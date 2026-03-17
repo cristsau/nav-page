@@ -1,0 +1,26 @@
+{
+  "name": "nav-page",
+  "version": "1.0.0",
+  "private": true,
+  "description": "轻量化、Notion风格的个人导航页",
+  "scripts": {
+    "dev": "pnpm -F app dev",
+    "build": "pnpm -F app build",
+    "build:extension": "pnpm -F extension build",
+    "preview": "pnpm -F app preview",
+    "lint": "pnpm -F app lint",
+    "install:all": "pnpm install"
+  },
+  "keywords": [
+    "navigation",
+    "bookmarks",
+    "notion",
+    "vue3",
+    "vite"
+  ],
+  "author": "",
+  "license": "MIT",
+  "engines": {
+    "node": ">=18.0.0"
+  }
+}

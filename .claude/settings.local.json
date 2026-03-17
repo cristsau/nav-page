@@ -1,0 +1,8 @@
+{
+  "permissions": {
+    "allow": [
+      "Bash(find D:/DomoCodex/projects/NAV -type f -name *)",
+      "Bash(git config:*)"
+    ]
+  }
+}
