@@ -10,7 +10,7 @@
 [![Vite](https://img.shields.io/badge/Vite-5.x-646CFF?logo=vite)](https://vitejs.dev/)
 [![License](https://img.shields.io/badge/License-MIT-green.svg)](./LICENSE)
 
-[在线预览](https://your-demo.com) · [功能特性](#功能特性) · [快速开始](#快速开始) · [文档](./PROJECT.md)
+[功能特性](#功能特性) · [快速开始](#快速开始) · [文档](./PROJECT.md)
 
 </div>
 
@@ -39,7 +39,7 @@ bash <(curl -L -s https://your-domain.com/install.sh)
 
 ```bash
 # 克隆项目
-git clone https://github.com/YOUR_USERNAME/nav-page.git
+git clone https://github.com/cristsau/nav-page.git
 cd nav-page
 
 # 安装依赖
@@ -85,11 +85,11 @@ pnpm lint         # 代码检查
 
 ### Vercel
 
-[![Deploy with Vercel](https://vercel.com/button)](https://vercel.com/new/clone?repository-url=https://github.com/YOUR_USERNAME/nav-page)
+[![Deploy with Vercel](https://vercel.com/button)](https://vercel.com/new/clone?repository-url=https://github.com/cristsau/nav-page)
 
 ### Netlify
 
-[![Deploy to Netlify](https://www.netlify.com/img/deploy/button.svg)](https://app.netlify.com/start/deploy?repository=https://github.com/YOUR_USERNAME/nav-page)
+[![Deploy to Netlify](https://www.netlify.com/img/deploy/button.svg)](https://app.netlify.com/start/deploy?repository=https://github.com/cristsau/nav-page)
 
 ### Docker
 

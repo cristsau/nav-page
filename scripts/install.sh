@@ -110,7 +110,7 @@ clone_project() {
     fi
 
     info "正在克隆项目..."
-    git clone https://github.com/YOUR_USERNAME/nav-page.git "$target_dir"
+    git clone https://github.com/cristsau/nav-page.git "$target_dir"
     success "项目克隆完成"
 }
 
