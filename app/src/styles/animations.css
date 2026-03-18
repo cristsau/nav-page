@@ -1,0 +1,290 @@
+/* 动画效果库 */
+
+/* ========== 基础动画 ========== */
+
+/* 淡入 */
+@keyframes fadeIn {
+  from {
+    opacity: 0;
+  }
+  to {
+    opacity: 1;
+  }
+}
+
+/* 淡出 */
+@keyframes fadeOut {
+  from {
+    opacity: 1;
+  }
+  to {
+    opacity: 0;
+  }
+}
+
+/* 从上滑入 */
+@keyframes slideInUp {
+  from {
+    opacity: 0;
+    transform: translateY(20px);
+  }
+  to {
+    opacity: 1;
+    transform: translateY(0);
+  }
+}
+
+/* 从下滑入 */
+@keyframes slideInDown {
+  from {
+    opacity: 0;
+    transform: translateY(-20px);
+  }
+  to {
+    opacity: 1;
+    transform: translateY(0);
+  }
+}
+
+/* 缩放弹入 */
+@keyframes scaleIn {
+  from {
+    opacity: 0;
+    transform: scale(0.9);
+  }
+  to {
+    opacity: 1;
+    transform: scale(1);
+  }
+}
+
+/* 弹跳弹入 */
+@keyframes bounceIn {
+  0% {
+    opacity: 0;
+    transform: scale(0.3);
+  }
+  50% {
+    transform: scale(1.05);
+  }
+  70% {
+    transform: scale(0.9);
+  }
+  100% {
+    opacity: 1;
+    transform: scale(1);
+  }
+}
+
+/* 脉冲 */
+@keyframes pulse {
+  0%, 100% {
+    transform: scale(1);
+  }
+  50% {
+    transform: scale(1.05);
+  }
+}
+
+/* 摇晃 */
+@keyframes shake {
+  0%, 100% {
+    transform: translateX(0);
+  }
+  25% {
+    transform: translateX(-5px);
+  }
+  75% {
+    transform: translateX(5px);
+  }
+}
+
+/* 旋转 */
+@keyframes spin {
+  from {
+    transform: rotate(0deg);
+  }
+  to {
+    transform: rotate(360deg);
+  }
+}
+
+/* ========== 交互动画 ========== */
+
+/* 卡片浮起 */
+.card-float {
+  transition: transform var(--transition-normal) var(--ease-smooth),
+              box-shadow var(--transition-normal) var(--ease-smooth);
+}
+
+.card-float:hover {
+  transform: translateY(-4px);
+  box-shadow: var(--shadow-card-hover);
+}
+
+/* 卡片点击下沉 */
+.card-press:active {
+  transform: translateY(-2px) scale(0.98);
+}
+
+/* 按钮波纹 */
+@keyframes ripple {
+  to {
+    transform: scale(4);
+    opacity: 0;
+  }
+}
+
+/* Tab 指示器滑动 */
+@keyframes tabIndicator {
+  from {
+    transform: scaleX(0);
+  }
+  to {
+    transform: scaleX(1);
+  }
+}
+
+/* ========== 页面级动画 ========== */
+
+/* 页面加载动画 */
+.page-enter-active {
+  animation: fadeIn 0.3s ease;
+}
+
+.page-leave-active {
+  animation: fadeOut 0.2s ease;
+}
+
+/* 列表交错进入 */
+.list-enter-active {
+  animation: slideInUp 0.4s ease;
+}
+
+.list-leave-active {
+  animation: fadeOut 0.2s ease;
+}
+
+.list-move {
+  transition: transform 0.3s ease;
+}
+
+/* 交错动画 - 需要配合 JS 使用 */
+.stagger-item {
+  opacity: 0;
+  animation: slideInUp 0.4s ease forwards;
+}
+
+.stagger-item:nth-child(1) { animation-delay: 0.05s; }
+.stagger-item:nth-child(2) { animation-delay: 0.1s; }
+.stagger-item:nth-child(3) { animation-delay: 0.15s; }
+.stagger-item:nth-child(4) { animation-delay: 0.2s; }
+.stagger-item:nth-child(5) { animation-delay: 0.25s; }
+.stagger-item:nth-child(6) { animation-delay: 0.3s; }
+.stagger-item:nth-child(7) { animation-delay: 0.35s; }
+.stagger-item:nth-child(8) { animation-delay: 0.4s; }
+.stagger-item:nth-child(9) { animation-delay: 0.45s; }
+.stagger-item:nth-child(10) { animation-delay: 0.5s; }
+
+/* ========== 模态框动画 ========== */
+
+.modal-enter-active {
+  animation: fadeIn 0.2s ease;
+}
+
+.modal-enter-active .modal-content {
+  animation: scaleIn 0.25s var(--ease-bounce);
+}
+
+.modal-leave-active {
+  animation: fadeOut 0.15s ease;
+}
+
+.modal-leave-active .modal-content {
+  animation: scaleIn 0.15s ease reverse;
+}
+
+/* ========== 搜索框动画 ========== */
+
+.search-focus {
+  transition: all var(--transition-normal) var(--ease-smooth);
+}
+
+.search-focus:focus {
+  transform: scale(1.02);
+  box-shadow: var(--shadow-lg);
+}
+
+/* ========== Tab 切换动画 ========== */
+
+.tab-slide-enter-active,
+.tab-slide-leave-active {
+  transition: all 0.3s var(--ease-smooth);
+}
+
+.tab-slide-enter-from {
+  opacity: 0;
+  transform: translateX(20px);
+}
+
+.tab-slide-leave-to {
+  opacity: 0;
+  transform: translateX(-20px);
+}
+
+/* ========== 折叠动画 ========== */
+
+.collapse-enter-active,
+.collapse-leave-active {
+  transition: all 0.3s var(--ease-smooth);
+  overflow: hidden;
+}
+
+.collapse-enter-from,
+.collapse-leave-to {
+  opacity: 0;
+  max-height: 0;
+}
+
+.collapse-enter-to,
+.collapse-leave-from {
+  opacity: 1;
+  max-height: 2000px;
+}
+
+/* ========== 工具类 ========== */
+
+.animate-fade-in {
+  animation: fadeIn 0.3s ease;
+}
+
+.animate-slide-up {
+  animation: slideInUp 0.4s ease;
+}
+
+.animate-scale-in {
+  animation: scaleIn 0.25s var(--ease-bounce);
+}
+
+.animate-bounce-in {
+  animation: bounceIn 0.5s ease;
+}
+
+.animate-pulse {
+  animation: pulse 2s ease infinite;
+}
+
+.animate-spin {
+  animation: spin 1s linear infinite;
+}
+
+/* 减少动画（无障碍） */
+@media (prefers-reduced-motion: reduce) {
+  *,
+  *::before,
+  *::after {
+    animation-duration: 0.01ms !important;
+    animation-iteration-count: 1 !important;
+    transition-duration: 0.01ms !important;
+  }
+}

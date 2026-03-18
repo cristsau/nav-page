@@ -1,0 +1,107 @@
+/* CSS Variables - 奶油风格主题 */
+:root {
+  /* 亮色模式 (默认) - 奶油色系 */
+  --bg-primary: #faf8f5;
+  --bg-secondary: #f5f2ed;
+  --bg-tertiary: #ebe7e0;
+  --bg-card: #ffffff;
+  --bg-hover: #f0ede8;
+  --bg-active: #e8e4dd;
+
+  --text-primary: #4a4540;
+  --text-secondary: #7a756d;
+  --text-muted: #a9a49c;
+
+  --border-color: #e8e4dd;
+  --border-light: #f0ede8;
+
+  /* 奶咖色强调色 */
+  --accent-color: #a08060;
+  --accent-hover: #8b6b4f;
+  --accent-light: #d4c4b0;
+  --accent-bg: #f5ede5;
+
+  /* 功能色 */
+  --success-color: #7a9f7a;
+  --warning-color: #c9a86c;
+  --error-color: #c47d7d;
+  --info-color: #7a9fc9;
+
+  /* 阴影 */
+  --shadow-sm: 0 2px 8px rgba(74, 69, 64, 0.06);
+  --shadow-md: 0 4px 16px rgba(74, 69, 64, 0.08);
+  --shadow-lg: 0 8px 32px rgba(74, 69, 64, 0.12);
+  --shadow-card: 0 4px 20px rgba(74, 69, 64, 0.08);
+  --shadow-card-hover: 0 8px 30px rgba(74, 69, 64, 0.15);
+
+  /* 圆角 - 更圆润 */
+  --radius-xs: 6px;
+  --radius-sm: 10px;
+  --radius-md: 16px;
+  --radius-lg: 24px;
+  --radius-xl: 32px;
+  --radius-full: 9999px;
+
+  /* 动画 */
+  --transition-fast: 0.15s ease;
+  --transition-normal: 0.25s ease;
+  --transition-slow: 0.4s ease;
+  --ease-bounce: cubic-bezier(0.34, 1.56, 0.64, 1);
+  --ease-smooth: cubic-bezier(0.4, 0, 0.2, 1);
+
+  /* 间距 */
+  --spacing-xs: 4px;
+  --spacing-sm: 8px;
+  --spacing-md: 16px;
+  --spacing-lg: 24px;
+  --spacing-xl: 32px;
+  --spacing-2xl: 48px;
+
+  /* 布局 */
+  --header-height: 64px;
+  --max-width: 1200px;
+  --sidebar-width: 240px;
+
+  /* 背景图 */
+  --bg-image: none;
+}
+
+/* 暗色模式 */
+.dark {
+  --bg-primary: #1a1815;
+  --bg-secondary: #252220;
+  --bg-tertiary: #302d2a;
+  --bg-card: #2d2a27;
+  --bg-hover: #353230;
+  --bg-active: #3d3a37;
+
+  --text-primary: #e8e4dd;
+  --text-secondary: #a9a49c;
+  --text-muted: #7a756d;
+
+  --border-color: #3d3a37;
+  --border-light: #353230;
+
+  --accent-color: #c4a882;
+  --accent-hover: #d4b892;
+  --accent-light: #4a4035;
+  --accent-bg: #352f28;
+
+  --success-color: #8fb88f;
+  --warning-color: #d4b87a;
+  --error-color: #d48a8a;
+  --info-color: #8ab8d4;
+
+  --shadow-sm: 0 2px 8px rgba(0, 0, 0, 0.2);
+  --shadow-md: 0 4px 16px rgba(0, 0, 0, 0.25);
+  --shadow-lg: 0 8px 32px rgba(0, 0, 0, 0.35);
+  --shadow-card: 0 4px 20px rgba(0, 0, 0, 0.25);
+  --shadow-card-hover: 0 8px 30px rgba(0, 0, 0, 0.4);
+}
+
+/* 用户自定义主题变量（通过 JS 动态设置） */
+.user-theme {
+  /* 这些变量会被 useConfig.js 动态覆盖 */
+  --user-accent-color: var(--accent-color);
+  --user-radius: var(--radius-md);
+}
