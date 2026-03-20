@@ -1,6 +1,13 @@
 import { createRouter, createWebHistory } from 'vue-router'
+import { bootstrapSystem, getCurrentUser } from '@/shared/db/database'
 
 const routes = [
+  {
+    path: '/auth',
+    name: 'Auth',
+    component: () => import('@/modules/auth/AuthView.vue'),
+    meta: { title: '登录', public: true }
+  },
   {
     path: '/',
     name: 'Navigation',
@@ -17,7 +24,7 @@ const routes = [
     path: '/share/:code',
     name: 'ShareView',
     component: () => import('@/modules/whisper/ShareView.vue'),
-    meta: { title: '分享' }
+    meta: { title: '分享', public: true }
   },
   {
     path: '/settings',
@@ -36,11 +43,25 @@ const router = createRouter({
   routes
 })
 
-router.beforeEach((to, from, next) => {
-  document.title = to.meta.title
-    ? `${to.meta.title} - NAV`
-    : 'NAV - 个人导航页'
-  next()
+router.beforeEach(async (to) => {
+  await bootstrapSystem()
+  const currentUser = await getCurrentUser()
+  const isPublic = Boolean(to.meta.public)
+
+  document.title = to.meta.title ? `${to.meta.title} - NAV` : 'NAV - 个人导航页'
+
+  if (!currentUser && !isPublic) {
+    return {
+      path: '/auth',
+      query: { redirect: to.fullPath }
+    }
+  }
+
+  if (currentUser && to.path === '/auth') {
+    return '/'
+  }
+
+  return true
 })
 
 export default router

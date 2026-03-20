@@ -4,51 +4,97 @@ import { useTheme } from '@/shared/composables/useTheme'
 import { useConfig, colorSchemes, borderRadiusOptions, cardSizeOptions } from '@/shared/composables/useConfig'
 
 const { isDark, setTheme } = useTheme()
-const { config, updateConfig } = useConfig()
+const { config, updateConfig, setColorScheme } = useConfig()
 
-// 主题模式
 const themeMode = ref('system')
-
-// 配色方案列表
-const colorSchemeList = Object.entries(colorSchemes).map(([key, value]) => ({
-  id: key,
-  ...value
-}))
-
-// 当前配色
-const currentScheme = computed(() => {
-  return config.value.style?.colorScheme || 'cream'
+const currentScheme = computed(() => config.value.style?.colorScheme || 'cream')
+const activeSchemeMeta = computed(() => {
+  return currentScheme.value === 'custom'
+    ? { name: '自定义', ...(config.value.style?.customTheme || {}) }
+    : (colorSchemes[currentScheme.value] || colorSchemes.cream)
 })
 
-// 圆角选项
-const radiusList = Object.entries(borderRadiusOptions).map(([key, value]) => ({
-  id: key,
-  ...value
-}))
+const colorSchemeList = computed(() => [
+  ...Object.entries(colorSchemes).map(([key, value]) => ({ id: key, ...value }))
+])
 
-// 卡片尺寸选项
-const sizeList = Object.entries(cardSizeOptions).map(([key, value]) => ({
-  id: key,
-  ...value
-}))
-
-// 背景图预览
+const radiusList = Object.entries(borderRadiusOptions).map(([key, value]) => ({ id: key, ...value }))
+const sizeList = Object.entries(cardSizeOptions).map(([key, value]) => ({ id: key, ...value }))
 const bgPreview = computed(() => config.value.style?.backgroundImage || '')
 
-onMounted(async () => {
-  themeMode.value = localStorage.getItem('nav-theme') || 'system'
+const customTheme = computed(() => config.value.style?.customTheme || {})
+
+const livePreviewStyle = computed(() => {
+  const scheme = activeSchemeMeta.value
+  const accent = scheme.primary
+
+  if (isDark.value) {
+    return {
+      '--preview-bg': scheme.darkBg,
+      '--preview-surface': scheme.darkBgCard,
+      '--preview-soft': scheme.darkBgSecondary,
+      '--preview-accent': accent,
+      '--preview-text': scheme.darkTextPrimary,
+      '--preview-muted': scheme.darkTextSecondary
+    }
+  }
+
+  return {
+    '--preview-bg': scheme.bg,
+    '--preview-surface': scheme.bgCard,
+    '--preview-soft': scheme.bgSecondary,
+    '--preview-accent': accent,
+    '--preview-text': scheme.textPrimary,
+    '--preview-muted': scheme.textSecondary
+  }
 })
+
+function forceApplyThemeTokens() {
+  const root = document.documentElement
+  const scheme = activeSchemeMeta.value
+  const accent = scheme.primary
+
+  root.style.setProperty('--accent-color', accent, 'important')
+
+  if (isDark.value) {
+    root.style.setProperty('--bg-primary', scheme.darkBg, 'important')
+    root.style.setProperty('--bg-secondary', scheme.darkBgSecondary, 'important')
+    root.style.setProperty('--bg-card', scheme.darkBgCard, 'important')
+    root.style.setProperty('--text-primary', scheme.darkTextPrimary, 'important')
+    root.style.setProperty('--text-secondary', scheme.darkTextSecondary, 'important')
+    root.style.setProperty('--accent-bg', `${accent}38`, 'important')
+  } else {
+    root.style.setProperty('--bg-primary', scheme.bg, 'important')
+    root.style.setProperty('--bg-secondary', scheme.bgSecondary, 'important')
+    root.style.setProperty('--bg-card', scheme.bgCard, 'important')
+    root.style.setProperty('--text-primary', scheme.textPrimary, 'important')
+    root.style.setProperty('--text-secondary', scheme.textSecondary, 'important')
+    root.style.setProperty('--accent-bg', `${accent}22`, 'important')
+  }
+}
+
+onMounted(() => {
+  themeMode.value = localStorage.getItem('nav-theme') || 'system'
+  forceApplyThemeTokens()
+})
+
+watch([currentScheme, isDark, () => config.value.style?.customTheme], () => {
+  forceApplyThemeTokens()
+}, { deep: true, immediate: true })
 
 function handleThemeChange(mode) {
   themeMode.value = mode
   setTheme(mode)
 }
 
-function selectColorScheme(schemeId) {
-  const scheme = colorSchemes[schemeId]
-  if (scheme) {
-    updateConfig('style.colorScheme', schemeId)
-    updateConfig('style.accentColor', scheme.primary)
+async function selectColorScheme(schemeId) {
+  await setColorScheme(schemeId)
+}
+
+function updateCustomTheme(key, value) {
+  updateConfig(`style.customTheme.${key}`, value)
+  if (currentScheme.value !== 'custom') {
+    updateConfig('style.colorScheme', 'custom')
   }
 }
 
@@ -64,13 +110,13 @@ function toggleAnimations() {
   updateConfig('style.animationsEnabled', !config.value.style?.animationsEnabled)
 }
 
-function handleBgUpload(e) {
-  const file = e.target.files?.[0]
+function handleBgUpload(event) {
+  const file = event.target.files?.[0]
   if (!file) return
 
   const reader = new FileReader()
-  reader.onload = (event) => {
-    updateConfig('style.backgroundImage', event.target.result)
+  reader.onload = (loadEvent) => {
+    updateConfig('style.backgroundImage', loadEvent.target.result)
   }
   reader.readAsDataURL(file)
 }
@@ -82,40 +128,35 @@ function clearBgImage() {
 
 <template>
   <div class="settings-section">
-    <h3 class="settings-section__title">🎨 外观设置</h3>
+    <h3 class="settings-section__title">外观设置</h3>
 
-    <!-- 主题模式 -->
     <div class="settings-item">
       <div class="settings-item__info">
         <div class="settings-item__label">主题模式</div>
-        <div class="settings-item__desc">选择界面主题</div>
+        <div class="settings-item__desc">选择亮色、暗色或跟随系统</div>
       </div>
       <div class="settings-item__control">
         <div class="theme-options">
           <label class="theme-option" :class="{ 'is-active': themeMode === 'light' }">
             <input type="radio" value="light" :checked="themeMode === 'light'" @change="handleThemeChange('light')">
-            <span class="theme-option__icon">☀️</span>
             <span class="theme-option__label">亮色</span>
           </label>
           <label class="theme-option" :class="{ 'is-active': themeMode === 'dark' }">
             <input type="radio" value="dark" :checked="themeMode === 'dark'" @change="handleThemeChange('dark')">
-            <span class="theme-option__icon">🌙</span>
             <span class="theme-option__label">暗色</span>
           </label>
           <label class="theme-option" :class="{ 'is-active': themeMode === 'system' }">
             <input type="radio" value="system" :checked="themeMode === 'system'" @change="handleThemeChange('system')">
-            <span class="theme-option__icon">💻</span>
             <span class="theme-option__label">跟随系统</span>
           </label>
         </div>
       </div>
     </div>
 
-    <!-- 配色方案 -->
     <div class="settings-item">
       <div class="settings-item__info">
         <div class="settings-item__label">配色方案</div>
-        <div class="settings-item__desc">选择主题配色</div>
+        <div class="settings-item__desc">内置方案和自定义方案都可切换</div>
       </div>
       <div class="settings-item__control">
         <div class="color-schemes">
@@ -124,7 +165,7 @@ function clearBgImage() {
             :key="scheme.id"
             class="color-scheme"
             :class="{ 'is-active': currentScheme === scheme.id }"
-            :style="{ '--scheme-color': scheme.primary }"
+            :style="{ '--scheme-color': scheme.primary || customTheme.primary || '#6b8c7a' }"
             @click="selectColorScheme(scheme.id)"
           >
             <span class="color-scheme__preview"></span>
@@ -134,11 +175,62 @@ function clearBgImage() {
       </div>
     </div>
 
-    <!-- 圆角大小 -->
+    <div class="theme-preview" :style="livePreviewStyle">
+      <div class="theme-preview__meta">
+        <span class="theme-preview__badge">{{ activeSchemeMeta.name }}</span>
+        <span class="theme-preview__badge">{{ isDark ? 'dark' : 'light' }}</span>
+      </div>
+      <div class="theme-preview__canvas">
+        <div class="theme-preview__surface">
+          <div class="theme-preview__dot"></div>
+          <div class="theme-preview__line theme-preview__line--strong"></div>
+          <div class="theme-preview__line"></div>
+        </div>
+        <button class="theme-preview__button">Preview</button>
+      </div>
+    </div>
+
+    <div class="settings-item settings-item--stack">
+      <div class="settings-item__info">
+        <div class="settings-item__label">自定义主题</div>
+        <div class="settings-item__desc">设置主色、亮色背景和暗色背景，选中后会作为“自定义”方案生效</div>
+      </div>
+      <div class="custom-theme-grid">
+        <label class="color-field">
+          <span>主色</span>
+          <input :value="customTheme.primary" type="color" @input="updateCustomTheme('primary', $event.target.value)">
+        </label>
+        <label class="color-field">
+          <span>亮色背景</span>
+          <input :value="customTheme.bg" type="color" @input="updateCustomTheme('bg', $event.target.value)">
+        </label>
+        <label class="color-field">
+          <span>亮色次背景</span>
+          <input :value="customTheme.bgSecondary" type="color" @input="updateCustomTheme('bgSecondary', $event.target.value)">
+        </label>
+        <label class="color-field">
+          <span>亮色卡片</span>
+          <input :value="customTheme.bgCard" type="color" @input="updateCustomTheme('bgCard', $event.target.value)">
+        </label>
+        <label class="color-field">
+          <span>暗色背景</span>
+          <input :value="customTheme.darkBg" type="color" @input="updateCustomTheme('darkBg', $event.target.value)">
+        </label>
+        <label class="color-field">
+          <span>暗色次背景</span>
+          <input :value="customTheme.darkBgSecondary" type="color" @input="updateCustomTheme('darkBgSecondary', $event.target.value)">
+        </label>
+        <label class="color-field">
+          <span>暗色卡片</span>
+          <input :value="customTheme.darkBgCard" type="color" @input="updateCustomTheme('darkBgCard', $event.target.value)">
+        </label>
+      </div>
+    </div>
+
     <div class="settings-item">
       <div class="settings-item__info">
         <div class="settings-item__label">圆角风格</div>
-        <div class="settings-item__desc">调整界面元素的圆角大小</div>
+        <div class="settings-item__desc">调整页面元素的圆角大小</div>
       </div>
       <div class="settings-item__control">
         <div class="option-pills">
@@ -155,11 +247,10 @@ function clearBgImage() {
       </div>
     </div>
 
-    <!-- 卡片尺寸 -->
     <div class="settings-item">
       <div class="settings-item__info">
         <div class="settings-item__label">卡片大小</div>
-        <div class="settings-item__desc">调整书签卡片的显示大小</div>
+        <div class="settings-item__desc">调整导航卡片的显示尺寸</div>
       </div>
       <div class="settings-item__control">
         <div class="option-pills">
@@ -176,25 +267,19 @@ function clearBgImage() {
       </div>
     </div>
 
-    <!-- 动画开关 -->
     <div class="settings-item">
       <div class="settings-item__info">
         <div class="settings-item__label">动画效果</div>
-        <div class="settings-item__desc">启用界面动画效果</div>
+        <div class="settings-item__desc">启用页面动画效果</div>
       </div>
       <div class="settings-item__control">
         <label class="toggle">
-          <input
-            type="checkbox"
-            :checked="config.style?.animationsEnabled !== false"
-            @change="toggleAnimations"
-          >
+          <input type="checkbox" :checked="config.style?.animationsEnabled !== false" @change="toggleAnimations">
           <span class="toggle__slider"></span>
         </label>
       </div>
     </div>
 
-    <!-- 背景图 -->
     <div class="settings-item">
       <div class="settings-item__info">
         <div class="settings-item__label">导航页背景图</div>
@@ -204,7 +289,7 @@ function clearBgImage() {
         <div class="bg-upload">
           <div v-if="bgPreview" class="bg-preview">
             <img :src="bgPreview" alt="背景预览">
-            <button class="bg-clear" @click="clearBgImage">✕</button>
+            <button class="bg-clear" @click="clearBgImage">×</button>
           </div>
           <label class="upload-btn">
             {{ bgPreview ? '更换' : '上传图片' }}
@@ -242,6 +327,10 @@ function clearBgImage() {
   border-bottom: 1px solid var(--border-light);
 }
 
+.settings-item--stack {
+  display: block;
+}
+
 .settings-item:last-child {
   border-bottom: none;
 }
@@ -263,32 +352,31 @@ function clearBgImage() {
   margin-top: 4px;
 }
 
-.settings-item__control {
-  flex-shrink: 0;
-}
-
-/* 主题选项 */
-.theme-options {
+.theme-options,
+.option-pills,
+.color-schemes {
   display: flex;
+  flex-wrap: wrap;
   gap: 8px;
 }
 
-.theme-option {
+.theme-option,
+.option-pill,
+.color-scheme {
   display: flex;
-  flex-direction: column;
   align-items: center;
+  gap: 8px;
   padding: 10px 14px;
   background: var(--bg-secondary);
+  border: none;
   border-radius: var(--radius-md);
   cursor: pointer;
-  transition: all 0.2s;
+  color: var(--text-primary);
 }
 
-.theme-option:hover {
-  background: var(--bg-hover);
-}
-
-.theme-option.is-active {
+.theme-option.is-active,
+.option-pill.is-active,
+.color-scheme.is-active {
   background: var(--accent-bg);
   box-shadow: 0 0 0 2px var(--accent-color);
 }
@@ -297,83 +385,100 @@ function clearBgImage() {
   display: none;
 }
 
-.theme-option__icon {
-  font-size: 20px;
-  margin-bottom: 4px;
-}
-
-.theme-option__label {
-  font-size: 12px;
-  color: var(--text-secondary);
-}
-
-/* 配色方案 */
-.color-schemes {
-  display: flex;
-  gap: 8px;
-  flex-wrap: wrap;
-}
-
-.color-scheme {
-  display: flex;
-  flex-direction: column;
-  align-items: center;
-  padding: 8px;
-  background: var(--bg-secondary);
-  border: none;
-  border-radius: var(--radius-md);
-  cursor: pointer;
-  transition: all 0.2s;
-}
-
-.color-scheme:hover {
-  background: var(--bg-hover);
-}
-
-.color-scheme.is-active {
-  box-shadow: 0 0 0 2px var(--accent-color);
-}
-
 .color-scheme__preview {
-  width: 28px;
-  height: 28px;
-  background: var(--scheme-color);
+  width: 18px;
+  height: 18px;
   border-radius: 50%;
-  margin-bottom: 4px;
+  background: var(--scheme-color);
 }
 
-.color-scheme__name {
-  font-size: 11px;
-  color: var(--text-secondary);
+.theme-preview {
+  margin: 4px 0 20px;
+  padding: 16px;
+  background: var(--preview-bg);
+  border: 1px solid color-mix(in srgb, var(--preview-accent) 35%, transparent);
+  border-radius: 18px;
 }
 
-/* 选项药丸 */
-.option-pills {
+.theme-preview__meta,
+.theme-preview__canvas {
   display: flex;
-  gap: 8px;
+  align-items: center;
+  gap: 12px;
 }
 
-.option-pill {
-  padding: 8px 16px;
-  background: var(--bg-secondary);
+.theme-preview__badge {
+  padding: 4px 10px;
+  border-radius: 999px;
+  background: color-mix(in srgb, var(--preview-accent) 24%, var(--preview-soft));
+  color: var(--preview-text);
+  font-size: 12px;
+}
+
+.theme-preview__canvas {
+  margin-top: 12px;
+  justify-content: space-between;
+}
+
+.theme-preview__surface {
+  flex: 1;
+  padding: 14px;
+  background: var(--preview-surface);
+  border-radius: 14px;
+}
+
+.theme-preview__dot {
+  width: 12px;
+  height: 12px;
+  border-radius: 50%;
+  background: var(--preview-accent);
+  margin-bottom: 10px;
+}
+
+.theme-preview__line {
+  height: 8px;
+  border-radius: 999px;
+  background: color-mix(in srgb, var(--preview-muted) 55%, transparent);
+  margin-top: 8px;
+}
+
+.theme-preview__line--strong {
+  width: 60%;
+  background: color-mix(in srgb, var(--preview-text) 80%, transparent);
+}
+
+.theme-preview__button {
+  padding: 10px 18px;
   border: none;
-  border-radius: 20px;
-  font-size: 13px;
-  color: var(--text-secondary);
-  cursor: pointer;
-  transition: all 0.2s;
-}
-
-.option-pill:hover {
-  background: var(--bg-hover);
-}
-
-.option-pill.is-active {
-  background: var(--accent-color);
+  border-radius: 999px;
+  background: var(--preview-accent);
   color: #fff;
+  font-weight: 600;
 }
 
-/* 开关 */
+.custom-theme-grid {
+  display: grid;
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+  gap: 12px;
+  margin-top: 16px;
+}
+
+.color-field {
+  display: grid;
+  gap: 8px;
+  color: var(--text-secondary);
+  font-size: 13px;
+}
+
+.color-field input {
+  width: 100%;
+  height: 42px;
+  padding: 4px;
+  border: none;
+  border-radius: 12px;
+  background: var(--bg-secondary);
+}
+
 .toggle {
   position: relative;
   display: inline-block;
@@ -391,7 +496,6 @@ function clearBgImage() {
   background: var(--bg-tertiary);
   border-radius: 13px;
   cursor: pointer;
-  transition: all 0.2s;
 }
 
 .toggle__slider::before {
@@ -404,7 +508,6 @@ function clearBgImage() {
   background: #fff;
   border-radius: 50%;
   transition: all 0.2s;
-  box-shadow: 0 1px 3px rgba(0,0,0,0.1);
 }
 
 .toggle input:checked + .toggle__slider {
@@ -415,7 +518,6 @@ function clearBgImage() {
   transform: translateX(22px);
 }
 
-/* 背景图上传 */
 .bg-upload {
   display: flex;
   align-items: center;
@@ -424,11 +526,10 @@ function clearBgImage() {
 
 .bg-preview {
   position: relative;
-  width: 80px;
-  height: 50px;
-  border-radius: var(--radius-md);
+  width: 56px;
+  height: 56px;
+  border-radius: 12px;
   overflow: hidden;
-  border: 2px solid var(--border-color);
 }
 
 .bg-preview img {
@@ -437,57 +538,30 @@ function clearBgImage() {
   object-fit: cover;
 }
 
-.bg-clear {
-  position: absolute;
-  top: -6px;
-  right: -6px;
-  width: 18px;
-  height: 18px;
-  display: flex;
-  align-items: center;
-  justify-content: center;
-  background: var(--error-color);
-  color: #fff;
-  border: none;
-  border-radius: 50%;
-  font-size: 10px;
-  cursor: pointer;
-}
-
+.bg-clear,
 .upload-btn {
-  padding: 8px 16px;
+  padding: 8px 14px;
   background: var(--bg-secondary);
+  border: none;
   border-radius: var(--radius-md);
-  font-size: 13px;
   color: var(--text-primary);
   cursor: pointer;
-  transition: all 0.2s;
 }
 
-.upload-btn:hover {
-  background: var(--bg-hover);
-}
-
-@media (max-width: 640px) {
+@media (max-width: 760px) {
   .settings-item {
     flex-direction: column;
     gap: 12px;
   }
 
-  .settings-item__info {
-    padding-right: 0;
+  .custom-theme-grid {
+    grid-template-columns: 1fr 1fr;
   }
+}
 
-  .settings-item__control {
-    width: 100%;
-  }
-
-  .theme-options {
-    justify-content: space-between;
-  }
-
-  .option-pills {
-    justify-content: space-between;
+@media (max-width: 520px) {
+  .custom-theme-grid {
+    grid-template-columns: 1fr;
   }
 }
 </style>

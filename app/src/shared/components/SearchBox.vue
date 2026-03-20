@@ -1,33 +1,67 @@
 <script setup>
-import { ref } from 'vue'
+import { computed, onMounted, ref } from 'vue'
 import { useConfig } from '@/shared/composables/useConfig'
 
-const { config, getSearchEngine, search, searchEngines } = useConfig()
+const {
+  getSearchEngine,
+  getQuickAccessSearchEngines,
+  loadCustomSearchEngines,
+  search,
+  updateConfig
+} = useConfig()
 
 const query = ref('')
 const isFocused = ref(false)
+const showSwitcher = ref(false)
+const currentEngine = computed(() => getSearchEngine())
+const allEngines = computed(() => getQuickAccessSearchEngines())
+
+onMounted(async () => {
+  await loadCustomSearchEngines()
+})
 
 function handleSearch() {
-  if (query.value.trim()) {
-    search(query.value.trim())
+  const trimmed = query.value.trim()
+  if (trimmed) {
+    search(trimmed)
   }
 }
 
-function handleKeydown(e) {
-  if (e.key === 'Enter') {
+function handleKeydown(event) {
+  if (event.key === 'Enter') {
     handleSearch()
   }
 }
 
-const currentEngine = getSearchEngine()
+function selectEngine(engineId) {
+  updateConfig('searchEngine', engineId)
+  showSwitcher.value = false
+}
 </script>
 
 <template>
   <div class="search-box" :class="{ 'is-focused': isFocused }">
-    <div class="search-box__engine">
-      <span class="search-box__icon">{{ currentEngine.icon }}</span>
-      <span class="search-box__name">{{ currentEngine.name }}</span>
+    <div class="search-box__engine-wrap">
+      <button class="search-box__engine" @click="showSwitcher = !showSwitcher">
+        <span class="search-box__icon">{{ currentEngine.icon }}</span>
+        <span class="search-box__name">{{ currentEngine.name }}</span>
+        <span class="search-box__chevron">▾</span>
+      </button>
+
+      <div v-if="showSwitcher" class="engine-switcher">
+        <button
+          v-for="engine in allEngines"
+          :key="engine.id"
+          class="engine-switcher__item"
+          :class="{ 'is-active': currentEngine.id === engine.id }"
+          @click="selectEngine(engine.id)"
+        >
+          <span>{{ engine.icon }}</span>
+          <span>{{ engine.name }}</span>
+        </button>
+      </div>
     </div>
+
     <input
       v-model="query"
       type="text"
@@ -45,9 +79,10 @@ const currentEngine = getSearchEngine()
 
 <style scoped>
 .search-box {
+  position: relative;
   display: flex;
   align-items: center;
-  max-width: 600px;
+  max-width: 640px;
   margin: 0 auto;
   background: var(--bg-card);
   border-radius: var(--radius-xl);
@@ -65,14 +100,21 @@ const currentEngine = getSearchEngine()
   box-shadow: var(--shadow-lg);
 }
 
+.search-box__engine-wrap {
+  position: relative;
+  flex-shrink: 0;
+}
+
 .search-box__engine {
   display: flex;
   align-items: center;
   gap: 6px;
   padding: 8px 16px;
   background: var(--bg-secondary);
+  border: none;
   border-radius: var(--radius-lg);
-  flex-shrink: 0;
+  color: var(--text-primary);
+  cursor: pointer;
 }
 
 .search-box__icon {
@@ -82,7 +124,43 @@ const currentEngine = getSearchEngine()
 .search-box__name {
   font-size: 14px;
   font-weight: 500;
+}
+
+.search-box__chevron {
+  font-size: 12px;
+  color: var(--text-muted);
+}
+
+.engine-switcher {
+  position: absolute;
+  top: calc(100% + 8px);
+  left: 0;
+  z-index: 30;
+  min-width: 180px;
+  display: grid;
+  gap: 6px;
+  padding: 10px;
+  background: var(--bg-card);
+  border: 1px solid var(--border-light);
+  border-radius: 18px;
+  box-shadow: var(--shadow-card-hover);
+}
+
+.engine-switcher__item {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 10px 12px;
+  border: none;
+  border-radius: 12px;
+  background: var(--bg-secondary);
   color: var(--text-primary);
+  cursor: pointer;
+}
+
+.engine-switcher__item.is-active {
+  background: var(--accent-bg);
+  box-shadow: 0 0 0 2px var(--accent-color);
 }
 
 .search-box__input {
@@ -117,10 +195,6 @@ const currentEngine = getSearchEngine()
   transform: scale(1.02);
 }
 
-.search-box__btn:active {
-  transform: scale(0.98);
-}
-
 @media (max-width: 640px) {
   .search-box {
     flex-direction: column;
@@ -128,19 +202,28 @@ const currentEngine = getSearchEngine()
     padding: 8px;
   }
 
-  .search-box__engine {
+  .search-box__engine-wrap,
+  .search-box__engine,
+  .search-box__input,
+  .search-box__btn {
     width: 100%;
+  }
+
+  .search-box__engine {
     justify-content: center;
     margin-bottom: 8px;
   }
 
+  .engine-switcher {
+    right: 0;
+    min-width: unset;
+  }
+
   .search-box__input {
-    width: 100%;
     text-align: center;
   }
 
   .search-box__btn {
-    width: 100%;
     margin-top: 8px;
   }
 }

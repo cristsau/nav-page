@@ -4,6 +4,7 @@ import { useRouter } from 'vue-router'
 import { getNotes, addNote, updateNote, deleteNote, toggleNotePin, getSetting, setSetting } from '@/shared/db/database'
 import NoteCard from './components/NoteCard.vue'
 import NoteEditor from './components/NoteEditor.vue'
+import NotePreview from './components/NotePreview.vue'
 import ShareManager from './components/ShareManager.vue'
 
 const router = useRouter()
@@ -18,6 +19,8 @@ const filterType = ref('all') // all | memo | diary
 // 编辑器
 const showEditor = ref(false)
 const editingNote = ref(null)
+const showPreview = ref(false)
+const previewingNote = ref(null)
 
 // 分享管理
 const showShareManager = ref(false)
@@ -80,8 +83,14 @@ const unpinnedMemos = computed(() => {
 // 加载数据
 async function loadNotes() {
   loading.value = true
-  notes.value = await getNotes()
-  loading.value = false
+  try {
+    notes.value = await getNotes()
+  } catch (e) {
+    console.error('Failed to load notes:', e)
+    alert('加载笔记失败，请刷新页面后重试。')
+  } finally {
+    loading.value = false
+  }
 }
 
 // 新建笔记
@@ -96,17 +105,27 @@ function handleEditNote(note) {
   showEditor.value = true
 }
 
+function handlePreviewNote(note) {
+  previewingNote.value = note
+  showPreview.value = true
+}
+
 // 保存笔记
 async function handleSaveNote(data) {
-  if (editingNote.value?.id) {
-    await updateNote(editingNote.value.id, data)
-  } else {
-    await addNote(data)
-  }
+  try {
+    if (editingNote.value?.id) {
+      await updateNote(editingNote.value.id, data)
+    } else {
+      await addNote(data)
+    }
 
-  showEditor.value = false
-  editingNote.value = null
-  await loadNotes()
+    showEditor.value = false
+    editingNote.value = null
+    await loadNotes()
+  } catch (e) {
+    console.error('Failed to save note:', e)
+    alert(`保存失败：${e.message || '请稍后重试'}`)
+  }
 }
 
 // 删除笔记
@@ -235,6 +254,7 @@ onMounted(async () => {
               v-for="note in pinnedMemos"
               :key="note.id"
               :note="note"
+              @preview="handlePreviewNote"
               @edit="handleEditNote"
               @delete="handleDeleteNote"
               @togglePin="handleTogglePin"
@@ -253,6 +273,7 @@ onMounted(async () => {
                 v-for="note in group.items"
                 :key="note.id"
                 :note="note"
+                @preview="handlePreviewNote"
                 @edit="handleEditNote"
                 @delete="handleDeleteNote"
                 @togglePin="handleTogglePin"
@@ -270,6 +291,7 @@ onMounted(async () => {
               v-for="note in unpinnedMemos"
               :key="note.id"
               :note="note"
+              @preview="handlePreviewNote"
               @edit="handleEditNote"
               @delete="handleDeleteNote"
               @togglePin="handleTogglePin"
@@ -296,6 +318,13 @@ onMounted(async () => {
       :note="editingNote"
       @close="showEditor = false; editingNote = null"
       @save="handleSaveNote"
+    />
+
+    <NotePreview
+      :show="showPreview"
+      :note="previewingNote"
+      @close="showPreview = false; previewingNote = null"
+      @edit="showPreview = false; handleEditNote($event)"
     />
 
     <!-- 分享管理弹窗 -->

@@ -1,334 +1,164 @@
-# NAV - 个人导航页
+# NAV 项目说明
 
-> 轻量化、Notion风格的个人导航页，支持书签管理、个人便签、AI辅助功能
+## 项目目标
 
-## 技术栈
+NAV 是一个轻量、可私有部署的个人导航页，核心方向是：
+
+- 导航与书签管理
+- 备忘录 / 日记记录
+- 多用户与审批注册
+- 自定义主题与搜索体验
+- 后续接入 AI 搜索、内容整理与同步能力
+
+项目当前仍以 `Vue 3 + Vite + Dexie.js` 为主，前端本地使用 IndexedDB 作为数据层。
+
+## 当前技术栈
 
 | 类型 | 选择 |
-|------|------|
-| 框架 | Vue 3 + Vite |
+| --- | --- |
+| 框架 | Vue 3 |
+| 构建 | Vite 5 |
 | 路由 | Vue Router 4 |
-| 数据库 | Dexie.js (IndexedDB封装) |
-| 编辑器 | Tiptap (Notion-like块编辑器) |
-| 样式 | CSS Variables + Notion风格 |
-| AI接口 | OpenAI + GLM 兼容格式 |
-| 扩展 | Chrome Extension (Manifest V3) |
+| 数据库 | Dexie.js / IndexedDB |
+| 状态方式 | Composables |
+| 主题 | CSS Variables |
+| 认证 | 前端登录 + IndexedDB 用户系统 |
+| 搜索 | 内置搜索引擎 + 可扩展接口配置 |
 
-## 功能模块
+## 当前数据库架构
 
-### 1. 导航模块 (Navigation)
-- [x] 书签分组管理
-- [x] 分组 CRUD（创建、读取、更新、删除）
-- [x] 书签 CRUD
-- [x] 拖拽排序
-- [x] 搜索过滤
-- [ ] 批量导入（Chrome HTML / JSON / CSV）
-- [ ] Favicon 自动获取
+项目继续使用现有 Dexie 多数据库架构，没有更换数据库方案。
 
-### 2. 便签模块 (Notes)
-- [ ] Notion风格块编辑器
-- [ ] Markdown 支持
-- [ ] 日记/笔记分类
-- [ ] 标签系统
-- [ ] 搜索功能
+### 系统数据库 `NavPageSystemDB`
 
-### 3. AI模块 (AI) - 预留
-- [ ] AI自动整理书签
-- [ ] AI自动分组建议
-- [ ] AI读取网页内容 → 保存到便签
-- [ ] 支持OpenAI / GLM接口
+| 表名 | 用途 |
+| --- | --- |
+| `users` | 用户账户信息 |
+| `registrationRequests` | 注册申请记录 |
+| `meta` | 系统元数据、Telegram 配置等 |
 
-### 4. 导入模块 (Import)
-- [ ] Chrome书签HTML导入
-- [ ] JSON格式导入
-- [ ] CSV格式导入
-- [ ] 导出备份
+### 用户数据库 `NavPageDB_{userId}`
 
-### 5. 设置模块 (Settings)
-- [ ] 暗色/亮色主题切换
-- [ ] AI接口配置
-- [ ] 数据备份/恢复
-- [ ] 清除数据
+每个用户独立一套数据库实例：
 
-### 6. 浏览器扩展 (Extension)
-- [ ] 一键添加当前页面到导航
-- [ ] 弹窗选择分组
-- [ ] 支持新建分组
-- [ ] Chrome / Firefox 兼容
+| 表名 | 用途 |
+| --- | --- |
+| `groups` | 导航分组 |
+| `bookmarks` | 书签收藏 |
+| `notes` | 备忘录 / 日记 |
+| `customEngines` | 自定义搜索引擎 |
+| `shares` | 笔记分享记录 |
+| `settings` | 用户设置 |
 
-## 项目结构
+## 当前已完成
 
-```
-nav-page/
-├── app/                              # 主应用
-│   ├── public/
-│   ├── src/
-│   │   ├── modules/                  # 功能模块
-│   │   │   ├── navigation/
-│   │   │   │   ├── components/
-│   │   │   │   │   ├── NavGroup.vue
-│   │   │   │   │   ├── NavItem.vue
-│   │   │   │   │   └── AddToNav.vue
-│   │   │   │   └── Navigation.vue
-│   │   │   │
-│   │   │   ├── notes/
-│   │   │   │   ├── components/
-│   │   │   │   │   ├── NoteCard.vue
-│   │   │   │   │   └── NoteEditor.vue
-│   │   │   │   └── Notes.vue
-│   │   │   │
-│   │   │   ├── ai/
-│   │   │   │   ├── components/
-│   │   │   │   │   ├── AutoOrganize.vue
-│   │   │   │   │   └── WebSummary.vue
-│   │   │   │   └── AI.vue
-│   │   │   │
-│   │   │   ├── import/
-│   │   │   │   └── Import.vue
-│   │   │   │
-│   │   │   └── settings/
-│   │   │       └── Settings.vue
-│   │   │
-│   │   ├── shared/                   # 共享资源
-│   │   │   ├── db/
-│   │   │   │   └── database.js       # Dexie数据库封装
-│   │   │   ├── components/
-│   │   │   │   ├── Modal.vue
-│   │   │   │   ├── Button.vue
-│   │   │   │   ├── Card.vue
-│   │   │   │   └── ThemeToggle.vue
-│   │   │   └── composables/
-│   │   │       ├── useTheme.js
-│   │   │       ├── useDB.js
-│   │   │       └── useShortcuts.js
-│   │   │
-│   │   ├── styles/
-│   │   │   ├── variables.css         # CSS变量（主题）
-│   │   │   ├── reset.css
-│   │   │   └── notion.css
-│   │   │
-│   │   ├── router/
-│   │   │   └── index.js
-│   │   │
-│   │   ├── App.vue
-│   │   └── main.js
-│   │
-│   ├── index.html
-│   ├── package.json
-│   ├── vite.config.js
-│   └── README.md
-│
-├── extension/                        # 浏览器扩展
-│   ├── manifest.json
-│   ├── popup/
-│   │   ├── popup.html
-│   │   ├── popup.js
-│   │   └── popup.css
-│   ├── content/
-│   │   └── content.js
-│   ├── background/
-│   │   └── background.js
-│   └── icons/
-│       ├── icon16.png
-│       ├── icon48.png
-│       └── icon128.png
-│
-├── scripts/
-│   └── install.sh                    # 一键安装脚本
-│
-├── PROJECT.md                        # 项目文档（本文件）
-├── README.md
-└── package.json                      # 根package.json（工作区）
-```
+### 导航模块
 
-## 数据结构
+- 书签分组 CRUD
+- 书签 CRUD
+- 搜索框搜索
+- 首页可直接切换搜索引擎
+- 设置中可控制前台显示哪些搜索引擎
 
-### 书签分组 (groups)
-```javascript
-{
-  id: 'uuid',
-  name: '开发工具',
-  icon: '🔧',
-  color: '#3b82f6',
-  order: 0,
-  collapsed: false,
-  createdAt: 1710691200000,
-  updatedAt: 1710691200000
-}
-```
+### 时光模块
 
-### 书签/导航链接 (bookmarks)
-```javascript
-{
-  id: 'uuid',
-  groupId: 'group-uuid',
-  title: 'Vue.js',
-  url: 'https://vuejs.org',
-  favicon: 'https://vuejs.org/logo.svg',
-  description: 'The Progressive JavaScript Framework',
-  tags: ['vue', 'frontend', 'doc'],
-  aiSummary: '',           // AI总结内容（预留）
-  order: 0,
-  createdAt: 1710691200000,
-  updatedAt: 1710691200000
-}
-```
+- 备忘录 / 日记创建与保存
+- 置顶、删除、分享基础能力
+- 点击卡片弹出预览
+- 新建逻辑与保存问题修复
 
-### 个人便签 (notes)
-```javascript
-{
-  id: 'uuid',
-  title: '2024-03-17 学习笔记',
-  content: '<p>HTML内容...</p>',
-  contentPlain: '纯文本内容...',
-  type: 'daily',           // 'daily' | 'note'
-  tags: ['学习', '前端'],
-  sourceUrl: '',           // 来源网页（AI抓取时）
-  order: 0,
-  createdAt: 1710691200000,
-  updatedAt: 1710691200000
-}
-```
+### 设置模块
 
-### 设置 (settings)
-```javascript
-{
-  id: 'theme',
-  value: 'light'           // 'light' | 'dark' | 'system'
-},
-{
-  id: 'aiConfig',
-  value: {
-    provider: 'openai',    // 'openai' | 'glm' | 'custom'
-    apiKey: '',
-    baseUrl: '',
-    model: 'gpt-4'
-  }
-}
-```
+- 亮色 / 暗色 / 跟随系统
+- 内置配色方案
+- 自定义主题配色
+- 自定义站点图标 / favicon
+- 搜索引擎管理
+- ChatGPT Search / Brave Search 接入配置入口
+- 数据导入导出 / 清空
 
-## 开发阶段
+### 用户与权限
 
-### Phase 1: 基础框架 (核心)
-- [x] 项目初始化
-- [ ] Vue Router 配置
-- [ ] Dexie 数据库封装
-- [ ] 基础 Notion 风格样式
-- [ ] 导航模块基础功能
-- [ ] 分组 CRUD
-- [ ] 书签 CRUD
+- 默认管理员账号已内置
+- 登录 / 注册页面
+- 注册需审批后才可登录
+- 管理员设置页可本地批准 / 拒绝注册
+- 用户数据按用户数据库隔离
 
-### Phase 2: 导航增强
-- [ ] 拖拽排序
-- [ ] 搜索过滤
-- [ ] 批量导入
-- [ ] 浏览器扩展
+### Telegram 审批
 
-### Phase 3: 便签模块
-- [ ] Tiptap 编辑器集成
-- [ ] 便签 CRUD
-- [ ] 标签系统
-- [ ] 搜索功能
+- 管理员可在设置里配置自己的 Bot Token 与 Chat ID
+- 注册申请可通知到 Telegram
+- 支持 Telegram 批准 / 拒绝命令同步
+- 不再把 Telegram 配置写死在项目里
 
-### Phase 4: 样式完善
-- [ ] 暗色模式
-- [ ] 移动端适配
-- [ ] 动画优化
+## 当前待完成
 
-### Phase 5: AI 集成
-- [ ] AI 接口封装
-- [ ] 自动整理书签
-- [ ] 网页内容抓取
-- [ ] AI 分组建议
+### 高优先级
 
-## 主题配色
+- 中文乱码文案清理
+- 搜索引擎 API 真正执行层
+  - ChatGPT Search Proxy / API 接入落地
+  - Brave Search API 结果面板
+- 多设备同步方案
 
-### 亮色模式
-```css
---bg-primary: #ffffff;
---bg-secondary: #f7f6f3;
---bg-hover: #efefef;
---text-primary: #37352f;
---text-secondary: #787774;
---border-color: #e3e2e0;
---accent-color: #2383e2;
-```
+### 中优先级
 
-### 暗色模式
-```css
---bg-primary: #191919;
---bg-secondary: #202020;
---bg-hover: #2f2f2f;
---text-primary: #e6e6e6;
---text-secondary: #9b9a97;
---border-color: #373737;
---accent-color: #529cca;
-```
+- 自定义主题导入 / 导出
+- 搜索引擎隐藏 / 排序体验优化
+- 移动端交互优化
+- PWA 化，便于 iPhone 使用
 
-## 浏览器扩展通信
+### 后续方向
 
-### 扩展 → 主应用
-```javascript
-// 方式1: 打开主应用 + URL参数
-chrome.tabs.create({
-  url: `https://your-nav.com/add?url=${encodeURIComponent(url)}&title=${encodeURIComponent(title)}`
-});
+- OpenClaw / OpenAI 兼容接入
+- AI 搜索结果聚合面板
+- AI 书签整理 / 摘要 / 自动分类
+- 服务端同步与账户体系
 
-// 方式2: BroadcastChannel（如果主应用已打开）
-const channel = new BroadcastChannel('nav-page');
-channel.postMessage({
-  type: 'ADD_BOOKMARK',
-  data: { url, title, favicon }
-});
-```
+## 关于数据同步
 
-### 主应用监听
-```javascript
-// 监听 URL 参数
-const route = useRoute();
-if (route.query.url) {
-  // 打开添加弹窗
-  showAddModal(route.query.url, route.query.title);
-}
+当前项目虽然会部署到服务器，但只要数据仍然保存在浏览器 IndexedDB 中，就仍然是“设备本地数据”。
 
-// 监听 BroadcastChannel
-const channel = new BroadcastChannel('nav-page');
-channel.onmessage = (event) => {
-  if (event.data.type === 'ADD_BOOKMARK') {
-    showAddModal(event.data.data);
-  }
-};
-```
+这意味着：
 
-## 一键安装
+- 当前架构适合继续作为本地数据层
+- 以后如果要让 iPhone 和家里电脑共用同一份数据，仍需要服务端同步层
+- 推荐后续方案：`Dexie 本地缓存 + 服务端同步 API`
+
+## 当前建议的开发顺序
+
+1. 清理中文乱码文案
+2. 完成 ChatGPT Search / Brave Search 真正接口执行
+3. 增加搜索结果面板
+4. 设计服务端同步层
+5. 再接入 OpenClaw / OpenAI 能力
+
+## 本次里程碑
+
+本次保存点主要包含：
+
+- 用户系统与审批注册
+- Telegram 可配置化接入
+- 设置页保存 / 退出
+- 自定义主题
+- 搜索引擎显示管理
+- 搜索框快速切换引擎
+- 备忘录预览
+
+## 回滚方式
+
+如果后续出现问题，可以直接回滚到本次 Git 提交：
 
 ```bash
-# 安装项目
-bash <(curl -L -s https://your-domain.com/install.sh)
-
-# 或使用 npx
-npx create-nav-page
+git log --oneline
+git checkout <commit>
 ```
 
-## 开发命令
+如果只是想回到当前 `master` 的上一个版本：
 
 ```bash
-# 安装依赖
-pnpm install
-
-# 开发模式
-pnpm dev
-
-# 构建生产版本
-pnpm build
-
-# 构建浏览器扩展
-pnpm build:extension
-
-# 预览生产版本
-pnpm preview
+git reset --hard HEAD~1
 ```
 
-## 许可证
-
-MIT License
+注意：`reset --hard` 会丢弃未提交修改，使用前先确认。

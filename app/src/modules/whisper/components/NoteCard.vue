@@ -1,6 +1,6 @@
 <script setup>
-import { ref, computed } from 'vue'
-import { encrypt, decrypt, obfuscate } from '@/shared/utils/crypto'
+import { computed, ref } from 'vue'
+import { decrypt } from '@/shared/utils/crypto'
 
 const props = defineProps({
   note: {
@@ -9,31 +9,28 @@ const props = defineProps({
   }
 })
 
-const emit = defineEmits(['edit', 'delete', 'togglePin', 'share'])
+const emit = defineEmits(['preview', 'edit', 'delete', 'togglePin', 'share'])
 
 const showPasswordModal = ref(false)
 const password = ref('')
 const decryptedContent = ref('')
 const decryptError = ref(false)
 
-// 是否加密
 const isEncrypted = computed(() => props.note.encrypted)
-
-// 是否置顶
 const isPinned = computed(() => props.note.pinned)
 
-// 预览内容
 const previewContent = computed(() => {
   if (isEncrypted.value) {
-    return '🔒 内容已加密'
+    return '已加密内容，点击解密后可预览'
   }
+
   if (decryptedContent.value) {
     return decryptedContent.value
   }
+
   return props.note.content?.slice(0, 100) || ''
 })
 
-// 格式化日期
 function formatDate(timestamp) {
   const date = new Date(timestamp)
   const now = new Date()
@@ -51,7 +48,6 @@ function formatDate(timestamp) {
   })
 }
 
-// 解密内容
 async function handleDecrypt() {
   if (!password.value) return
 
@@ -64,73 +60,46 @@ async function handleDecrypt() {
     decryptError.value = true
   }
 }
-
-function handleEdit() {
-  emit('edit', props.note)
-}
-
-function handleDelete() {
-  emit('delete', props.note)
-}
-
-function handleTogglePin() {
-  emit('togglePin', props.note)
-}
-
-function handleShare() {
-  emit('share', props.note)
-}
 </script>
 
 <template>
-  <div class="note-card card-float" :class="{ 'is-pinned': isPinned, 'is-encrypted': isEncrypted }">
-    <!-- 置顶标记 -->
+  <div class="note-card card-float" :class="{ 'is-pinned': isPinned, 'is-encrypted': isEncrypted }" @click="emit('preview', note)">
     <div v-if="isPinned" class="note-card__pin">📌</div>
 
-    <!-- 类型标记 -->
     <div class="note-card__type">
-      {{ note.type === 'memo' ? '📋 备忘录' : '📖 日记' }}
+      {{ note.type === 'memo' ? '备忘录' : '日记' }}
     </div>
 
-    <!-- 标题 -->
     <div class="note-card__title">{{ note.title }}</div>
 
-    <!-- 内容预览 -->
     <div class="note-card__content">
       {{ previewContent }}
       <span v-if="!isEncrypted && note.content?.length > 100">...</span>
     </div>
 
-    <!-- 底部信息 -->
     <div class="note-card__footer">
       <span class="note-card__date">{{ formatDate(note.updatedAt) }}</span>
-
-      <!-- 分享状态 -->
-      <span v-if="note.share?.enabled" class="note-card__share-status">
-        🔗 已分享
-      </span>
+      <span v-if="note.share?.enabled" class="note-card__share-status">已分享</span>
     </div>
 
-    <!-- 操作按钮 -->
-    <div class="note-card__actions">
-      <button class="action-btn" :title="isPinned ? '取消置顶' : '置顶'" @click="handleTogglePin">
+    <div class="note-card__actions" @click.stop>
+      <button class="action-btn" :title="isPinned ? '取消置顶' : '置顶'" @click="emit('togglePin', note)">
         {{ isPinned ? '📌' : '📍' }}
       </button>
       <button v-if="isEncrypted && !decryptedContent" class="action-btn" title="解密查看" @click="showPasswordModal = true">
-        🔓
+        🔐
       </button>
-      <button class="action-btn" title="分享" @click="handleShare">
+      <button class="action-btn" title="分享" @click="emit('share', note)">
         🔗
       </button>
-      <button class="action-btn" title="编辑" @click="handleEdit">
+      <button class="action-btn" title="编辑" @click="emit('edit', note)">
         ✏️
       </button>
-      <button class="action-btn action-btn--danger" title="删除" @click="handleDelete">
-        🗑️
+      <button class="action-btn action-btn--danger" title="删除" @click="emit('delete', note)">
+        🗑
       </button>
     </div>
 
-    <!-- 密码输入弹窗 -->
     <div v-if="showPasswordModal" class="password-modal" @click.self="showPasswordModal = false">
       <div class="password-modal__content">
         <h3>输入密码解密</h3>
@@ -252,7 +221,6 @@ function handleShare() {
   background: var(--error-color);
 }
 
-/* 密码弹窗 */
 .password-modal {
   position: fixed;
   inset: 0;
@@ -276,16 +244,20 @@ function handleShare() {
   color: var(--text-primary);
 }
 
-.password-modal__content .input {
+.input {
   width: 100%;
-  padding: 12px;
-  margin-bottom: 8px;
+  padding: 12px 16px;
+  font-size: 14px;
+  color: var(--text-primary);
+  background: var(--bg-secondary);
+  border: 1px solid var(--border-color);
+  border-radius: var(--radius-md);
 }
 
 .error {
   color: var(--error-color);
   font-size: 12px;
-  margin-bottom: 12px;
+  margin: 10px 0 0;
 }
 
 .password-modal__actions {
@@ -295,7 +267,6 @@ function handleShare() {
   margin-top: 16px;
 }
 
-/* 按钮样式 */
 .btn {
   padding: 8px 20px;
   border: none;
@@ -303,7 +274,6 @@ function handleShare() {
   font-size: 14px;
   font-weight: 500;
   cursor: pointer;
-  transition: all var(--transition-fast);
 }
 
 .btn--primary {
@@ -314,21 +284,5 @@ function handleShare() {
 .btn--secondary {
   background: var(--bg-secondary);
   color: var(--text-primary);
-}
-
-.input {
-  width: 100%;
-  padding: 12px 16px;
-  font-size: 14px;
-  color: var(--text-primary);
-  background: var(--bg-secondary);
-  border: 2px solid transparent;
-  border-radius: var(--radius-md);
-  outline: none;
-  transition: all var(--transition-fast);
-}
-
-.input:focus {
-  border-color: var(--accent-color);
 }
 </style>

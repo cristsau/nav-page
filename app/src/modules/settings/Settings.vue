@@ -1,54 +1,88 @@
 <script setup>
+import { onMounted, ref } from 'vue'
 import { useRouter } from 'vue-router'
 import GeneralSettings from './components/GeneralSettings.vue'
 import AppearanceSettings from './components/AppearanceSettings.vue'
 import SearchSettings from './components/SearchSettings.vue'
 import DataSettings from './components/DataSettings.vue'
+import UserManagementSettings from './components/UserManagementSettings.vue'
+import { useConfig } from '@/shared/composables/useConfig'
+import { useAuth } from '@/shared/composables/useAuth'
 
 const router = useRouter()
+const saving = ref(false)
+const saveMessage = ref('')
+
+const { persistConfigNow } = useConfig()
+const { currentUser, logout, initAuth } = useAuth()
+
+onMounted(async () => {
+  await initAuth()
+})
 
 function goBack() {
   router.push('/')
+}
+
+async function handleSave() {
+  saving.value = true
+  saveMessage.value = ''
+
+  try {
+    await persistConfigNow()
+    saveMessage.value = '设置已保存并立即生效'
+  } catch (error) {
+    saveMessage.value = error.message || '设置保存失败'
+  } finally {
+    saving.value = false
+  }
+}
+
+async function handleExit() {
+  await logout()
+  window.location.assign('/auth')
 }
 </script>
 
 <template>
   <div class="page">
-    <!-- 顶部导航 -->
     <header class="header">
       <div class="header__left">
         <button class="header__btn" @click="goBack">←</button>
-        <h1 class="header__title">⚙️ 设置</h1>
+        <div>
+          <h1 class="header__title">⚙️ 设置</h1>
+          <p class="header__subtitle">当前用户：{{ currentUser?.username || '未登录' }}</p>
+        </div>
+      </div>
+      <div class="header__actions">
+        <button class="header__btn header__btn--primary" :disabled="saving" @click="handleSave">
+          {{ saving ? '保存中...' : '保存' }}
+        </button>
+        <button class="header__btn" @click="handleExit">退出</button>
       </div>
     </header>
 
-    <!-- 设置内容 -->
     <main class="main">
+      <div v-if="saveMessage" class="save-message">{{ saveMessage }}</div>
+
       <div class="settings-container">
-        <!-- 基础设置 -->
         <GeneralSettings />
-
-        <!-- 外观设置 -->
         <AppearanceSettings />
-
-        <!-- 搜索设置 -->
         <SearchSettings />
-
-        <!-- 数据管理 -->
+        <UserManagementSettings />
         <DataSettings />
 
-        <!-- 关于 -->
         <div class="about-section">
-          <div class="about-section__logo">📍 NAV</div>
+          <div class="about-section__logo">NAV</div>
           <div class="about-section__info">
-            <p class="about-section__version">版本 2.0.0</p>
-            <p class="about-section__desc">轻量化、扁平化奶油风格的个人导航页</p>
+            <p class="about-section__version">版本 2.1.0</p>
+            <p class="about-section__desc">支持多用户、本地审批和 Telegram 审批联动的导航页。</p>
           </div>
           <div class="about-section__features">
-            <span>✨ 模块化设计</span>
-            <span>🎨 自定义主题</span>
-            <span>🔒 本地加密</span>
-            <span>🔗 一键分享</span>
+            <span>多用户隔离</span>
+            <span>审批式注册</span>
+            <span>主题与搜索强制保存</span>
+            <span>Telegram 同步审批</span>
           </div>
         </div>
       </div>
@@ -62,7 +96,6 @@ function goBack() {
   background: var(--bg-primary);
 }
 
-/* 顶部导航 */
 .header {
   position: sticky;
   top: 0;
@@ -70,10 +103,11 @@ function goBack() {
   display: flex;
   align-items: center;
   justify-content: space-between;
-  height: var(--header-height);
-  padding: 0 24px;
-  background: var(--bg-primary);
+  gap: 16px;
+  padding: 18px 24px;
+  background: color-mix(in srgb, var(--bg-primary) 88%, transparent);
   border-bottom: 1px solid var(--border-light);
+  backdrop-filter: blur(18px);
 }
 
 .header__left {
@@ -82,36 +116,61 @@ function goBack() {
   gap: 12px;
 }
 
-.header__btn {
-  width: 40px;
-  height: 40px;
-  display: flex;
-  align-items: center;
-  justify-content: center;
-  background: var(--bg-secondary);
-  border: none;
-  border-radius: var(--radius-md);
-  font-size: 18px;
-  cursor: pointer;
-  transition: all var(--transition-fast);
-}
-
-.header__btn:hover {
-  background: var(--bg-hover);
-}
-
 .header__title {
-  font-size: 20px;
-  font-weight: 600;
+  margin: 0;
+  font-size: 22px;
   color: var(--text-primary);
 }
 
-/* 主内容 */
+.header__subtitle {
+  margin: 6px 0 0;
+  font-size: 12px;
+  color: var(--text-muted);
+}
+
+.header__actions {
+  display: flex;
+  gap: 10px;
+}
+
+.header__btn {
+  min-width: 44px;
+  height: 44px;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  padding: 0 18px;
+  background: var(--bg-secondary);
+  color: var(--text-primary);
+  border: none;
+  border-radius: 16px;
+  cursor: pointer;
+  transition: all 0.2s ease;
+}
+
+.header__btn--primary {
+  background: var(--accent-color);
+  color: #fff;
+}
+
+.header__btn:disabled {
+  opacity: 0.7;
+  cursor: wait;
+}
+
 .main {
-  max-width: 800px;
+  max-width: 860px;
   margin: 0 auto;
-  padding: 24px;
-  padding-bottom: 48px;
+  padding: 24px 24px 48px;
+}
+
+.save-message {
+  margin-bottom: 16px;
+  padding: 14px 16px;
+  border-radius: 16px;
+  background: var(--bg-card);
+  border: 1px solid var(--border-light);
+  color: var(--text-secondary);
 }
 
 .settings-container {
@@ -120,7 +179,6 @@ function goBack() {
   gap: 24px;
 }
 
-/* 关于区块 */
 .about-section {
   text-align: center;
   padding: 32px 24px;
@@ -134,6 +192,7 @@ function goBack() {
   font-weight: 700;
   color: var(--text-primary);
   margin-bottom: 12px;
+  letter-spacing: 0.2em;
 }
 
 .about-section__version {
@@ -152,24 +211,35 @@ function goBack() {
   display: flex;
   flex-wrap: wrap;
   justify-content: center;
-  gap: 16px;
+  gap: 12px;
 }
 
 .about-section__features span {
   font-size: 13px;
   color: var(--text-secondary);
-  padding: 6px 12px;
+  padding: 8px 14px;
   background: var(--bg-secondary);
   border-radius: var(--radius-full);
 }
 
 @media (max-width: 640px) {
-  .header {
-    padding: 0 16px;
+  .header,
+  .main {
+    padding-left: 16px;
+    padding-right: 16px;
   }
 
-  .main {
-    padding: 16px;
+  .header {
+    flex-direction: column;
+    align-items: stretch;
+  }
+
+  .header__actions {
+    justify-content: stretch;
+  }
+
+  .header__btn {
+    flex: 1;
   }
 }
 </style>

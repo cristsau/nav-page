@@ -1,74 +1,72 @@
 <script setup>
-import { ref, computed, onMounted, watch } from 'vue'
-import { useConfig, searchEngines } from '@/shared/composables/useConfig'
+import { ref, computed, onMounted } from 'vue'
+import { useConfig } from '@/shared/composables/useConfig'
 import { getCustomEngines, addCustomEngine, updateCustomEngine, deleteCustomEngine } from '@/shared/db/database'
 
-const { config, updateConfig } = useConfig()
+const { config, updateConfig, getAllSearchEngines, loadCustomSearchEngines } = useConfig()
 
-// 内置搜索引擎列表
-const builtInEngines = Object.entries(searchEngines).map(([key, value]) => ({
-  id: key,
-  ...value,
-  isBuiltIn: true
-}))
-
-// 自定义搜索引擎
 const customEngines = ref([])
-
-// 所有搜索引擎
-const allEngines = computed(() => [...builtInEngines, ...customEngines.value])
-
-// 聚合搜索设置
-const aggregateEnabled = computed(() => config.value.search?.aggregate?.enabled || false)
-const aggregateEngines = computed(() => config.value.search?.aggregate?.engines || [])
-
-// 显示添加引擎弹窗
 const showAddModal = ref(false)
 const editingEngine = ref(null)
-
-// 表单数据
 const formData = ref({
   name: '',
-  icon: '🔍',
+  icon: '🔎',
   url: ''
 })
 
-// 加载自定义搜索引擎
+const allEngines = computed(() => getAllSearchEngines())
+const aggregateEnabled = computed(() => config.value.search?.aggregate?.enabled || false)
+const quickAccessIds = computed(() => config.value.search?.quickAccessEngineIds || [])
+
 async function loadCustomEngines() {
   try {
     customEngines.value = await getCustomEngines()
-  } catch (e) {
+  } catch {
     customEngines.value = []
   }
 }
 
-onMounted(() => {
-  loadCustomEngines()
+onMounted(async () => {
+  await loadCustomEngines()
+  await loadCustomSearchEngines()
 })
 
-// 选择搜索引擎
 function selectEngine(engineId) {
   updateConfig('searchEngine', engineId)
 }
 
-// 打开添加弹窗
+function toggleQuickAccess(engineId) {
+  const list = [...quickAccessIds.value]
+  const index = list.indexOf(engineId)
+
+  if (index >= 0) {
+    list.splice(index, 1)
+  } else {
+    list.push(engineId)
+  }
+
+  updateConfig('search.quickAccessEngineIds', list)
+}
+
+function isQuickAccess(engineId) {
+  return quickAccessIds.value.includes(engineId)
+}
+
 function openAddModal() {
   editingEngine.value = null
-  formData.value = { name: '', icon: '🔍', url: '' }
+  formData.value = { name: '', icon: '🔎', url: '' }
   showAddModal.value = true
 }
 
-// 编辑自定义引擎
 function editEngine(engine) {
   editingEngine.value = engine
   formData.value = { name: engine.name, icon: engine.icon, url: engine.url }
   showAddModal.value = true
 }
 
-// 保存自定义引擎
 async function saveEngine() {
   if (!formData.value.name || !formData.value.url) {
-    alert('请填写名称和URL')
+    alert('请填写名称和 URL')
     return
   }
 
@@ -80,42 +78,33 @@ async function saveEngine() {
 
   showAddModal.value = false
   await loadCustomEngines()
+  await loadCustomSearchEngines()
 }
 
-// 删除自定义引擎
-async function deleteEngine(engine) {
-  if (!confirm(`确定删除「${engine.name}」？`)) return
+async function removeEngine(engine) {
+  if (!confirm(`确定删除 ${engine.name} 吗？`)) return
   await deleteCustomEngine(engine.id)
   await loadCustomEngines()
+  await loadCustomSearchEngines()
 }
 
-// 切换聚合搜索
 function toggleAggregate() {
-  const currentEngines = config.value.search?.aggregate?.engines || []
-  updateConfig('search.aggregate', {
-    enabled: !aggregateEnabled.value,
-    engines: currentEngines
-  })
+  updateConfig('search.aggregate.enabled', !aggregateEnabled.value)
 }
 
-// 切换聚合引擎
 function toggleAggregateEngine(engineId) {
   const engines = [...(config.value.search?.aggregate?.engines || [])]
   const index = engines.indexOf(engineId)
 
-  if (index > -1) {
+  if (index >= 0) {
     engines.splice(index, 1)
   } else {
     engines.push(engineId)
   }
 
-  updateConfig('search.aggregate', {
-    enabled: aggregateEnabled.value,
-    engines
-  })
+  updateConfig('search.aggregate.engines', engines)
 }
 
-// 检查引擎是否在聚合列表中
 function isAggregateEngine(engineId) {
   return (config.value.search?.aggregate?.engines || []).includes(engineId)
 }
@@ -123,13 +112,12 @@ function isAggregateEngine(engineId) {
 
 <template>
   <div class="settings-section">
-    <h3 class="settings-section__title">🔍 搜索设置</h3>
+    <h3 class="settings-section__title">搜索设置</h3>
 
-    <!-- 默认搜索引擎 -->
     <div class="settings-item">
       <div class="settings-item__info">
         <div class="settings-item__label">默认搜索引擎</div>
-        <div class="settings-item__desc">选择搜索时使用的引擎</div>
+        <div class="settings-item__desc">支持百度、Google、Bing、Brave 和 ChatGPT Search</div>
       </div>
       <div class="settings-item__control">
         <div class="engine-grid">
@@ -142,21 +130,42 @@ function isAggregateEngine(engineId) {
           >
             <span class="engine-option__icon">{{ engine.icon }}</span>
             <span class="engine-option__name">{{ engine.name }}</span>
-            <span v-if="!engine.isBuiltIn" class="engine-option__badge">自定义</span>
             <div v-if="!engine.isBuiltIn" class="engine-option__actions" @click.stop>
               <button class="action-btn" @click="editEngine(engine)">✏️</button>
-              <button class="action-btn action-btn--danger" @click="deleteEngine(engine)">🗑️</button>
+              <button class="action-btn action-btn--danger" @click="removeEngine(engine)">🗑</button>
             </div>
           </button>
           <button class="engine-option engine-option--add" @click="openAddModal">
-            <span class="engine-option__icon">➕</span>
+            <span class="engine-option__icon">＋</span>
             <span class="engine-option__name">添加</span>
           </button>
         </div>
       </div>
     </div>
 
-    <!-- 聚合搜索 -->
+    <div class="settings-item settings-item--stack">
+      <div class="settings-item__info">
+        <div class="settings-item__label">前台快速切换引擎</div>
+        <div class="settings-item__desc">这里勾选的引擎才会出现在首页搜索框的切换菜单里</div>
+      </div>
+      <div class="checkbox-grid">
+        <label
+          v-for="engine in allEngines"
+          :key="`${engine.id}-quick`"
+          class="checkbox-item"
+          :class="{ 'is-checked': isQuickAccess(engine.id) }"
+        >
+          <input
+            type="checkbox"
+            :checked="isQuickAccess(engine.id)"
+            @change="toggleQuickAccess(engine.id)"
+          >
+          <span>{{ engine.icon }}</span>
+          <span>{{ engine.name }}</span>
+        </label>
+      </div>
+    </div>
+
     <div class="settings-item">
       <div class="settings-item__info">
         <div class="settings-item__label">聚合搜索</div>
@@ -170,38 +179,138 @@ function isAggregateEngine(engineId) {
       </div>
     </div>
 
-    <!-- 聚合引擎选择 -->
-    <div v-if="aggregateEnabled" class="settings-item">
+    <div v-if="aggregateEnabled" class="settings-item settings-item--stack">
       <div class="settings-item__info">
-        <div class="settings-item__label">选择聚合引擎</div>
-        <div class="settings-item__desc">勾选要同时搜索的引擎（至少选2个）</div>
+        <div class="settings-item__label">聚合引擎列表</div>
+        <div class="settings-item__desc">勾选要一起打开的搜索引擎</div>
       </div>
-      <div class="settings-item__control">
-        <div class="checkbox-grid">
-          <label
-            v-for="engine in allEngines"
-            :key="engine.id"
-            class="checkbox-item"
-            :class="{ 'is-checked': isAggregateEngine(engine.id) }"
+      <div class="checkbox-grid">
+        <label
+          v-for="engine in allEngines"
+          :key="`${engine.id}-aggregate`"
+          class="checkbox-item"
+          :class="{ 'is-checked': isAggregateEngine(engine.id) }"
+        >
+          <input
+            type="checkbox"
+            :checked="isAggregateEngine(engine.id)"
+            @change="toggleAggregateEngine(engine.id)"
           >
-            <input
-              type="checkbox"
-              :checked="isAggregateEngine(engine.id)"
-              @change="toggleAggregateEngine(engine.id)"
-            >
-            <span class="checkbox-item__icon">{{ engine.icon }}</span>
-            <span class="checkbox-item__label">{{ engine.name }}</span>
-          </label>
-        </div>
+          <span>{{ engine.icon }}</span>
+          <span>{{ engine.name }}</span>
+        </label>
       </div>
     </div>
 
-    <!-- 添加/编辑弹窗 -->
+    <div class="settings-item settings-item--stack">
+      <div class="settings-item__info">
+        <div class="settings-item__label">ChatGPT Search 接入</div>
+        <div class="settings-item__desc">支持 CLI Proxy / API 方式保存配置。目前前台先做接入入口和回退打开 ChatGPT。</div>
+      </div>
+      <div class="provider-grid">
+        <label class="provider-field">
+          <span>启用</span>
+          <input
+            type="checkbox"
+            :checked="config.search?.providers?.chatgpt?.enabled"
+            @change="updateConfig('search.providers.chatgpt.enabled', $event.target.checked)"
+          >
+        </label>
+        <label class="provider-field">
+          <span>接入模式</span>
+          <select
+            class="input"
+            :value="config.search?.providers?.chatgpt?.mode"
+            @change="updateConfig('search.providers.chatgpt.mode', $event.target.value)"
+          >
+            <option value="proxy">CLI Proxy / API Management Center</option>
+            <option value="api">OpenAI API</option>
+          </select>
+        </label>
+        <label class="provider-field">
+          <span>Proxy Base URL</span>
+          <input
+            class="input"
+            type="text"
+            :value="config.search?.providers?.chatgpt?.cliProxyBaseUrl"
+            placeholder="https://your-proxy.example.com"
+            @input="updateConfig('search.providers.chatgpt.cliProxyBaseUrl', $event.target.value)"
+          >
+        </label>
+        <label class="provider-field">
+          <span>API Endpoint</span>
+          <input
+            class="input"
+            type="text"
+            :value="config.search?.providers?.chatgpt?.endpoint"
+            placeholder="https://api.openai.com/v1/..."
+            @input="updateConfig('search.providers.chatgpt.endpoint', $event.target.value)"
+          >
+        </label>
+        <label class="provider-field">
+          <span>API Key</span>
+          <input
+            class="input"
+            type="password"
+            :value="config.search?.providers?.chatgpt?.apiKey"
+            placeholder="输入 API Key"
+            @input="updateConfig('search.providers.chatgpt.apiKey', $event.target.value)"
+          >
+        </label>
+        <label class="provider-field">
+          <span>Model</span>
+          <input
+            class="input"
+            type="text"
+            :value="config.search?.providers?.chatgpt?.model"
+            placeholder="gpt-4.1 / gpt-5..."
+            @input="updateConfig('search.providers.chatgpt.model', $event.target.value)"
+          >
+        </label>
+      </div>
+    </div>
+
+    <div class="settings-item settings-item--stack">
+      <div class="settings-item__info">
+        <div class="settings-item__label">Brave Search API 接入</div>
+        <div class="settings-item__desc">可先保存接口配置，后续我们再把前台 AI 搜索结果面板接上</div>
+      </div>
+      <div class="provider-grid">
+        <label class="provider-field">
+          <span>启用</span>
+          <input
+            type="checkbox"
+            :checked="config.search?.providers?.brave?.enabled"
+            @change="updateConfig('search.providers.brave.enabled', $event.target.checked)"
+          >
+        </label>
+        <label class="provider-field">
+          <span>Endpoint</span>
+          <input
+            class="input"
+            type="text"
+            :value="config.search?.providers?.brave?.endpoint"
+            @input="updateConfig('search.providers.brave.endpoint', $event.target.value)"
+          >
+        </label>
+        <label class="provider-field">
+          <span>API Key</span>
+          <input
+            class="input"
+            type="password"
+            :value="config.search?.providers?.brave?.apiKey"
+            placeholder="输入 Brave Search API Key"
+            @input="updateConfig('search.providers.brave.apiKey', $event.target.value)"
+          >
+        </label>
+      </div>
+    </div>
+
     <div v-if="showAddModal" class="modal-overlay" @click.self="showAddModal = false">
       <div class="modal-content">
         <div class="modal__header">
           <h3>{{ editingEngine ? '编辑搜索引擎' : '添加搜索引擎' }}</h3>
-          <button class="modal__close" @click="showAddModal = false">✕</button>
+          <button class="modal__close" @click="showAddModal = false">×</button>
         </div>
         <div class="modal__body">
           <div class="form-group">
@@ -209,13 +318,12 @@ function isAggregateEngine(engineId) {
             <input v-model="formData.name" type="text" class="input" placeholder="搜索引擎名称">
           </div>
           <div class="form-group">
-            <label class="form-label">图标（emoji）</label>
-            <input v-model="formData.icon" type="text" class="input" placeholder="🔍">
+            <label class="form-label">图标</label>
+            <input v-model="formData.icon" type="text" class="input" placeholder="🔎">
           </div>
           <div class="form-group">
-            <label class="form-label">搜索URL</label>
+            <label class="form-label">搜索 URL</label>
             <input v-model="formData.url" type="text" class="input" placeholder="https://example.com/search?q=">
-            <p class="form-hint">搜索词会自动拼接到URL末尾</p>
           </div>
         </div>
         <div class="modal__footer">
@@ -253,6 +361,10 @@ function isAggregateEngine(engineId) {
   border-bottom: 1px solid var(--border-light);
 }
 
+.settings-item--stack {
+  display: block;
+}
+
 .settings-item:last-child {
   border-bottom: none;
 }
@@ -274,16 +386,11 @@ function isAggregateEngine(engineId) {
   margin-top: 4px;
 }
 
-.settings-item__control {
-  flex-shrink: 0;
-}
-
-/* 搜索引擎网格 */
 .engine-grid {
   display: grid;
   grid-template-columns: repeat(4, 1fr);
   gap: 8px;
-  width: 300px;
+  width: 360px;
 }
 
 .engine-option {
@@ -296,11 +403,6 @@ function isAggregateEngine(engineId) {
   border: none;
   border-radius: var(--radius-md);
   cursor: pointer;
-  transition: all 0.2s;
-}
-
-.engine-option:hover {
-  background: var(--bg-hover);
 }
 
 .engine-option.is-active {
@@ -316,29 +418,15 @@ function isAggregateEngine(engineId) {
 .engine-option__name {
   font-size: 11px;
   color: var(--text-secondary);
-}
-
-.engine-option__badge {
-  position: absolute;
-  top: 4px;
-  right: 4px;
-  font-size: 9px;
-  padding: 1px 4px;
-  background: var(--accent-color);
-  color: #fff;
-  border-radius: 4px;
+  text-align: center;
 }
 
 .engine-option__actions {
   position: absolute;
-  top: 2px;
-  right: 2px;
-  display: none;
-  gap: 2px;
-}
-
-.engine-option:hover .engine-option__actions {
+  top: 4px;
+  right: 4px;
   display: flex;
+  gap: 4px;
 }
 
 .engine-option--add {
@@ -346,29 +434,57 @@ function isAggregateEngine(engineId) {
   background: transparent;
 }
 
-.engine-option--add:hover {
-  border-color: var(--accent-color);
+.checkbox-grid {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+  margin-top: 14px;
 }
 
-.action-btn {
-  width: 18px;
-  height: 18px;
+.checkbox-item {
   display: flex;
   align-items: center;
-  justify-content: center;
-  background: var(--bg-card);
-  border: none;
-  border-radius: 4px;
-  font-size: 10px;
+  gap: 6px;
+  padding: 8px 12px;
+  background: var(--bg-secondary);
+  border-radius: 999px;
   cursor: pointer;
+  color: var(--text-primary);
 }
 
-.action-btn--danger:hover {
-  background: var(--error-color);
-  color: #fff;
+.checkbox-item.is-checked {
+  background: var(--accent-bg);
 }
 
-/* 开关 */
+.checkbox-item input {
+  display: none;
+}
+
+.provider-grid {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 12px;
+  margin-top: 14px;
+}
+
+.provider-field {
+  display: grid;
+  gap: 8px;
+  color: var(--text-secondary);
+  font-size: 13px;
+}
+
+.input {
+  width: 100%;
+  padding: 10px 14px;
+  font-size: 14px;
+  color: var(--text-primary);
+  background: var(--bg-secondary);
+  border: 1px solid var(--border-color);
+  border-radius: var(--radius-md);
+  outline: none;
+}
+
 .toggle {
   position: relative;
   display: inline-block;
@@ -385,8 +501,6 @@ function isAggregateEngine(engineId) {
   inset: 0;
   background: var(--bg-tertiary);
   border-radius: 13px;
-  cursor: pointer;
-  transition: all 0.2s;
 }
 
 .toggle__slider::before {
@@ -399,7 +513,6 @@ function isAggregateEngine(engineId) {
   background: #fff;
   border-radius: 50%;
   transition: all 0.2s;
-  box-shadow: 0 1px 3px rgba(0,0,0,0.1);
 }
 
 .toggle input:checked + .toggle__slider {
@@ -410,47 +523,6 @@ function isAggregateEngine(engineId) {
   transform: translateX(22px);
 }
 
-/* 复选框网格 */
-.checkbox-grid {
-  display: flex;
-  flex-wrap: wrap;
-  gap: 6px;
-  width: 300px;
-}
-
-.checkbox-item {
-  display: flex;
-  align-items: center;
-  gap: 4px;
-  padding: 5px 10px;
-  background: var(--bg-secondary);
-  border-radius: 20px;
-  cursor: pointer;
-  transition: all 0.2s;
-}
-
-.checkbox-item:hover {
-  background: var(--bg-hover);
-}
-
-.checkbox-item.is-checked {
-  background: var(--accent-bg);
-}
-
-.checkbox-item input {
-  display: none;
-}
-
-.checkbox-item__icon {
-  font-size: 12px;
-}
-
-.checkbox-item__label {
-  font-size: 11px;
-  color: var(--text-secondary);
-}
-
-/* 弹窗 */
 .modal-overlay {
   position: fixed;
   inset: 0;
@@ -462,13 +534,14 @@ function isAggregateEngine(engineId) {
 }
 
 .modal-content {
+  width: 420px;
+  max-width: 90vw;
   background: var(--bg-card);
   border-radius: var(--radius-lg);
-  width: 400px;
-  max-width: 90vw;
 }
 
-.modal__header {
+.modal__header,
+.modal__footer {
   display: flex;
   align-items: center;
   justify-content: space-between;
@@ -476,73 +549,33 @@ function isAggregateEngine(engineId) {
   border-bottom: 1px solid var(--border-light);
 }
 
-.modal__header h3 {
-  font-size: 16px;
-  color: var(--text-primary);
-}
-
-.modal__close {
-  width: 28px;
-  height: 28px;
-  display: flex;
-  align-items: center;
-  justify-content: center;
-  background: var(--bg-secondary);
-  border: none;
-  border-radius: 6px;
-  cursor: pointer;
+.modal__footer {
+  border-top: 1px solid var(--border-light);
+  border-bottom: none;
+  justify-content: flex-end;
+  gap: 8px;
 }
 
 .modal__body {
-  padding: 20px;
-}
-
-.modal__footer {
-  display: flex;
-  justify-content: flex-end;
-  gap: 12px;
-  padding: 16px 20px;
-  border-top: 1px solid var(--border-light);
+  padding: 18px 20px;
 }
 
 .form-group {
-  margin-bottom: 16px;
+  margin-bottom: 14px;
 }
 
 .form-label {
   display: block;
-  font-size: 13px;
-  color: var(--text-secondary);
   margin-bottom: 6px;
+  color: var(--text-secondary);
 }
 
-.form-hint {
-  font-size: 11px;
-  color: var(--text-muted);
-  margin-top: 4px;
-}
-
-.input {
-  width: 100%;
-  padding: 10px 14px;
-  font-size: 14px;
-  color: var(--text-primary);
-  background: var(--bg-secondary);
-  border: 2px solid transparent;
-  border-radius: var(--radius-md);
-  outline: none;
-}
-
-.input:focus {
-  border-color: var(--accent-color);
-}
-
-.btn {
-  padding: 10px 20px;
+.action-btn,
+.btn,
+.modal__close {
+  padding: 8px 12px;
   border: none;
   border-radius: var(--radius-md);
-  font-size: 14px;
-  font-weight: 500;
   cursor: pointer;
 }
 
@@ -551,28 +584,27 @@ function isAggregateEngine(engineId) {
   color: #fff;
 }
 
-.btn--secondary {
+.btn--secondary,
+.action-btn,
+.modal__close {
   background: var(--bg-secondary);
   color: var(--text-primary);
 }
 
-@media (max-width: 640px) {
+.action-btn--danger {
+  background: color-mix(in srgb, var(--error-color) 16%, var(--bg-secondary));
+}
+
+@media (max-width: 760px) {
+  .provider-grid,
+  .engine-grid {
+    grid-template-columns: repeat(2, 1fr);
+    width: 100%;
+  }
+
   .settings-item {
     flex-direction: column;
     gap: 12px;
-  }
-
-  .settings-item__info {
-    padding-right: 0;
-  }
-
-  .settings-item__control {
-    width: 100%;
-  }
-
-  .engine-grid,
-  .checkbox-grid {
-    width: 100%;
   }
 }
 </style>

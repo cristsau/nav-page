@@ -1,14 +1,18 @@
 import { createApp } from 'vue'
 import App from './App.vue'
 import router from './router'
+import { bootstrapSystem } from '@/shared/db/database'
 
-// 样式
 import './styles/reset.css'
 import './styles/variables.css'
 import './styles/animations.css'
 
-const app = createApp(App)
+async function bootstrapApp() {
+  await bootstrapSystem()
 
-app.use(router)
+  const app = createApp(App)
+  app.use(router)
+  app.mount('#app')
+}
 
-app.mount('#app')
+bootstrapApp()

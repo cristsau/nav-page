@@ -1,49 +1,56 @@
 <script setup>
-import { ref, onMounted, watch } from 'vue'
+import { ref, watch } from 'vue'
 import { useConfig } from '@/shared/composables/useConfig'
 
 const { config, updateConfig } = useConfig()
 
-// 本地表单
 const siteName = ref('')
 const siteIcon = ref('')
+const customIcon = ref('')
 const favicon = ref('')
 
-// 预设图标
-const presetIcons = [
-  '📍', '🚀', '⭐', '🎯', '💡', '🔥', '🌟', '📌',
-  '🔖', '🏷️', '🏠', '🌈', '☀️', '🌙', '⚡', '💎'
-]
+const presetIcons = ['🧭', '🌐', '📚', '📝', '⚡', '🎯', '📌', '💼', '🧠', '🛠', '🏠', '🚀', '☀️', '🌙', '⚙️', '🔖']
 
-// 监听 config 变化
-watch(() => config.value.site, (site) => {
-  if (site) {
+watch(
+  () => config.value.site,
+  (site) => {
+    if (!site) return
     siteName.value = site.name || 'NAV'
-    siteIcon.value = site.icon || '📍'
+    siteIcon.value = site.icon || '🧭'
+    customIcon.value = site.icon || ''
     favicon.value = site.favicon || ''
-  }
-}, { immediate: true, deep: true })
+  },
+  { immediate: true, deep: true }
+)
 
 function saveSettings() {
   updateConfig('site', {
-    name: siteName.value,
-    icon: siteIcon.value,
+    name: siteName.value.trim() || 'NAV',
+    icon: siteIcon.value || customIcon.value || '🧭',
     favicon: favicon.value
   })
 }
 
 function selectIcon(icon) {
   siteIcon.value = icon
+  customIcon.value = icon
   saveSettings()
 }
 
-function handleFaviconUpload(e) {
-  const file = e.target.files?.[0]
+function applyCustomIcon() {
+  const icon = customIcon.value.trim()
+  if (!icon) return
+  siteIcon.value = icon.slice(0, 2)
+  saveSettings()
+}
+
+function handleFaviconUpload(event) {
+  const file = event.target.files?.[0]
   if (!file) return
 
   const reader = new FileReader()
-  reader.onload = (event) => {
-    favicon.value = event.target.result
+  reader.onload = (loadEvent) => {
+    favicon.value = loadEvent.target.result
     saveSettings()
   }
   reader.readAsDataURL(file)
@@ -57,30 +64,22 @@ function clearFavicon() {
 
 <template>
   <div class="settings-section">
-    <h3 class="settings-section__title">🏠 基础设置</h3>
+    <h3 class="settings-section__title">基础设置</h3>
 
-    <!-- 网站名称 -->
     <div class="settings-item">
       <div class="settings-item__info">
         <div class="settings-item__label">网站名称</div>
         <div class="settings-item__desc">显示在浏览器标签和页面顶部</div>
       </div>
       <div class="settings-item__control">
-        <input
-          v-model="siteName"
-          type="text"
-          class="input"
-          placeholder="NAV"
-          @change="saveSettings"
-        >
+        <input v-model="siteName" type="text" class="input" placeholder="NAV" @change="saveSettings">
       </div>
     </div>
 
-    <!-- 网站图标 -->
     <div class="settings-item">
       <div class="settings-item__info">
         <div class="settings-item__label">网站图标</div>
-        <div class="settings-item__desc">选择或自定义图标</div>
+        <div class="settings-item__desc">支持预设图标，也支持输入自己的 Emoji 或短文字</div>
       </div>
       <div class="settings-item__control">
         <div class="icon-selector">
@@ -96,21 +95,30 @@ function clearFavicon() {
               {{ icon }}
             </button>
           </div>
+          <div class="custom-icon-row">
+            <input
+              v-model="customIcon"
+              type="text"
+              class="input input--small"
+              placeholder="输入自定义图标"
+              @keydown.enter.prevent="applyCustomIcon"
+            >
+            <button class="btn btn--secondary" @click="applyCustomIcon">应用</button>
+          </div>
         </div>
       </div>
     </div>
 
-    <!-- Favicon -->
     <div class="settings-item">
       <div class="settings-item__info">
-        <div class="settings-item__label">浏览器图标 (Favicon)</div>
-        <div class="settings-item__desc">显示在浏览器标签的小图标</div>
+        <div class="settings-item__label">Favicon</div>
+        <div class="settings-item__desc">上传浏览器标签的小图标</div>
       </div>
       <div class="settings-item__control">
         <div class="favicon-upload">
           <div v-if="favicon" class="favicon-preview">
             <img :src="favicon" alt="favicon">
-            <button class="favicon-clear" @click="clearFavicon">✕</button>
+            <button class="favicon-clear" @click="clearFavicon">×</button>
           </div>
           <label class="upload-btn">
             {{ favicon ? '更换' : '上传图片' }}
@@ -174,7 +182,7 @@ function clearFavicon() {
 }
 
 .input {
-  width: 200px;
+  width: 220px;
   padding: 10px 14px;
   font-size: 14px;
   color: var(--text-primary);
@@ -182,27 +190,29 @@ function clearFavicon() {
   border: 2px solid transparent;
   border-radius: var(--radius-md);
   outline: none;
-  transition: border-color 0.2s;
 }
 
 .input:focus {
   border-color: var(--accent-color);
 }
 
-/* 图标选择器 */
+.input--small {
+  width: 160px;
+}
+
 .icon-selector {
-  width: 240px;
+  width: 260px;
 }
 
 .icon-preview {
-  width: 48px;
-  height: 48px;
+  width: 56px;
+  height: 56px;
   display: flex;
   align-items: center;
   justify-content: center;
   background: var(--bg-secondary);
   border-radius: var(--radius-md);
-  font-size: 28px;
+  font-size: 30px;
   margin-bottom: 12px;
   border: 2px solid var(--border-color);
 }
@@ -210,12 +220,12 @@ function clearFavicon() {
 .icon-grid {
   display: grid;
   grid-template-columns: repeat(8, 1fr);
-  gap: 4px;
+  gap: 6px;
 }
 
 .icon-btn {
-  width: 26px;
-  height: 26px;
+  width: 28px;
+  height: 28px;
   display: flex;
   align-items: center;
   justify-content: center;
@@ -224,12 +234,6 @@ function clearFavicon() {
   border-radius: 6px;
   font-size: 14px;
   cursor: pointer;
-  transition: all 0.2s;
-}
-
-.icon-btn:hover {
-  background: var(--bg-hover);
-  transform: scale(1.1);
 }
 
 .icon-btn.is-active {
@@ -237,7 +241,12 @@ function clearFavicon() {
   box-shadow: 0 0 0 2px var(--accent-light);
 }
 
-/* Favicon 上传 */
+.custom-icon-row {
+  display: flex;
+  gap: 8px;
+  margin-top: 12px;
+}
+
 .favicon-upload {
   display: flex;
   align-items: center;
@@ -246,13 +255,10 @@ function clearFavicon() {
 
 .favicon-preview {
   position: relative;
-  width: 32px;
-  height: 32px;
-  display: flex;
-  align-items: center;
-  justify-content: center;
+  width: 36px;
+  height: 36px;
   background: var(--bg-secondary);
-  border-radius: 6px;
+  border-radius: 8px;
   overflow: hidden;
 }
 
@@ -266,31 +272,24 @@ function clearFavicon() {
   position: absolute;
   top: -6px;
   right: -6px;
-  width: 16px;
-  height: 16px;
-  display: flex;
-  align-items: center;
-  justify-content: center;
-  background: var(--error-color);
-  color: #fff;
+  width: 18px;
+  height: 18px;
   border: none;
   border-radius: 50%;
-  font-size: 10px;
+  background: var(--error-color);
+  color: #fff;
   cursor: pointer;
 }
 
-.upload-btn {
+.upload-btn,
+.btn {
   padding: 8px 16px;
   background: var(--bg-secondary);
+  border: none;
   border-radius: var(--radius-md);
   font-size: 13px;
   color: var(--text-primary);
   cursor: pointer;
-  transition: all 0.2s;
-}
-
-.upload-btn:hover {
-  background: var(--bg-hover);
 }
 
 @media (max-width: 640px) {
@@ -299,17 +298,16 @@ function clearFavicon() {
     gap: 12px;
   }
 
-  .settings-item__info {
-    padding-right: 0;
-  }
-
-  .settings-item__control {
-    width: 100%;
-  }
-
+  .settings-item__info,
+  .settings-item__control,
   .input,
-  .icon-selector {
+  .icon-selector,
+  .input--small {
     width: 100%;
+  }
+
+  .custom-icon-row {
+    flex-direction: column;
   }
 }
 </style>

@@ -1,43 +1,64 @@
 import { ref, watch, onMounted } from 'vue'
-import { getSetting, setSetting } from '@/shared/db/database'
+import { getSetting, setSetting, getCustomEngines } from '@/shared/db/database'
 
-// 默认配置
+const defaultCustomTheme = {
+  primary: '#6b8c7a',
+  bg: '#f4f7f5',
+  bgSecondary: '#e8eee9',
+  bgCard: '#ffffff',
+  textPrimary: '#243228',
+  textSecondary: '#5f7265',
+  darkBg: '#141917',
+  darkBgSecondary: '#1e2722',
+  darkBgCard: '#26332c',
+  darkTextPrimary: '#edf5ef',
+  darkTextSecondary: '#b7c8bc'
+}
+
 const defaultConfig = {
-  // 网站基础配置
   site: {
     name: 'NAV',
-    icon: '📍',
+    icon: '🧭',
     favicon: ''
   },
-
-  // 默认搜索引擎
   searchEngine: 'baidu',
-
-  // 搜索设置
   search: {
     aggregate: {
       enabled: false,
       engines: []
+    },
+    quickAccessEngineIds: ['baidu', 'google', 'bing', 'brave'],
+    hiddenEngineIds: ['zhihu', 'bilibili', 'weibo'],
+    providers: {
+      chatgpt: {
+        enabled: false,
+        mode: 'proxy',
+        endpoint: '',
+        apiKey: '',
+        model: '',
+        cliProxyBaseUrl: ''
+      },
+      brave: {
+        enabled: false,
+        endpoint: 'https://api.search.brave.com/res/v1/web/search',
+        apiKey: ''
+      }
     }
   },
-
-  // 模块显示
   modules: {
     navigation: true,
     whisper: true,
     settings: true
   },
-
-  // 样式配置
   style: {
     colorScheme: 'cream',
     accentColor: '#a08060',
     borderRadius: 'medium',
     cardSize: 'medium',
-    animationsEnabled: true
+    animationsEnabled: true,
+    backgroundImage: '',
+    customTheme: { ...defaultCustomTheme }
   },
-
-  // 布局配置
   layout: {
     columns: 4,
     showDescription: true,
@@ -45,19 +66,18 @@ const defaultConfig = {
   }
 }
 
-// 搜索引擎配置
 export const searchEngines = {
-  baidu: { name: '百度', url: 'https://www.baidu.com/s?wd=', icon: '🔍' },
-  google: { name: 'Google', url: 'https://www.google.com/search?q=', icon: '🌐' },
-  bing: { name: 'Bing', url: 'https://www.bing.com/search?q=', icon: '🔎' },
-  duckduckgo: { name: 'DuckDuckGo', url: 'https://duckduckgo.com/?q=', icon: '🦆' },
-  zhihu: { name: '知乎', url: 'https://www.zhihu.com/search?type=content&q=', icon: '📝' },
-  bilibili: { name: 'B站', url: 'https://search.bilibili.com/all?keyword=', icon: '📺' },
-  github: { name: 'GitHub', url: 'https://github.com/search?q=', icon: '🐙' },
-  weibo: { name: '微博', url: 'https://s.weibo.com/weibo?q=', icon: '📢' }
+  baidu: { id: 'baidu', name: '百度', url: 'https://www.baidu.com/s?wd=', icon: '🔎', type: 'web', isBuiltIn: true },
+  google: { id: 'google', name: 'Google', url: 'https://www.google.com/search?q=', icon: '🌐', type: 'web', isBuiltIn: true },
+  bing: { id: 'bing', name: 'Bing', url: 'https://www.bing.com/search?q=', icon: '🧭', type: 'web', isBuiltIn: true },
+  brave: { id: 'brave', name: 'Brave Search', url: 'https://search.brave.com/search?q=', icon: '🦁', type: 'web', isBuiltIn: true },
+  chatgpt: { id: 'chatgpt', name: 'ChatGPT Search', url: 'https://chatgpt.com/', icon: '✨', type: 'chatgpt', isBuiltIn: true },
+  zhihu: { id: 'zhihu', name: '知乎', url: 'https://www.zhihu.com/search?type=content&q=', icon: '💡', type: 'web', isBuiltIn: true },
+  bilibili: { id: 'bilibili', name: 'Bilibili', url: 'https://search.bilibili.com/all?keyword=', icon: '📺', type: 'web', isBuiltIn: true },
+  github: { id: 'github', name: 'GitHub', url: 'https://github.com/search?q=', icon: '🐙', type: 'web', isBuiltIn: true },
+  weibo: { id: 'weibo', name: '微博', url: 'https://s.weibo.com/weibo?q=', icon: '📣', type: 'web', isBuiltIn: true }
 }
 
-// 配色方案
 export const colorSchemes = {
   cream: {
     name: '奶油',
@@ -66,7 +86,12 @@ export const colorSchemes = {
     bgSecondary: '#f5f2ed',
     bgCard: '#ffffff',
     textPrimary: '#4a4540',
-    textSecondary: '#7a756d'
+    textSecondary: '#7a756d',
+    darkBg: '#1e1815',
+    darkBgSecondary: '#2a211d',
+    darkBgCard: '#372b25',
+    darkTextPrimary: '#f1e8df',
+    darkTextSecondary: '#c7b7a7'
   },
   ocean: {
     name: '海洋',
@@ -75,7 +100,12 @@ export const colorSchemes = {
     bgSecondary: '#e5eef3',
     bgCard: '#ffffff',
     textPrimary: '#3a5060',
-    textSecondary: '#6a8090'
+    textSecondary: '#6a8090',
+    darkBg: '#0f1820',
+    darkBgSecondary: '#152734',
+    darkBgCard: '#1e3648',
+    darkTextPrimary: '#e3f1f7',
+    darkTextSecondary: '#9fc2d4'
   },
   forest: {
     name: '森林',
@@ -84,7 +114,12 @@ export const colorSchemes = {
     bgSecondary: '#e8f0e8',
     bgCard: '#ffffff',
     textPrimary: '#3a5040',
-    textSecondary: '#6a8070'
+    textSecondary: '#6a8070',
+    darkBg: '#121915',
+    darkBgSecondary: '#1a2a20',
+    darkBgCard: '#24382b',
+    darkTextPrimary: '#e6f2e8',
+    darkTextSecondary: '#a9c7b0'
   },
   rose: {
     name: '玫瑰',
@@ -93,7 +128,12 @@ export const colorSchemes = {
     bgSecondary: '#f5e8ee',
     bgCard: '#ffffff',
     textPrimary: '#5a4050',
-    textSecondary: '#8a7080'
+    textSecondary: '#8a7080',
+    darkBg: '#2a151f',
+    darkBgSecondary: '#462432',
+    darkBgCard: '#603142',
+    darkTextPrimary: '#f7e5ec',
+    darkTextSecondary: '#ddb2c0'
   },
   lavender: {
     name: '薰衣草',
@@ -102,7 +142,12 @@ export const colorSchemes = {
     bgSecondary: '#eaeaf5',
     bgCard: '#ffffff',
     textPrimary: '#404060',
-    textSecondary: '#707090'
+    textSecondary: '#707090',
+    darkBg: '#171623',
+    darkBgSecondary: '#26233a',
+    darkBgCard: '#383454',
+    darkTextPrimary: '#ecebfb',
+    darkTextSecondary: '#bbb8e3'
   },
   sunset: {
     name: '日落',
@@ -111,158 +156,259 @@ export const colorSchemes = {
     bgSecondary: '#f5ece5',
     bgCard: '#ffffff',
     textPrimary: '#5a4a40',
-    textSecondary: '#8a7060'
+    textSecondary: '#8a7060',
+    darkBg: '#261712',
+    darkBgSecondary: '#3d241c',
+    darkBgCard: '#573329',
+    darkTextPrimary: '#f7e9e1',
+    darkTextSecondary: '#ddb49d'
+  },
+  custom: {
+    name: '自定义'
   }
 }
 
-// 圆角配置
 export const borderRadiusOptions = {
   small: { radius: '8px', label: '紧凑' },
   medium: { radius: '16px', label: '标准' },
   large: { radius: '24px', label: '圆润' }
 }
 
-// 卡片尺寸配置
 export const cardSizeOptions = {
   small: { width: '90px', iconSize: '32px', label: '紧凑' },
   medium: { width: '110px', iconSize: '44px', label: '标准' },
   large: { width: '130px', iconSize: '56px', label: '宽松' }
 }
 
-// 全局配置状态
-const config = ref(JSON.parse(JSON.stringify(defaultConfig)))
+const config = ref(clone(defaultConfig))
+const customSearchEngines = ref([])
 let initialized = false
-let saveTimeout = null
 let watchInitialized = false
+let saveTimeout = null
 
-// 保存配置（防抖）
-async function saveConfig() {
-  if (saveTimeout) {
-    clearTimeout(saveTimeout)
-  }
-  saveTimeout = setTimeout(async () => {
-    try {
-      await setSetting('appConfig', JSON.parse(JSON.stringify(config.value)))
-    } catch (e) {
-      console.error('Failed to save config:', e)
+function clone(value) {
+  return JSON.parse(JSON.stringify(value))
+}
+
+function mergeDeep(target, source) {
+  const output = { ...target }
+
+  for (const key in source) {
+    const sourceValue = source[key]
+    if (sourceValue && typeof sourceValue === 'object' && !Array.isArray(sourceValue)) {
+      output[key] = mergeDeep(target[key] || {}, sourceValue)
+    } else if (sourceValue !== undefined) {
+      output[key] = sourceValue
     }
-  }, 300)
+  }
+
+  return output
 }
 
-// 调整颜色亮度
-function adjustColor(hex, percent) {
-  if (!hex) return '#a08060'
-  const num = parseInt(hex.replace('#', ''), 16)
-  const r = Math.min(255, Math.max(0, (num >> 16) + percent))
-  const g = Math.min(255, Math.max(0, ((num >> 8) & 0x00FF) + percent))
-  const b = Math.min(255, Math.max(0, (num & 0x0000FF) + percent))
-  return '#' + ((1 << 24) + (r << 16) + (g << 8) + b).toString(16).slice(1)
+function updateFavicon(favicon) {
+  let link = document.querySelector("link[rel*='icon']")
+
+  if (!link) {
+    link = document.createElement('link')
+    link.rel = 'icon'
+    document.head.appendChild(link)
+  }
+
+  link.href = favicon
 }
 
-// 应用样式配置（全局函数）
-function applyStyleConfig() {
+function adjustColor(hex, amount) {
+  const value = (hex || '#a08060').replace('#', '')
+  const num = parseInt(value, 16)
+  const r = Math.min(255, Math.max(0, (num >> 16) + amount))
+  const g = Math.min(255, Math.max(0, ((num >> 8) & 255) + amount))
+  const b = Math.min(255, Math.max(0, (num & 255) + amount))
+  return `#${((1 << 24) + (r << 16) + (g << 8) + b).toString(16).slice(1)}`
+}
+
+function mixColors(colorA, colorB, weight = 0.5) {
+  const parse = (hex) => {
+    const value = (hex || '#000000').replace('#', '')
+    return {
+      r: parseInt(value.slice(0, 2), 16),
+      g: parseInt(value.slice(2, 4), 16),
+      b: parseInt(value.slice(4, 6), 16)
+    }
+  }
+
+  const a = parse(colorA)
+  const b = parse(colorB)
+  const ratio = Math.min(1, Math.max(0, weight))
+  const red = Math.round(a.r + (b.r - a.r) * ratio)
+  const green = Math.round(a.g + (b.g - a.g) * ratio)
+  const blue = Math.round(a.b + (b.b - a.b) * ratio)
+
+  return `#${[red, green, blue].map((value) => value.toString(16).padStart(2, '0')).join('')}`
+}
+
+function ensureConfigShape() {
+  config.value = mergeDeep(clone(defaultConfig), config.value)
+
+  if (!Array.isArray(config.value.search.quickAccessEngineIds) || !config.value.search.quickAccessEngineIds.length) {
+    config.value.search.quickAccessEngineIds = [...defaultConfig.search.quickAccessEngineIds]
+  }
+
+  if (!config.value.style.customTheme) {
+    config.value.style.customTheme = { ...defaultCustomTheme }
+  }
+}
+
+function getResolvedColorScheme(style = config.value.style) {
+  if (style?.colorScheme === 'custom') {
+    return {
+      name: '自定义',
+      ...defaultCustomTheme,
+      ...(style.customTheme || {})
+    }
+  }
+
+  return colorSchemes[style?.colorScheme] || colorSchemes.cream
+}
+
+function syncStyleConfig() {
+  ensureConfigShape()
+  const scheme = getResolvedColorScheme(config.value.style)
+  config.value.style.accentColor = scheme.primary
+}
+
+export async function loadCustomSearchEngines() {
+  try {
+    customSearchEngines.value = await getCustomEngines()
+  } catch (error) {
+    console.error('Failed to load custom search engines:', error)
+    customSearchEngines.value = []
+  }
+}
+
+export function applyStyleConfig() {
   const root = document.documentElement
-  const { style, site } = config.value
-
-  if (!style) return
-
-  // 配色方案 - 应用完整配色
-  const scheme = colorSchemes[style.colorScheme] || colorSchemes.cream
-  const accentColor = style.accentColor || scheme.primary
-
-  // 检查是否是暗色模式
+  const style = config.value.style || {}
+  const scheme = getResolvedColorScheme(style)
   const isDark = root.classList.contains('dark')
+  const accentColor = scheme.primary
 
-  // 强调色（亮暗模式通用）
   root.style.setProperty('--accent-color', accentColor, 'important')
-  root.style.setProperty('--accent-hover', adjustColor(accentColor, isDark ? 15 : -15), 'important')
-  root.style.setProperty('--accent-light', adjustColor(accentColor, isDark ? -30 : 40), 'important')
-  root.style.setProperty('--accent-bg', adjustColor(accentColor, isDark ? -30 : 45) + '20', 'important')
+  root.style.setProperty('--accent-hover', adjustColor(accentColor, isDark ? 18 : -15), 'important')
+  root.style.setProperty('--accent-light', adjustColor(accentColor, isDark ? -28 : 40), 'important')
+  root.style.setProperty('--accent-bg', `${adjustColor(accentColor, isDark ? -12 : 45)}${isDark ? '38' : '20'}`, 'important')
 
-  // 背景色和文字色（根据模式调整）
   if (isDark) {
-    // 暗色模式：基于配色方案生成暗色版本
-    root.style.setProperty('--bg-primary', darkenColor(scheme.bg, 85), 'important')
-    root.style.setProperty('--bg-secondary', darkenColor(scheme.bg, 80), 'important')
-    root.style.setProperty('--bg-card', darkenColor(scheme.bg, 75), 'important')
-    root.style.setProperty('--text-primary', lightenColor(scheme.textPrimary, 60), 'important')
-    root.style.setProperty('--text-secondary', lightenColor(scheme.textSecondary, 40), 'important')
+    root.style.setProperty('--bg-primary', scheme.darkBg, 'important')
+    root.style.setProperty('--bg-secondary', scheme.darkBgSecondary, 'important')
+    root.style.setProperty('--bg-card', scheme.darkBgCard, 'important')
+    root.style.setProperty('--bg-hover', mixColors(scheme.darkBgSecondary, accentColor, 0.24), 'important')
+    root.style.setProperty('--bg-active', mixColors(scheme.darkBgCard, accentColor, 0.3), 'important')
+    root.style.setProperty('--bg-tertiary', mixColors(scheme.darkBgSecondary, '#ffffff', 0.08), 'important')
+    root.style.setProperty('--text-primary', scheme.darkTextPrimary, 'important')
+    root.style.setProperty('--text-secondary', scheme.darkTextSecondary, 'important')
+    root.style.setProperty('--text-muted', mixColors(scheme.darkTextSecondary, scheme.darkBg, 0.72), 'important')
+    root.style.setProperty('--border-color', mixColors(scheme.darkBgCard, accentColor, 0.38), 'important')
+    root.style.setProperty('--border-light', mixColors(scheme.darkBgSecondary, accentColor, 0.3), 'important')
+    root.style.setProperty('--success-color', mixColors('#7fbf90', accentColor, 0.2), 'important')
+    root.style.setProperty('--warning-color', mixColors('#d4b87a', accentColor, 0.25), 'important')
+    root.style.setProperty('--info-color', mixColors('#7aaed4', accentColor, 0.3), 'important')
   } else {
-    // 亮色模式
     root.style.setProperty('--bg-primary', scheme.bg, 'important')
     root.style.setProperty('--bg-secondary', scheme.bgSecondary, 'important')
     root.style.setProperty('--bg-card', scheme.bgCard, 'important')
+    root.style.setProperty('--bg-hover', mixColors(scheme.bgSecondary, accentColor, 0.12), 'important')
+    root.style.setProperty('--bg-active', mixColors(scheme.bgSecondary, accentColor, 0.2), 'important')
+    root.style.setProperty('--bg-tertiary', mixColors(scheme.bgSecondary, accentColor, 0.08), 'important')
     root.style.setProperty('--text-primary', scheme.textPrimary, 'important')
     root.style.setProperty('--text-secondary', scheme.textSecondary, 'important')
+    root.style.setProperty('--text-muted', adjustColor(scheme.textSecondary, 40), 'important')
+    root.style.setProperty('--border-color', mixColors(scheme.bgSecondary, accentColor, 0.22), 'important')
+    root.style.setProperty('--border-light', mixColors(scheme.bgSecondary, accentColor, 0.12), 'important')
+    root.style.setProperty('--success-color', '#7a9f7a', 'important')
+    root.style.setProperty('--warning-color', '#c9a86c', 'important')
+    root.style.setProperty('--info-color', '#7a9fc9', 'important')
   }
 
-  // 圆角
-  const radius = borderRadiusOptions[style.borderRadius]?.radius || '16px'
-  root.style.setProperty('--radius-md', radius, 'important')
+  root.style.setProperty('--radius-md', borderRadiusOptions[style.borderRadius]?.radius || '16px', 'important')
 
-  // 动画
   if (style.animationsEnabled === false) {
     root.classList.add('reduce-motion')
   } else {
     root.classList.remove('reduce-motion')
   }
 
-  // 背景图
   if (style.backgroundImage) {
     root.style.setProperty('--bg-image', `url(${style.backgroundImage})`)
   } else {
     root.style.removeProperty('--bg-image')
   }
 
-  // 网站标题
-  if (site?.name) {
-    document.title = site.name
+  if (config.value.site?.name) {
+    document.title = config.value.site.name
   }
 
-  // Favicon
-  if (site?.favicon) {
-    updateFavicon(site.favicon)
+  if (config.value.site?.favicon) {
+    updateFavicon(config.value.site.favicon)
   }
 }
 
-// 变暗颜色
-function darkenColor(hex, percent) {
-  if (!hex) return '#1a1815'
-  const num = parseInt(hex.replace('#', ''), 16)
-  const r = Math.max(0, (num >> 16) - percent)
-  const g = Math.max(0, ((num >> 8) & 0x00FF) - percent)
-  const b = Math.max(0, (num & 0x0000FF) - percent)
-  return '#' + ((1 << 24) + (r << 16) + (g << 8) + b).toString(16).slice(1)
+function getAllSearchEngineList() {
+  return [
+    ...Object.values(searchEngines),
+    ...customSearchEngines.value.map((engine) => ({
+      ...engine,
+      type: 'web',
+      isBuiltIn: false
+    }))
+  ]
 }
 
-// 变亮颜色
-function lightenColor(hex, percent) {
-  if (!hex) return '#e8e4dd'
-  const num = parseInt(hex.replace('#', ''), 16)
-  const r = Math.min(255, (num >> 16) + percent)
-  const g = Math.min(255, ((num >> 8) & 0x00FF) + percent)
-  const b = Math.min(255, (num & 0x0000FF) + percent)
-  return '#' + ((1 << 24) + (r << 16) + (g << 8) + b).toString(16).slice(1)
-}
-
-// 更新 Favicon
-function updateFavicon(favicon) {
-  let link = document.querySelector("link[rel*='icon']")
-  if (!link) {
-    link = document.createElement('link')
-    link.rel = 'icon'
-    document.head.appendChild(link)
+function scheduleSave() {
+  if (saveTimeout) {
+    clearTimeout(saveTimeout)
   }
-  link.href = favicon
+
+  saveTimeout = setTimeout(async () => {
+    await persistConfigNow()
+  }, 300)
 }
 
-// 全局监听配置变化
+export async function persistConfigNow() {
+  try {
+    await setSetting('appConfig', clone(config.value))
+  } catch (error) {
+    console.error('Failed to persist config:', error)
+  }
+}
+
+export async function loadConfig() {
+  try {
+    const savedConfig = await getSetting('appConfig')
+    config.value = savedConfig
+      ? mergeDeep(clone(defaultConfig), savedConfig)
+      : clone(defaultConfig)
+  } catch (error) {
+    console.error('Failed to load config:', error)
+    config.value = clone(defaultConfig)
+  }
+
+  ensureConfigShape()
+  syncStyleConfig()
+  applyStyleConfig()
+}
+
 if (!watchInitialized) {
   watchInitialized = true
-  watch(config, () => {
-    saveConfig()
-    applyStyleConfig()
-  }, { deep: true })
+  watch(
+    config,
+    () => {
+      ensureConfigShape()
+      syncStyleConfig()
+      applyStyleConfig()
+      scheduleSave()
+    },
+    { deep: true }
+  )
 }
 
 export function useConfig() {
@@ -270,108 +416,137 @@ export function useConfig() {
     if (!initialized) {
       initialized = true
       await loadConfig()
+      await loadCustomSearchEngines()
     }
   })
 
-  // 加载配置
-  async function loadConfig() {
-    try {
-      const savedConfig = await getSetting('appConfig')
-      if (savedConfig) {
-        config.value = mergeDeep(JSON.parse(JSON.stringify(defaultConfig)), savedConfig)
-      }
-      applyStyleConfig()
-    } catch (e) {
-      console.error('Failed to load config:', e)
-    }
-  }
-
-  // 深度合并
-  function mergeDeep(target, source) {
-    const output = { ...target }
-    for (const key in source) {
-      if (source[key] && typeof source[key] === 'object' && !Array.isArray(source[key])) {
-        output[key] = mergeDeep(target[key] || {}, source[key])
-      } else if (source[key] !== undefined) {
-        output[key] = source[key]
-      }
-    }
-    return output
-  }
-
-  // 更新单个配置项
   function updateConfig(path, value) {
     const keys = path.split('.')
     let target = config.value
 
-    for (let i = 0; i < keys.length - 1; i++) {
-      if (!target[keys[i]]) {
-        target[keys[i]] = {}
+    for (let index = 0; index < keys.length - 1; index += 1) {
+      const key = keys[index]
+      if (!target[key]) {
+        target[key] = {}
       }
-      target = target[keys[i]]
+      target = target[key]
     }
 
     target[keys[keys.length - 1]] = value
   }
 
-  // 重置配置
-  async function resetConfig() {
-    config.value = JSON.parse(JSON.stringify(defaultConfig))
+  async function setColorScheme(schemeId) {
+    updateConfig('style.colorScheme', schemeId)
+    syncStyleConfig()
     applyStyleConfig()
-    await setSetting('appConfig', config.value)
+    await persistConfigNow()
   }
 
-  // 获取当前搜索引擎
+  async function applyCurrentConfigNow() {
+    syncStyleConfig()
+    applyStyleConfig()
+    await persistConfigNow()
+  }
+
+  async function resetConfig() {
+    config.value = clone(defaultConfig)
+    syncStyleConfig()
+    applyStyleConfig()
+    await persistConfigNow()
+  }
+
+  function getAllSearchEngines() {
+    return getAllSearchEngineList()
+  }
+
+  function getQuickAccessSearchEngines() {
+    const allEngines = getAllSearchEngineList()
+    const visibleIds = config.value.search?.quickAccessEngineIds || defaultConfig.search.quickAccessEngineIds
+
+    return visibleIds
+      .map((engineId) => allEngines.find((engine) => engine.id === engineId))
+      .filter(Boolean)
+  }
+
   function getSearchEngine() {
-    return searchEngines[config.value.searchEngine] || searchEngines.baidu
+    const allEngines = getAllSearchEngineList()
+    return allEngines.find((engine) => engine.id === config.value.searchEngine) || searchEngines.baidu
   }
 
-  // 执行搜索
-  function search(query) {
-    const { search: searchConfig } = config.value
+  async function handleChatGPTSearch(query) {
+    const provider = config.value.search?.providers?.chatgpt || {}
 
-    if (searchConfig?.aggregate?.enabled && searchConfig.aggregate.engines?.length > 0) {
-      searchConfig.aggregate.engines.forEach(engineId => {
-        const engine = searchEngines[engineId]
-        if (engine) {
-          window.open(engine.url + encodeURIComponent(query), '_blank')
-        }
-      })
-    } else {
-      const engine = getSearchEngine()
-      window.open(engine.url + encodeURIComponent(query), '_blank')
+    if (provider.enabled && (provider.endpoint || provider.cliProxyBaseUrl)) {
+      alert('ChatGPT Search 的 API/Proxy 接入配置已保存。下一步建议接入你自己的服务端代理来真正执行搜索。')
+      return
+    }
+
+    try {
+      await navigator.clipboard.writeText(query)
+      window.open('https://chatgpt.com/', '_blank')
+      alert('已为你打开 ChatGPT，并把搜索词复制到剪贴板。')
+    } catch {
+      window.open('https://chatgpt.com/', '_blank')
     }
   }
 
-  // 检查模块是否启用
+  async function search(query) {
+    const allEngines = getAllSearchEngineList()
+    const { search } = config.value
+
+    const runSingleEngine = async (engineId) => {
+      const engine = allEngines.find((item) => item.id === engineId)
+      if (!engine) return
+
+      if (engine.type === 'chatgpt') {
+        await handleChatGPTSearch(query)
+        return
+      }
+
+      window.open(engine.url + encodeURIComponent(query), '_blank')
+    }
+
+    if (search?.aggregate?.enabled && search.aggregate.engines?.length) {
+      for (const engineId of search.aggregate.engines) {
+        await runSingleEngine(engineId)
+      }
+      return
+    }
+
+    await runSingleEngine(config.value.searchEngine)
+  }
+
   function isModuleEnabled(moduleName) {
     return config.value.modules?.[moduleName] !== false
   }
 
-  // 获取卡片样式
   function getCardStyle() {
     return cardSizeOptions[config.value.style?.cardSize] || cardSizeOptions.medium
   }
 
-  // 获取网站名称
   function getSiteName() {
     return config.value.site?.name || 'NAV'
   }
 
-  // 获取网站图标
   function getSiteIcon() {
-    return config.value.site?.icon || '📍'
+    return config.value.site?.icon || '🧭'
   }
 
-  // 获取当前配色方案
   function getColorScheme() {
-    return colorSchemes[config.value.style?.colorScheme] || colorSchemes.cream
+    return getResolvedColorScheme(config.value.style)
   }
 
   return {
     config,
+    customSearchEngines,
+    loadConfig,
+    loadCustomSearchEngines,
     updateConfig,
+    setColorScheme,
     resetConfig,
+    persistConfigNow: applyCurrentConfigNow,
+    getAllSearchEngines,
+    getQuickAccessSearchEngines,
     getSearchEngine,
     search,
     isModuleEnabled,
@@ -386,5 +561,4 @@ export function useConfig() {
   }
 }
 
-// 导出全局配置
 export const appConfig = config

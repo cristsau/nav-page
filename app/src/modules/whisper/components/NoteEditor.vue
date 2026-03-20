@@ -30,7 +30,7 @@ const formData = ref({
 const tagInput = ref('')
 
 // 是否编辑模式
-const isEdit = computed(() => !!props.note)
+const isEdit = computed(() => !!props.note?.id)
 
 // 标题
 const modalTitle = computed(() => {
@@ -43,7 +43,7 @@ const modalTitle = computed(() => {
 // 监听显示状态，初始化表单
 watch(() => props.show, (val) => {
   if (val) {
-    if (props.note) {
+    if (props.note?.id) {
       formData.value = {
         type: props.note.type,
         title: props.note.title,
@@ -54,14 +54,14 @@ watch(() => props.show, (val) => {
         tags: props.note.tags || []
       }
     } else {
-      resetForm()
+      resetForm(props.note?.type || 'memo')
     }
   }
 })
 
-function resetForm() {
+function resetForm(type = 'memo') {
   formData.value = {
-    type: 'memo',
+    type,
     title: '',
     content: '',
     encrypted: false,
@@ -86,15 +86,29 @@ function removeTag(index) {
   formData.value.tags.splice(index, 1)
 }
 
-// 提交表单
-async function handleSubmit() {
-  if (!formData.value.title.trim()) {
-    alert('请输入标题')
-    return
+function buildDefaultTitle() {
+  const content = formData.value.content.trim()
+  if (content) {
+    return content.replace(/\s+/g, ' ').slice(0, 20)
   }
 
+  const label = formData.value.type === 'diary' ? '日记' : '备忘录'
+  const now = new Date()
+  const timestamp = now.toLocaleString('zh-CN', {
+    month: '2-digit',
+    day: '2-digit',
+    hour: '2-digit',
+    minute: '2-digit'
+  })
+
+  return `${label} ${timestamp}`
+}
+
+// 提交表单
+async function handleSubmit() {
   let content = formData.value.content
   let passwordHash = ''
+  const title = formData.value.title.trim() || buildDefaultTitle()
 
   // 如果需要加密
   if (formData.value.encrypted) {
@@ -112,11 +126,11 @@ async function handleSubmit() {
 
   emit('save', {
     type: formData.value.type,
-    title: formData.value.title.trim(),
+    title,
     content,
     encrypted: formData.value.encrypted,
     password: passwordHash,
-    tags: formData.value.tags
+    tags: [...formData.value.tags]
   })
 
   resetForm()
