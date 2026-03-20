@@ -402,8 +402,6 @@ if (!watchInitialized) {
   watch(
     config,
     () => {
-      ensureConfigShape()
-      syncStyleConfig()
       applyStyleConfig()
       scheduleSave()
     },
