@@ -716,4 +716,38 @@ export async function clearAllData() {
   await db.settings.clear()
 }
 
+export async function getLocalDataSummary() {
+  const db = getUserDb()
+  if (!db) {
+    return {
+      groups: 0,
+      bookmarks: 0,
+      notes: 0,
+      customEngines: 0,
+      shares: 0,
+      settings: 0,
+      total: 0
+    }
+  }
+
+  const [groups, bookmarks, notes, customEngines, shares, settings] = await Promise.all([
+    db.groups.count(),
+    db.bookmarks.count(),
+    db.notes.count(),
+    db.customEngines.count(),
+    db.shares.count(),
+    db.settings.count()
+  ])
+
+  return {
+    groups,
+    bookmarks,
+    notes,
+    customEngines,
+    shares,
+    settings,
+    total: groups + bookmarks + notes + customEngines + shares + settings
+  }
+}
+
 export default systemDb

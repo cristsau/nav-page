@@ -1,6 +1,6 @@
 <script setup>
-import { ref } from 'vue'
-import { exportData, importData, clearAllData } from '@/shared/db/database'
+import { computed, onMounted, ref } from 'vue'
+import { clearAllData, exportData, getLocalDataSummary, importData } from '@/shared/db/database'
 import { useConfig } from '@/shared/composables/useConfig'
 import { importLocalDataToBackend, shouldUseBackendMigration } from '@/shared/services/migrationApi'
 
@@ -9,6 +9,44 @@ const { resetConfig } = useConfig()
 const importing = ref(false)
 const exporting = ref(false)
 const migrating = ref(false)
+const storageInfo = ref({
+  used: 0,
+  quota: 0
+})
+const localDataSummary = ref({
+  groups: 0,
+  bookmarks: 0,
+  notes: 0,
+  customEngines: 0,
+  shares: 0,
+  settings: 0,
+  total: 0
+})
+
+const shouldShowCloudMigration = computed(() =>
+  shouldUseBackendMigration() && localDataSummary.value.total > 0
+)
+
+async function refreshLocalDataSummary() {
+  localDataSummary.value = await getLocalDataSummary()
+}
+
+async function refreshStorageInfo() {
+  if (!navigator.storage?.estimate) return
+
+  const estimate = await navigator.storage.estimate()
+  storageInfo.value = {
+    used: estimate.usage || 0,
+    quota: estimate.quota || 0
+  }
+}
+
+async function refreshLocalState() {
+  await Promise.all([
+    refreshLocalDataSummary(),
+    refreshStorageInfo()
+  ])
+}
 
 async function handleExport() {
   if (exporting.value) return
@@ -45,6 +83,7 @@ async function handleImport(event) {
     }
 
     await importData(data.data)
+    await refreshLocalState()
     alert('导入成功，页面将刷新。')
     window.location.reload()
   } catch (error) {
@@ -56,7 +95,7 @@ async function handleImport(event) {
 }
 
 async function handleMigrateToCloud() {
-  if (!shouldUseBackendMigration() || migrating.value) return
+  if (!shouldShowCloudMigration.value || migrating.value) return
 
   if (!confirm('确定把当前浏览器里的本地数据迁移到云端数据库吗？\n\n这会用本地数据覆盖当前账号在云端的已有数据。')) {
     return
@@ -67,6 +106,7 @@ async function handleMigrateToCloud() {
     const backup = await exportData()
     const summary = await importLocalDataToBackend(backup.data)
     alert(`迁移成功：书签 ${summary.imported.bookmarks} 条，笔记 ${summary.imported.notes} 条，设置 ${summary.imported.settings} 项。`)
+    await refreshLocalState()
   } catch (error) {
     alert(`迁移失败：${error.message}`)
   } finally {
@@ -81,6 +121,7 @@ async function handleClearData() {
 
   try {
     await clearAllData()
+    await refreshLocalState()
     alert('本地数据已清除，页面将刷新。')
     window.location.reload()
   } catch (error) {
@@ -94,22 +135,8 @@ async function handleResetConfig() {
   }
 
   await resetConfig()
+  await refreshLocalState()
   alert('设置已重置。')
-}
-
-const storageInfo = ref({
-  used: 0,
-  quota: 0
-})
-
-async function getStorageInfo() {
-  if (navigator.storage?.estimate) {
-    const estimate = await navigator.storage.estimate()
-    storageInfo.value = {
-      used: estimate.usage || 0,
-      quota: estimate.quota || 0
-    }
-  }
 }
 
 function formatSize(bytes) {
@@ -118,7 +145,7 @@ function formatSize(bytes) {
   return `${(bytes / (1024 * 1024)).toFixed(2)} MB`
 }
 
-getStorageInfo()
+onMounted(refreshLocalState)
 </script>
 
 <template>
@@ -136,12 +163,27 @@ getStorageInfo()
             <div
               class="storage-bar__used"
               :style="{ width: storageInfo.quota ? `${(storageInfo.used / storageInfo.quota) * 100}%` : '0%' }"
-            ></div>
+            />
           </div>
           <div class="storage-text">
             {{ formatSize(storageInfo.used) }} / {{ formatSize(storageInfo.quota) }}
           </div>
         </div>
+      </div>
+    </div>
+
+    <div class="settings-item">
+      <div class="settings-item__info">
+        <div class="settings-item__label">本地旧数据检测</div>
+        <div class="settings-item__desc">
+          当前浏览器里检测到 {{ localDataSummary.total }} 条本地记录。
+          只有存在旧 IndexedDB 数据时，才显示“迁移到云端”入口。
+        </div>
+      </div>
+      <div class="settings-item__control">
+        <button class="btn btn--secondary" @click="refreshLocalState">
+          重新检测
+        </button>
       </div>
     </div>
 
@@ -176,7 +218,7 @@ getStorageInfo()
       </div>
     </div>
 
-    <div v-if="shouldUseBackendMigration()" class="settings-item">
+    <div v-if="shouldShowCloudMigration" class="settings-item">
       <div class="settings-item__info">
         <div class="settings-item__label">迁移本地数据到云端</div>
         <div class="settings-item__desc">把当前浏览器 IndexedDB 里的书签、便签、设置和自定义搜索引擎导入 PostgreSQL</div>
@@ -258,6 +300,7 @@ getStorageInfo()
   font-size: 12px;
   color: var(--text-muted);
   margin-top: 4px;
+  line-height: 1.6;
 }
 
 .settings-item__control {
