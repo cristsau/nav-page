@@ -283,6 +283,48 @@ cp -r /opt/nav/app/dist/* /var/www/nav/
 systemctl reload nginx
 ```
 
+## 11.1 脚本化发布与回滚
+
+项目现在已经补了发布脚本：
+
+- 服务器部署脚本：[scripts/deploy.sh](D:/DomoCodex/projects/NAV/scripts/deploy.sh)
+- 服务器回滚脚本：[scripts/rollback.sh](D:/DomoCodex/projects/NAV/scripts/rollback.sh)
+- 本地一键部署脚本：[deploy-oracle-jp.ps1](D:/DomoCodex/projects/NAV/scripts/deploy-oracle-jp.ps1)
+- 本地一键回滚脚本：[rollback-oracle-jp.ps1](D:/DomoCodex/projects/NAV/scripts/rollback-oracle-jp.ps1)
+
+### 本地一键部署到 oracle-JP
+
+在本地项目根目录执行：
+
+```powershell
+powershell -ExecutionPolicy Bypass -File .\scripts\deploy-oracle-jp.ps1
+```
+
+如果你要部署指定 Git 引用：
+
+```powershell
+powershell -ExecutionPolicy Bypass -File .\scripts\deploy-oracle-jp.ps1 -Ref master
+```
+
+这个脚本会：
+
+- 检查本地是否有未提交修改
+- 先把当前分支推到 GitHub
+- 再 SSH 到 `oracle-JP`
+- 调用服务器上的 `scripts/deploy.sh`
+
+### 本地一键回滚 oracle-JP
+
+```powershell
+powershell -ExecutionPolicy Bypass -File .\scripts\rollback-oracle-jp.ps1 -Ref 0ca3300
+```
+
+这个脚本会在服务器上：
+
+- checkout 到指定提交
+- 重新构建前端
+- 覆盖发布到 `/home/web/html/nav`
+
 ## 12. 商业化改造路线
 
 推荐按下面顺序推进：
@@ -327,3 +369,41 @@ systemctl reload nginx
 2. 再做 Telegram 后端接口
 3. 再做搜索 API 与 AI 接入
 4. 最后整理客户自部署交付方案
+
+## 15. 当前已部署环境记录
+
+### 已部署站点
+
+- 域名：`nav.skrskr.net`
+- 服务器：`oracle-JP`
+- 公网 IP：`150.230.212.137`
+
+### 对外访问端口
+
+- `80`：HTTP，自动跳转到 HTTPS
+- `443`：HTTPS，当前正式访问入口
+
+说明：
+
+- NAV 没有单独暴露新的应用端口
+- 当前直接复用服务器现有 `nginx` Web 入口
+
+### 服务器上的部署目录
+
+- 项目代码：`/opt/nav`
+- 前端构建目录：`/opt/nav/app/dist`
+- 站点发布目录：`/home/web/html/nav`
+- Nginx 站点配置：`/home/web/conf.d/nav.skrskr.net.conf`
+- 证书文件：
+  - `/home/web/certs/nav.skrskr.net_cert.pem`
+  - `/home/web/certs/nav.skrskr.net_key.pem`
+
+### 当前部署版本
+
+- Git 提交：`0ca3300`
+
+### 验证结果
+
+- `https://nav.skrskr.net` 返回 `200`
+- `https://nav.skrskr.net/settings` 返回 `200`
+- HTTP 已正确跳转到 HTTPS
