@@ -1,164 +1,114 @@
-# NAV 项目说明
+# NAV Project Overview
 
-## 项目目标
+## 项目定位
 
-NAV 是一个轻量、可私有部署的个人导航页，核心方向是：
+NAV 是一个可私有部署的个人导航页系统，当前目标不是只做“静态导航首页”，而是逐步演进成：
 
-- 导航与书签管理
-- 备忘录 / 日记记录
-- 多用户与审批注册
-- 自定义主题与搜索体验
-- 后续接入 AI 搜索、内容整理与同步能力
-
-项目当前仍以 `Vue 3 + Vite + Dexie.js` 为主，前端本地使用 IndexedDB 作为数据层。
+- 可登录的个人导航中心
+- 可记录便签 / 日记的个人工作台
+- 可审批注册的轻量团队入口
+- 可接入 AI 搜索与内容整理能力的私有化产品
 
 ## 当前技术栈
 
-| 类型 | 选择 |
-| --- | --- |
-| 框架 | Vue 3 |
-| 构建 | Vite 5 |
-| 路由 | Vue Router 4 |
-| 数据库 | Dexie.js / IndexedDB |
-| 状态方式 | Composables |
-| 主题 | CSS Variables |
-| 认证 | 前端登录 + IndexedDB 用户系统 |
-| 搜索 | 内置搜索引擎 + 可扩展接口配置 |
+### 前端
 
-## 当前数据库架构
+- Vue 3
+- Vite 5
+- Vue Router 4
+- CSS Variables
 
-项目继续使用现有 Dexie 多数据库架构，没有更换数据库方案。
+### 后端
 
-### 系统数据库 `NavPageSystemDB`
+- Fastify
+- PostgreSQL
 
-| 表名 | 用途 |
-| --- | --- |
-| `users` | 用户账户信息 |
-| `registrationRequests` | 注册申请记录 |
-| `meta` | 系统元数据、Telegram 配置等 |
+### 本地缓存 / 数据迁移
 
-### 用户数据库 `NavPageDB_{userId}`
+- Dexie.js
+- IndexedDB
 
-每个用户独立一套数据库实例：
+说明：
 
-| 表名 | 用途 |
-| --- | --- |
-| `groups` | 导航分组 |
-| `bookmarks` | 书签收藏 |
-| `notes` | 备忘录 / 日记 |
-| `customEngines` | 自定义搜索引擎 |
-| `shares` | 笔记分享记录 |
-| `settings` | 用户设置 |
+- 当前项目已经不是纯前端 Dexie 版本
+- 认证、设置、导航、便签、搜索引擎、Telegram、AI 代理都在逐步迁到后端
+- Dexie 现在主要承担本地缓存和迁移来源的角色
 
-## 当前已完成
+## 当前功能范围
 
-### 导航模块
+### 导航
 
-- 书签分组 CRUD
-- 书签 CRUD
-- 搜索框搜索
-- 首页可直接切换搜索引擎
-- 设置中可控制前台显示哪些搜索引擎
+- 分组管理
+- 书签管理
+- 书签搜索
+- 快速添加
 
-### 时光模块
+### 时光
 
-- 备忘录 / 日记创建与保存
-- 置顶、删除、分享基础能力
-- 点击卡片弹出预览
-- 新建逻辑与保存问题修复
+- 备忘录
+- 日记
+- 预览
+- 分享
 
-### 设置模块
+### 设置
 
-- 亮色 / 暗色 / 跟随系统
-- 内置配色方案
-- 自定义主题配色
-- 自定义站点图标 / favicon
-- 搜索引擎管理
-- ChatGPT Search / Brave Search 接入配置入口
-- 数据导入导出 / 清空
-
-### 用户与权限
-
-- 默认管理员账号已内置
-- 登录 / 注册页面
-- 注册需审批后才可登录
-- 管理员设置页可本地批准 / 拒绝注册
-- 用户数据按用户数据库隔离
-
-### Telegram 审批
-
-- 管理员可在设置里配置自己的 Bot Token 与 Chat ID
-- 注册申请可通知到 Telegram
-- 支持 Telegram 批准 / 拒绝命令同步
-- 不再把 Telegram 配置写死在项目里
-
-## 当前待完成
-
-### 高优先级
-
-- 中文乱码文案清理
-- 搜索引擎 API 真正执行层
-  - ChatGPT Search Proxy / API 接入落地
-  - Brave Search API 结果面板
-- 多设备同步方案
-
-### 中优先级
-
-- 自定义主题导入 / 导出
-- 搜索引擎隐藏 / 排序体验优化
-- 移动端交互优化
-- PWA 化，便于 iPhone 使用
-
-### 后续方向
-
-- OpenClaw / OpenAI 兼容接入
-- AI 搜索结果聚合面板
-- AI 书签整理 / 摘要 / 自动分类
-- 服务端同步与账户体系
-
-## 关于数据同步
-
-当前项目虽然会部署到服务器，但只要数据仍然保存在浏览器 IndexedDB 中，就仍然是“设备本地数据”。
-
-这意味着：
-
-- 当前架构适合继续作为本地数据层
-- 以后如果要让 iPhone 和家里电脑共用同一份数据，仍需要服务端同步层
-- 推荐后续方案：`Dexie 本地缓存 + 服务端同步 API`
-
-## 当前建议的开发顺序
-
-1. 清理中文乱码文案
-2. 完成 ChatGPT Search / Brave Search 真正接口执行
-3. 增加搜索结果面板
-4. 设计服务端同步层
-5. 再接入 OpenClaw / OpenAI 能力
-
-## 本次里程碑
-
-本次保存点主要包含：
-
-- 用户系统与审批注册
-- Telegram 可配置化接入
-- 设置页保存 / 退出
+- 主题模式
+- 配色方案
 - 自定义主题
-- 搜索引擎显示管理
-- 搜索框快速切换引擎
-- 备忘录预览
+- 网站图标 / favicon
+- 搜索引擎管理
+- 数据导入导出
+- 浏览器集成入口
 
-## 回滚方式
+### 用户系统
 
-如果后续出现问题，可以直接回滚到本次 Git 提交：
+- 登录
+- 注册
+- 审批
+- 管理员用户管理
 
-```bash
-git log --oneline
-git checkout <commit>
-```
+### Telegram
 
-如果只是想回到当前 `master` 的上一个版本：
+- 管理员自定义 Telegram Bot Token / Chat ID
+- 注册申请通知
+- Telegram 审批同步
 
-```bash
-git reset --hard HEAD~1
-```
+### AI 搜索
 
-注意：`reset --hard` 会丢弃未提交修改，使用前先确认。
+- ChatGPT / OpenAI-compatible
+- Brave Search API
+- OpenClaw
+
+## 当前部署
+
+- 测试站点：[https://nav.skrskr.net](https://nav.skrskr.net)
+- 测试服务器：`oracle-JP`
+
+## 当前开发原则
+
+- 本地开发
+- GitHub 作为代码主线
+- 服务器负责部署，不作为长期主开发机
+- 未确认前不急于提交，先在线上测试环境验证
+
+## 最重要的进度文档
+
+如果下次继续实施，请优先看：
+
+- `D:/DomoCodex/projects/NAV/STATUS_REPORT.md`
+
+这个文件应始终作为“当前进度、已完成项、剩余工作、下一步动作”的主文档。 
+
+## 换电脑继续开发
+
+如果后面换到另一台电脑继续让 Codex 帮你开发，最稳的方式是：
+
+1. 先拉取仓库最新代码
+2. 先阅读：
+   - `D:/DomoCodex/projects/NAV/PROJECT.md`
+   - `D:/DomoCodex/projects/NAV/STATUS_REPORT.md`
+   - `D:/DomoCodex/projects/NAV/DEPLOYMENT.md`
+   - `D:/DomoCodex/projects/NAV/BACKEND_PLAN.md`
+3. 再查看当前工作区改动和线上环境
+
+这样新的 Codex 即使没有当前聊天记录，也能快速恢复上下文。 

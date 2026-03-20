@@ -4,6 +4,7 @@ import { useRouter } from 'vue-router'
 import GeneralSettings from './components/GeneralSettings.vue'
 import AppearanceSettings from './components/AppearanceSettings.vue'
 import SearchSettings from './components/SearchSettings.vue'
+import BrowserIntegrationSettings from './components/BrowserIntegrationSettings.vue'
 import DataSettings from './components/DataSettings.vue'
 import UserManagementSettings from './components/UserManagementSettings.vue'
 import { useConfig } from '@/shared/composables/useConfig'
@@ -50,7 +51,7 @@ async function handleExit() {
       <div class="header__left">
         <button class="header__btn" @click="goBack">←</button>
         <div>
-          <h1 class="header__title">⚙️ 设置</h1>
+          <h1 class="header__title">设置</h1>
           <p class="header__subtitle">当前用户：{{ currentUser?.username || '未登录' }}</p>
         </div>
       </div>
@@ -69,20 +70,22 @@ async function handleExit() {
         <GeneralSettings />
         <AppearanceSettings />
         <SearchSettings />
+        <BrowserIntegrationSettings />
         <UserManagementSettings />
         <DataSettings />
 
         <div class="about-section">
           <div class="about-section__logo">NAV</div>
           <div class="about-section__info">
-            <p class="about-section__version">版本 2.1.0</p>
-            <p class="about-section__desc">支持多用户、本地审批和 Telegram 审批联动的导航页。</p>
+            <p class="about-section__version">版本 2.2.0</p>
+            <p class="about-section__desc">支持多用户、云端数据、浏览器扩展和 AI 搜索代理的个人导航页。</p>
           </div>
           <div class="about-section__features">
-            <span>多用户隔离</span>
-            <span>审批式注册</span>
-            <span>主题与搜索强制保存</span>
-            <span>Telegram 同步审批</span>
+            <span>后端认证</span>
+            <span>PostgreSQL 云端数据</span>
+            <span>浏览器扩展快速添加</span>
+            <span>Telegram 审批</span>
+            <span>AI 搜索代理</span>
           </div>
         </div>
       </div>

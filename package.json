@@ -4,12 +4,14 @@
   "private": true,
   "description": "轻量化、Notion风格的个人导航页",
   "scripts": {
-    "dev": "pnpm -F app dev",
-    "build": "pnpm -F app build",
-    "build:extension": "pnpm -F extension build",
-    "preview": "pnpm -F app preview",
-    "lint": "pnpm -F app lint",
-    "install:all": "pnpm install"
+    "dev": "npm --prefix app run dev",
+    "dev:app": "npm --prefix app run dev",
+    "dev:api": "npm --prefix api run dev",
+    "build": "npm --prefix app run build",
+    "preview": "npm --prefix app run preview",
+    "lint": "npm --prefix app run lint",
+    "migrate:api": "npm --prefix api run migrate",
+    "start:api": "npm --prefix api run start"
   },
   "keywords": [
     "navigation",

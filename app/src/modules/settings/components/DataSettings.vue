@@ -2,13 +2,14 @@
 import { ref } from 'vue'
 import { exportData, importData, clearAllData } from '@/shared/db/database'
 import { useConfig } from '@/shared/composables/useConfig'
+import { importLocalDataToBackend, shouldUseBackendMigration } from '@/shared/services/migrationApi'
 
 const { resetConfig } = useConfig()
 
 const importing = ref(false)
 const exporting = ref(false)
+const migrating = ref(false)
 
-// 导出数据
 async function handleExport() {
   if (exporting.value) return
 
@@ -17,20 +18,19 @@ async function handleExport() {
     const data = await exportData()
     const blob = new Blob([JSON.stringify(data, null, 2)], { type: 'application/json' })
     const url = URL.createObjectURL(blob)
-    const a = document.createElement('a')
-    a.href = url
-    a.download = `nav-backup-${new Date().toISOString().slice(0, 10)}.json`
-    a.click()
+    const anchor = document.createElement('a')
+    anchor.href = url
+    anchor.download = `nav-backup-${new Date().toISOString().slice(0, 10)}.json`
+    anchor.click()
     URL.revokeObjectURL(url)
-    alert('导出成功！')
-  } catch (e) {
-    alert('导出失败：' + e.message)
+    alert('导出成功。')
+  } catch (error) {
+    alert(`导出失败：${error.message}`)
   } finally {
     exporting.value = false
   }
 }
 
-// 导入数据
 async function handleImport(event) {
   const file = event.target.files?.[0]
   if (!file) return
@@ -40,60 +40,70 @@ async function handleImport(event) {
     const text = await file.text()
     const data = JSON.parse(text)
 
-    // 验证数据格式
     if (!data.version || !data.data) {
       throw new Error('无效的备份文件')
     }
 
     await importData(data.data)
-    alert('导入成功！页面将刷新')
+    alert('导入成功，页面将刷新。')
     window.location.reload()
-  } catch (e) {
-    alert('导入失败：' + e.message)
+  } catch (error) {
+    alert(`导入失败：${error.message}`)
   } finally {
     importing.value = false
     event.target.value = ''
   }
 }
 
-// 清除所有数据
-async function handleClearData() {
-  if (!confirm('⚠️ 确定要清除所有数据吗？\n\n这将删除：\n• 所有分组和书签\n• 所有时光笔记\n• 所有自定义设置\n\n此操作不可恢复！')) {
+async function handleMigrateToCloud() {
+  if (!shouldUseBackendMigration() || migrating.value) return
+
+  if (!confirm('确定把当前浏览器里的本地数据迁移到云端数据库吗？\n\n这会用本地数据覆盖当前账号在云端的已有数据。')) {
     return
   }
 
-  if (!confirm('🔴 最后确认：真的要删除所有数据吗？')) {
+  migrating.value = true
+  try {
+    const backup = await exportData()
+    const summary = await importLocalDataToBackend(backup.data)
+    alert(`迁移成功：书签 ${summary.imported.bookmarks} 条，笔记 ${summary.imported.notes} 条，设置 ${summary.imported.settings} 项。`)
+  } catch (error) {
+    alert(`迁移失败：${error.message}`)
+  } finally {
+    migrating.value = false
+  }
+}
+
+async function handleClearData() {
+  if (!confirm('确定要清除当前浏览器里的所有本地数据吗？\n\n这不会删除云端数据库里的数据，但会移除本机缓存。')) {
     return
   }
 
   try {
     await clearAllData()
-    alert('数据已清除，页面将刷新')
+    alert('本地数据已清除，页面将刷新。')
     window.location.reload()
-  } catch (e) {
-    alert('清除失败：' + e.message)
+  } catch (error) {
+    alert(`清除失败：${error.message}`)
   }
 }
 
-// 重置设置
 async function handleResetConfig() {
-  if (!confirm('确定要重置所有设置吗？（不会删除数据）')) {
+  if (!confirm('确定要恢复默认设置吗？这不会删除书签和便签数据。')) {
     return
   }
 
   await resetConfig()
-  alert('设置已重置')
+  alert('设置已重置。')
 }
 
-// 存储使用情况
 const storageInfo = ref({
   used: 0,
   quota: 0
 })
 
-// 获取存储信息
 async function getStorageInfo() {
-  if (navigator.storage && navigator.storage.estimate) {
+  if (navigator.storage?.estimate) {
     const estimate = await navigator.storage.estimate()
     storageInfo.value = {
       used: estimate.usage || 0,
@@ -102,33 +112,30 @@ async function getStorageInfo() {
   }
 }
 
-// 格式化存储大小
 function formatSize(bytes) {
-  if (bytes < 1024) return bytes + ' B'
-  if (bytes < 1024 * 1024) return (bytes / 1024).toFixed(2) + ' KB'
-  return (bytes / (1024 * 1024)).toFixed(2) + ' MB'
+  if (bytes < 1024) return `${bytes} B`
+  if (bytes < 1024 * 1024) return `${(bytes / 1024).toFixed(2)} KB`
+  return `${(bytes / (1024 * 1024)).toFixed(2)} MB`
 }
 
-// 初始化
 getStorageInfo()
 </script>
 
 <template>
   <div class="settings-section">
-    <h3 class="settings-section__title">💾 数据管理</h3>
+    <h3 class="settings-section__title">数据管理</h3>
 
-    <!-- 存储使用情况 -->
     <div class="settings-item">
       <div class="settings-item__info">
-        <div class="settings-item__label">存储使用</div>
-        <div class="settings-item__desc">本地存储空间使用情况</div>
+        <div class="settings-item__label">本地存储使用</div>
+        <div class="settings-item__desc">当前浏览器 IndexedDB 的占用情况</div>
       </div>
       <div class="settings-item__control">
         <div class="storage-info">
           <div class="storage-bar">
             <div
               class="storage-bar__used"
-              :style="{ width: `${(storageInfo.used / storageInfo.quota) * 100}%` }"
+              :style="{ width: storageInfo.quota ? `${(storageInfo.used / storageInfo.quota) * 100}%` : '0%' }"
             ></div>
           </div>
           <div class="storage-text">
@@ -138,32 +145,26 @@ getStorageInfo()
       </div>
     </div>
 
-    <!-- 备份数据 -->
     <div class="settings-item">
       <div class="settings-item__info">
-        <div class="settings-item__label">备份数据</div>
-        <div class="settings-item__desc">导出所有数据到本地文件</div>
+        <div class="settings-item__label">导出本地备份</div>
+        <div class="settings-item__desc">把当前浏览器的所有本地数据导出为 JSON 文件</div>
       </div>
       <div class="settings-item__control">
-        <button
-          class="btn btn--secondary"
-          :disabled="exporting"
-          @click="handleExport"
-        >
-          {{ exporting ? '导出中...' : '📥 导出备份' }}
+        <button class="btn btn--secondary" :disabled="exporting" @click="handleExport">
+          {{ exporting ? '导出中...' : '导出备份' }}
         </button>
       </div>
     </div>
 
-    <!-- 恢复数据 -->
     <div class="settings-item">
       <div class="settings-item__info">
-        <div class="settings-item__label">恢复数据</div>
-        <div class="settings-item__desc">从备份文件恢复数据</div>
+        <div class="settings-item__label">导入本地备份</div>
+        <div class="settings-item__desc">从 JSON 备份文件恢复本地数据</div>
       </div>
       <div class="settings-item__control">
         <label class="btn btn--secondary">
-          {{ importing ? '导入中...' : '📤 导入备份' }}
+          {{ importing ? '导入中...' : '导入备份' }}
           <input
             type="file"
             accept=".json"
@@ -175,28 +176,38 @@ getStorageInfo()
       </div>
     </div>
 
-    <!-- 重置设置 -->
-    <div class="settings-item">
+    <div v-if="shouldUseBackendMigration()" class="settings-item">
       <div class="settings-item__info">
-        <div class="settings-item__label">重置设置</div>
-        <div class="settings-item__desc">恢复默认设置（不影响数据）</div>
+        <div class="settings-item__label">迁移本地数据到云端</div>
+        <div class="settings-item__desc">把当前浏览器 IndexedDB 里的书签、便签、设置和自定义搜索引擎导入 PostgreSQL</div>
       </div>
       <div class="settings-item__control">
-        <button class="btn btn--secondary" @click="handleResetConfig">
-          🔄 重置设置
+        <button class="btn btn--secondary" :disabled="migrating" @click="handleMigrateToCloud">
+          {{ migrating ? '迁移中...' : '上传到云端' }}
         </button>
       </div>
     </div>
 
-    <!-- 清除数据 -->
+    <div class="settings-item">
+      <div class="settings-item__info">
+        <div class="settings-item__label">重置设置</div>
+        <div class="settings-item__desc">恢复默认界面设置，不删除书签和便签</div>
+      </div>
+      <div class="settings-item__control">
+        <button class="btn btn--secondary" @click="handleResetConfig">
+          重置设置
+        </button>
+      </div>
+    </div>
+
     <div class="settings-item settings-item--danger">
       <div class="settings-item__info">
-        <div class="settings-item__label">清除所有数据</div>
-        <div class="settings-item__desc">删除所有本地数据（不可恢复）</div>
+        <div class="settings-item__label">清除本地数据</div>
+        <div class="settings-item__desc">删除当前浏览器里的本地缓存，不影响云端数据库</div>
       </div>
       <div class="settings-item__control">
         <button class="btn btn--danger" @click="handleClearData">
-          🗑️ 清除数据
+          清除本地数据
         </button>
       </div>
     </div>
@@ -258,9 +269,8 @@ getStorageInfo()
   color: var(--error-color);
 }
 
-/* 存储信息 */
 .storage-info {
-  width: 200px;
+  width: 220px;
   text-align: right;
 }
 
@@ -284,7 +294,6 @@ getStorageInfo()
   color: var(--text-muted);
 }
 
-/* 按钮 */
 .btn {
   display: inline-flex;
   align-items: center;

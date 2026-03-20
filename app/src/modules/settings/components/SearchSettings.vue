@@ -1,7 +1,15 @@
 <script setup>
-import { ref, computed, onMounted } from 'vue'
+import { computed, onMounted, ref } from 'vue'
 import { useConfig } from '@/shared/composables/useConfig'
 import { getCustomEngines, addCustomEngine, updateCustomEngine, deleteCustomEngine } from '@/shared/db/database'
+import { testBackendAiProvider } from '@/shared/services/aiSearchApi'
+import {
+  createBackendCustomSearchEngine,
+  deleteBackendCustomSearchEngine,
+  fetchBackendCustomSearchEngines,
+  shouldUseBackendSearchEngines,
+  updateBackendCustomSearchEngine
+} from '@/shared/services/searchEnginesApi'
 
 const { config, updateConfig, getAllSearchEngines, loadCustomSearchEngines } = useConfig()
 
@@ -10,8 +18,26 @@ const showAddModal = ref(false)
 const editingEngine = ref(null)
 const formData = ref({
   name: '',
-  icon: '🔎',
+  icon: '🔍',
   url: ''
+})
+
+const providerTesting = ref({
+  chatgpt: false,
+  brave: false,
+  openclaw: false
+})
+
+const providerMessages = ref({
+  chatgpt: '',
+  brave: '',
+  openclaw: ''
+})
+
+const providerMessageTypes = ref({
+  chatgpt: '',
+  brave: '',
+  openclaw: ''
 })
 
 const allEngines = computed(() => getAllSearchEngines())
@@ -20,7 +46,9 @@ const quickAccessIds = computed(() => config.value.search?.quickAccessEngineIds 
 
 async function loadCustomEngines() {
   try {
-    customEngines.value = await getCustomEngines()
+    customEngines.value = shouldUseBackendSearchEngines()
+      ? await fetchBackendCustomSearchEngines()
+      : await getCustomEngines()
   } catch {
     customEngines.value = []
   }
@@ -54,7 +82,7 @@ function isQuickAccess(engineId) {
 
 function openAddModal() {
   editingEngine.value = null
-  formData.value = { name: '', icon: '🔎', url: '' }
+  formData.value = { name: '', icon: '🔍', url: '' }
   showAddModal.value = true
 }
 
@@ -71,7 +99,13 @@ async function saveEngine() {
   }
 
   if (editingEngine.value) {
-    await updateCustomEngine(editingEngine.value.id, formData.value)
+    if (shouldUseBackendSearchEngines()) {
+      await updateBackendCustomSearchEngine(editingEngine.value.id, formData.value)
+    } else {
+      await updateCustomEngine(editingEngine.value.id, formData.value)
+    }
+  } else if (shouldUseBackendSearchEngines()) {
+    await createBackendCustomSearchEngine(formData.value)
   } else {
     await addCustomEngine(formData.value)
   }
@@ -83,7 +117,13 @@ async function saveEngine() {
 
 async function removeEngine(engine) {
   if (!confirm(`确定删除 ${engine.name} 吗？`)) return
-  await deleteCustomEngine(engine.id)
+
+  if (shouldUseBackendSearchEngines()) {
+    await deleteBackendCustomSearchEngine(engine.id)
+  } else {
+    await deleteCustomEngine(engine.id)
+  }
+
   await loadCustomEngines()
   await loadCustomSearchEngines()
 }
@@ -108,6 +148,26 @@ function toggleAggregateEngine(engineId) {
 function isAggregateEngine(engineId) {
   return (config.value.search?.aggregate?.engines || []).includes(engineId)
 }
+
+function setProviderMessage(provider, type, message) {
+  providerMessages.value[provider] = message
+  providerMessageTypes.value[provider] = type
+}
+
+async function handleProviderTest(provider) {
+  providerTesting.value[provider] = true
+  setProviderMessage(provider, '', '')
+
+  try {
+    const providerConfig = { ...(config.value.search?.providers?.[provider] || {}) }
+    const result = await testBackendAiProvider(provider, providerConfig)
+    setProviderMessage(provider, 'success', result.message || '连接成功')
+  } catch (error) {
+    setProviderMessage(provider, 'error', error.message || '连接失败')
+  } finally {
+    providerTesting.value[provider] = false
+  }
+}
 </script>
 
 <template>
@@ -117,7 +177,7 @@ function isAggregateEngine(engineId) {
     <div class="settings-item">
       <div class="settings-item__info">
         <div class="settings-item__label">默认搜索引擎</div>
-        <div class="settings-item__desc">支持百度、Google、Bing、Brave 和 ChatGPT Search</div>
+        <div class="settings-item__desc">支持百度、Google、Bing、Brave Search、ChatGPT Search、OpenClaw 和自定义搜索。</div>
       </div>
       <div class="settings-item__control">
         <div class="engine-grid">
@@ -131,12 +191,12 @@ function isAggregateEngine(engineId) {
             <span class="engine-option__icon">{{ engine.icon }}</span>
             <span class="engine-option__name">{{ engine.name }}</span>
             <div v-if="!engine.isBuiltIn" class="engine-option__actions" @click.stop>
-              <button class="action-btn" @click="editEngine(engine)">✏️</button>
-              <button class="action-btn action-btn--danger" @click="removeEngine(engine)">🗑</button>
+              <button class="action-btn" @click="editEngine(engine)">编辑</button>
+              <button class="action-btn action-btn--danger" @click="removeEngine(engine)">删除</button>
             </div>
           </button>
           <button class="engine-option engine-option--add" @click="openAddModal">
-            <span class="engine-option__icon">＋</span>
+            <span class="engine-option__icon">+</span>
             <span class="engine-option__name">添加</span>
           </button>
         </div>
@@ -145,8 +205,8 @@ function isAggregateEngine(engineId) {
 
     <div class="settings-item settings-item--stack">
       <div class="settings-item__info">
-        <div class="settings-item__label">前台快速切换引擎</div>
-        <div class="settings-item__desc">这里勾选的引擎才会出现在首页搜索框的切换菜单里</div>
+        <div class="settings-item__label">首页快速切换</div>
+        <div class="settings-item__desc">这里勾选的引擎，才会显示在导航首页搜索框的切换菜单里。</div>
       </div>
       <div class="checkbox-grid">
         <label
@@ -169,7 +229,7 @@ function isAggregateEngine(engineId) {
     <div class="settings-item">
       <div class="settings-item__info">
         <div class="settings-item__label">聚合搜索</div>
-        <div class="settings-item__desc">一次搜索同时打开多个引擎</div>
+        <div class="settings-item__desc">一次搜索时同时打开多个网页搜索引擎。</div>
       </div>
       <div class="settings-item__control">
         <label class="toggle">
@@ -182,7 +242,7 @@ function isAggregateEngine(engineId) {
     <div v-if="aggregateEnabled" class="settings-item settings-item--stack">
       <div class="settings-item__info">
         <div class="settings-item__label">聚合引擎列表</div>
-        <div class="settings-item__desc">勾选要一起打开的搜索引擎</div>
+        <div class="settings-item__desc">勾选后会在一次搜索中批量打开这些网页引擎。</div>
       </div>
       <div class="checkbox-grid">
         <label
@@ -204,8 +264,8 @@ function isAggregateEngine(engineId) {
 
     <div class="settings-item settings-item--stack">
       <div class="settings-item__info">
-        <div class="settings-item__label">ChatGPT Search 接入</div>
-        <div class="settings-item__desc">支持 CLI Proxy / API 方式保存配置。目前前台先做接入入口和回退打开 ChatGPT。</div>
+        <div class="settings-item__label">ChatGPT / OpenAI 接入</div>
+        <div class="settings-item__desc">配置完成后，首页切到 ChatGPT Search 会优先通过服务器代理返回 AI 答案。</div>
       </div>
       <div class="provider-grid">
         <label class="provider-field">
@@ -224,7 +284,7 @@ function isAggregateEngine(engineId) {
             @change="updateConfig('search.providers.chatgpt.mode', $event.target.value)"
           >
             <option value="proxy">CLI Proxy / API Management Center</option>
-            <option value="api">OpenAI API</option>
+            <option value="api">OpenAI-Compatible API</option>
           </select>
         </label>
         <label class="provider-field">
@@ -243,7 +303,7 @@ function isAggregateEngine(engineId) {
             class="input"
             type="text"
             :value="config.search?.providers?.chatgpt?.endpoint"
-            placeholder="https://api.openai.com/v1/..."
+            placeholder="https://api.openai.com/v1/chat/completions"
             @input="updateConfig('search.providers.chatgpt.endpoint', $event.target.value)"
           >
         </label>
@@ -263,17 +323,29 @@ function isAggregateEngine(engineId) {
             class="input"
             type="text"
             :value="config.search?.providers?.chatgpt?.model"
-            placeholder="gpt-4.1 / gpt-5..."
+            placeholder="gpt-4.1-mini / gpt-5 ..."
             @input="updateConfig('search.providers.chatgpt.model', $event.target.value)"
           >
         </label>
+      </div>
+      <div class="provider-actions">
+        <button class="btn btn--secondary" :disabled="providerTesting.chatgpt" @click="handleProviderTest('chatgpt')">
+          {{ providerTesting.chatgpt ? '测试中...' : '测试连接' }}
+        </button>
+      </div>
+      <div
+        v-if="providerMessages.chatgpt"
+        class="provider-message"
+        :class="`is-${providerMessageTypes.chatgpt}`"
+      >
+        {{ providerMessages.chatgpt }}
       </div>
     </div>
 
     <div class="settings-item settings-item--stack">
       <div class="settings-item__info">
         <div class="settings-item__label">Brave Search API 接入</div>
-        <div class="settings-item__desc">可先保存接口配置，后续我们再把前台 AI 搜索结果面板接上</div>
+        <div class="settings-item__desc">配置完成后，首页切到 Brave Search 会优先在页面内显示结果卡片。</div>
       </div>
       <div class="provider-grid">
         <label class="provider-field">
@@ -290,10 +362,11 @@ function isAggregateEngine(engineId) {
             class="input"
             type="text"
             :value="config.search?.providers?.brave?.endpoint"
+            placeholder="https://api.search.brave.com/res/v1/web/search"
             @input="updateConfig('search.providers.brave.endpoint', $event.target.value)"
           >
         </label>
-        <label class="provider-field">
+        <label class="provider-field provider-field--full">
           <span>API Key</span>
           <input
             class="input"
@@ -303,6 +376,87 @@ function isAggregateEngine(engineId) {
             @input="updateConfig('search.providers.brave.apiKey', $event.target.value)"
           >
         </label>
+      </div>
+      <div class="provider-actions">
+        <button class="btn btn--secondary" :disabled="providerTesting.brave" @click="handleProviderTest('brave')">
+          {{ providerTesting.brave ? '测试中...' : '测试连接' }}
+        </button>
+      </div>
+      <div
+        v-if="providerMessages.brave"
+        class="provider-message"
+        :class="`is-${providerMessageTypes.brave}`"
+      >
+        {{ providerMessages.brave }}
+      </div>
+    </div>
+
+    <div class="settings-item settings-item--stack">
+      <div class="settings-item__info">
+        <div class="settings-item__label">OpenClaw 接入</div>
+        <div class="settings-item__desc">适合接你自己的 OpenClaw 或 OpenAI-compatible 网关，配置完成后首页会直接返回答案面板。</div>
+      </div>
+      <div class="provider-grid">
+        <label class="provider-field">
+          <span>启用</span>
+          <input
+            type="checkbox"
+            :checked="config.search?.providers?.openclaw?.enabled"
+            @change="updateConfig('search.providers.openclaw.enabled', $event.target.checked)"
+          >
+        </label>
+        <label class="provider-field">
+          <span>Base URL</span>
+          <input
+            class="input"
+            type="text"
+            :value="config.search?.providers?.openclaw?.baseUrl"
+            placeholder="https://your-openclaw.example.com"
+            @input="updateConfig('search.providers.openclaw.baseUrl', $event.target.value)"
+          >
+        </label>
+        <label class="provider-field">
+          <span>Endpoint</span>
+          <input
+            class="input"
+            type="text"
+            :value="config.search?.providers?.openclaw?.endpoint"
+            placeholder="留空时自动拼接 /v1/chat/completions"
+            @input="updateConfig('search.providers.openclaw.endpoint', $event.target.value)"
+          >
+        </label>
+        <label class="provider-field">
+          <span>API Key</span>
+          <input
+            class="input"
+            type="password"
+            :value="config.search?.providers?.openclaw?.apiKey"
+            placeholder="如果网关需要鉴权就在这里填写"
+            @input="updateConfig('search.providers.openclaw.apiKey', $event.target.value)"
+          >
+        </label>
+        <label class="provider-field provider-field--full">
+          <span>Model</span>
+          <input
+            class="input"
+            type="text"
+            :value="config.search?.providers?.openclaw?.model"
+            placeholder="例如 gpt-4.1-mini / claude / qwen ..."
+            @input="updateConfig('search.providers.openclaw.model', $event.target.value)"
+          >
+        </label>
+      </div>
+      <div class="provider-actions">
+        <button class="btn btn--secondary" :disabled="providerTesting.openclaw" @click="handleProviderTest('openclaw')">
+          {{ providerTesting.openclaw ? '测试中...' : '测试连接' }}
+        </button>
+      </div>
+      <div
+        v-if="providerMessages.openclaw"
+        class="provider-message"
+        :class="`is-${providerMessageTypes.openclaw}`"
+      >
+        {{ providerMessages.openclaw }}
       </div>
     </div>
 
@@ -319,7 +473,7 @@ function isAggregateEngine(engineId) {
           </div>
           <div class="form-group">
             <label class="form-label">图标</label>
-            <input v-model="formData.icon" type="text" class="input" placeholder="🔎">
+            <input v-model="formData.icon" type="text" class="input" placeholder="🔍">
           </div>
           <div class="form-group">
             <label class="form-label">搜索 URL</label>
@@ -384,6 +538,7 @@ function isAggregateEngine(engineId) {
   font-size: 12px;
   color: var(--text-muted);
   margin-top: 4px;
+  line-height: 1.6;
 }
 
 .engine-grid {
@@ -472,6 +627,34 @@ function isAggregateEngine(engineId) {
   gap: 8px;
   color: var(--text-secondary);
   font-size: 13px;
+}
+
+.provider-field--full {
+  grid-column: 1 / -1;
+}
+
+.provider-actions {
+  display: flex;
+  justify-content: flex-end;
+  margin-top: 12px;
+}
+
+.provider-message {
+  margin-top: 12px;
+  padding: 12px 14px;
+  border-radius: 14px;
+  background: var(--bg-secondary);
+  color: var(--text-secondary);
+  font-size: 13px;
+  line-height: 1.6;
+}
+
+.provider-message.is-success {
+  color: #3f7a56;
+}
+
+.provider-message.is-error {
+  color: #c84d4d;
 }
 
 .input {

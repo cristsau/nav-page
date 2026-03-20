@@ -16,6 +16,18 @@ import {
   syncTelegramApprovals,
   sendDecisionNotification
 } from '@/shared/services/telegramApproval'
+import {
+  isBackendAuthEnabled,
+  fetchBackendSession,
+  loginWithBackend,
+  logoutWithBackend,
+  registerWithBackend,
+  fetchBackendApprovedUsers,
+  fetchBackendRegistrationRequests,
+  approveBackendRegistration,
+  rejectBackendRegistration
+} from '@/shared/services/authApi'
+import { syncBackendTelegramApprovals } from '@/shared/services/adminTelegramApi'
 
 const currentUser = ref(null)
 const pendingRequests = ref([])
@@ -24,7 +36,10 @@ const registrationHistory = ref([])
 const initialized = ref(false)
 
 async function refreshCurrentUser() {
-  currentUser.value = await getCurrentUser()
+  currentUser.value = isBackendAuthEnabled()
+    ? await fetchBackendSession()
+    : await getCurrentUser()
+
   return currentUser.value
 }
 
@@ -36,6 +51,13 @@ async function refreshAdminData() {
     return
   }
 
+  if (isBackendAuthEnabled()) {
+    pendingRequests.value = await fetchBackendRegistrationRequests('pending')
+    approvedUsers.value = await fetchBackendApprovedUsers()
+    registrationHistory.value = await fetchBackendRegistrationRequests('all')
+    return
+  }
+
   pendingRequests.value = await getPendingRegistrationRequests()
   approvedUsers.value = await getApprovedUsers()
   registrationHistory.value = await getRegistrationHistory()
@@ -44,27 +66,39 @@ async function refreshAdminData() {
 export function useAuth() {
   async function initAuth() {
     if (initialized.value) return
-    await bootstrapSystem()
+    if (!isBackendAuthEnabled()) {
+      await bootstrapSystem()
+    }
     await refreshCurrentUser()
     await refreshAdminData()
     initialized.value = true
   }
 
   async function refreshAll() {
-    await bootstrapSystem()
+    if (!isBackendAuthEnabled()) {
+      await bootstrapSystem()
+    }
     await refreshCurrentUser()
     await refreshAdminData()
   }
 
   async function login(username, password) {
-    const user = await loginUser(username, password)
+    const user = isBackendAuthEnabled()
+      ? await loginWithBackend(username, password)
+      : await loginUser(username, password)
+
     currentUser.value = user
     await refreshAdminData()
     return user
   }
 
   async function logout() {
-    logoutUser()
+    if (isBackendAuthEnabled()) {
+      await logoutWithBackend()
+    } else {
+      logoutUser()
+    }
+
     currentUser.value = null
     pendingRequests.value = []
     approvedUsers.value = []
@@ -72,6 +106,10 @@ export function useAuth() {
   }
 
   async function register(payload) {
+    if (isBackendAuthEnabled()) {
+      return registerWithBackend(payload)
+    }
+
     const request = await registerUser(payload)
 
     try {
@@ -84,6 +122,12 @@ export function useAuth() {
   }
 
   async function approve(requestId) {
+    if (isBackendAuthEnabled()) {
+      const result = await approveBackendRegistration(requestId)
+      await refreshAdminData()
+      return result
+    }
+
     const result = await approveRegistration(requestId, currentUser.value?.username || 'admin')
 
     try {
@@ -97,6 +141,12 @@ export function useAuth() {
   }
 
   async function reject(requestId) {
+    if (isBackendAuthEnabled()) {
+      const result = await rejectBackendRegistration(requestId)
+      await refreshAdminData()
+      return result
+    }
+
     const result = await rejectRegistration(requestId, currentUser.value?.username || 'admin')
 
     try {
@@ -110,6 +160,12 @@ export function useAuth() {
   }
 
   async function syncTelegram() {
+    if (isBackendAuthEnabled()) {
+      const summary = await syncBackendTelegramApprovals()
+      await refreshAdminData()
+      return summary
+    }
+
     const summary = await syncTelegramApprovals()
     await refreshAdminData()
     return summary

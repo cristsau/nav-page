@@ -1,10 +1,15 @@
 import { ref, watch, onMounted } from 'vue'
-import { getSetting, setSetting } from '@/shared/db/database'
+import { getCurrentUserId, getSetting, setSetting } from '@/shared/db/database'
 import { applyStyleConfig } from '@/shared/composables/useConfig'
+import { fetchBackendSetting, saveBackendSetting, shouldUseBackendSettings } from '@/shared/services/settingsApi'
 
 const isDark = ref(false)
 let initialized = false
 let stopWatchingSystemTheme = null
+
+function canUseBackendSettings() {
+  return shouldUseBackendSettings() && Boolean(getCurrentUserId())
+}
 
 function getSystemPrefersDark() {
   return window.matchMedia('(prefers-color-scheme: dark)').matches
@@ -34,7 +39,9 @@ function startWatchingSystemTheme() {
 
 export async function loadTheme() {
   try {
-    const savedTheme = await getSetting('theme')
+    const savedTheme = canUseBackendSettings()
+      ? await fetchBackendSetting('theme')
+      : await getSetting('theme')
 
     if (savedTheme === 'dark') {
       isDark.value = true
@@ -79,7 +86,11 @@ export function useTheme() {
     }
 
     try {
-      await setSetting('theme', theme)
+      if (canUseBackendSettings()) {
+        await saveBackendSetting('theme', theme)
+      } else if (getCurrentUserId()) {
+        await setSetting('theme', theme)
+      }
     } catch (error) {
       console.error('Failed to persist theme:', error)
     }

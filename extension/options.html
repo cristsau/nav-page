@@ -1,0 +1,30 @@
+<!doctype html>
+<html lang="zh-CN">
+  <head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>NAV 扩展设置</title>
+    <link rel="stylesheet" href="options.css">
+  </head>
+  <body>
+    <main class="page">
+      <section class="card">
+        <h1>NAV 扩展设置</h1>
+        <p class="desc">设置你的 NAV 站点地址。扩展会复用你在浏览器里登录的 NAV 会话。</p>
+
+        <label class="field">
+          <span>NAV 地址</span>
+          <input id="navBaseUrlInput" type="url" placeholder="https://nav.skrskr.net">
+        </label>
+
+        <div class="actions">
+          <button id="saveBtn" class="primary-btn">保存</button>
+          <button id="openNavBtn" class="secondary-btn">打开 NAV</button>
+        </div>
+
+        <div id="statusMessage" class="status"></div>
+      </section>
+    </main>
+    <script type="module" src="options.js"></script>
+  </body>
+  </html>

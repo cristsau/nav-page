@@ -13,6 +13,9 @@ const {
 const query = ref('')
 const isFocused = ref(false)
 const showSwitcher = ref(false)
+const isSearching = ref(false)
+const searchError = ref('')
+const searchResult = ref(null)
 const currentEngine = computed(() => getSearchEngine())
 const allEngines = computed(() => getQuickAccessSearchEngines())
 
@@ -20,10 +23,24 @@ onMounted(async () => {
   await loadCustomSearchEngines()
 })
 
-function handleSearch() {
+async function handleSearch() {
   const trimmed = query.value.trim()
-  if (trimmed) {
-    search(trimmed)
+  if (!trimmed || isSearching.value) return
+
+  searchError.value = ''
+  searchResult.value = null
+  isSearching.value = true
+
+  try {
+    const outcome = await search(trimmed)
+
+    if (outcome?.mode === 'ai') {
+      searchResult.value = outcome.result
+    }
+  } catch (error) {
+    searchError.value = error.message || '搜索失败，请稍后重试'
+  } finally {
+    isSearching.value = false
   }
 }
 
@@ -36,48 +53,122 @@ function handleKeydown(event) {
 function selectEngine(engineId) {
   updateConfig('searchEngine', engineId)
   showSwitcher.value = false
+  searchResult.value = null
+  searchError.value = ''
+}
+
+function closeResultPanel() {
+  searchResult.value = null
+  searchError.value = ''
+}
+
+function openExternalResult() {
+  if (!searchResult.value?.externalUrl) return
+  window.open(searchResult.value.externalUrl, '_blank')
 }
 </script>
 
 <template>
-  <div class="search-box" :class="{ 'is-focused': isFocused }">
-    <div class="search-box__engine-wrap">
-      <button class="search-box__engine" @click="showSwitcher = !showSwitcher">
-        <span class="search-box__icon">{{ currentEngine.icon }}</span>
-        <span class="search-box__name">{{ currentEngine.name }}</span>
-        <span class="search-box__chevron">▾</span>
-      </button>
-
-      <div v-if="showSwitcher" class="engine-switcher">
-        <button
-          v-for="engine in allEngines"
-          :key="engine.id"
-          class="engine-switcher__item"
-          :class="{ 'is-active': currentEngine.id === engine.id }"
-          @click="selectEngine(engine.id)"
-        >
-          <span>{{ engine.icon }}</span>
-          <span>{{ engine.name }}</span>
+  <div class="search-shell">
+    <div class="search-box" :class="{ 'is-focused': isFocused }">
+      <div class="search-box__engine-wrap">
+        <button class="search-box__engine" @click="showSwitcher = !showSwitcher">
+          <span class="search-box__icon">{{ currentEngine.icon }}</span>
+          <span class="search-box__name">{{ currentEngine.name }}</span>
+          <span class="search-box__chevron">▾</span>
         </button>
+
+        <div v-if="showSwitcher" class="engine-switcher">
+          <button
+            v-for="engine in allEngines"
+            :key="engine.id"
+            class="engine-switcher__item"
+            :class="{ 'is-active': currentEngine.id === engine.id }"
+            @click="selectEngine(engine.id)"
+          >
+            <span>{{ engine.icon }}</span>
+            <span>{{ engine.name }}</span>
+          </button>
+        </div>
       </div>
+
+      <input
+        v-model="query"
+        type="text"
+        class="search-box__input"
+        :placeholder="`在 ${currentEngine.name} 搜索...`"
+        @focus="isFocused = true"
+        @blur="isFocused = false"
+        @keydown="handleKeydown"
+      >
+      <button class="search-box__btn" :disabled="isSearching" @click="handleSearch">
+        <span>{{ isSearching ? '搜索中...' : '搜索' }}</span>
+      </button>
     </div>
 
-    <input
-      v-model="query"
-      type="text"
-      class="search-box__input"
-      :placeholder="`在 ${currentEngine.name} 搜索...`"
-      @focus="isFocused = true"
-      @blur="isFocused = false"
-      @keydown="handleKeydown"
-    >
-    <button class="search-box__btn" @click="handleSearch">
-      <span>搜索</span>
-    </button>
+    <div v-if="isSearching || searchError || searchResult" class="search-result-panel">
+      <div class="search-result-panel__header">
+        <div>
+          <div class="search-result-panel__title">
+            {{ searchResult?.label || currentEngine.name }}
+          </div>
+          <div class="search-result-panel__meta">
+            {{ searchResult?.query || query }}
+          </div>
+        </div>
+        <button class="search-result-panel__close" @click="closeResultPanel">关闭</button>
+      </div>
+
+      <div v-if="isSearching" class="search-result-panel__state">
+        正在请求 AI 搜索结果...
+      </div>
+
+      <div v-else-if="searchError" class="search-result-panel__state search-result-panel__state--error">
+        {{ searchError }}
+      </div>
+
+      <template v-else-if="searchResult">
+        <div v-if="searchResult.answer" class="search-result-panel__answer">
+          {{ searchResult.answer }}
+        </div>
+
+        <div v-if="searchResult.items?.length" class="search-result-list">
+          <a
+            v-for="(item, index) in searchResult.items"
+            :key="item.url || index"
+            class="search-result-item"
+            :href="item.url"
+            target="_blank"
+            rel="noreferrer"
+          >
+            <div class="search-result-item__source">{{ item.source || '搜索结果' }}</div>
+            <div class="search-result-item__title">{{ item.title }}</div>
+            <div v-if="item.description" class="search-result-item__desc">{{ item.description }}</div>
+            <div class="search-result-item__url">{{ item.url }}</div>
+          </a>
+        </div>
+
+        <div class="search-result-panel__actions">
+          <button
+            v-if="searchResult.externalUrl"
+            class="search-result-panel__link"
+            @click="openExternalResult"
+          >
+            在原始站点打开
+          </button>
+        </div>
+      </template>
+    </div>
   </div>
 </template>
 
 <style scoped>
+.search-shell {
+  position: relative;
+  display: grid;
+  gap: 16px;
+}
+
 .search-box {
   position: relative;
   display: flex;
@@ -190,9 +281,124 @@ function selectEngine(engineId) {
   flex-shrink: 0;
 }
 
-.search-box__btn:hover {
+.search-box__btn:hover:not(:disabled) {
   background: var(--accent-hover);
   transform: scale(1.02);
+}
+
+.search-box__btn:disabled {
+  opacity: 0.7;
+  cursor: wait;
+}
+
+.search-result-panel {
+  max-width: 960px;
+  width: min(100%, 960px);
+  margin: 0 auto;
+  padding: 20px;
+  background: color-mix(in srgb, var(--bg-card) 92%, var(--accent-color) 8%);
+  border: 1px solid var(--border-light);
+  border-radius: 28px;
+  box-shadow: var(--shadow-card-hover);
+}
+
+.search-result-panel__header {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 16px;
+  margin-bottom: 16px;
+}
+
+.search-result-panel__title {
+  font-size: 18px;
+  font-weight: 700;
+  color: var(--text-primary);
+}
+
+.search-result-panel__meta {
+  margin-top: 6px;
+  color: var(--text-muted);
+  font-size: 13px;
+}
+
+.search-result-panel__close,
+.search-result-panel__link {
+  padding: 10px 16px;
+  background: var(--bg-secondary);
+  color: var(--text-primary);
+  border: none;
+  border-radius: 999px;
+  cursor: pointer;
+}
+
+.search-result-panel__answer {
+  padding: 16px 18px;
+  background: var(--bg-secondary);
+  border-radius: 20px;
+  color: var(--text-primary);
+  line-height: 1.8;
+  white-space: pre-wrap;
+}
+
+.search-result-panel__state {
+  padding: 16px 18px;
+  background: var(--bg-secondary);
+  border-radius: 20px;
+  color: var(--text-secondary);
+}
+
+.search-result-panel__state--error {
+  color: #d65c5c;
+}
+
+.search-result-list {
+  display: grid;
+  gap: 12px;
+}
+
+.search-result-item {
+  display: grid;
+  gap: 6px;
+  padding: 16px 18px;
+  background: var(--bg-secondary);
+  border-radius: 20px;
+  color: inherit;
+  text-decoration: none;
+  transition: transform var(--transition-fast), box-shadow var(--transition-fast);
+}
+
+.search-result-item:hover {
+  transform: translateY(-2px);
+  box-shadow: var(--shadow-card);
+}
+
+.search-result-item__source {
+  font-size: 12px;
+  color: var(--text-muted);
+}
+
+.search-result-item__title {
+  font-size: 16px;
+  font-weight: 600;
+  color: var(--text-primary);
+}
+
+.search-result-item__desc {
+  color: var(--text-secondary);
+  line-height: 1.6;
+}
+
+.search-result-item__url {
+  color: var(--accent-color);
+  font-size: 12px;
+  word-break: break-all;
+}
+
+.search-result-panel__actions {
+  display: flex;
+  justify-content: flex-end;
+  margin-top: 16px;
 }
 
 @media (max-width: 640px) {
@@ -225,6 +431,10 @@ function selectEngine(engineId) {
 
   .search-box__btn {
     margin-top: 8px;
+  }
+
+  .search-result-panel__header {
+    flex-direction: column;
   }
 }
 </style>

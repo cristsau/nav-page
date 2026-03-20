@@ -1,5 +1,8 @@
 import { ref, watch, onMounted } from 'vue'
-import { getSetting, setSetting, getCustomEngines } from '@/shared/db/database'
+import { getCurrentUserId, getSetting, setSetting, getCustomEngines } from '@/shared/db/database'
+import { runBackendAiSearch, shouldUseBackendAiSearch } from '@/shared/services/aiSearchApi'
+import { fetchBackendCustomSearchEngines, shouldUseBackendSearchEngines } from '@/shared/services/searchEnginesApi'
+import { fetchBackendSetting, saveBackendSetting, shouldUseBackendSettings } from '@/shared/services/settingsApi'
 
 const defaultCustomTheme = {
   primary: '#6b8c7a',
@@ -42,6 +45,13 @@ const defaultConfig = {
         enabled: false,
         endpoint: 'https://api.search.brave.com/res/v1/web/search',
         apiKey: ''
+      },
+      openclaw: {
+        enabled: false,
+        baseUrl: '',
+        endpoint: '',
+        apiKey: '',
+        model: ''
       }
     }
   },
@@ -71,6 +81,7 @@ export const searchEngines = {
   google: { id: 'google', name: 'Google', url: 'https://www.google.com/search?q=', icon: '🌐', type: 'web', isBuiltIn: true },
   bing: { id: 'bing', name: 'Bing', url: 'https://www.bing.com/search?q=', icon: '🧭', type: 'web', isBuiltIn: true },
   brave: { id: 'brave', name: 'Brave Search', url: 'https://search.brave.com/search?q=', icon: '🦁', type: 'web', isBuiltIn: true },
+  openclaw: { id: 'openclaw', name: 'OpenClaw', url: 'https://ai.skrskr.net/', icon: '🧠', type: 'openclaw', isBuiltIn: true },
   chatgpt: { id: 'chatgpt', name: 'ChatGPT Search', url: 'https://chatgpt.com/', icon: '✨', type: 'chatgpt', isBuiltIn: true },
   zhihu: { id: 'zhihu', name: '知乎', url: 'https://www.zhihu.com/search?type=content&q=', icon: '💡', type: 'web', isBuiltIn: true },
   bilibili: { id: 'bilibili', name: 'Bilibili', url: 'https://search.bilibili.com/all?keyword=', icon: '📺', type: 'web', isBuiltIn: true },
@@ -186,6 +197,10 @@ let initialized = false
 let watchInitialized = false
 let saveTimeout = null
 
+function canUseBackendSettings() {
+  return shouldUseBackendSettings() && Boolean(getCurrentUserId())
+}
+
 function clone(value) {
   return JSON.parse(JSON.stringify(value))
 }
@@ -278,7 +293,9 @@ function syncStyleConfig() {
 
 export async function loadCustomSearchEngines() {
   try {
-    customSearchEngines.value = await getCustomEngines()
+    customSearchEngines.value = shouldUseBackendSearchEngines()
+      ? await fetchBackendCustomSearchEngines()
+      : await getCustomEngines()
   } catch (error) {
     console.error('Failed to load custom search engines:', error)
     customSearchEngines.value = []
@@ -363,6 +380,30 @@ function getAllSearchEngineList() {
   ]
 }
 
+function isAiSearchEngine(engineId) {
+  return engineId === 'brave' || engineId === 'chatgpt' || engineId === 'openclaw'
+}
+
+function isAiSearchEnabled(engineId) {
+  if (!shouldUseBackendAiSearch() || !isAiSearchEngine(engineId)) {
+    return false
+  }
+
+  if (engineId === 'openclaw') {
+    return true
+  }
+
+  if (engineId === 'brave') {
+    return Boolean(config.value.search?.providers?.brave?.enabled)
+  }
+
+  if (engineId === 'chatgpt') {
+    return Boolean(config.value.search?.providers?.chatgpt?.enabled)
+  }
+
+  return false
+}
+
 function scheduleSave() {
   if (saveTimeout) {
     clearTimeout(saveTimeout)
@@ -374,7 +415,16 @@ function scheduleSave() {
 }
 
 export async function persistConfigNow() {
+  if (!getCurrentUserId()) {
+    return
+  }
+
   try {
+    if (canUseBackendSettings()) {
+      await saveBackendSetting('appConfig', clone(config.value))
+      return
+    }
+
     await setSetting('appConfig', clone(config.value))
   } catch (error) {
     console.error('Failed to persist config:', error)
@@ -383,7 +433,10 @@ export async function persistConfigNow() {
 
 export async function loadConfig() {
   try {
-    const savedConfig = await getSetting('appConfig')
+    const savedConfig = canUseBackendSettings()
+      ? await fetchBackendSetting('appConfig')
+      : await getSetting('appConfig')
+
     config.value = savedConfig
       ? mergeDeep(clone(defaultConfig), savedConfig)
       : clone(defaultConfig)
@@ -471,47 +524,38 @@ export function useConfig() {
     return allEngines.find((engine) => engine.id === config.value.searchEngine) || searchEngines.baidu
   }
 
-  async function handleChatGPTSearch(query) {
-    const provider = config.value.search?.providers?.chatgpt || {}
-
-    if (provider.enabled && (provider.endpoint || provider.cliProxyBaseUrl)) {
-      alert('ChatGPT Search 的 API/Proxy 接入配置已保存。下一步建议接入你自己的服务端代理来真正执行搜索。')
-      return
-    }
-
-    try {
-      await navigator.clipboard.writeText(query)
-      window.open('https://chatgpt.com/', '_blank')
-      alert('已为你打开 ChatGPT，并把搜索词复制到剪贴板。')
-    } catch {
-      window.open('https://chatgpt.com/', '_blank')
-    }
-  }
-
   async function search(query) {
     const allEngines = getAllSearchEngineList()
     const { search } = config.value
 
-    const runSingleEngine = async (engineId) => {
+    const runSingleEngine = async (engineId, forceExternal = false) => {
       const engine = allEngines.find((item) => item.id === engineId)
       if (!engine) return
 
-      if (engine.type === 'chatgpt') {
-        await handleChatGPTSearch(query)
-        return
+      if (!forceExternal && isAiSearchEnabled(engine.id)) {
+        const result = await runBackendAiSearch(engine.id, query)
+        return {
+          mode: 'ai',
+          result
+        }
       }
 
       window.open(engine.url + encodeURIComponent(query), '_blank')
+      return {
+        mode: 'external'
+      }
     }
 
     if (search?.aggregate?.enabled && search.aggregate.engines?.length) {
       for (const engineId of search.aggregate.engines) {
-        await runSingleEngine(engineId)
+        await runSingleEngine(engineId, true)
       }
-      return
+      return {
+        mode: 'external'
+      }
     }
 
-    await runSingleEngine(config.value.searchEngine)
+    return runSingleEngine(config.value.searchEngine)
   }
 
   function isModuleEnabled(moduleName) {

@@ -1,5 +1,6 @@
 import { createRouter, createWebHistory } from 'vue-router'
 import { bootstrapSystem, getCurrentUser } from '@/shared/db/database'
+import { fetchBackendSession, isBackendAuthEnabled } from '@/shared/services/authApi'
 
 const routes = [
   {
@@ -13,6 +14,12 @@ const routes = [
     name: 'Navigation',
     component: () => import('@/modules/navigation/Navigation.vue'),
     meta: { title: '导航' }
+  },
+  {
+    path: '/quick-add',
+    name: 'QuickAdd',
+    component: () => import('@/modules/navigation/QuickAddView.vue'),
+    meta: { title: '快速添加' }
   },
   {
     path: '/whisper',
@@ -44,8 +51,13 @@ const router = createRouter({
 })
 
 router.beforeEach(async (to) => {
-  await bootstrapSystem()
-  const currentUser = await getCurrentUser()
+  const currentUser = isBackendAuthEnabled()
+    ? await fetchBackendSession()
+    : await (async () => {
+        await bootstrapSystem()
+        return getCurrentUser()
+      })()
+
   const isPublic = Boolean(to.meta.public)
 
   document.title = to.meta.title ? `${to.meta.title} - NAV` : 'NAV - 个人导航页'

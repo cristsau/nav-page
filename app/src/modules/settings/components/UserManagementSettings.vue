@@ -3,6 +3,12 @@ import { computed, onMounted, onUnmounted, ref } from 'vue'
 import { useAuth } from '@/shared/composables/useAuth'
 import { getTelegramConfig, setTelegramConfig } from '@/shared/db/database'
 import { testTelegramConfig } from '@/shared/services/telegramApproval'
+import {
+  fetchBackendTelegramConfig,
+  saveBackendTelegramConfig,
+  shouldUseBackendTelegramAdmin,
+  testBackendTelegramConfig
+} from '@/shared/services/adminTelegramApi'
 
 const {
   currentUser,
@@ -37,7 +43,9 @@ function formatDate(timestamp) {
 }
 
 async function loadTelegramSettings() {
-  telegramForm.value = await getTelegramConfig()
+  telegramForm.value = shouldUseBackendTelegramAdmin()
+    ? await fetchBackendTelegramConfig()
+    : await getTelegramConfig()
 }
 
 async function handleApprove(requestId) {
@@ -73,7 +81,11 @@ async function handleSaveTelegram() {
   telegramMessage.value = ''
 
   try {
-    await setTelegramConfig(telegramForm.value)
+    if (shouldUseBackendTelegramAdmin()) {
+      await saveBackendTelegramConfig(telegramForm.value)
+    } else {
+      await setTelegramConfig(telegramForm.value)
+    }
     telegramMessage.value = 'Telegram 配置已保存，仅保存在当前设备管理员账户下'
   } catch (error) {
     telegramMessage.value = error.message || 'Telegram 配置保存失败'
@@ -87,7 +99,9 @@ async function handleTestTelegram() {
   telegramMessage.value = ''
 
   try {
-    const result = await testTelegramConfig(telegramForm.value)
+    const result = shouldUseBackendTelegramAdmin()
+      ? await testBackendTelegramConfig(telegramForm.value)
+      : await testTelegramConfig(telegramForm.value)
     telegramMessage.value = `连接成功，Bot 名称：${result.result?.username || result.result?.first_name || '未知'}`
   } catch (error) {
     telegramMessage.value = error.message || 'Telegram 连接失败'

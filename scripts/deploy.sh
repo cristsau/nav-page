@@ -9,11 +9,15 @@ APP_DIR="$REPO_ROOT/app"
 DEPLOY_REF="${1:-master}"
 DEPLOY_DIR="${NAV_DEPLOY_DIR:-/home/web/html/nav}"
 REMOTE_NAME="${NAV_REMOTE_NAME:-origin}"
+VITE_AUTH_MODE_VALUE="${NAV_VITE_AUTH_MODE:-backend}"
+VITE_API_BASE_URL_VALUE="${NAV_VITE_API_BASE_URL:-/api}"
 
 echo "[deploy] repo: $REPO_ROOT"
 echo "[deploy] app: $APP_DIR"
 echo "[deploy] ref: $DEPLOY_REF"
 echo "[deploy] target: $DEPLOY_DIR"
+echo "[deploy] vite auth mode: $VITE_AUTH_MODE_VALUE"
+echo "[deploy] vite api base url: $VITE_API_BASE_URL_VALUE"
 
 cd "$REPO_ROOT"
 
@@ -29,7 +33,7 @@ fi
 cd "$APP_DIR"
 
 npm install
-npm run build
+VITE_AUTH_MODE="$VITE_AUTH_MODE_VALUE" VITE_API_BASE_URL="$VITE_API_BASE_URL_VALUE" npm run build
 
 mkdir -p "$DEPLOY_DIR"
 find "$DEPLOY_DIR" -mindepth 1 -maxdepth 1 -exec rm -rf {} +

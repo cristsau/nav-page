@@ -1,7 +1,9 @@
 <script setup>
 import { ref, computed, onMounted } from 'vue'
 import { useRouter } from 'vue-router'
-import { getNotes, addNote, updateNote, deleteNote, toggleNotePin, getSetting, setSetting } from '@/shared/db/database'
+import { getCurrentUserId, getNotes as getLocalNotes, addNote as addLocalNote, updateNote as updateLocalNote, deleteNote as deleteLocalNote, toggleNotePin as toggleLocalNotePin, getSetting as getLocalSetting, setSetting as setLocalSetting } from '@/shared/db/database'
+import { fetchBackendSetting, saveBackendSetting, shouldUseBackendSettings } from '@/shared/services/settingsApi'
+import { createBackendNote, deleteBackendNote, fetchBackendNotes, shouldUseBackendNotes, toggleBackendNotePin, updateBackendNote } from '@/shared/services/notesApi'
 import NoteCard from './components/NoteCard.vue'
 import NoteEditor from './components/NoteEditor.vue'
 import NotePreview from './components/NotePreview.vue'
@@ -29,6 +31,56 @@ const sharingNote = ref(null)
 // 设置弹窗
 const showSettings = ref(false)
 const whisperBgImage = ref('')
+
+function canUseBackendSettings() {
+  return shouldUseBackendSettings() && Boolean(getCurrentUserId())
+}
+
+async function getSetting(key) {
+  if (canUseBackendSettings()) {
+    return fetchBackendSetting(key)
+  }
+
+  return getLocalSetting(key)
+}
+
+async function setSetting(key, value) {
+  if (canUseBackendSettings()) {
+    return saveBackendSetting(key, value)
+  }
+
+  return setLocalSetting(key, value)
+}
+
+async function getNotes() {
+  return shouldUseBackendNotes()
+    ? fetchBackendNotes()
+    : getLocalNotes()
+}
+
+async function addNote(note) {
+  return shouldUseBackendNotes()
+    ? createBackendNote(note)
+    : addLocalNote(note)
+}
+
+async function updateNote(id, updates) {
+  return shouldUseBackendNotes()
+    ? updateBackendNote(id, updates)
+    : updateLocalNote(id, updates)
+}
+
+async function deleteNote(id) {
+  return shouldUseBackendNotes()
+    ? deleteBackendNote(id)
+    : deleteLocalNote(id)
+}
+
+async function toggleNotePin(id) {
+  return shouldUseBackendNotes()
+    ? toggleBackendNotePin(id)
+    : toggleLocalNotePin(id)
+}
 
 // 背景图样式
 const bgStyle = computed(() => {

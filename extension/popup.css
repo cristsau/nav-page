@@ -1,0 +1,123 @@
+* {
+  box-sizing: border-box;
+}
+
+body {
+  margin: 0;
+  font-family: "Segoe UI", "PingFang SC", sans-serif;
+  background: #f4f6f5;
+  color: #223028;
+}
+
+.popup {
+  width: 360px;
+  padding: 16px;
+}
+
+.popup__header {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 12px;
+  margin-bottom: 16px;
+}
+
+.popup__header h1 {
+  margin: 0;
+  font-size: 18px;
+}
+
+.popup__header p {
+  margin: 6px 0 0;
+  color: #64756b;
+  font-size: 12px;
+}
+
+.auth-status {
+  min-height: 16px;
+}
+
+.auth-status.is-error {
+  color: #c84d4d;
+}
+
+.auth-status.is-success {
+  color: #3e7e57;
+}
+
+.card {
+  padding: 16px;
+  border-radius: 18px;
+  background: #ffffff;
+  box-shadow: 0 10px 28px rgba(26, 41, 31, 0.08);
+}
+
+.field {
+  display: grid;
+  gap: 6px;
+  margin-bottom: 12px;
+  font-size: 13px;
+}
+
+.field span {
+  color: #4a5b51;
+}
+
+input,
+select {
+  width: 100%;
+  padding: 10px 12px;
+  border: 1px solid #d8e3dc;
+  border-radius: 12px;
+  background: #f7faf8;
+  color: #223028;
+}
+
+.inline-row,
+.actions {
+  display: grid;
+  grid-template-columns: 1fr auto;
+  gap: 8px;
+}
+
+.actions {
+  margin-top: 12px;
+}
+
+button {
+  border: none;
+  border-radius: 12px;
+  cursor: pointer;
+}
+
+.primary-btn {
+  padding: 10px 14px;
+  background: #5f8a6f;
+  color: #fff;
+}
+
+.secondary-btn,
+.link-btn {
+  padding: 10px 14px;
+  background: #eef4f0;
+  color: #223028;
+}
+
+.link-btn {
+  padding: 8px 12px;
+}
+
+.status {
+  min-height: 20px;
+  margin-top: 8px;
+  font-size: 12px;
+  color: #64756b;
+}
+
+.status.is-error {
+  color: #c84d4d;
+}
+
+.status.is-success {
+  color: #3e7e57;
+}

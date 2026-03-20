@@ -1,7 +1,8 @@
 <script setup>
 import { ref, onMounted } from 'vue'
 import { useRoute, useRouter } from 'vue-router'
-import { getShareByCode } from '@/shared/db/database'
+import { getShareByCode as getLocalShareByCode } from '@/shared/db/database'
+import { fetchBackendShareByCode, shouldUseBackendNotes } from '@/shared/services/notesApi'
 import { decrypt } from '@/shared/utils/crypto'
 
 const route = useRoute()
@@ -15,6 +16,12 @@ const showPasswordModal = ref(false)
 const password = ref('')
 const decryptedContent = ref('')
 const decryptError = ref(false)
+
+async function getShareByCode(code) {
+  return shouldUseBackendNotes()
+    ? fetchBackendShareByCode(code)
+    : getLocalShareByCode(code)
+}
 
 onMounted(async () => {
   const code = route.params.code

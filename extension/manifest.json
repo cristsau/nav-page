@@ -1,0 +1,25 @@
+{
+  "manifest_version": 3,
+  "name": "NAV Quick Add",
+  "version": "1.0.0",
+  "description": "Quickly add the current page to NAV.",
+  "permissions": [
+    "storage",
+    "tabs",
+    "contextMenus",
+    "notifications"
+  ],
+  "host_permissions": [
+    "https://*/*",
+    "http://*/*"
+  ],
+  "background": {
+    "service_worker": "background.js",
+    "type": "module"
+  },
+  "action": {
+    "default_title": "Add to NAV",
+    "default_popup": "popup.html"
+  },
+  "options_page": "options.html"
+}

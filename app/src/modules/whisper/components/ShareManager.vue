@@ -1,6 +1,7 @@
 <script setup>
 import { ref, computed, onMounted } from 'vue'
-import { createShare, cancelShare, getAllActiveShares } from '@/shared/db/database'
+import { createShare as createLocalShare, cancelShare as cancelLocalShare, getAllActiveShares as getLocalActiveShares } from '@/shared/db/database'
+import { cancelBackendShare, createBackendShare, fetchBackendShares, shouldUseBackendNotes } from '@/shared/services/notesApi'
 
 const props = defineProps({
   show: {
@@ -34,6 +35,24 @@ const expireOptions = [
 const existingShares = ref([])
 
 // 计算过期时间
+async function createShare(noteId, expireAt) {
+  return shouldUseBackendNotes()
+    ? createBackendShare(noteId, expireAt)
+    : createLocalShare(noteId, expireAt)
+}
+
+async function cancelShare(shareId) {
+  return shouldUseBackendNotes()
+    ? cancelBackendShare(shareId)
+    : cancelLocalShare(shareId)
+}
+
+async function getAllActiveShares(noteId) {
+  return shouldUseBackendNotes()
+    ? fetchBackendShares(noteId)
+    : getLocalActiveShares()
+}
+
 function getExpireAt() {
   if (expireOption.value === 'forever') return null
   if (expireOption.value === 'custom') {
@@ -79,8 +98,10 @@ async function handleCancelShare(shareId) {
 // 加载已有分享
 async function loadExistingShares() {
   if (!props.note) return
-  existingShares.value = await getAllActiveShares()
-  existingShares.value = existingShares.value.filter(s => s.noteId === props.note.id)
+  existingShares.value = await getAllActiveShares(props.note.id)
+  if (!shouldUseBackendNotes()) {
+    existingShares.value = existingShares.value.filter(s => s.noteId === props.note.id)
+  }
 }
 
 // 格式化日期
