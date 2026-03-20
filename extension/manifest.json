@@ -1,8 +1,8 @@
 {
   "manifest_version": 3,
-  "name": "NAV Quick Add",
+  "name": "DOMO NAV Quick Add",
   "version": "1.0.0",
-  "description": "Quickly add the current page to NAV.",
+  "description": "Quickly add the current page to DOMO NAV.",
   "permissions": [
     "storage",
     "tabs",
@@ -18,7 +18,7 @@
     "type": "module"
   },
   "action": {
-    "default_title": "Add to NAV",
+    "default_title": "Add to DOMO NAV",
     "default_popup": "popup.html"
   },
   "options_page": "options.html"

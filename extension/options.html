@@ -3,28 +3,35 @@
   <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>NAV 扩展设置</title>
+    <title>DOMO NAV 扩展设置</title>
     <link rel="stylesheet" href="options.css">
   </head>
   <body>
     <main class="page">
       <section class="card">
-        <h1>NAV 扩展设置</h1>
-        <p class="desc">设置你的 NAV 站点地址。扩展会复用你在浏览器里登录的 NAV 会话。</p>
+        <div class="hero">
+          <img class="hero__avatar" src="./assets/domo-avatar.svg" alt="DOMO NAV avatar">
+          <div>
+            <div class="hero__eyebrow">DOMO NAV</div>
+            <h1>扩展设置</h1>
+            <p class="desc">设置你的 DOMO NAV 站点地址。扩展会复用你在浏览器里登录的站点会话。</p>
+          </div>
+        </div>
 
         <label class="field">
-          <span>NAV 地址</span>
+          <span>DOMO NAV 地址</span>
           <input id="navBaseUrlInput" type="url" placeholder="https://nav.skrskr.net">
         </label>
 
         <div class="actions">
-          <button id="saveBtn" class="primary-btn">保存</button>
-          <button id="openNavBtn" class="secondary-btn">打开 NAV</button>
+          <button id="saveBtn" class="primary-btn" type="button">保存</button>
+          <button id="openNavBtn" class="secondary-btn" type="button">打开 DOMO NAV</button>
         </div>
 
         <div id="statusMessage" class="status"></div>
+        <footer class="footer">Design by CrisTsau</footer>
       </section>
     </main>
     <script type="module" src="options.js"></script>
   </body>
-  </html>
+</html>

@@ -60,7 +60,7 @@ router.beforeEach(async (to) => {
 
   const isPublic = Boolean(to.meta.public)
 
-  document.title = to.meta.title ? `${to.meta.title} - NAV` : 'NAV - 个人导航页'
+  document.title = to.meta.title ? `${to.meta.title} - DOMO NAV` : 'DOMO NAV - 个人导航工作台'
 
   if (!currentUser && !isPublic) {
     return {

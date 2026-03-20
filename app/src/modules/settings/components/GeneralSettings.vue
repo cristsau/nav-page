@@ -9,14 +9,14 @@ const siteIcon = ref('')
 const customIcon = ref('')
 const favicon = ref('')
 
-const presetIcons = ['🧭', '🌐', '📚', '📝', '⚡', '🎯', '📌', '💼', '🧠', '🛠', '🏠', '🚀', '☀️', '🌙', '⚙️', '🔖']
+const presetIcons = ['💠', '🌐', '📚', '🗂', '✨', '🧭', '🚀', '📝', '🔎', '🪄', '📌', '🌙', '☀️', '🎯', '🛠️', '🔐']
 
 watch(
   () => config.value.site,
   (site) => {
     if (!site) return
-    siteName.value = site.name || 'NAV'
-    siteIcon.value = site.icon || '🧭'
+    siteName.value = site.name || 'DOMO NAV'
+    siteIcon.value = site.icon || '💠'
     customIcon.value = site.icon || ''
     favicon.value = site.favicon || ''
   },
@@ -25,8 +25,8 @@ watch(
 
 function saveSettings() {
   updateConfig('site', {
-    name: siteName.value.trim() || 'NAV',
-    icon: siteIcon.value || customIcon.value || '🧭',
+    name: siteName.value.trim() || 'DOMO NAV',
+    icon: siteIcon.value || customIcon.value || '💠',
     favicon: favicon.value
   })
 }
@@ -69,17 +69,17 @@ function clearFavicon() {
     <div class="settings-item">
       <div class="settings-item__info">
         <div class="settings-item__label">网站名称</div>
-        <div class="settings-item__desc">显示在浏览器标签和页面顶部</div>
+        <div class="settings-item__desc">显示在浏览器标签、页面头部和品牌落款里。</div>
       </div>
       <div class="settings-item__control">
-        <input v-model="siteName" type="text" class="input" placeholder="NAV" @change="saveSettings">
+        <input v-model="siteName" type="text" class="input" placeholder="DOMO NAV" @change="saveSettings">
       </div>
     </div>
 
     <div class="settings-item">
       <div class="settings-item__info">
         <div class="settings-item__label">网站图标</div>
-        <div class="settings-item__desc">支持预设图标，也支持输入自己的 Emoji 或短文字</div>
+        <div class="settings-item__desc">支持预设图标，也支持输入自己的 Emoji 或短文字。</div>
       </div>
       <div class="settings-item__control">
         <div class="icon-selector">
@@ -112,7 +112,7 @@ function clearFavicon() {
     <div class="settings-item">
       <div class="settings-item__info">
         <div class="settings-item__label">Favicon</div>
-        <div class="settings-item__desc">上传浏览器标签的小图标</div>
+        <div class="settings-item__desc">上传浏览器标签页的小图标，便于区分 DOMO NAV。</div>
       </div>
       <div class="settings-item__control">
         <div class="favicon-upload">
@@ -121,7 +121,7 @@ function clearFavicon() {
             <button class="favicon-clear" @click="clearFavicon">×</button>
           </div>
           <label class="upload-btn">
-            {{ favicon ? '更换' : '上传图片' }}
+            {{ favicon ? '更换图片' : '上传图片' }}
             <input type="file" accept="image/*" hidden @change="handleFaviconUpload">
           </label>
         </div>

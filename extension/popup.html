@@ -3,21 +3,33 @@
   <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>NAV Quick Add</title>
+    <title>DOMO NAV Quick Add</title>
     <link rel="stylesheet" href="popup.css">
   </head>
   <body>
     <main class="popup">
       <header class="popup__header">
-        <div>
-          <h1>NAV 快速添加</h1>
-          <p id="navBaseUrlText"></p>
-          <p id="authStatusText" class="auth-status"></p>
+        <div class="popup__brand">
+          <img class="popup__avatar" src="./assets/domo-avatar.svg" alt="DOMO NAV avatar">
+          <div>
+            <span class="popup__eyebrow">DOMO NAV</span>
+            <h1>快速收藏当前页面</h1>
+            <p id="navBaseUrlText"></p>
+            <p id="authStatusText" class="auth-status"></p>
+          </div>
         </div>
-        <button id="openOptionsBtn" class="link-btn">设置</button>
+        <button id="openOptionsBtn" class="link-btn" type="button">设置</button>
       </header>
 
       <section class="card">
+        <div class="hero">
+          <img class="hero__mark" src="./assets/domo-mark.svg" alt="DOMO NAV mark">
+          <div>
+            <div class="hero__title">一键加入 DOMO NAV</div>
+            <div class="hero__desc">支持选择分组、快速新建分组，以及默认分组自动兜底。</div>
+          </div>
+        </div>
+
         <label class="field">
           <span>页面标题</span>
           <input id="titleInput" type="text">
@@ -31,16 +43,20 @@
           <select id="groupSelect"></select>
         </label>
         <div class="inline-row">
-          <input id="newGroupInput" type="text" placeholder="快速创建分组">
-          <button id="createGroupBtn" class="secondary-btn">新建分组</button>
+          <input id="newGroupInput" type="text" placeholder="快速创建新分组">
+          <button id="createGroupBtn" class="secondary-btn" type="button">新建分组</button>
         </div>
         <div id="statusMessage" class="status"></div>
         <div class="actions">
-          <button id="loginBtn" class="secondary-btn" type="button">打开 NAV 登录</button>
-          <button id="saveBtn" class="primary-btn" type="button">添加到 NAV</button>
+          <button id="loginBtn" class="secondary-btn" type="button">打开 DOMO NAV 登录</button>
+          <button id="saveBtn" class="primary-btn" type="button">添加到 DOMO NAV</button>
         </div>
       </section>
+
+      <footer class="popup__footer">
+        <span>Design by CrisTsau</span>
+      </footer>
     </main>
     <script type="module" src="popup.js"></script>
   </body>
-  </html>
+</html>

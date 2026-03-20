@@ -73,25 +73,21 @@ function formatDate(timestamp) {
 
 <template>
   <div class="share-page">
-    <!-- 加载中 -->
     <div v-if="loading" class="loading-state">
       <span class="loading__spinner">⏳</span>
       <span>加载中...</span>
     </div>
 
-    <!-- 错误状态 -->
     <div v-else-if="error" class="error-state">
       <div class="error-state__icon">😕</div>
       <div class="error-state__title">{{ error }}</div>
       <button class="btn btn--primary" @click="goHome">返回首页</button>
     </div>
 
-    <!-- 内容展示 -->
     <div v-else class="share-content">
-      <!-- 头部信息 -->
       <div class="share-header">
         <div class="share-header__type">
-          {{ note.type === 'memo' ? '📋 备忘录' : '📖 日记' }}
+          {{ note.type === 'memo' ? '🗒 备忘录' : '📝 日记' }}
         </div>
         <h1 class="share-header__title">{{ note.title }}</h1>
         <div class="share-header__meta">
@@ -101,14 +97,11 @@ function formatDate(timestamp) {
         </div>
       </div>
 
-      <!-- 内容区域 -->
       <div class="share-body">
-        <!-- 未加密内容 -->
         <div v-if="!note.encrypted" class="share-body__content">
           {{ note.content }}
         </div>
 
-        <!-- 已加密内容 -->
         <div v-else class="share-body__encrypted">
           <div v-if="decryptedContent" class="share-body__content">
             {{ decryptedContent }}
@@ -122,19 +115,16 @@ function formatDate(timestamp) {
           </div>
         </div>
 
-        <!-- 标签 -->
         <div v-if="note.tags?.length" class="share-body__tags">
           <span v-for="tag in note.tags" :key="tag" class="tag">{{ tag }}</span>
         </div>
       </div>
 
-      <!-- 底部信息 -->
       <div class="share-footer">
-        <p>由 NAV 提供 · 轻量化个人导航页</p>
+        <p>Powered by DOMO NAV · Design by CrisTsau</p>
       </div>
     </div>
 
-    <!-- 密码弹窗 -->
     <div v-if="showPasswordModal" class="password-modal" @click.self="showPasswordModal = false">
       <div class="password-modal__content">
         <h3>输入密码解密</h3>
@@ -165,7 +155,6 @@ function formatDate(timestamp) {
   padding: 24px;
 }
 
-/* 加载状态 */
 .loading-state {
   display: flex;
   align-items: center;
@@ -182,7 +171,6 @@ function formatDate(timestamp) {
   to { transform: rotate(360deg); }
 }
 
-/* 错误状态 */
 .error-state {
   text-align: center;
 }
@@ -198,7 +186,6 @@ function formatDate(timestamp) {
   margin-bottom: 24px;
 }
 
-/* 分享内容 */
 .share-content {
   width: 100%;
   max-width: 720px;
@@ -296,7 +283,6 @@ function formatDate(timestamp) {
   color: var(--text-muted);
 }
 
-/* 密码弹窗 */
 .password-modal {
   position: fixed;
   inset: 0;
@@ -339,7 +325,6 @@ function formatDate(timestamp) {
   margin-top: 20px;
 }
 
-/* 按钮 */
 .btn {
   padding: 10px 24px;
   border: none;

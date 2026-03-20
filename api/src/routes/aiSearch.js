@@ -199,7 +199,7 @@ async function runChatSearch(provider, queryText) {
   const endpoint = resolveChatEndpoint(provider)
   const model = normalizeText(provider.model, DEFAULT_OPENAI_MODEL) || DEFAULT_OPENAI_MODEL
   const systemPrompt = [
-    '你是 NAV 的 AI 搜索助手。',
+      '你是 DOMO NAV 的 AI 搜索助手。',
     '请用简洁中文回答用户问题。',
     '如果没有联网或无法确认事实，请明确说明不确定，不要编造来源。',
     '优先给出可执行结论，再补充必要细节。'
@@ -267,7 +267,7 @@ async function runOpenClawSearch(provider, queryText) {
   const model = normalizeText(provider.model, DEFAULT_OPENCLAW_MODEL) || DEFAULT_OPENCLAW_MODEL
   const apiKey = normalizeText(provider.apiKey)
   const systemPrompt = [
-    '你是 NAV 的 OpenClaw 搜索助手。',
+      '你是 DOMO NAV 的 OpenClaw 搜索助手。',
     '请用简洁中文回答用户问题。',
     '如果无法确认事实，请明确说明不确定。'
   ].join(' ')
@@ -320,7 +320,7 @@ export default async function aiSearchRoutes(fastify) {
 
     try {
       if (provider === 'brave') {
-        const result = await runBraveSearch(inputConfig, 'NAV 浏览器书签 AI 搜索')
+    const result = await runBraveSearch(inputConfig, 'DOMO NAV 浏览器书签 AI 搜索')
         return {
           ok: true,
           provider,

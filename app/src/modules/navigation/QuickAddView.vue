@@ -109,7 +109,7 @@ async function handleSave() {
       description: form.value.description.trim()
     })
 
-    setStatus('已成功添加到 NAV', 'success')
+    setStatus('已成功添加到 DOMO NAV', 'success')
   } catch (error) {
     setStatus(error.message || '添加失败', 'error')
   } finally {
@@ -132,8 +132,8 @@ function goHome() {
     <main class="panel">
       <div class="panel__header">
         <div>
-          <h1>快速添加到 NAV</h1>
-          <p>适合浏览器扩展右键菜单、iPhone 快捷指令和手动快速收藏。</p>
+          <h1>快速添加到 DOMO NAV</h1>
+          <p>适合浏览器扩展、右键菜单、iPhone 快捷指令和手动快速收藏使用。</p>
         </div>
         <button class="ghost-btn" @click="goHome">返回首页</button>
       </div>
@@ -182,9 +182,11 @@ function goHome() {
       <div class="actions">
         <button class="secondary-btn" @click="goHome">稍后再说</button>
         <button class="primary-btn" :disabled="saving" @click="handleSave">
-          {{ saving ? '保存中...' : '添加到 NAV' }}
+          {{ saving ? '保存中...' : '添加到 DOMO NAV' }}
         </button>
       </div>
+
+      <p class="signature">Design by CrisTsau</p>
     </main>
   </div>
 </template>
@@ -307,6 +309,14 @@ textarea {
 
 .status.is-error {
   color: #c84d4d;
+}
+
+.signature {
+  margin: 18px 0 0;
+  text-align: center;
+  font-size: 12px;
+  color: var(--text-muted);
+  letter-spacing: 0.08em;
 }
 
 @media (max-width: 720px) {

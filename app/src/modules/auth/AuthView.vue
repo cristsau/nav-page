@@ -37,7 +37,7 @@ async function handleLogin() {
     await login(loginForm.value.username, loginForm.value.password)
     window.location.assign(String(redirectTarget.value))
   } catch (error) {
-    errorMessage.value = error.message || '登录失败，请稍后再试'
+    errorMessage.value = error.message || '登录失败，请稍后再试。'
   } finally {
     loading.value = false
   }
@@ -48,12 +48,12 @@ async function handleRegister() {
   successMessage.value = ''
 
   if (!registerForm.value.username.trim() || !registerForm.value.password) {
-    errorMessage.value = '请填写用户名和密码'
+    errorMessage.value = '请填写用户名和密码。'
     return
   }
 
   if (registerForm.value.password !== registerForm.value.confirmPassword) {
-    errorMessage.value = '两次输入的密码不一致'
+    errorMessage.value = '两次输入的密码不一致。'
     return
   }
 
@@ -73,7 +73,7 @@ async function handleRegister() {
     }
     activeTab.value = 'login'
   } catch (error) {
-    errorMessage.value = error.message || '注册失败，请稍后再试'
+    errorMessage.value = error.message || '注册失败，请稍后再试。'
   } finally {
     loading.value = false
   }
@@ -84,9 +84,9 @@ async function handleRegister() {
   <div class="auth-page">
     <div class="auth-card">
       <div class="auth-card__header">
-        <div class="auth-card__logo">NAV</div>
-        <h1 class="auth-card__title">账户登录与注册</h1>
-        <p class="auth-card__desc">默认管理员账户已预置，可直接登录后审批新用户。</p>
+        <div class="auth-card__logo">DOMO NAV</div>
+        <h1 class="auth-card__title">账号登录与注册</h1>
+        <p class="auth-card__desc">适合个人和小团队使用的私有化导航工作台。新用户注册后需要管理员审批。</p>
       </div>
 
       <div class="auth-tabs">
@@ -140,6 +140,7 @@ async function handleRegister() {
 
       <p v-if="errorMessage" class="auth-message auth-message--error">{{ errorMessage }}</p>
       <p v-if="successMessage" class="auth-message auth-message--success">{{ successMessage }}</p>
+      <p class="auth-signature">Design by CrisTsau</p>
     </div>
   </div>
 </template>
@@ -172,13 +173,13 @@ async function handleRegister() {
   display: inline-flex;
   align-items: center;
   justify-content: center;
-  min-width: 72px;
+  min-width: 118px;
   padding: 8px 16px;
   border-radius: 999px;
   background: var(--accent-bg);
   color: var(--accent-color);
   font-weight: 700;
-  letter-spacing: 0.18em;
+  letter-spacing: 0.16em;
 }
 
 .auth-card__title {
@@ -262,9 +263,6 @@ async function handleRegister() {
 .auth-message {
   margin-top: 12px;
   line-height: 1.6;
-}
-
-.auth-message {
   padding: 12px 14px;
   border-radius: 14px;
   font-size: 14px;
@@ -278,5 +276,13 @@ async function handleRegister() {
 .auth-message--success {
   background: color-mix(in srgb, #5a8a6a 18%, var(--bg-secondary));
   color: #5a8a6a;
+}
+
+.auth-signature {
+  margin: 18px 0 0;
+  text-align: center;
+  font-size: 12px;
+  color: var(--text-muted);
+  letter-spacing: 0.08em;
 }
 </style>

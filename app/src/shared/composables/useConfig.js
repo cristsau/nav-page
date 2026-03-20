@@ -20,7 +20,7 @@ const defaultCustomTheme = {
 
 const defaultConfig = {
   site: {
-    name: 'NAV',
+    name: 'DOMO NAV',
     icon: '🧭',
     favicon: ''
   },
@@ -566,8 +566,8 @@ export function useConfig() {
     return cardSizeOptions[config.value.style?.cardSize] || cardSizeOptions.medium
   }
 
-  function getSiteName() {
-    return config.value.site?.name || 'NAV'
+function getSiteName() {
+    return config.value.site?.name || 'DOMO NAV'
   }
 
   function getSiteIcon() {

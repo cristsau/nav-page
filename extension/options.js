@@ -25,7 +25,7 @@ async function init() {
 async function handleSave() {
   const navBaseUrl = navBaseUrlInput.value.trim() || DEFAULT_NAV_BASE_URL
   await chrome.storage.sync.set({ navBaseUrl })
-  setStatus('已保存，扩展会使用这个地址连接 NAV。')
+  setStatus('已保存，扩展会使用这个地址连接 DOMO NAV。')
 }
 
 function setStatus(message) {

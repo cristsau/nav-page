@@ -30,12 +30,12 @@ function openLink(url) {
       <div class="settings-item__info">
         <div class="settings-item__label">设为浏览器启动页</div>
         <div class="settings-item__desc">
-          浏览器安全限制下，网页不能直接替你修改启动页；这里提供一键复制地址和设置说明。
+          浏览器不允许网页直接改写启动页，所以这里提供一键复制地址和最短设置指引。
         </div>
       </div>
       <div class="settings-item__control settings-item__control--stack">
-        <button class="btn btn--secondary" @click="copyText(navUrl, 'NAV 地址')">复制 NAV 地址</button>
-        <p class="helper-text">Chrome / Edge：打开浏览器设置，搜索“启动时”，选择“打开特定网页”，填入上面的 NAV 地址。</p>
+        <button class="btn btn--secondary" @click="copyText(navUrl, 'DOMO NAV 地址')">复制 DOMO NAV 地址</button>
+        <p class="helper-text">Chrome / Edge：打开浏览器设置，搜索“启动时”，选择“打开特定网页”，填入上面的地址。</p>
       </div>
     </div>
 
@@ -43,13 +43,13 @@ function openLink(url) {
       <div class="settings-item__info">
         <div class="settings-item__label">安装浏览器扩展</div>
         <div class="settings-item__desc">
-          浏览器不允许网站静默安装扩展，所以这里改成最接近真实可用的方案：下载扩展包并引导安装。
+          浏览器不允许网站静默安装扩展，所以这里提供下载包和安装指引。安装后可以直接把当前网页加入 DOMO NAV。
         </div>
       </div>
       <div class="settings-item__control settings-item__control--stack">
         <button class="btn btn--primary" @click="openLink(extensionDownloadUrl)">下载扩展包</button>
         <button class="btn btn--secondary" @click="openLink(extensionGuideUrl)">查看安装说明</button>
-        <p class="helper-text">Chrome / Edge：打开“扩展程序”页面，启用“开发者模式”，再选择“加载已解压的扩展程序”。</p>
+        <p class="helper-text">Chrome / Edge：打开扩展程序页面，启用“开发者模式”，再选择“加载已解压的扩展程序”。</p>
       </div>
     </div>
 
@@ -57,13 +57,13 @@ function openLink(url) {
       <div class="settings-item__info">
         <div class="settings-item__label">iPhone 快速添加当前页</div>
         <div class="settings-item__desc">
-          iPhone 端最稳的方案是用“快捷指令 + Safari 分享菜单”打开 NAV 的快速添加页。
+          iPhone 端最稳的方式是“快捷指令 + Safari 分享菜单”，把当前链接和标题送到 DOMO NAV 的快速添加页。
         </div>
       </div>
       <div class="settings-item__control settings-item__control--stack">
         <button class="btn btn--secondary" @click="openLink(quickAddUrl)">打开快速添加页</button>
         <button class="btn btn--secondary" @click="copyText(iphoneShortcutTemplate, 'iPhone 模板地址')">复制 iPhone 模板地址</button>
-        <p class="helper-text">在 iPhone“快捷指令”中创建一个接收 Safari 分享内容的快捷指令，把链接和标题拼到这个模板后打开即可。</p>
+        <p class="helper-text">在 iPhone“快捷指令”里创建一个接收 Safari 分享内容的快捷指令，把链接和标题拼到这个模板后打开即可。</p>
       </div>
     </div>
 

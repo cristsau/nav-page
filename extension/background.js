@@ -4,13 +4,13 @@ const DEFAULT_GROUP_NAME = '默认分组'
 chrome.runtime.onInstalled.addListener(() => {
   chrome.contextMenus.create({
     id: 'nav-add-default',
-    title: '添加到 NAV 默认分组',
+    title: '添加到 DOMO NAV 默认分组',
     contexts: ['page', 'link']
   })
 
   chrome.contextMenus.create({
     id: 'nav-open-quick-add',
-    title: '在 NAV 中选择分组后添加',
+    title: '打开 DOMO NAV 后选择分组再添加',
     contexts: ['page', 'link']
   })
 })
@@ -29,9 +29,9 @@ chrome.contextMenus.onClicked.addListener(async (info, tab) => {
         favicon: tab?.favIconUrl || ''
       })
 
-      notify('NAV', '已添加到默认分组')
+      notify('DOMO NAV', '已添加到默认分组')
     } catch (error) {
-      notify('NAV', error.message || '添加失败，请先登录 NAV')
+      notify('DOMO NAV', error.message || '添加失败，请先登录 DOMO NAV')
     }
   }
 

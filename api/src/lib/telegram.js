@@ -95,7 +95,7 @@ export async function sendRegistrationNotificationToAdmins(requestRecord) {
   }
 
   const text = [
-    'NAV 收到新的注册申请',
+    'DOMO NAV 收到新的注册申请',
     `用户名: ${requestRecord.username}`,
     `申请编号: ${requestRecord.id}`,
     `提交时间: ${formatDate(requestRecord.created_at || requestRecord.createdAt)}`,
@@ -121,7 +121,7 @@ export async function sendDecisionNotificationToAdmins(requestRecord, decisionLa
   }
 
   const text = [
-    `NAV 注册申请已${decisionLabel}`,
+    `DOMO NAV 注册申请已${decisionLabel}`,
     `用户名: ${requestRecord.username}`,
     `申请编号: ${requestRecord.id}`,
     `处理时间: ${formatDate(requestRecord.updated_at || requestRecord.updatedAt)}`,

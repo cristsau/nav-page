@@ -31,9 +31,9 @@ async function handleSave() {
 
   try {
     await persistConfigNow()
-    saveMessage.value = '设置已保存并立即生效'
+    saveMessage.value = '设置已保存并立即生效。'
   } catch (error) {
-    saveMessage.value = error.message || '设置保存失败'
+    saveMessage.value = error.message || '设置保存失败。'
   } finally {
     saving.value = false
   }
@@ -75,10 +75,12 @@ async function handleExit() {
         <DataSettings />
 
         <div class="about-section">
-          <div class="about-section__logo">NAV</div>
+          <div class="about-section__logo">DOMO NAV</div>
           <div class="about-section__info">
-            <p class="about-section__version">版本 2.2.0</p>
-            <p class="about-section__desc">支持多用户、云端数据、浏览器扩展和 AI 搜索代理的个人导航页。</p>
+            <p class="about-section__version">版本 2.3.0</p>
+            <p class="about-section__desc">
+              面向个人与小团队的私有化导航工作台，已接入后端认证、PostgreSQL 云端数据、浏览器扩展和 AI 搜索代理。
+            </p>
           </div>
           <div class="about-section__features">
             <span>后端认证</span>
@@ -87,6 +89,7 @@ async function handleExit() {
             <span>Telegram 审批</span>
             <span>AI 搜索代理</span>
           </div>
+          <p class="about-section__signature">Design by CrisTsau</p>
         </div>
       </div>
     </main>
@@ -195,7 +198,7 @@ async function handleExit() {
   font-weight: 700;
   color: var(--text-primary);
   margin-bottom: 12px;
-  letter-spacing: 0.2em;
+  letter-spacing: 0.14em;
 }
 
 .about-section__version {
@@ -208,6 +211,7 @@ async function handleExit() {
   font-size: 14px;
   color: var(--text-secondary);
   margin-bottom: 20px;
+  line-height: 1.7;
 }
 
 .about-section__features {
@@ -223,6 +227,13 @@ async function handleExit() {
   padding: 8px 14px;
   background: var(--bg-secondary);
   border-radius: var(--radius-full);
+}
+
+.about-section__signature {
+  margin: 18px 0 0;
+  color: var(--text-muted);
+  font-size: 12px;
+  letter-spacing: 0.08em;
 }
 
 @media (max-width: 640px) {

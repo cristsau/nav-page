@@ -89,7 +89,7 @@ async function loadGroups() {
     groupSelect.value = groups[0].id
     setStatus('分组已加载')
   } catch (error) {
-    setStatus(error.message || '无法加载分组，请先登录 NAV', 'error')
+    setStatus(error.message || '无法加载分组，请先登录 DOMO NAV', 'error')
   }
 }
 
@@ -103,7 +103,7 @@ async function loadSession() {
     }
   } catch {}
 
-  authStatusText.textContent = '未检测到 NAV 登录态，请先点“打开 NAV 登录”'
+  authStatusText.textContent = '未检测到 DOMO NAV 登录状态，请先打开登录页。'
   authStatusText.className = 'auth-status is-error'
 }
 
@@ -192,9 +192,9 @@ async function handleSave() {
       })
     })
 
-    setStatus('已成功添加到 NAV', 'success')
+    setStatus('已成功添加到 DOMO NAV', 'success')
   } catch (error) {
-    setStatus(error.message || '保存失败，请先登录 NAV', 'error')
+    setStatus(error.message || '保存失败，请先登录 DOMO NAV', 'error')
   } finally {
     saveBtn.disabled = false
   }

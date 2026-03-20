@@ -1,16 +1,18 @@
-# NAV Status Report
+# DOMO NAV Status Report
 
 最后更新：2026-03-20
 
-## 1. 项目目标
+## 1. 当前目标
 
-NAV 当前分成两个阶段目标：
+DOMO NAV 当前分成两个阶段目标：
 
-1. 测试版目标
-- 让 [https://nav.skrskr.net](https://nav.skrskr.net) 成为可稳定访问、可演示、可日常使用的个人导航站
+### 测试版目标
+
+- 让 [https://nav.skrskr.net](https://nav.skrskr.net) 成为可稳定访问、可演示、可日常使用的导航工作台
 - 支持书签、便签、主题、搜索、注册审批、浏览器扩展快速添加
 
-2. 商业版目标
+### 商业版目标
+
 - 形成“前端 + 后端 API + PostgreSQL”的正式架构
 - 支持多用户、审批、Telegram、AI 搜索代理
 - 后续可以作为团体买断版交付给客户自行部署
@@ -25,6 +27,7 @@ NAV 当前分成两个阶段目标：
 - 反向代理：`nginx`
 
 当前线上环境定位：
+
 - 持续演进中的测试版
 - 已可用于日常测试和小范围演示
 - 还不是最终商业交付版
@@ -43,9 +46,8 @@ NAV 当前分成两个阶段目标：
 
 - 分组 CRUD
 - 书签 CRUD
-- 书签搜索
-- 分组与书签排序
-- 快速添加书签
+- 搜索
+- 快速添加
 
 ### 3.3 时光 / 便签
 
@@ -62,15 +64,15 @@ NAV 当前分成两个阶段目标：
 - 网站名称 / 图标 / favicon
 - 搜索引擎显示管理
 - 数据导入导出
-- 本地 IndexedDB -> PostgreSQL 迁移入口
 - 浏览器集成设置页
+- “迁移本地数据到云端”仅在检测到旧 IndexedDB 数据时显示
 
 关于“迁移本地数据到云端”：
 
-- 这个功能现在仍然有价值
-- 它不是给“全新用户”用的，而是给旧浏览器、本地开发阶段、老版本 NAV 用户用的
-- 只要某台设备里还留着历史 IndexedDB 数据，这个入口就可以把旧数据一次性导入 PostgreSQL
-- 当确认所有历史设备都已经迁移完、本地 Dexie 不再承担迁移来源角色后，再考虑移除
+- 这个功能仍然有价值
+- 它不是给全新用户用的，而是给旧浏览器、旧设备、旧版本 DOMO NAV 用户用的
+- 只要某台设备里还留着历史 IndexedDB 数据，就可以用它一次性导入 PostgreSQL
+- 当确认所有历史设备都已迁移完毕后，再考虑移除
 
 ### 3.5 搜索与 AI
 
@@ -89,14 +91,15 @@ NAV 当前分成两个阶段目标：
 - Telegram Bot Token / Chat ID 不再写死
 - 每个管理员都可以填写自己的 Telegram 配置
 - 支持 Telegram 审批同步
-- 已新增后端兼容路由，避免旧前端资源继续请求旧的 `/api/telegram/get-me` 时直接 404
+- 已修复旧前端资源请求旧 `/api/telegram/get-me` 导致 404 的兼容问题
+- 已修复 `getMe` 调用方式，改成无 payload 时走 GET
 
 ### 3.7 浏览器集成
 
 - 已新增 `/quick-add` 快速添加页
 - 已完成浏览器扩展骨架
 - 扩展支持：
-  - 添加当前页到 NAV
+  - 添加当前页到 DOMO NAV
   - 选择分组
   - 快速创建分组
   - 无分组时自动落默认分组
@@ -107,88 +110,70 @@ NAV 当前分成两个阶段目标：
   - `/downloads/nav-extension/README.html`
 - 已新增 iPhone 快速添加方案入口
 
-## 4. 本轮关键进展
+### 3.8 品牌与防剽窃标识
 
-### 4.1 Telegram 失败原因已定位
+- 项目默认名称已从 `NAV` 升级为 `DOMO NAV`
+- 设置页底部已加 `Design by CrisTsau`
+- 首页底部已加品牌与署名
+- 登录页已加署名
+- 公开分享页已加署名
+- 浏览器扩展已加默认品牌视觉与署名
 
-用户之前看到的报错：
+## 4. 这次新增进展
 
-```json
-{"message":"Route POST:/api/telegram/get-me not found","error":"Not Found","statusCode":404}
-```
+### 4.1 扩展默认视觉已重做
 
-根因不是 Bot Token 或 Chat ID 无效，而是：
+- 扩展不再是空白表单
+- 已内置默认品牌头像和品牌图块
+- 弹窗、设置页、右键菜单文案已统一为 `DOMO NAV`
+- 扩展可继续复用当前站点登录态
 
-- 之前服务器上的前端生产构建一度按本地模式构建
-- 设置页因此仍会走旧的 Telegram dev-proxy 路由
-- 旧前端会请求 `/api/telegram/get-me`
-- 后端正式版原先没有这个旧兼容路由，所以返回 404
+### 4.2 反代方案已确认方向
 
-现在已完成：
+当前情况：
 
-- 新增 `app/.env.production`
-  - `VITE_AUTH_MODE=backend`
-  - `VITE_API_BASE_URL=/api`
-- 修正服务器部署脚本默认值
-  - `scripts/deploy.sh` 现在默认按 `backend` 模式构建
-- 后端已补兼容路由：
-  - `POST /api/telegram/get-me`
-  - `POST /api/telegram/get-updates`
-  - `POST /api/telegram/send-message`
+- 源站在 `150.230.212.137`
+- 可访问域名是 `nav.skrskr.net`
+- 你在 `45.143.234.47` 上装了 Nginx Proxy Manager，想给 `nav.cristsau.cn` 做反代
 
-当前线上验证结果：
+已确认现象：
 
-- `/api/admin/telegram-config/test` 已存在
-- `/api/telegram/get-me` 已存在
-- 未登录访问时返回 `401 Authentication required`
-- 已经不再是 `404 Route not found`
+- 直接访问 `https://nav.skrskr.net` 返回 `200`
+- 直接访问 `https://nav.cristsau.cn` 当前返回 `502`
+- 直接访问 `https://150.230.212.137` 会出现 TLS 安全通道错误
 
-这意味着：
-- 接口缺失问题已经修掉
-- 后续如果再失败，应优先检查管理员登录状态、Token/Chat ID 本身是否正确
+结论：
 
-2026-03-20 当日晚些时候补充定位：
+- 不能直接把上游写成裸 IP 的 HTTPS，因为证书不匹配
+- 更稳的做法是让 NPM 反代到一个“仍然指向源站、且证书匹配的域名”
 
-- 数据库里保存的 `Bot Token` 和 `Chat ID` 是完整正确的
-- 服务器直接用同一 token 调 Telegram `getMe` 成功
-- 真正导致“测试连接”失败的后续原因，是 `nav-api` 容器里 `Node fetch` 对 Telegram `getMe` 的“空 JSON POST”调用异常
-- 已修复为：
-  - 无 payload 的 Telegram 方法走 `GET`
-  - 有 payload 的方法继续走 `POST`
+推荐做法：
 
-这次修复后，在同一服务器环境里再次验证：
+1. `nav.cristsau.cn` 保持指向 `45.143.234.47`
+2. NPM 里把上游写成：
+   - Scheme: `https`
+   - Forward Hostname: `nav.skrskr.net`
+   - Forward Port: `443`
+3. 打开 NPM 的：
+   - `Websockets Support`
+   - `Block Common Exploits`
+4. 如果仍然 502，优先检查 NPM 是否开启了“校验证书 / SSL 重新协商”导致上游握手失败
+5. 更理想的是再单独做一个只给源站用的域名，比如 `origin-nav.skrskr.net`，专供反代上游使用
 
-- `getMe` 成功
-- `getUpdates` 成功
+扩展影响：
 
-### 4.2 AI provider 测试按钮已补齐
-
-设置页现在已支持：
-
-- ChatGPT / OpenAI-compatible 测试连接
-- Brave Search API 测试连接
-- OpenClaw 测试连接
-
-后端接口：
-
-- `POST /api/ai-search/providers/test`
-
-当前线上验证结果：
-
-- 路由已上线
-- 未登录时返回 `401 Authentication required`
-- 说明前后端链路已接通
-- 下一步需要填入真实配置后做实际 provider 联调
+- 如果你继续对外使用 `nav.skrskr.net`，扩展不受影响
+- 如果以后要主域名切到 `nav.cristsau.cn`，扩展里把 `NAV Base URL` 改成新域名即可
+- 只要新域名完整转发 `/`、`/api`、`/downloads`、`/quick-add`，扩展、快速添加页和下载包都不会受影响
 
 ## 5. 当前未完成项
 
 ### 5.1 高优先级
 
 1. 真实联调 Telegram
-- 使用管理员登录态
+- 使用管理员登录
 - 在设置页点击“测试连接”
-- 确认真实 Bot Token + Chat ID 成功通过
-- 确认保存、同步审批、测试连接三条链路都稳定
+- 确认真实 Bot Token + Chat ID 可稳定通过
 
 2. 真实联调 AI provider
 - ChatGPT / OpenAI-compatible
@@ -196,83 +181,85 @@ NAV 当前分成两个阶段目标：
 - OpenClaw
 
 目标：
-- 配置真实 endpoint / key / model
-- 点击“测试连接”得到明确成功结果
-- 在首页搜索框验证真实搜索结果面板
 
-3. 清理中文乱码
-- 目前部分旧组件和旧文档仍有乱码
-- 重点优先：
-  - 用户管理
-  - 数据管理
-  - 部分时光模块文案
-  - 文档说明
+- 配置真实 endpoint / key / model
+- “测试连接”得到明确成功结果
+- 首页搜索框能返回真实结果
+
+3. 清理剩余中文乱码
+
+重点优先：
+
+- 用户管理
+- 数据管理
+- 部分时光模块文案
+- 旧说明文档
 
 ### 5.2 中优先级
 
-1. 浏览器扩展体验继续优化
+1. 浏览器扩展继续优化
 - 更明确的登录态提示
 - 添加成功后的反馈
 - 失败原因提示更清楚
 
 2. iPhone 快捷指令模板
 - 补正式模板说明
-- 把“快速添加当前页”方案写成可直接照着做的步骤
+- 把“快速添加当前页”写成可直接照做的步骤
 
 3. 搜索与 AI 体验优化
-- 增加 provider 配置校验
+- provider 配置校验
 - 明确区分“未启用 / 未保存 / Key 无效 / Endpoint 无效”
 
 ### 5.3 商业化后续
 
-- 数据迁移策略
 - 备份
 - 审计日志
 - 限流
 - 多环境部署
 - 客户买断版标准化部署文档
 
-## 6.5 换电脑后如何继续协作
+## 6. 换电脑后如何继续协作
 
-如果以后不用当前办公电脑，而是换到家里电脑继续让 Codex 接着做，推荐流程是：
+推荐流程：
 
-1. 家里电脑先拉取最新仓库
-2. 让新的 Codex 先阅读以下文件：
+1. 先拉取最新仓库
+2. 让新的 Codex 先阅读：
    - `D:/DomoCodex/projects/NAV/PROJECT.md`
    - `D:/DomoCodex/projects/NAV/STATUS_REPORT.md`
    - `D:/DomoCodex/projects/NAV/DEPLOYMENT.md`
    - `D:/DomoCodex/projects/NAV/BACKEND_PLAN.md`
-3. 再让它查看当前工作区状态和线上环境
-4. 然后直接按 `STATUS_REPORT.md` 里“下一步推荐执行顺序”继续
+3. 再让它查看当前代码和线上环境
 
-关键点：
+给新的 Codex 直接复制这句就够了：
 
-- Codex 不会自动继承这次对话记忆
-- 但只要仓库代码和上面这几份文档是最新的，新的 Codex 就能很快恢复上下文
-- 所以后续每次阶段性收口，都要优先更新 `STATUS_REPORT.md`
+```text
+先 git pull origin master，然后阅读 PROJECT.md、STATUS_REPORT.md、DEPLOYMENT.md、BACKEND_PLAN.md，再查看当前代码和线上环境，按 STATUS_REPORT.md 里的下一步继续实施。
+```
 
 ## 7. 下一步推荐执行顺序
 
-### 第一组：先收口当前链路
+### 第一组：先收口当前可用链路
 
 1. 真实测试 Telegram 配置
 2. 真实测试 ChatGPT / Brave / OpenClaw
 3. 修完失败提示与输入校验
 
 实现效果：
-- 设置页里的所有“测试连接”都能真实可用
-- 后台接入状态更清晰
-- 下一步接 AI 搜索时不会反复被配置问题卡住
+
+- 设置页里的“测试连接”都真可用
+- 后台接入状态更清楚
+- AI 搜索链路能稳定演示
 
 ### 第二组：清理用户可见体验
 
-1. 清理中文乱码
+1. 清理剩余中文乱码
 2. 优化扩展提示
 3. 优化 iPhone 快速添加说明
 
 实现效果：
-- 页面更适合演示和对外使用
-- 用户不容易被乱码和模糊提示困住
+
+- 页面更适合演示和对外试用
+- 用户不会被乱码和模糊提示困住
 
 ### 第三组：继续商业化准备
 
@@ -280,21 +267,7 @@ NAV 当前分成两个阶段目标：
 2. 部署与环境拆分
 3. 客户自部署交付方案
 
-## 8. 如果下次继续开发，建议直接从这里开始
-
-下次进入项目后，按这个顺序继续：
-
-1. 打开 [https://nav.skrskr.net/settings](https://nav.skrskr.net/settings)
-2. 使用管理员账号登录
-3. 在“Telegram 接入”里做一次真实测试连接
-4. 在“搜索设置”里分别配置并测试：
-   - ChatGPT / OpenAI-compatible
-   - Brave Search
-   - OpenClaw
-5. 配置成功后，到首页做真实 AI 搜索验证
-6. 然后开始清理乱码和扩展体验
-
-## 9. 关键文件
+## 8. 关键文件
 
 ### 后端
 
