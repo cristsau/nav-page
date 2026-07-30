@@ -21,7 +21,27 @@ test('API health endpoint is available behind the public /api prefix', async () 
   }
 })
 
-test('Fastify client errors keep their original 400 status', async () => {
+test('non-empty malformed DELETE requests still use the JSON parser', async () => {
+  const app = createApp()
+
+  try {
+    const response = await app.inject({
+      method: 'DELETE',
+      url: '/api/bookmarks/read-only-probe',
+      headers: {
+        'content-type': 'application/json'
+      },
+      payload: '{'
+    })
+
+    assert.equal(response.statusCode, 400)
+    assert.match(response.json().error, /JSON/)
+  } finally {
+    await app.close()
+  }
+})
+
+test('bodyless JSON DELETE reaches authentication instead of the JSON parser', async () => {
   const app = createApp()
 
   try {
@@ -31,22 +51,6 @@ test('Fastify client errors keep their original 400 status', async () => {
       headers: {
         'content-type': 'application/json'
       }
-    })
-
-    assert.equal(response.statusCode, 400)
-    assert.match(response.json().error, /Body cannot be empty/)
-  } finally {
-    await app.close()
-  }
-})
-
-test('bodyless DELETE reaches authentication instead of the JSON parser', async () => {
-  const app = createApp()
-
-  try {
-    const response = await app.inject({
-      method: 'DELETE',
-      url: '/api/bookmarks/read-only-probe'
     })
 
     assert.equal(response.statusCode, 401)

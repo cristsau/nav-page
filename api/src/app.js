@@ -17,6 +17,30 @@ import noteAiRoutes from './routes/noteAi.js'
 import notesRoutes from './routes/notes.js'
 import settingsRoutes from './routes/settings.js'
 
+function stripBodylessDeleteJsonContentType(request) {
+  if (String(request.raw.method || '').toUpperCase() !== 'DELETE') {
+    return
+  }
+
+  const headers = request.raw.headers || {}
+  const contentType = String(headers['content-type'] || '')
+    .split(';', 1)[0]
+    .trim()
+    .toLowerCase()
+  const contentLength = headers['content-length']
+  const transferEncoding = headers['transfer-encoding']
+  const isJson = contentType === 'application/json' || contentType.endsWith('+json')
+  const isBodyless = !transferEncoding && (
+    contentLength === undefined
+    || String(contentLength).trim() === ''
+    || String(contentLength).trim() === '0'
+  )
+
+  if (isJson && isBodyless) {
+    delete headers['content-type']
+  }
+}
+
 export function createApp() {
   const app = Fastify({
     logger: true
@@ -31,6 +55,8 @@ export function createApp() {
   app.register(authPlugin)
 
   app.addHook('onRequest', async (request, reply) => {
+    stripBodylessDeleteJsonContentType(request)
+
     if (!isUnsafeRequestOriginTrusted(request, config.corsOrigin)) {
       reply.code(403)
       return reply.send({
