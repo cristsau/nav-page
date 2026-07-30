@@ -12,7 +12,7 @@ const props = defineProps({
   }
 })
 
-const emit = defineEmits(['close', 'edit'])
+const emit = defineEmits(['close', 'edit', 'ai', 'copyId', 'copyExtract'])
 
 function formatDate(timestamp) {
   if (!timestamp) return '-'
@@ -43,6 +43,15 @@ function formatEntryDate(value) {
       </div>
 
       <div class="preview-card__meta">
+        <button
+          v-if="note.numberId"
+          type="button"
+          class="preview-card__id"
+          :aria-label="`复制笔记数字 ID ${note.numberId}`"
+          @click="emit('copyId', note)"
+        >
+          <Icon name="copy" :size="13" /> ID #{{ note.numberId }}
+        </button>
         <span>更新时间：{{ formatDate(note.updatedAt) }}</span>
         <span v-if="note.type === 'diary'">记录日期：{{ formatEntryDate(note.entryDate) }}</span>
         <span v-if="note.mood">心情：{{ note.mood }}</span>
@@ -62,6 +71,12 @@ function formatEntryDate(value) {
 
       <div class="preview-card__footer">
         <button type="button" class="btn btn--secondary" @click="emit('close')">关闭</button>
+        <button type="button" class="btn btn--secondary" @click="emit('copyExtract', note)">
+          <Icon name="copy" :size="16" /> 快速复制
+        </button>
+        <button type="button" class="btn btn--secondary" @click="emit('ai', note)">
+          <Icon name="sparkles" :size="16" /> AI 编辑
+        </button>
         <button type="button" class="btn btn--primary" @click="emit('edit', note)">
           <Icon name="edit" :size="16" /> 编辑
         </button>
@@ -139,6 +154,20 @@ function formatEntryDate(value) {
   font-size: 12px;
 }
 
+.preview-card__id {
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+  padding: 3px 8px;
+  color: var(--accent-color);
+  background: var(--accent-bg);
+  border: 0;
+  border-radius: 999px;
+  font: inherit;
+  font-variant-numeric: tabular-nums;
+  cursor: pointer;
+}
+
 .preview-card__completed {
   display: inline-flex;
   align-items: center;
@@ -184,5 +213,26 @@ function formatEntryDate(value) {
 .btn--secondary {
   background: var(--bg-secondary);
   color: var(--text-primary);
+}
+
+@media (max-width: 560px) {
+  .preview-modal {
+    align-items: flex-end;
+    padding: 0;
+  }
+
+  .preview-card {
+    max-height: 94vh;
+    border-radius: 22px 22px 0 0;
+  }
+
+  .preview-card__footer {
+    display: grid;
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+  }
+
+  .btn {
+    justify-content: center;
+  }
 }
 </style>

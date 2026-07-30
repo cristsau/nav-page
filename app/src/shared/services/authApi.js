@@ -1,7 +1,7 @@
 import { CURRENT_USER_STORAGE_KEY } from '@/shared/db/database'
+import { apiRequest as request } from '@/shared/services/apiClient'
 
 const AUTH_MODE = import.meta.env.VITE_AUTH_MODE || 'local'
-const API_BASE_URL = import.meta.env.VITE_API_BASE_URL || '/api'
 
 function setCurrentUserId(userId) {
   if (typeof window === 'undefined' || !window.localStorage) return
@@ -11,28 +11,6 @@ function setCurrentUserId(userId) {
   } else {
     window.localStorage.removeItem(CURRENT_USER_STORAGE_KEY)
   }
-}
-
-async function request(path, options = {}) {
-  const response = await fetch(`${API_BASE_URL}${path}`, {
-    credentials: 'include',
-    headers: {
-      'Content-Type': 'application/json',
-      ...(options.headers || {})
-    },
-    ...options
-  })
-
-  const contentType = response.headers.get('content-type') || ''
-  const payload = contentType.includes('application/json')
-    ? await response.json()
-    : { error: await response.text() }
-
-  if (!response.ok) {
-    throw new Error(payload.error || `Request failed: ${response.status}`)
-  }
-
-  return payload
 }
 
 export function isBackendAuthEnabled() {

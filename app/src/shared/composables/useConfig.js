@@ -3,6 +3,10 @@ import { getCurrentUserId, getSetting, setSetting, getCustomEngines } from '@/sh
 import { runBackendAiSearch, shouldUseBackendAiSearch } from '@/shared/services/aiSearchApi'
 import { fetchBackendCustomSearchEngines, shouldUseBackendSearchEngines } from '@/shared/services/searchEnginesApi'
 import { fetchBackendSetting, saveBackendSetting, shouldUseBackendSettings } from '@/shared/services/settingsApi'
+import {
+  buildWebSearchUrl,
+  normalizeEngineMonogram
+} from '@/shared/utils/unifiedSearch'
 
 const defaultCustomTheme = {
   primary: '#6b8c7a',
@@ -21,8 +25,8 @@ const defaultCustomTheme = {
 const defaultConfig = {
   site: {
     name: 'DOMO NAV',
-    icon: 'D',
-    favicon: ''
+    icon: '/domo-logo.png',
+    favicon: '/domo-logo.png'
   },
   searchEngine: 'baidu',
   search: {
@@ -372,9 +376,7 @@ export function applyStyleConfig() {
     document.title = config.value.site.name
   }
 
-  if (config.value.site?.favicon) {
-    updateFavicon(config.value.site.favicon)
-  }
+  updateFavicon(config.value.site?.favicon || '/domo-logo.png')
 }
 
 function getAllSearchEngineList() {
@@ -382,6 +384,7 @@ function getAllSearchEngineList() {
     ...Object.values(searchEngines),
     ...customSearchEngines.value.map((engine) => ({
       ...engine,
+      icon: normalizeEngineMonogram(engine.icon),
       type: 'web',
       isBuiltIn: false
     }))
@@ -424,18 +427,20 @@ function scheduleSave() {
 
 export async function persistConfigNow() {
   if (!getCurrentUserId()) {
-    return
+    return false
   }
 
   try {
     if (canUseBackendSettings()) {
       await saveBackendSetting('appConfig', clone(config.value))
-      return
+      return true
     }
 
     await setSetting('appConfig', clone(config.value))
+    return true
   } catch (error) {
     console.error('Failed to persist config:', error)
+    return false
   }
 }
 
@@ -504,7 +509,7 @@ export function useConfig() {
   async function applyCurrentConfigNow() {
     syncStyleConfig()
     applyStyleConfig()
-    await persistConfigNow()
+    return persistConfigNow()
   }
 
   async function resetConfig() {
@@ -548,7 +553,7 @@ export function useConfig() {
         }
       }
 
-      window.open(engine.url + encodeURIComponent(query), '_blank', 'noopener,noreferrer')
+      window.open(buildWebSearchUrl(engine.url, query), '_blank', 'noopener,noreferrer')
       return {
         mode: 'external'
       }
@@ -579,7 +584,7 @@ export function useConfig() {
   }
 
   function getSiteIcon() {
-    return config.value.site?.icon || 'D'
+    return config.value.site?.icon || '/domo-logo.png'
   }
 
   function getColorScheme() {

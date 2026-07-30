@@ -72,8 +72,8 @@ async function ensureDefaultGroup() {
 
   return groupStore.create({
     name: DEFAULT_GROUP_NAME,
-    icon: 'D',
-    color: '#6b8c7a'
+    icon: 'folder',
+    color: '#a08060'
   })
 }
 
@@ -87,8 +87,8 @@ async function handleCreateGroup() {
   try {
     const group = await groupStore.create({
       name,
-      icon: 'D',
-      color: '#6b8c7a'
+      icon: 'folder',
+      color: '#a08060'
     })
 
     newGroupName.value = ''

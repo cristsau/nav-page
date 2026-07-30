@@ -10,7 +10,17 @@ const props = defineProps({
   }
 })
 
-const emit = defineEmits(['preview', 'edit', 'delete', 'togglePin', 'toggleComplete', 'share'])
+const emit = defineEmits([
+  'preview',
+  'edit',
+  'delete',
+  'togglePin',
+  'toggleComplete',
+  'share',
+  'ai',
+  'copyId',
+  'copyExtract'
+])
 
 const showPasswordModal = ref(false)
 const password = ref('')
@@ -102,7 +112,11 @@ function unlockedNote() {
 }
 
 function runAction(action) {
-  if (isEncrypted.value && !unlocked.value && ['preview', 'edit'].includes(action)) {
+  if (
+    isEncrypted.value
+    && !unlocked.value
+    && ['preview', 'edit', 'ai', 'copyExtract'].includes(action)
+  ) {
     unlockAction.value = action
     password.value = ''
     decryptError.value = false
@@ -140,15 +154,25 @@ async function handleDecrypt() {
     }"
     tabindex="0"
     @click="runAction('preview')"
-    @keydown.enter.prevent="runAction('preview')"
-    @keydown.space.prevent="runAction('preview')"
+    @keydown.enter.self.prevent="runAction('preview')"
+    @keydown.space.self.prevent="runAction('preview')"
   >
-    <div v-if="isPinned" class="note-card__pin" title="已置顶">
-      <Icon name="pin" :size="14" />
-    </div>
-
     <div class="note-card__type">
+      <span v-if="isPinned" class="note-card__pin" title="已置顶">
+        <Icon name="pin" :size="12" />
+      </span>
       {{ note.type === 'memo' ? '备忘录' : '日记' }}
+      <button
+        v-if="note.numberId"
+        type="button"
+        class="note-card__id"
+        :aria-label="`复制笔记数字 ID ${note.numberId}`"
+        title="复制数字 ID"
+        @click.stop="emit('copyId', note)"
+      >
+        <Icon name="copy" :size="11" />
+        #{{ note.numberId }}
+      </button>
       <span v-if="note.type === 'diary' && note.mood" class="note-card__mood">{{ note.mood }}</span>
     </div>
 
@@ -221,6 +245,24 @@ async function handleDecrypt() {
         @click="emit('share', note)"
       >
         <Icon name="share" :size="15" />
+      </button>
+      <button
+        type="button"
+        class="action-btn action-btn--ai"
+        title="使用 AI 编辑"
+        :aria-label="`使用 AI 编辑 ${note.title}`"
+        @click="runAction('ai')"
+      >
+        <Icon name="sparkles" :size="15" />
+      </button>
+      <button
+        type="button"
+        class="action-btn"
+        title="快速复制 ID、标题和正文"
+        :aria-label="`快速复制 ${note.title}`"
+        @click="runAction('copyExtract')"
+      >
+        <Icon name="copy" :size="15" />
       </button>
       <button
         type="button"
@@ -302,9 +344,8 @@ async function handleDecrypt() {
 }
 
 .note-card__pin {
-  position: absolute;
-  top: 17px;
-  left: 16px;
+  display: inline-flex;
+  align-items: center;
   color: var(--accent-color);
 }
 
@@ -322,6 +363,25 @@ async function handleDecrypt() {
   color: var(--text-secondary);
   background: var(--bg-secondary);
   border-radius: 999px;
+}
+
+.note-card__id {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  padding: 2px 7px;
+  color: var(--text-muted);
+  background: transparent;
+  border: 1px solid var(--border-light);
+  border-radius: 999px;
+  font-size: 10px;
+  font-variant-numeric: tabular-nums;
+  cursor: pointer;
+}
+
+.note-card__id:hover {
+  color: var(--accent-color);
+  border-color: color-mix(in srgb, var(--accent-color) 48%, var(--border-light));
 }
 
 .note-card__title {
@@ -378,15 +438,20 @@ async function handleDecrypt() {
   top: 8px;
   right: 8px;
   display: flex;
+  justify-content: flex-end;
+  flex-wrap: wrap;
+  max-width: calc(100% - 16px);
   gap: 4px;
-  opacity: 1;
-  transform: none;
+  opacity: 0;
+  pointer-events: none;
+  transform: translateY(-4px);
   transition: opacity var(--transition-fast), transform var(--transition-fast);
 }
 
 .note-card:hover .note-card__actions,
 .note-card:focus-within .note-card__actions {
   opacity: 1;
+  pointer-events: auto;
   transform: translateY(0);
 }
 
@@ -412,6 +477,12 @@ async function handleDecrypt() {
 .action-btn--danger:hover {
   color: #fff;
   background: var(--error-color);
+}
+
+.action-btn--ai:hover {
+  color: var(--accent-color);
+  border-color: color-mix(in srgb, var(--accent-color) 46%, var(--border-light));
+  background: color-mix(in srgb, var(--accent-color) 9%, var(--bg-card));
 }
 
 .action-btn.is-complete {
@@ -501,13 +572,22 @@ async function handleDecrypt() {
 @media (hover: none), (pointer: coarse) {
   .note-card__actions {
     opacity: 1;
+    pointer-events: auto;
     transform: none;
   }
 
-  .note-card__pin {
-    top: 17px;
-    right: auto;
-    bottom: auto;
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .note-card,
+  .note-card__actions,
+  .action-btn {
+    transition: none;
+  }
+
+  .note-card:hover,
+  .action-btn:hover {
+    transform: none;
   }
 }
 </style>

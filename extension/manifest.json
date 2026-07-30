@@ -1,8 +1,14 @@
 {
   "manifest_version": 3,
   "name": "DOMO NAV Quick Add",
-  "version": "1.1.0",
+  "version": "1.1.1",
   "description": "一键把当前网页添加到 DOMO NAV，并记住上次使用的分组。",
+  "icons": {
+    "16": "assets/domo-logo.png",
+    "32": "assets/domo-logo.png",
+    "48": "assets/domo-logo.png",
+    "128": "assets/domo-logo.png"
+  },
   "permissions": [
     "storage",
     "tabs",
@@ -21,6 +27,7 @@
   },
   "action": {
     "default_title": "添加到 DOMO NAV",
+    "default_icon": "assets/domo-logo.png",
     "default_popup": "popup.html"
   },
   "options_page": "options.html",

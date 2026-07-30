@@ -1,4 +1,9 @@
 import { query } from '../db/index.js'
+import {
+  isPlainObject,
+  mergeAppConfigSecrets,
+  redactAppConfigSecrets
+} from '../lib/settingsSecrets.js'
 
 function normalizeKey(value) {
   return String(value || '').trim()
@@ -29,7 +34,9 @@ export default async function settingsRoutes(fastify) {
 
     return {
       key,
-      value: record?.value,
+      value: key === 'appConfig'
+        ? redactAppConfigSecrets(record?.value)
+        : record?.value,
       updatedAt: record?.updated_at || null
     }
   })
@@ -44,9 +51,31 @@ export default async function settingsRoutes(fastify) {
     }
 
     const payload = request.body || {}
-    const value = Object.prototype.hasOwnProperty.call(payload, 'value')
+    const hasRequestedValue = Object.prototype.hasOwnProperty.call(payload, 'value')
+    const requestedValue = hasRequestedValue
       ? payload.value
       : null
+    let value = requestedValue
+
+    if (key === 'appConfig') {
+      if (!hasRequestedValue || !isPlainObject(requestedValue)) {
+        reply.code(400)
+        return { error: 'appConfig value must be an object' }
+      }
+
+      const existing = await query(
+        `
+          SELECT value
+          FROM user_settings
+          WHERE user_id = $1
+            AND key = $2
+          LIMIT 1
+        `,
+        [request.currentUser.id, key]
+      )
+
+      value = mergeAppConfigSecrets(requestedValue, existing.rows[0]?.value)
+    }
 
     const { rows } = await query(
       `
@@ -63,7 +92,9 @@ export default async function settingsRoutes(fastify) {
 
     return {
       key: rows[0].key,
-      value: rows[0].value,
+      value: key === 'appConfig'
+        ? redactAppConfigSecrets(rows[0].value)
+        : rows[0].value,
       updatedAt: rows[0].updated_at
     }
   })

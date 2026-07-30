@@ -1,8 +1,12 @@
 <script setup>
-import { computed, onMounted, ref } from 'vue'
+import { computed, onBeforeUnmount, onMounted, ref, watch } from 'vue'
+import { useRouter } from 'vue-router'
 import { useConfig } from '@/shared/composables/useConfig'
 import Icon from '@/shared/components/Icon.vue'
+import { searchWorkspace } from '@/shared/services/unifiedSearchApi'
+import { createHighlightedSegments } from '@/shared/utils/unifiedSearch'
 
+const router = useRouter()
 const {
   getSearchEngine,
   getQuickAccessSearchEngines,
@@ -11,6 +15,8 @@ const {
   updateConfig
 } = useConfig()
 
+const searchShell = ref(null)
+const queryInput = ref(null)
 const query = ref('')
 const isFocused = ref(false)
 const showSwitcher = ref(false)
@@ -18,14 +24,114 @@ const isSearching = ref(false)
 const searchError = ref('')
 const searchResult = ref(null)
 const copied = ref(false)
+const isLocalSearching = ref(false)
+const localSearchError = ref('')
+const showLocalResults = ref(false)
+const activeResultIndex = ref(-1)
+const localSearchResult = ref({
+  bookmarks: [],
+  notes: [],
+  all: [],
+  total: 0,
+  failedSources: []
+})
+
+let localSearchTimer = null
+let localSearchSequence = 0
+
 const currentEngine = computed(() => getSearchEngine())
 const allEngines = computed(() => getQuickAccessSearchEngines())
+const localResultGroups = computed(() => {
+  let resultIndex = 0
+
+  return [
+    {
+      id: 'bookmarks',
+      label: '导航',
+      icon: 'browser',
+      items: localSearchResult.value.bookmarks.map((item) => ({
+        ...item,
+        resultIndex: resultIndex++
+      }))
+    },
+    {
+      id: 'notes',
+      label: '笔记与备忘录',
+      icon: 'note',
+      items: localSearchResult.value.notes.map((item) => ({
+        ...item,
+        resultIndex: resultIndex++
+      }))
+    }
+  ].filter((group) => group.items.length)
+})
+const flatLocalResults = computed(() => localResultGroups.value.flatMap((group) => group.items))
+const shouldShowLocalPanel = computed(() => (
+  showLocalResults.value &&
+  Boolean(query.value.trim())
+))
 
 onMounted(async () => {
   await loadCustomSearchEngines()
+  window.addEventListener('keydown', handleGlobalKeydown)
+  document.addEventListener('pointerdown', handleDocumentPointerDown)
 })
 
-async function handleSearch() {
+onBeforeUnmount(() => {
+  clearTimeout(localSearchTimer)
+  window.removeEventListener('keydown', handleGlobalKeydown)
+  document.removeEventListener('pointerdown', handleDocumentPointerDown)
+})
+
+watch(query, (value) => {
+  clearTimeout(localSearchTimer)
+  activeResultIndex.value = -1
+  localSearchError.value = ''
+  searchResult.value = null
+  searchError.value = ''
+
+  const trimmed = value.trim()
+  if (!trimmed) {
+    showLocalResults.value = false
+    isLocalSearching.value = false
+    localSearchResult.value = {
+      bookmarks: [],
+      notes: [],
+      all: [],
+      total: 0,
+      failedSources: []
+    }
+    return
+  }
+
+  showLocalResults.value = true
+  isLocalSearching.value = true
+  const sequence = ++localSearchSequence
+
+  localSearchTimer = window.setTimeout(async () => {
+    try {
+      const result = await searchWorkspace(trimmed)
+      if (sequence !== localSearchSequence) return
+      localSearchResult.value = result
+    } catch (error) {
+      if (sequence !== localSearchSequence) return
+      localSearchError.value = error.message || '站内搜索失败'
+      localSearchResult.value = {
+        bookmarks: [],
+        notes: [],
+        all: [],
+        total: 0,
+        failedSources: []
+      }
+    } finally {
+      if (sequence === localSearchSequence) {
+        isLocalSearching.value = false
+      }
+    }
+  }, 180)
+})
+
+async function handleWebSearch() {
   const trimmed = query.value.trim()
   if (!trimmed || isSearching.value) return
 
@@ -38,6 +144,7 @@ async function handleSearch() {
 
     if (outcome?.mode === 'ai') {
       searchResult.value = outcome.result
+      showLocalResults.value = false
     }
   } catch (error) {
     searchError.value = error.message || '搜索失败，请稍后重试'
@@ -47,8 +154,70 @@ async function handleSearch() {
 }
 
 function handleKeydown(event) {
-  if (event.key === 'Enter') {
-    handleSearch()
+  if (event.key === 'ArrowDown' && flatLocalResults.value.length) {
+    event.preventDefault()
+    showLocalResults.value = true
+    activeResultIndex.value = Math.min(
+      activeResultIndex.value + 1,
+      flatLocalResults.value.length - 1
+    )
+    return
+  }
+
+  if (event.key === 'ArrowUp' && flatLocalResults.value.length) {
+    event.preventDefault()
+    showLocalResults.value = true
+    activeResultIndex.value = Math.max(activeResultIndex.value - 1, 0)
+    return
+  }
+
+  if (event.key === 'Escape') {
+    showSwitcher.value = false
+    showLocalResults.value = false
+    queryInput.value?.blur()
+    return
+  }
+
+  if (event.key !== 'Enter') return
+  event.preventDefault()
+
+  if (activeResultIndex.value >= 0) {
+    const activeResult = flatLocalResults.value[activeResultIndex.value]
+    if (activeResult) {
+      openLocalResult(activeResult)
+      return
+    }
+  }
+
+  handleWebSearch()
+}
+
+function handleGlobalKeydown(event) {
+  const target = event.target
+  const isEditableTarget = target instanceof HTMLElement && (
+    target.isContentEditable ||
+    ['INPUT', 'TEXTAREA', 'SELECT'].includes(target.tagName)
+  )
+  const isCommandShortcut = (event.ctrlKey || event.metaKey) && event.key.toLowerCase() === 'k'
+  const isSlashShortcut = event.key === '/' && !isEditableTarget
+
+  if (!isCommandShortcut && !isSlashShortcut) return
+
+  event.preventDefault()
+  queryInput.value?.focus()
+  showLocalResults.value = Boolean(query.value.trim())
+}
+
+function handleDocumentPointerDown(event) {
+  if (searchShell.value?.contains(event.target)) return
+  showSwitcher.value = false
+  showLocalResults.value = false
+}
+
+function handleInputFocus() {
+  isFocused.value = true
+  if (query.value.trim()) {
+    showLocalResults.value = true
   }
 }
 
@@ -57,6 +226,28 @@ function selectEngine(engineId) {
   showSwitcher.value = false
   searchResult.value = null
   searchError.value = ''
+}
+
+function openLocalResult(result) {
+  if (result.kind === 'bookmark' && result.href) {
+    try {
+      const targetUrl = new URL(result.href)
+      if (!['http:', 'https:'].includes(targetUrl.protocol)) return
+      window.open(targetUrl.toString(), '_blank', 'noopener,noreferrer')
+    } catch {
+      return
+    }
+  } else if (result.kind === 'note') {
+    router.push({
+      path: '/whisper',
+      query: {
+        search: query.value.trim(),
+        note: String(result.id)
+      }
+    })
+  }
+
+  showLocalResults.value = false
 }
 
 function closeResultPanel() {
@@ -68,6 +259,10 @@ function closeResultPanel() {
 function openExternalResult() {
   if (!searchResult.value?.externalUrl) return
   window.open(searchResult.value.externalUrl, '_blank', 'noopener,noreferrer')
+}
+
+function highlight(value) {
+  return createHighlightedSegments(value, query.value)
 }
 
 async function copyAnswer() {
@@ -86,7 +281,7 @@ async function copyAnswer() {
 </script>
 
 <template>
-  <div class="search-shell">
+  <div ref="searchShell" class="search-shell">
     <div class="search-box" :class="{ 'is-focused': isFocused }">
       <div class="search-box__engine-wrap">
         <button
@@ -101,35 +296,162 @@ async function copyAnswer() {
           <Icon name="more-horizontal" :size="15" />
         </button>
 
-        <div v-if="showSwitcher" class="engine-switcher">
+        <div v-if="showSwitcher" class="engine-switcher" role="menu" aria-label="搜索引擎">
           <button
             v-for="engine in allEngines"
             :key="engine.id"
             class="engine-switcher__item"
             type="button"
+            role="menuitem"
             :class="{ 'is-active': currentEngine.id === engine.id }"
             @click="selectEngine(engine.id)"
           >
-            <span>{{ engine.icon }}</span>
+            <span class="engine-switcher__monogram" aria-hidden="true">{{ engine.icon }}</span>
             <span>{{ engine.name }}</span>
+            <Icon v-if="currentEngine.id === engine.id" name="check" :size="15" />
           </button>
         </div>
       </div>
 
-      <input
-        v-model="query"
-        type="text"
-        class="search-box__input"
-        :placeholder="`在 ${currentEngine.name} 搜索...`"
-        @focus="isFocused = true"
-        @blur="isFocused = false"
-        @keydown="handleKeydown"
+      <div class="search-box__field">
+        <Icon class="search-box__field-icon" name="search" :size="18" />
+        <input
+          ref="queryInput"
+          v-model="query"
+          type="search"
+          class="search-box__input"
+          placeholder="搜索导航、笔记，或继续搜索 Web"
+          role="combobox"
+          aria-autocomplete="list"
+          aria-controls="workspace-search-results"
+          :aria-expanded="shouldShowLocalPanel"
+          :aria-activedescendant="activeResultIndex >= 0 ? `workspace-result-${activeResultIndex}` : undefined"
+          @focus="handleInputFocus"
+          @blur="isFocused = false"
+          @keydown="handleKeydown"
+        >
+        <kbd class="search-box__shortcut">Ctrl K</kbd>
+      </div>
+
+      <button
+        class="search-box__btn"
+        type="button"
+        :disabled="isSearching || !query.trim()"
+        :aria-label="`使用 ${currentEngine.name} 搜索 Web`"
+        @click="handleWebSearch"
       >
-      <button class="search-box__btn" type="button" :disabled="isSearching" @click="handleSearch">
-        <Icon :name="isSearching ? 'refresh' : 'search'" :size="17" />
-        <span>{{ isSearching ? '搜索中...' : '搜索' }}</span>
+        <Icon :name="isSearching ? 'refresh' : 'external-link'" :size="17" />
+        <span>{{ isSearching ? '搜索中' : 'Web 搜索' }}</span>
       </button>
     </div>
+
+    <section
+      v-if="shouldShowLocalPanel"
+      id="workspace-search-results"
+      class="workspace-results"
+      role="listbox"
+      aria-label="站内搜索结果"
+    >
+      <header class="workspace-results__header">
+        <div>
+          <div class="workspace-results__eyebrow">站内搜索</div>
+          <div class="workspace-results__summary" aria-live="polite">
+            <template v-if="isLocalSearching">正在检索导航与笔记</template>
+            <template v-else>找到 {{ localSearchResult.total }} 项内容</template>
+          </div>
+        </div>
+        <button
+          class="workspace-results__close"
+          type="button"
+          aria-label="关闭站内搜索结果"
+          @click="showLocalResults = false"
+        >
+          <Icon name="close" :size="17" />
+        </button>
+      </header>
+
+      <div v-if="isLocalSearching" class="workspace-results__loading">
+        <span class="workspace-results__loading-bar"></span>
+        <span class="workspace-results__loading-bar"></span>
+        <span class="workspace-results__loading-bar"></span>
+      </div>
+
+      <div v-else-if="localSearchError" class="workspace-results__message workspace-results__message--error">
+        <Icon name="alert" :size="18" />
+        <span>{{ localSearchError }}</span>
+      </div>
+
+      <template v-else>
+        <div
+          v-if="localSearchResult.failedSources?.length"
+          class="workspace-results__message"
+        >
+          <Icon name="alert" :size="17" />
+          <span>{{ localSearchResult.failedSources.join('、') }}暂时未完成检索，已显示其余结果。</span>
+        </div>
+
+        <div v-if="localResultGroups.length" class="workspace-results__groups">
+          <section
+            v-for="group in localResultGroups"
+            :key="group.id"
+            class="workspace-result-group"
+          >
+            <div class="workspace-result-group__title">
+              <Icon :name="group.icon" :size="16" />
+              <span>{{ group.label }}</span>
+              <span class="workspace-result-group__count">{{ group.items.length }}</span>
+            </div>
+
+            <div class="workspace-result-group__list">
+              <button
+                v-for="item in group.items"
+                :id="`workspace-result-${item.resultIndex}`"
+                :key="`${item.kind}-${item.id}`"
+                class="workspace-result-item"
+                :class="{ 'is-active': activeResultIndex === item.resultIndex }"
+                type="button"
+                role="option"
+                :aria-selected="activeResultIndex === item.resultIndex"
+                @mouseenter="activeResultIndex = item.resultIndex"
+                @click="openLocalResult(item)"
+              >
+                <span class="workspace-result-item__type">{{ item.kindLabel }}</span>
+                <span class="workspace-result-item__body">
+                  <span class="workspace-result-item__title">
+                    <template v-for="(segment, index) in highlight(item.title)" :key="index">
+                      <mark v-if="segment.match">{{ segment.text }}</mark>
+                      <template v-else>{{ segment.text }}</template>
+                    </template>
+                  </span>
+                  <span v-if="item.snippet" class="workspace-result-item__snippet">
+                    <template v-for="(segment, index) in highlight(item.snippet)" :key="index">
+                      <mark v-if="segment.match">{{ segment.text }}</mark>
+                      <template v-else>{{ segment.text }}</template>
+                    </template>
+                  </span>
+                  <span v-if="item.subtitle" class="workspace-result-item__meta">{{ item.subtitle }}</span>
+                </span>
+                <Icon :name="item.kind === 'bookmark' ? 'external-link' : 'note'" :size="17" />
+              </button>
+            </div>
+          </section>
+        </div>
+
+        <div v-else class="workspace-results__empty">
+          <Icon name="search" :size="22" />
+          <div>
+            <div>站内没有匹配内容</div>
+            <p>可继续使用 {{ currentEngine.name }} 搜索 Web。</p>
+          </div>
+        </div>
+      </template>
+
+      <footer class="workspace-results__footer">
+        <span><kbd>↑</kbd><kbd>↓</kbd> 选择</span>
+        <span><kbd>Enter</kbd> 打开</span>
+        <span><kbd>Esc</kbd> 关闭</span>
+      </footer>
+    </section>
 
     <div v-if="isSearching || searchError || searchResult" class="search-result-panel">
       <div class="search-result-panel__header">
@@ -211,29 +533,41 @@ async function copyAnswer() {
 .search-shell {
   position: relative;
   display: grid;
-  gap: 16px;
+  gap: 12px;
+  width: min(100%, 760px);
+  margin: 0 auto;
 }
 
 .search-box {
   position: relative;
-  display: flex;
+  display: grid;
+  grid-template-columns: auto minmax(0, 1fr) auto;
   align-items: center;
-  max-width: 640px;
-  margin: 0 auto;
-  background: var(--bg-card);
-  border-radius: var(--radius-xl);
-  box-shadow: var(--shadow-card);
-  padding: 6px;
-  transition: all var(--transition-normal) var(--ease-smooth);
+  width: 100%;
+  padding: 7px;
+  background:
+    linear-gradient(135deg, color-mix(in srgb, var(--bg-card) 96%, #fff 4%), var(--bg-card));
+  border: 1px solid color-mix(in srgb, var(--border-light) 76%, transparent);
+  border-radius: 22px;
+  box-shadow:
+    0 14px 36px color-mix(in srgb, var(--text-primary) 8%, transparent),
+    inset 0 1px rgba(255, 255, 255, 0.7);
+  transition:
+    border-color var(--transition-normal),
+    box-shadow var(--transition-normal),
+    transform var(--transition-normal);
 }
 
 .search-box:hover {
-  box-shadow: var(--shadow-card-hover);
+  border-color: color-mix(in srgb, var(--accent-color) 24%, var(--border-light));
 }
 
 .search-box.is-focused {
-  transform: scale(1.02);
-  box-shadow: var(--shadow-lg);
+  border-color: color-mix(in srgb, var(--accent-color) 48%, var(--border-light));
+  box-shadow:
+    0 18px 46px color-mix(in srgb, var(--text-primary) 11%, transparent),
+    0 0 0 4px color-mix(in srgb, var(--accent-color) 12%, transparent);
+  transform: translateY(-1px);
 }
 
 .search-box__engine-wrap {
@@ -244,107 +578,152 @@ async function copyAnswer() {
 .search-box__engine {
   display: flex;
   align-items: center;
-  gap: 6px;
-  padding: 8px 16px;
-  background: var(--bg-secondary);
-  border: none;
-  border-radius: var(--radius-lg);
+  gap: 7px;
+  min-height: 44px;
+  padding: 8px 12px 8px 9px;
+  background: color-mix(in srgb, var(--bg-secondary) 84%, var(--bg-card));
+  border: 1px solid transparent;
+  border-radius: 16px;
   color: var(--text-primary);
   cursor: pointer;
+  transition: background var(--transition-fast), border-color var(--transition-fast);
 }
 
-.search-box__icon {
-  min-width: 27px;
-  padding: 4px 6px;
+.search-box__engine:hover {
+  background: var(--bg-secondary);
+  border-color: var(--border-light);
+}
+
+.search-box__icon,
+.engine-switcher__monogram {
+  display: inline-grid;
+  place-items: center;
+  min-width: 28px;
+  height: 28px;
+  padding: 0 6px;
   color: var(--accent-color);
   background: var(--accent-bg);
-  border-radius: 9px;
-  font-size: 11px;
-  font-weight: 700;
-  text-align: center;
+  border: 1px solid color-mix(in srgb, var(--accent-color) 18%, transparent);
+  border-radius: 10px;
+  font-size: 10px;
+  font-weight: 750;
+  letter-spacing: 0.02em;
 }
 
 .search-box__name {
-  font-size: 14px;
-  font-weight: 500;
-}
-
-.search-box__chevron {
-  font-size: 12px;
-  color: var(--text-muted);
+  font-size: 13px;
+  font-weight: 650;
+  white-space: nowrap;
 }
 
 .engine-switcher {
   position: absolute;
-  top: calc(100% + 8px);
+  top: calc(100% + 11px);
   left: 0;
-  z-index: 30;
-  min-width: 180px;
+  z-index: 40;
+  min-width: 218px;
   display: grid;
-  gap: 6px;
-  padding: 10px;
-  background: var(--bg-card);
+  gap: 4px;
+  padding: 8px;
+  background: color-mix(in srgb, var(--bg-card) 96%, transparent);
   border: 1px solid var(--border-light);
   border-radius: 18px;
-  box-shadow: var(--shadow-card-hover);
+  box-shadow: 0 18px 48px color-mix(in srgb, var(--text-primary) 16%, transparent);
+  backdrop-filter: blur(18px);
 }
 
 .engine-switcher__item {
-  display: flex;
+  display: grid;
+  grid-template-columns: auto minmax(0, 1fr) auto;
   align-items: center;
-  gap: 8px;
-  padding: 10px 12px;
-  border: none;
-  border-radius: 12px;
-  background: var(--bg-secondary);
+  gap: 9px;
+  min-height: 42px;
+  padding: 7px 9px;
+  border: 1px solid transparent;
+  border-radius: 13px;
+  background: transparent;
   color: var(--text-primary);
+  text-align: left;
   cursor: pointer;
 }
 
+.engine-switcher__item:hover,
 .engine-switcher__item.is-active {
-  background: var(--accent-bg);
-  box-shadow: 0 0 0 2px var(--accent-color);
+  background: var(--bg-secondary);
+  border-color: var(--border-light);
+}
+
+.search-box__field {
+  min-width: 0;
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding-left: 15px;
+}
+
+.search-box__field-icon {
+  color: var(--text-muted);
 }
 
 .search-box__input {
+  min-width: 0;
   flex: 1;
   border: none;
   background: transparent;
-  padding: 12px 16px;
-  font-size: 16px;
+  padding: 12px 2px;
+  font-size: 15px;
   color: var(--text-primary);
   outline: none;
+}
+
+.search-box__input::-webkit-search-cancel-button {
+  display: none;
 }
 
 .search-box__input::placeholder {
   color: var(--text-muted);
 }
 
+.search-box__shortcut,
+.workspace-results__footer kbd {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  min-height: 23px;
+  padding: 2px 7px;
+  border: 1px solid var(--border-light);
+  border-bottom-color: color-mix(in srgb, var(--border-color) 72%, var(--border-light));
+  border-radius: 7px;
+  background: var(--bg-secondary);
+  color: var(--text-muted);
+  font: 600 10px/1 system-ui, sans-serif;
+  white-space: nowrap;
+}
+
 .search-box__btn {
+  min-height: 44px;
   display: inline-flex;
   align-items: center;
   justify-content: center;
   gap: 7px;
-  padding: 10px 24px;
-  background: var(--accent-color);
-  color: #fff;
+  padding: 10px 16px;
+  background: var(--text-primary);
+  color: var(--bg-card);
   border: none;
-  border-radius: var(--radius-lg);
-  font-size: 14px;
-  font-weight: 500;
+  border-radius: 16px;
+  font-size: 13px;
+  font-weight: 650;
   cursor: pointer;
-  transition: all var(--transition-fast);
-  flex-shrink: 0;
+  transition: transform var(--transition-fast), opacity var(--transition-fast);
 }
 
 .search-box__btn:hover:not(:disabled) {
-  background: var(--accent-hover);
-  transform: scale(1.02);
+  transform: translateY(-1px);
 }
 
 .search-box__btn:disabled {
-  opacity: 0.7;
-  cursor: wait;
+  opacity: 0.48;
+  cursor: not-allowed;
 }
 
 .search-box__btn:disabled svg {
@@ -355,14 +734,260 @@ async function copyAnswer() {
   to { transform: rotate(360deg); }
 }
 
+.workspace-results {
+  position: absolute;
+  top: calc(100% + 2px);
+  left: 0;
+  z-index: 35;
+  width: 100%;
+  max-height: min(70vh, 620px);
+  overflow: auto;
+  padding: 12px;
+  background: color-mix(in srgb, var(--bg-card) 95%, transparent);
+  border: 1px solid var(--border-light);
+  border-radius: 24px;
+  box-shadow:
+    0 24px 70px color-mix(in srgb, var(--text-primary) 18%, transparent),
+    inset 0 1px rgba(255, 255, 255, 0.62);
+  backdrop-filter: blur(22px);
+}
+
+.workspace-results__header {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 16px;
+  padding: 4px 5px 11px;
+}
+
+.workspace-results__eyebrow {
+  color: var(--accent-color);
+  font-size: 10px;
+  font-weight: 750;
+  letter-spacing: 0.14em;
+  text-transform: uppercase;
+}
+
+.workspace-results__summary {
+  margin-top: 4px;
+  color: var(--text-primary);
+  font-size: 14px;
+  font-weight: 650;
+}
+
+.workspace-results__close {
+  width: 34px;
+  height: 34px;
+  display: grid;
+  place-items: center;
+  border: 1px solid transparent;
+  border-radius: 11px;
+  background: transparent;
+  color: var(--text-muted);
+  cursor: pointer;
+}
+
+.workspace-results__close:hover {
+  background: var(--bg-secondary);
+  border-color: var(--border-light);
+  color: var(--text-primary);
+}
+
+.workspace-results__loading {
+  display: grid;
+  gap: 8px;
+  padding: 8px 4px 14px;
+}
+
+.workspace-results__loading-bar {
+  height: 46px;
+  border-radius: 14px;
+  background:
+    linear-gradient(
+      90deg,
+      var(--bg-secondary) 0%,
+      color-mix(in srgb, var(--bg-secondary) 70%, var(--bg-card)) 50%,
+      var(--bg-secondary) 100%
+    );
+  background-size: 220% 100%;
+  animation: search-shimmer 1.15s linear infinite;
+}
+
+@keyframes search-shimmer {
+  to { background-position: -220% 0; }
+}
+
+.workspace-results__groups {
+  display: grid;
+  gap: 14px;
+}
+
+.workspace-result-group__title {
+  display: flex;
+  align-items: center;
+  gap: 7px;
+  padding: 0 6px 7px;
+  color: var(--text-secondary);
+  font-size: 12px;
+  font-weight: 650;
+}
+
+.workspace-result-group__count {
+  display: inline-grid;
+  place-items: center;
+  min-width: 20px;
+  height: 20px;
+  margin-left: 2px;
+  padding: 0 6px;
+  border-radius: 999px;
+  background: var(--bg-secondary);
+  color: var(--text-muted);
+  font-size: 10px;
+}
+
+.workspace-result-group__list {
+  display: grid;
+  gap: 4px;
+}
+
+.workspace-result-item {
+  width: 100%;
+  display: grid;
+  grid-template-columns: auto minmax(0, 1fr) auto;
+  align-items: center;
+  gap: 12px;
+  padding: 11px 12px;
+  border: 1px solid transparent;
+  border-radius: 16px;
+  background: transparent;
+  color: var(--text-primary);
+  text-align: left;
+  cursor: pointer;
+}
+
+.workspace-result-item:hover,
+.workspace-result-item.is-active {
+  background: var(--bg-secondary);
+  border-color: color-mix(in srgb, var(--accent-color) 18%, var(--border-light));
+}
+
+.workspace-result-item__type {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  min-width: 48px;
+  min-height: 28px;
+  padding: 5px 8px;
+  border-radius: 9px;
+  background: var(--accent-bg);
+  color: var(--accent-color);
+  font-size: 10px;
+  font-weight: 700;
+  white-space: nowrap;
+}
+
+.workspace-result-item__body {
+  min-width: 0;
+  display: grid;
+  gap: 3px;
+}
+
+.workspace-result-item__title,
+.workspace-result-item__snippet,
+.workspace-result-item__meta {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.workspace-result-item__title {
+  font-size: 14px;
+  font-weight: 650;
+}
+
+.workspace-result-item__snippet {
+  color: var(--text-secondary);
+  font-size: 12px;
+}
+
+.workspace-result-item__meta {
+  color: var(--text-muted);
+  font-size: 10px;
+}
+
+.workspace-result-item mark {
+  padding: 0 2px;
+  border-radius: 4px;
+  background: color-mix(in srgb, var(--accent-color) 22%, transparent);
+  color: inherit;
+}
+
+.workspace-result-item > svg {
+  color: var(--text-muted);
+}
+
+.workspace-results__message,
+.workspace-results__empty {
+  display: flex;
+  align-items: center;
+  gap: 11px;
+  margin: 2px 0 10px;
+  padding: 14px;
+  border-radius: 15px;
+  background: var(--bg-secondary);
+  color: var(--text-secondary);
+  font-size: 12px;
+}
+
+.workspace-results__message--error {
+  color: var(--error-color);
+}
+
+.workspace-results__empty {
+  min-height: 92px;
+  justify-content: center;
+}
+
+.workspace-results__empty > svg {
+  color: var(--accent-color);
+}
+
+.workspace-results__empty > div > div {
+  color: var(--text-primary);
+  font-size: 14px;
+  font-weight: 650;
+}
+
+.workspace-results__empty p {
+  margin: 4px 0 0;
+  color: var(--text-muted);
+  font-size: 12px;
+}
+
+.workspace-results__footer {
+  display: flex;
+  align-items: center;
+  justify-content: flex-end;
+  gap: 14px;
+  margin-top: 10px;
+  padding: 10px 4px 1px;
+  border-top: 1px solid var(--border-light);
+  color: var(--text-muted);
+  font-size: 10px;
+}
+
+.workspace-results__footer span {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+}
+
 .search-result-panel {
-  max-width: 960px;
-  width: min(100%, 960px);
-  margin: 0 auto;
+  width: 100%;
   padding: 20px;
   background: color-mix(in srgb, var(--bg-card) 92%, var(--accent-color) 8%);
   border: 1px solid var(--border-light);
-  border-radius: 28px;
+  border-radius: 24px;
   box-shadow: var(--shadow-card-hover);
 }
 
@@ -431,7 +1056,7 @@ async function copyAnswer() {
 }
 
 .search-result-panel__state--error {
-  color: #d65c5c;
+  color: var(--error-color);
 }
 
 .search-result-list {
@@ -484,40 +1109,66 @@ async function copyAnswer() {
   margin-top: 16px;
 }
 
-@media (max-width: 640px) {
+@media (max-width: 680px) {
   .search-box {
-    flex-direction: column;
-    border-radius: var(--radius-lg);
-    padding: 8px;
-  }
-
-  .search-box__engine-wrap,
-  .search-box__engine,
-  .search-box__input,
-  .search-box__btn {
-    width: 100%;
+    grid-template-columns: auto minmax(0, 1fr) auto;
+    border-radius: 20px;
   }
 
   .search-box__engine {
-    justify-content: center;
-    margin-bottom: 8px;
+    padding-right: 9px;
   }
 
-  .engine-switcher {
-    right: 0;
-    min-width: unset;
+  .search-box__engine .search-box__name,
+  .search-box__engine > svg,
+  .search-box__shortcut,
+  .search-box__btn span {
+    display: none;
+  }
+
+  .search-box__field {
+    padding-left: 9px;
   }
 
   .search-box__input {
-    text-align: center;
+    font-size: 14px;
   }
 
   .search-box__btn {
-    margin-top: 8px;
+    width: 44px;
+    padding: 0;
+  }
+
+  .engine-switcher {
+    min-width: min(218px, calc(100vw - 40px));
+  }
+
+  .workspace-results {
+    max-height: min(72vh, 560px);
+    border-radius: 20px;
+  }
+
+  .workspace-result-item {
+    grid-template-columns: minmax(0, 1fr) auto;
+  }
+
+  .workspace-result-item__type {
+    display: none;
+  }
+
+  .workspace-results__footer {
+    justify-content: flex-start;
+    overflow-x: auto;
   }
 
   .search-result-panel__header {
     flex-direction: column;
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .workspace-results__loading-bar {
+    animation: none;
   }
 }
 </style>

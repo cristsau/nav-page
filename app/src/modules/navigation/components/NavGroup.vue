@@ -2,6 +2,7 @@
 import { computed, ref, watch } from 'vue'
 import Icon from '@/shared/components/Icon.vue'
 import NavItem from './NavItem.vue'
+import { resolveGroupIcon } from '../navigationUi'
 
 const props = defineProps({
   groups: {
@@ -23,6 +24,10 @@ const props = defineProps({
   pendingBookmarkId: {
     type: String,
     default: ''
+  },
+  analyzingBookmarkId: {
+    type: String,
+    default: ''
   }
 })
 
@@ -32,6 +37,7 @@ const emit = defineEmits([
   'editGroup',
   'deleteGroup',
   'addBookmark',
+  'aiBookmark',
   'editBookmark',
   'deleteBookmark'
 ])
@@ -76,6 +82,26 @@ function selectGroup(group) {
   emit('selectGroup', group)
 }
 
+function handleGroupKeydown(group, event) {
+  const currentIndex = props.groups.findIndex((item) => item.id === group.id)
+  if (currentIndex < 0) return
+
+  let nextIndex = currentIndex
+  if (event.key === 'ArrowRight') nextIndex = (currentIndex + 1) % props.groups.length
+  else if (event.key === 'ArrowLeft') nextIndex = (currentIndex - 1 + props.groups.length) % props.groups.length
+  else if (event.key === 'Home') nextIndex = 0
+  else if (event.key === 'End') nextIndex = props.groups.length - 1
+  else return
+
+  event.preventDefault()
+  const nextGroup = props.groups[nextIndex]
+  selectGroup(nextGroup)
+  const tabs = event.currentTarget
+    .closest('[role="tablist"]')
+    ?.querySelectorAll('[role="tab"]')
+  tabs?.[nextIndex]?.focus()
+}
+
 function handleAddGroup() {
   emit('addGroup')
 }
@@ -98,8 +124,18 @@ function handleEditBookmark(bookmark) {
   emit('editBookmark', bookmark)
 }
 
+function handleAiBookmark(bookmark, triggerElement) {
+  emit('aiBookmark', bookmark, triggerElement)
+}
+
 function handleDeleteBookmark(bookmark) {
   emit('deleteBookmark', bookmark)
+}
+
+function groupStyle(group) {
+  return {
+    '--group-color': group.color || 'var(--accent-color)'
+  }
 }
 </script>
 
@@ -113,39 +149,53 @@ function handleDeleteBookmark(bookmark) {
           :key="group.id"
           class="groups-tabs__tab"
           :class="{ 'is-active': activeGroup?.id === group.id }"
-          role="tab"
-          :aria-selected="activeGroup?.id === group.id"
-          :tabindex="activeGroup?.id === group.id ? 0 : -1"
-          @click="selectGroup(group)"
-          @keydown.enter.prevent="selectGroup(group)"
-          @keydown.space.prevent="selectGroup(group)"
+          :style="groupStyle(group)"
+          role="presentation"
         >
-          <span class="groups-tabs__icon">{{ group.icon }}</span>
-          <span class="groups-tabs__name">{{ group.name }}</span>
           <button
-            class="groups-tabs__edit"
-            title="编辑"
+            class="groups-tabs__main"
             type="button"
-            :aria-label="`编辑分组 ${group.name}`"
-            @click="handleEditGroup(group, $event)"
+            role="tab"
+            :aria-selected="activeGroup?.id === group.id"
+            :tabindex="activeGroup?.id === group.id ? 0 : -1"
+            @click="selectGroup(group)"
+            @keydown="handleGroupKeydown(group, $event)"
           >
-            <Icon name="edit" :size="14" />
+            <span class="groups-tabs__icon" aria-hidden="true">
+              <Icon :name="resolveGroupIcon(group.icon, group.name)" :size="17" />
+            </span>
+            <span class="groups-tabs__name">{{ group.name }}</span>
+            <span class="groups-tabs__count" aria-hidden="true">
+              {{ bookmarks.filter((bookmark) => bookmark.groupId === group.id).length }}
+            </span>
           </button>
-          <button
-            class="groups-tabs__delete"
-            title="删除"
-            type="button"
-            :aria-label="`删除分组 ${group.name}`"
-            :disabled="pendingGroupId === group.id"
-            @click="handleDeleteGroup(group, $event)"
-          >
-            <span v-if="pendingGroupId === group.id" class="mini-spinner" aria-hidden="true"></span>
-            <Icon v-else name="trash" :size="14" />
-          </button>
+          <span class="groups-tabs__actions" role="group" :aria-label="`${group.name} 分组操作`">
+            <button
+              class="groups-tabs__action"
+              title="编辑分组"
+              type="button"
+              :aria-label="`编辑分组 ${group.name}`"
+              @click="handleEditGroup(group, $event)"
+            >
+              <Icon name="edit" :size="13" />
+            </button>
+            <button
+              class="groups-tabs__action groups-tabs__action--danger"
+              title="删除分组"
+              type="button"
+              :aria-label="`删除分组 ${group.name}`"
+              :disabled="pendingGroupId === group.id"
+              @click="handleDeleteGroup(group, $event)"
+            >
+              <span v-if="pendingGroupId === group.id" class="mini-spinner" aria-hidden="true"></span>
+              <Icon v-else name="trash" :size="13" />
+            </button>
+          </span>
         </div>
       </div>
       <button class="groups-tabs__add" type="button" title="添加分组" aria-label="添加分组" @click="handleAddGroup">
         <Icon name="plus" :size="18" />
+        <span>新分组</span>
       </button>
     </div>
 
@@ -166,6 +216,8 @@ function handleDeleteBookmark(bookmark) {
               :key="bookmark.id"
               :bookmark="bookmark"
               :deleting="pendingBookmarkId === bookmark.id"
+              :analyzing="analyzingBookmarkId === bookmark.id"
+              @ai="handleAiBookmark"
               @edit="handleEditBookmark"
               @delete="handleDeleteBookmark"
             />
@@ -187,124 +239,200 @@ function handleDeleteBookmark(bookmark) {
 
 <style scoped>
 .nav-groups {
-  margin-top: 32px;
+  margin-top: 36px;
 }
 
 /* Tab 样式 */
 .groups-tabs {
   display: flex;
   align-items: center;
-  gap: 12px;
-  margin-bottom: 24px;
-  padding: 8px;
-  background: var(--bg-secondary);
-  border-radius: var(--radius-lg);
-  overflow-x: auto;
+  gap: 10px;
+  margin-bottom: 26px;
+  padding: 9px;
+  background:
+    linear-gradient(135deg, color-mix(in srgb, var(--bg-secondary) 96%, white 4%), var(--bg-secondary));
+  border: 1px solid color-mix(in srgb, var(--border-light) 78%, transparent);
+  border-radius: 22px;
+  box-shadow: 0 1px 0 color-mix(in srgb, white 66%, transparent) inset;
 }
 
 .groups-tabs__list {
   display: flex;
   gap: 8px;
   flex: 1;
+  min-width: 0;
+  overflow-x: auto;
+  scrollbar-width: thin;
+  scrollbar-color: color-mix(in srgb, var(--accent-color) 24%, transparent) transparent;
 }
 
 .groups-tabs__tab {
   position: relative;
   display: flex;
   align-items: center;
-  gap: 8px;
-  padding: 12px 20px;
+  flex: 0 0 auto;
+  min-width: 0;
   background: transparent;
-  border-radius: var(--radius-md);
-  cursor: pointer;
+  border: 1px solid transparent;
+  border-radius: 15px;
   white-space: nowrap;
-  transition: all var(--transition-fast);
+  transition:
+    background var(--transition-fast),
+    border-color var(--transition-fast),
+    box-shadow var(--transition-fast);
 }
 
 .groups-tabs__tab:hover {
-  background: var(--bg-hover);
+  background: color-mix(in srgb, var(--bg-hover) 82%, transparent);
 }
 
 .groups-tabs__tab.is-active {
   background: var(--bg-card);
-  box-shadow: var(--shadow-sm);
+  border-color: color-mix(in srgb, var(--group-color) 32%, var(--border-light));
+  box-shadow:
+    0 8px 22px color-mix(in srgb, var(--group-color) 10%, transparent),
+    0 1px 0 color-mix(in srgb, white 72%, transparent) inset;
 }
 
-.groups-tabs__tab.is-active::after {
-  content: '';
-  position: absolute;
-  bottom: 4px;
-  left: 50%;
-  transform: translateX(-50%);
-  width: 20px;
-  height: 3px;
-  background: var(--accent-color);
-  border-radius: var(--radius-full);
+.groups-tabs__main {
+  min-width: 0;
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 8px 10px;
+  color: var(--text-primary);
+  background: transparent;
+  border: 0;
+  border-radius: 14px;
+  cursor: pointer;
+  font: inherit;
+}
+
+.groups-tabs__main:focus-visible {
+  outline: 2px solid var(--group-color);
+  outline-offset: 2px;
 }
 
 .groups-tabs__icon {
-  font-size: 18px;
+  width: 30px;
+  height: 30px;
+  display: grid;
+  place-items: center;
+  flex: 0 0 auto;
+  color: var(--group-color);
+  background: color-mix(in srgb, var(--group-color) 11%, var(--bg-secondary));
+  border: 1px solid color-mix(in srgb, var(--group-color) 17%, transparent);
+  border-radius: 10px;
 }
 
 .groups-tabs__name {
   font-size: 14px;
-  font-weight: 500;
-  color: var(--text-primary);
+  font-weight: 650;
+  letter-spacing: 0.01em;
 }
 
-.groups-tabs__edit,
-.groups-tabs__delete {
+.groups-tabs__count {
+  min-width: 22px;
+  padding: 3px 6px;
+  color: var(--text-muted);
+  background: color-mix(in srgb, var(--bg-tertiary) 76%, transparent);
+  border-radius: 999px;
+  font-size: 11px;
+  font-variant-numeric: tabular-nums;
+}
+
+.groups-tabs__actions {
+  width: 0;
+  display: flex;
+  align-items: center;
+  gap: 3px;
+  overflow: hidden;
+  opacity: 0;
+  pointer-events: none;
+  transform: translateX(-4px);
+  transition:
+    width var(--transition-fast),
+    opacity var(--transition-fast),
+    transform var(--transition-fast);
+}
+
+.groups-tabs__tab:hover .groups-tabs__actions,
+.groups-tabs__tab:focus-within .groups-tabs__actions {
+  width: 53px;
+  padding-right: 5px;
   opacity: 1;
-  width: 22px;
-  height: 22px;
+  pointer-events: auto;
+  transform: translateX(0);
+}
+
+.groups-tabs__action {
+  width: 24px;
+  height: 24px;
   display: flex;
   align-items: center;
   justify-content: center;
-  background: var(--bg-secondary);
-  border: none;
-  border-radius: var(--radius-xs);
-  cursor: pointer;
-  font-size: 10px;
-  transition: all var(--transition-fast);
+  flex: 0 0 auto;
   color: var(--text-muted);
+  background: transparent;
+  border: 0;
+  border-radius: 8px;
+  cursor: pointer;
+  transition:
+    color var(--transition-fast),
+    background var(--transition-fast);
 }
 
-.groups-tabs__tab:hover .groups-tabs__edit,
-.groups-tabs__tab:hover .groups-tabs__delete,
-.groups-tabs__tab:focus-within .groups-tabs__edit,
-.groups-tabs__tab:focus-within .groups-tabs__delete {
-  opacity: 1;
-}
-
-.groups-tabs__edit:hover {
+.groups-tabs__action:hover:not(:disabled) {
+  color: var(--text-primary);
   background: var(--bg-hover);
 }
 
-.groups-tabs__delete:hover {
+.groups-tabs__action--danger:hover:not(:disabled) {
   background: var(--error-color);
   color: #fff;
 }
 
-.groups-tabs__delete:disabled {
-  opacity: 1;
+.groups-tabs__action:focus-visible {
+  outline: 2px solid var(--accent-color);
+  outline-offset: 1px;
+}
+
+.groups-tabs__action:disabled {
   cursor: wait;
 }
 
 .groups-tabs__add {
-  padding: 12px 16px;
+  min-height: 46px;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  gap: 7px;
+  padding: 0 15px;
   background: var(--accent-color);
-  border: none;
-  border-radius: var(--radius-md);
+  border: 1px solid color-mix(in srgb, var(--accent-hover) 70%, transparent);
+  border-radius: 15px;
   cursor: pointer;
-  font-size: 16px;
-  transition: all var(--transition-fast);
+  font: inherit;
+  font-size: 13px;
+  font-weight: 650;
   flex-shrink: 0;
   color: #fff;
+  box-shadow: 0 8px 20px color-mix(in srgb, var(--accent-color) 22%, transparent);
+  transition:
+    background var(--transition-fast),
+    transform var(--transition-fast),
+    box-shadow var(--transition-fast);
 }
 
 .groups-tabs__add:hover {
   background: var(--accent-hover);
-  transform: scale(1.05);
+  transform: translateY(-1px);
+  box-shadow: 0 10px 24px color-mix(in srgb, var(--accent-color) 28%, transparent);
+}
+
+.groups-tabs__add:focus-visible {
+  outline: 2px solid var(--accent-color);
+  outline-offset: 3px;
 }
 
 /* 书签网格 */
@@ -314,9 +442,9 @@ function handleDeleteBookmark(bookmark) {
 
 .bookmarks-grid {
   display: grid;
-  grid-template-columns: repeat(auto-fill, minmax(110px, 1fr));
-  gap: 16px;
-  justify-items: center;
+  grid-template-columns: repeat(auto-fill, minmax(150px, 1fr));
+  gap: 15px;
+  align-items: stretch;
 }
 
 /* 添加书签卡片 */
@@ -325,25 +453,44 @@ function handleDeleteBookmark(bookmark) {
   flex-direction: column;
   align-items: center;
   justify-content: center;
-  width: 110px;
+  width: 100%;
+  min-height: 154px;
   padding: 20px 12px;
-  background: var(--bg-secondary);
-  border: 2px dashed var(--border-color);
-  border-radius: var(--radius-md);
-  cursor: pointer;
-  transition: all var(--transition-normal) var(--ease-smooth);
   color: var(--text-secondary);
+  background:
+    linear-gradient(145deg, color-mix(in srgb, var(--bg-secondary) 94%, white 6%), var(--bg-secondary));
+  border: 1px dashed color-mix(in srgb, var(--accent-color) 38%, var(--border-color));
+  border-radius: 22px;
+  cursor: pointer;
+  transition:
+    color var(--transition-fast),
+    background var(--transition-fast),
+    border-color var(--transition-fast),
+    transform var(--transition-normal) var(--ease-smooth),
+    box-shadow var(--transition-normal) var(--ease-smooth);
 }
 
 .bookmark-card--add:hover {
   background: var(--accent-bg);
   border-color: var(--accent-color);
   transform: translateY(-4px);
+  box-shadow: 0 14px 30px color-mix(in srgb, var(--accent-color) 13%, transparent);
+}
+
+.bookmark-card--add:focus-visible {
+  outline: 2px solid var(--accent-color);
+  outline-offset: 3px;
 }
 
 .bookmark-card--add .bookmark-card__icon {
-  font-size: 32px;
+  width: 42px;
+  height: 42px;
+  display: grid;
+  place-items: center;
   margin-bottom: 8px;
+  color: var(--accent-color);
+  background: color-mix(in srgb, var(--accent-color) 11%, transparent);
+  border-radius: 14px;
 }
 
 .bookmark-card--add .bookmark-card__title {
@@ -441,24 +588,59 @@ function handleDeleteBookmark(bookmark) {
 @media (max-width: 640px) {
   .groups-tabs {
     flex-wrap: nowrap;
-    overflow-x: auto;
+    align-items: stretch;
+    padding: 7px;
+  }
+
+  .groups-tabs__list {
     -webkit-overflow-scrolling: touch;
   }
 
-  .groups-tabs__tab {
-    padding: 10px 14px;
+  .bookmarks-grid {
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+    gap: 10px;
   }
 
-  .bookmarks-grid {
-    grid-template-columns: repeat(auto-fill, minmax(90px, 1fr));
-    gap: 12px;
+  .groups-tabs__add {
+    width: 46px;
+    padding: 0;
+  }
+
+  .groups-tabs__add span {
+    position: absolute;
+    width: 1px;
+    height: 1px;
+    overflow: hidden;
+    clip: rect(0 0 0 0);
   }
 }
 
 @media (hover: none), (pointer: coarse) {
-  .groups-tabs__edit,
-  .groups-tabs__delete {
+  .groups-tabs__actions {
+    width: 53px;
+    padding-right: 5px;
     opacity: 1;
+    pointer-events: auto;
+    transform: none;
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .groups-tabs__tab,
+  .groups-tabs__actions,
+  .groups-tabs__action,
+  .groups-tabs__add,
+  .bookmark-card--add,
+  .tab-slide-enter-active,
+  .tab-slide-leave-active,
+  .list-enter-active,
+  .list-leave-active {
+    transition: none;
+  }
+
+  .groups-tabs__add:hover,
+  .bookmark-card--add:hover {
+    transform: none;
   }
 }
 </style>

@@ -65,7 +65,9 @@ async function handleRegister() {
       password: registerForm.value.password
     })
 
-    successMessage.value = `注册申请已提交，等待管理员审批。申请编号：${request.id}`
+    successMessage.value = request.autoApproved
+      ? '本地管理员已创建，请使用刚才的账号登录。'
+      : `注册申请已提交，等待管理员审批。申请编号：${request.id}`
     registerForm.value = {
       username: '',
       password: '',
@@ -84,7 +86,10 @@ async function handleRegister() {
   <div class="auth-page">
     <div class="auth-card">
       <div class="auth-card__header">
-        <div class="auth-card__logo">DOMO NAV</div>
+        <div class="auth-card__brand">
+          <img class="auth-card__logo" src="/domo-logo.png" alt="">
+          <span>DOMO NAV</span>
+        </div>
         <h1 class="auth-card__title">账号登录与注册</h1>
         <p class="auth-card__desc">适合个人和小团队使用的私有化导航工作台。新用户注册后需要管理员审批。</p>
       </div>
@@ -169,17 +174,27 @@ async function handleRegister() {
   margin-bottom: 24px;
 }
 
-.auth-card__logo {
+.auth-card__brand {
   display: inline-flex;
   align-items: center;
-  justify-content: center;
-  min-width: 118px;
-  padding: 8px 16px;
+  gap: 10px;
+  padding: 7px 14px 7px 7px;
   border-radius: 999px;
   background: var(--accent-bg);
   color: var(--accent-color);
   font-weight: 700;
   letter-spacing: 0.16em;
+}
+
+.auth-card__logo {
+  width: 46px;
+  height: 46px;
+  display: block;
+  object-fit: contain;
+  overflow: hidden;
+  background: #fff;
+  border: 1px solid var(--border-light);
+  border-radius: 50%;
 }
 
 .auth-card__title {

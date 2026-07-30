@@ -2,6 +2,7 @@
 import { ref, watch, computed } from 'vue'
 import { encrypt, hashPassword } from '@/shared/utils/crypto'
 import Icon from '@/shared/components/Icon.vue'
+import NoteAiPanel from './NoteAiPanel.vue'
 
 const props = defineProps({
   show: {
@@ -38,6 +39,7 @@ const formData = ref({
 // 标签输入
 const tagInput = ref('')
 const initialSnapshot = ref('')
+const copiedId = ref(false)
 
 // 是否编辑模式
 const isEdit = computed(() => !!props.note?.id)
@@ -52,6 +54,9 @@ const modalTitle = computed(() => {
 })
 
 const contentCount = computed(() => formData.value.content.length)
+const noteNumberLabel = computed(() => (
+  props.note?.numberId ? `#${props.note.numberId}` : ''
+))
 
 function today() {
   const now = new Date()
@@ -130,6 +135,31 @@ function removeTag(index) {
   formData.value.tags.splice(index, 1)
 }
 
+async function copyNoteId() {
+  if (!props.note?.numberId) return
+
+  try {
+    await navigator.clipboard.writeText(String(props.note.numberId))
+    copiedId.value = true
+    window.setTimeout(() => {
+      copiedId.value = false
+    }, 1800)
+  } catch {
+    alert('复制 ID 失败，请手动复制。')
+  }
+}
+
+function insertAiText(text) {
+  const current = formData.value.content.trimEnd()
+  formData.value.content = current
+    ? `${current}\n\n${text}`
+    : text
+}
+
+function replaceAiText(text) {
+  formData.value.content = text
+}
+
 function buildDefaultTitle() {
   const content = formData.value.content.trim()
   if (content) {
@@ -199,7 +229,20 @@ function close() {
     <div class="editor-content" role="dialog" aria-modal="true" :aria-label="modalTitle">
       <!-- 头部 -->
       <div class="editor__header">
-        <h3 class="editor__title">{{ modalTitle }}</h3>
+        <div class="editor__heading">
+          <h3 class="editor__title">{{ modalTitle }}</h3>
+          <button
+            v-if="noteNumberLabel"
+            type="button"
+            class="editor__note-id"
+            :aria-label="`复制笔记数字 ID ${note.numberId}`"
+            :title="copiedId ? '已复制' : '复制数字 ID'"
+            @click="copyNoteId"
+          >
+            <Icon :name="copiedId ? 'circle-check' : 'copy'" :size="13" />
+            {{ noteNumberLabel }}
+          </button>
+        </div>
         <button type="button" class="editor__close" aria-label="关闭编辑器" :disabled="saving" @click="close">
           <Icon name="close" :size="18" />
         </button>
@@ -271,6 +314,17 @@ function close() {
         />
         <div class="editor__counter">{{ contentCount }} 字</div>
       </div>
+
+      <NoteAiPanel
+        :type="formData.type"
+        :title="formData.title"
+        :content="formData.content"
+        :encrypted="formData.encrypted"
+        :auto-open="Boolean(note?._openAi)"
+        :disabled="saving"
+        @insert="insertAiText"
+        @replace="replaceAiText"
+      />
 
       <!-- 标签 -->
       <div class="form-group">
@@ -390,6 +444,32 @@ function close() {
   font-size: 18px;
   font-weight: 600;
   color: var(--text-primary);
+}
+
+.editor__heading {
+  min-width: 0;
+  display: flex;
+  align-items: center;
+  gap: 9px;
+}
+
+.editor__note-id {
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+  padding: 5px 8px;
+  color: var(--text-muted);
+  background: var(--bg-secondary);
+  border: 1px solid var(--border-light);
+  border-radius: 999px;
+  font-size: 11px;
+  font-variant-numeric: tabular-nums;
+  cursor: pointer;
+}
+
+.editor__note-id:hover {
+  color: var(--accent-color);
+  border-color: color-mix(in srgb, var(--accent-color) 50%, var(--border-light));
 }
 
 .editor__close {

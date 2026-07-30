@@ -1,19 +1,25 @@
 <script setup>
-import { onMounted, ref } from 'vue'
+import { nextTick, onMounted, ref } from 'vue'
 import { useRouter } from 'vue-router'
 import { useGroups, useBookmarks } from '@/shared/composables/useDB'
 import { useTheme } from '@/shared/composables/useTheme'
 import { useConfig } from '@/shared/composables/useConfig'
 import SearchBox from '@/shared/components/SearchBox.vue'
 import Icon from '@/shared/components/Icon.vue'
+import { runBackendAiSearch, shouldUseBackendAiSearch } from '@/shared/services/aiSearchApi'
 import NavGroup from './components/NavGroup.vue'
 import AddToNav from './components/AddToNav.vue'
+import BookmarkAiPanel from './components/BookmarkAiPanel.vue'
+import {
+  buildBookmarkAiPrompt,
+  resolveBookmarkAiProvider
+} from './navigationUi'
 
 const router = useRouter()
 const { groups, load: loadGroups, create: createGroup, update: updateGroup, remove: removeGroup } = useGroups()
 const { bookmarks, load: loadBookmarks, create: createBookmark, update: updateBookmark, remove: removeBookmark } = useBookmarks()
 const { isDark, toggleTheme } = useTheme()
-const { getSiteName, getSiteIcon, isModuleEnabled } = useConfig()
+const { config, getSiteName, isModuleEnabled } = useConfig()
 
 const showModal = ref(false)
 const modalMode = ref('bookmark')
@@ -22,9 +28,17 @@ const defaultGroupId = ref('')
 const activeGroupId = ref('')
 const pendingGroupId = ref('')
 const pendingBookmarkId = ref('')
+const analyzingBookmarkId = ref('')
 const savingItem = ref(false)
 const status = ref({ message: '', type: '' })
+const showBookmarkAi = ref(false)
+const aiBookmark = ref(null)
+const aiResult = ref(null)
+const aiError = ref('')
+const aiNeedsSetup = ref(false)
 let statusTimer = null
+let aiRequestId = 0
+let aiTriggerElement = null
 
 async function loadData() {
   await Promise.all([loadGroups(), loadBookmarks()])
@@ -82,6 +96,61 @@ function handleEditBookmark(bookmark) {
   modalMode.value = 'bookmark'
   editingItem.value = bookmark
   showModal.value = true
+}
+
+async function handleAiBookmark(bookmark, triggerElement = null) {
+  const requestId = ++aiRequestId
+  const providerId = resolveBookmarkAiProvider(config.value)
+
+  if (triggerElement instanceof HTMLElement) {
+    aiTriggerElement = triggerElement
+  }
+  aiBookmark.value = bookmark
+  aiResult.value = null
+  aiError.value = ''
+  aiNeedsSetup.value = false
+  showBookmarkAi.value = true
+
+  if (!shouldUseBackendAiSearch() || !providerId) {
+    aiNeedsSetup.value = true
+    aiError.value = '请先在“设置 > 搜索设置”中启用并测试 ChatGPT / CLI Proxy，再回来使用书签 AI 分析。'
+    return
+  }
+
+  analyzingBookmarkId.value = bookmark.id
+
+  try {
+    const prompt = buildBookmarkAiPrompt(bookmark, providerId)
+    const result = await runBackendAiSearch(providerId, prompt, {
+      webSearchEnabled: false
+    })
+    if (requestId !== aiRequestId) return
+    aiResult.value = result
+  } catch (error) {
+    if (requestId !== aiRequestId) return
+    aiError.value = error.message || 'AI 分析失败，请稍后重试'
+  } finally {
+    if (requestId === aiRequestId) {
+      analyzingBookmarkId.value = ''
+    }
+  }
+}
+
+async function closeBookmarkAi(restoreFocus = true) {
+  const triggerElement = aiTriggerElement
+  aiRequestId += 1
+  showBookmarkAi.value = false
+  analyzingBookmarkId.value = ''
+
+  if (restoreFocus && triggerElement?.isConnected) {
+    await nextTick()
+    triggerElement.focus()
+  }
+}
+
+function openAiSettings() {
+  closeBookmarkAi(false)
+  router.push({ path: '/settings', query: { section: 'search' } })
 }
 
 async function handleDeleteBookmark(bookmark) {
@@ -157,8 +226,7 @@ onMounted(async () => {
     <header class="header">
       <div class="header__logo">
         <span class="header__logo-icon">
-          <Icon v-if="!getSiteIcon() || getSiteIcon() === '🧭'" name="compass" :size="22" />
-          <span v-else>{{ getSiteIcon() }}</span>
+          <img src="/domo-logo.png" alt="">
         </span>
         <span class="header__logo-text">{{ getSiteName() }}</span>
       </div>
@@ -201,11 +269,13 @@ onMounted(async () => {
           :active-group-id="activeGroupId"
           :pending-group-id="pendingGroupId"
           :pending-bookmark-id="pendingBookmarkId"
+          :analyzing-bookmark-id="analyzingBookmarkId"
           @select-group="activeGroupId = $event.id"
           @add-group="handleAddGroup"
           @edit-group="handleEditGroup"
           @delete-group="handleDeleteGroup"
           @add-bookmark="handleAddBookmark"
+          @ai-bookmark="handleAiBookmark"
           @edit-bookmark="handleEditBookmark"
           @delete-bookmark="handleDeleteBookmark"
         />
@@ -240,6 +310,18 @@ onMounted(async () => {
       @close="showModal = false"
       @submit="handleModalSubmit"
     />
+
+    <BookmarkAiPanel
+      :show="showBookmarkAi"
+      :bookmark="aiBookmark"
+      :result="aiResult"
+      :loading="Boolean(analyzingBookmarkId)"
+      :error="aiError"
+      :needs-setup="aiNeedsSetup"
+      @close="closeBookmarkAi"
+      @retry="handleAiBookmark(aiBookmark)"
+      @open-settings="openAiSettings"
+    />
   </div>
 </template>
 
@@ -272,13 +354,19 @@ onMounted(async () => {
 .header__logo-icon {
   width: 36px;
   height: 36px;
-  display: grid;
-  place-items: center;
-  color: var(--accent-color);
-  background: var(--accent-bg);
-  border: 1px solid var(--border-color);
-  border-radius: 12px;
-  font-size: 18px;
+  display: block;
+  overflow: hidden;
+  background: #fff;
+  border: 1px solid var(--border-light);
+  border-radius: 50%;
+  box-shadow: 0 6px 18px color-mix(in srgb, var(--text-primary) 10%, transparent);
+}
+
+.header__logo-icon img {
+  width: 100%;
+  height: 100%;
+  display: block;
+  object-fit: contain;
 }
 
 .header__logo-text {

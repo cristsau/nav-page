@@ -1,15 +1,17 @@
 <script setup>
-import { onMounted, ref } from 'vue'
-import { useRouter } from 'vue-router'
+import { nextTick, onMounted, ref, watch } from 'vue'
+import { useRoute, useRouter } from 'vue-router'
 import GeneralSettings from './components/GeneralSettings.vue'
 import AppearanceSettings from './components/AppearanceSettings.vue'
 import SearchSettings from './components/SearchSettings.vue'
 import BrowserIntegrationSettings from './components/BrowserIntegrationSettings.vue'
 import DataSettings from './components/DataSettings.vue'
 import UserManagementSettings from './components/UserManagementSettings.vue'
+import Icon from '@/shared/components/Icon.vue'
 import { useConfig } from '@/shared/composables/useConfig'
 import { useAuth } from '@/shared/composables/useAuth'
 
+const route = useRoute()
 const router = useRouter()
 const saving = ref(false)
 const saveMessage = ref('')
@@ -17,9 +19,31 @@ const saveMessage = ref('')
 const { persistConfigNow } = useConfig()
 const { currentUser, logout, initAuth } = useAuth()
 
+async function focusRequestedSection() {
+  const section = String(route.query.section || '').trim()
+  if (!section) return
+
+  await nextTick()
+  const target = document.getElementById(`settings-${section}`)
+  if (!target) return
+
+  const reduceMotion = window.matchMedia?.('(prefers-reduced-motion: reduce)').matches
+  target.scrollIntoView({
+    behavior: reduceMotion ? 'auto' : 'smooth',
+    block: 'start'
+  })
+  target.focus({ preventScroll: true })
+}
+
 onMounted(async () => {
   await initAuth()
+  await focusRequestedSection()
 })
+
+watch(
+  () => route.query.section,
+  () => focusRequestedSection()
+)
 
 function goBack() {
   router.push('/')
@@ -49,7 +73,9 @@ async function handleExit() {
   <div class="page">
     <header class="header">
       <div class="header__left">
-        <button class="header__btn" @click="goBack">←</button>
+        <button class="header__btn" type="button" aria-label="返回导航页" title="返回导航页" @click="goBack">
+          <Icon name="arrow-left" :size="20" />
+        </button>
         <div>
           <h1 class="header__title">设置</h1>
           <p class="header__subtitle">当前用户：{{ currentUser?.username || '未登录' }}</p>
@@ -69,13 +95,16 @@ async function handleExit() {
       <div class="settings-container">
         <GeneralSettings />
         <AppearanceSettings />
-        <SearchSettings />
+        <SearchSettings id="settings-search" tabindex="-1" />
         <BrowserIntegrationSettings />
         <UserManagementSettings />
         <DataSettings />
 
         <div class="about-section">
-          <div class="about-section__logo">DOMO NAV</div>
+          <div class="about-section__brand">
+            <img class="about-section__logo" src="/domo-logo.png" alt="">
+            <span>DOMO NAV</span>
+          </div>
           <div class="about-section__info">
             <p class="about-section__version">版本 2.3.0</p>
             <p class="about-section__desc">
@@ -193,12 +222,27 @@ async function handleExit() {
   box-shadow: var(--shadow-card);
 }
 
-.about-section__logo {
-  font-size: 32px;
+.about-section__brand {
+  display: inline-flex;
+  align-items: center;
+  gap: 12px;
+  margin-bottom: 12px;
+  font-size: 28px;
   font-weight: 700;
   color: var(--text-primary);
-  margin-bottom: 12px;
   letter-spacing: 0.14em;
+}
+
+.about-section__logo {
+  width: 52px;
+  height: 52px;
+  display: block;
+  object-fit: contain;
+  overflow: hidden;
+  background: #fff;
+  border: 1px solid var(--border-light);
+  border-radius: 50%;
+  box-shadow: 0 8px 24px color-mix(in srgb, var(--text-primary) 10%, transparent);
 }
 
 .about-section__version {

@@ -4,6 +4,7 @@ import { useRoute, useRouter } from 'vue-router'
 import { getShareByCode as getLocalShareByCode } from '@/shared/db/database'
 import { fetchBackendShareByCode, shouldUseBackendNotes } from '@/shared/services/notesApi'
 import { decrypt } from '@/shared/utils/crypto'
+import Icon from '@/shared/components/Icon.vue'
 
 const route = useRoute()
 const router = useRouter()
@@ -74,12 +75,14 @@ function formatDate(timestamp) {
 <template>
   <div class="share-page">
     <div v-if="loading" class="loading-state">
-      <span class="loading__spinner">⏳</span>
+      <Icon class="loading__spinner" name="refresh" :size="20" />
       <span>加载中...</span>
     </div>
 
     <div v-else-if="error" class="error-state">
-      <div class="error-state__icon">😕</div>
+      <div class="error-state__icon">
+        <Icon name="circle-x" :size="44" />
+      </div>
       <div class="error-state__title">{{ error }}</div>
       <button class="btn btn--primary" @click="goHome">返回首页</button>
     </div>
@@ -87,7 +90,8 @@ function formatDate(timestamp) {
     <div v-else class="share-content">
       <div class="share-header">
         <div class="share-header__type">
-          {{ note.type === 'memo' ? '🗒 备忘录' : '📝 日记' }}
+          <Icon :name="note.type === 'memo' ? 'list' : 'book'" :size="15" />
+          <span>{{ note.type === 'memo' ? '备忘录' : '日记' }}</span>
         </div>
         <h1 class="share-header__title">{{ note.title }}</h1>
         <div class="share-header__meta">
@@ -107,7 +111,9 @@ function formatDate(timestamp) {
             {{ decryptedContent }}
           </div>
           <div v-else class="share-body__locked">
-            <div class="locked-icon">🔒</div>
+            <div class="locked-icon">
+              <Icon name="lock" :size="36" />
+            </div>
             <div class="locked-text">内容已加密</div>
             <button class="btn btn--primary" @click="showPasswordModal = true">
               输入密码查看
@@ -176,8 +182,15 @@ function formatDate(timestamp) {
 }
 
 .error-state__icon {
-  font-size: 64px;
+  width: 64px;
+  height: 64px;
+  display: grid;
+  place-items: center;
+  margin-inline: auto;
   margin-bottom: 16px;
+  color: var(--error-color);
+  background: color-mix(in srgb, var(--error-color) 10%, transparent);
+  border-radius: 50%;
 }
 
 .error-state__title {
@@ -201,6 +214,9 @@ function formatDate(timestamp) {
 }
 
 .share-header__type {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
   font-size: 13px;
   color: var(--text-muted);
   margin-bottom: 8px;
@@ -245,8 +261,14 @@ function formatDate(timestamp) {
 }
 
 .locked-icon {
-  font-size: 48px;
+  width: 56px;
+  height: 56px;
+  display: grid;
+  place-items: center;
   margin-bottom: 16px;
+  color: var(--accent-color);
+  background: var(--accent-bg);
+  border-radius: 50%;
 }
 
 .locked-text {
@@ -364,6 +386,12 @@ function formatDate(timestamp) {
   .share-header,
   .share-body {
     padding: 24px 20px;
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .loading__spinner {
+    animation: none;
   }
 }
 </style>
