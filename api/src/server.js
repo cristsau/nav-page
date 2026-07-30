@@ -2,6 +2,9 @@ import { createApp } from './app.js'
 import { ensureAdminUser } from './bootstrap.js'
 import { config } from './config.js'
 import { pool, runMigrations } from './db/index.js'
+import { configureOutboundNetwork } from './lib/network.js'
+
+configureOutboundNetwork()
 
 async function main() {
   await runMigrations()

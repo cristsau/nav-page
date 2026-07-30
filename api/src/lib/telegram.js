@@ -3,6 +3,7 @@ import { getUserSettingValue, setUserSettingValue } from './userSettings.js'
 
 const TELEGRAM_CONFIG_KEY = 'telegramConfig'
 const TELEGRAM_UPDATE_OFFSET_KEY = 'telegramUpdateOffset'
+const TELEGRAM_REQUEST_TIMEOUT_MS = 10000
 
 function formatDate(timestamp) {
   return new Date(timestamp).toLocaleString('zh-CN', { hour12: false })
@@ -20,6 +21,7 @@ export async function callTelegram(botToken, method, payload = {}) {
   const hasPayload = payload && Object.keys(payload).length > 0
   const response = await fetch(`https://api.telegram.org/bot${botToken}/${method}`, {
     method: hasPayload ? 'POST' : 'GET',
+    signal: AbortSignal.timeout(TELEGRAM_REQUEST_TIMEOUT_MS),
     headers: hasPayload
       ? {
           'Content-Type': 'application/json'

@@ -57,7 +57,7 @@ async function handleReject(requestId) {
 }
 
 async function handleSyncTelegram() {
-  if (currentUser.value?.role !== 'admin') return
+  if (currentUser.value?.role !== 'admin' || syncing.value) return
 
   syncing.value = true
   syncMessage.value = ''
