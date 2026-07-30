@@ -40,7 +40,7 @@ function handleClick(e) {
     :disabled="disabled || loading"
     @click="handleClick"
   >
-    <span v-if="loading" class="btn__spinner">⏳</span>
+    <span v-if="loading" class="btn__spinner" aria-hidden="true"></span>
     <slot />
   </button>
 </template>
@@ -119,7 +119,12 @@ function handleClick(e) {
 }
 
 .btn__spinner {
-  animation: spin 1s linear infinite;
+  width: 14px;
+  height: 14px;
+  border: 2px solid currentColor;
+  border-right-color: transparent;
+  border-radius: 50%;
+  animation: spin 0.8s linear infinite;
 }
 
 @keyframes spin {

@@ -10,6 +10,7 @@
     "build": "npm --prefix app run build",
     "preview": "npm --prefix app run preview",
     "lint": "npm --prefix app run lint",
+    "test": "npm --prefix api test",
     "migrate:api": "npm --prefix api run migrate",
     "start:api": "npm --prefix api run start"
   },

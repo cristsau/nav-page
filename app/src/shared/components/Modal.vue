@@ -1,5 +1,6 @@
 <script setup>
-import { watch } from 'vue'
+import { nextTick, onBeforeUnmount, ref, watch } from 'vue'
+import Icon from './Icon.vue'
 
 const props = defineProps({
   show: {
@@ -17,6 +18,7 @@ const props = defineProps({
 })
 
 const emit = defineEmits(['close'])
+const closeButton = ref(null)
 
 function close() {
   emit('close')
@@ -38,10 +40,16 @@ watch(() => props.show, (val) => {
   if (val) {
     document.body.style.overflow = 'hidden'
     document.addEventListener('keydown', onKeyDown)
+    nextTick(() => closeButton.value?.focus())
   } else {
     document.body.style.overflow = ''
     document.removeEventListener('keydown', onKeyDown)
   }
+})
+
+onBeforeUnmount(() => {
+  document.body.style.overflow = ''
+  document.removeEventListener('keydown', onKeyDown)
 })
 </script>
 
@@ -49,11 +57,17 @@ watch(() => props.show, (val) => {
   <Teleport to="body">
     <Transition name="modal">
       <div v-if="show" class="modal-overlay" @click="onOverlayClick">
-        <div class="modal-content" :style="{ maxWidth: width }">
+        <div
+          class="modal-content"
+          :style="{ maxWidth: width }"
+          role="dialog"
+          aria-modal="true"
+          :aria-label="title"
+        >
           <div class="modal__header">
             <h3 class="modal__title">{{ title }}</h3>
-            <button class="modal__close" @click="close">
-              ✕
+            <button ref="closeButton" type="button" class="modal__close" aria-label="关闭弹窗" @click="close">
+              <Icon name="close" :size="18" />
             </button>
           </div>
           <div class="modal__body">

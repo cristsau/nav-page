@@ -1,15 +1,17 @@
 {
   "manifest_version": 3,
   "name": "DOMO NAV Quick Add",
-  "version": "1.0.0",
-  "description": "Quickly add the current page to DOMO NAV.",
+  "version": "1.1.0",
+  "description": "一键把当前网页添加到 DOMO NAV，并记住上次使用的分组。",
   "permissions": [
     "storage",
     "tabs",
-    "contextMenus",
-    "notifications"
+    "contextMenus"
   ],
   "host_permissions": [
+    "https://nav.skrskr.net/*"
+  ],
+  "optional_host_permissions": [
     "https://*/*",
     "http://*/*"
   ],
@@ -18,8 +20,17 @@
     "type": "module"
   },
   "action": {
-    "default_title": "Add to DOMO NAV",
+    "default_title": "添加到 DOMO NAV",
     "default_popup": "popup.html"
   },
-  "options_page": "options.html"
+  "options_page": "options.html",
+  "commands": {
+    "quick-add-last-group": {
+      "suggested_key": {
+        "default": "Ctrl+Shift+Y",
+        "mac": "Command+Shift+Y"
+      },
+      "description": "一键添加当前网页到上次使用的分组"
+    }
+  }
 }

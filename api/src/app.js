@@ -30,6 +30,11 @@ export function createApp() {
     service: 'nav-api'
   }))
 
+  app.get('/api/health', async () => ({
+    ok: true,
+    service: 'nav-api'
+  }))
+
   app.register(adminTelegramRoutes, { prefix: '/api' })
   app.register(aiSearchRoutes, { prefix: '/api' })
   app.register(authRoutes, { prefix: '/api' })

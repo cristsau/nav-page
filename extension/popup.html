@@ -26,8 +26,13 @@
           <img class="hero__mark" src="./assets/domo-mark.svg" alt="DOMO NAV mark">
           <div>
             <div class="hero__title">一键加入 DOMO NAV</div>
-            <div class="hero__desc">支持选择分组、快速新建分组，以及默认分组自动兜底。</div>
+            <div class="hero__desc">选择一次分组后，右键菜单或快捷键会直接收藏到该分组。</div>
           </div>
+        </div>
+
+        <div class="shortcut-tip">
+          <span>真正一键收藏</span>
+          <kbd>Ctrl</kbd><span>+</span><kbd>Shift</kbd><span>+</span><kbd>Y</kbd>
         </div>
 
         <label class="field">
@@ -46,7 +51,7 @@
           <input id="newGroupInput" type="text" placeholder="快速创建新分组">
           <button id="createGroupBtn" class="secondary-btn" type="button">新建分组</button>
         </div>
-        <div id="statusMessage" class="status"></div>
+        <div id="statusMessage" class="status" role="status" aria-live="polite"></div>
         <div class="actions">
           <button id="loginBtn" class="secondary-btn" type="button">打开 DOMO NAV 登录</button>
           <button id="saveBtn" class="primary-btn" type="button">添加到 DOMO NAV</button>

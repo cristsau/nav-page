@@ -1,5 +1,6 @@
 import { query, withTransaction } from '../db/index.js'
 import { mapBookmark, mapGroup } from '../lib/navigation.js'
+import { normalizeHttpUrl } from '../lib/urls.js'
 
 function normalizeText(value, fallback = '') {
   return String(value ?? fallback).trim()
@@ -77,7 +78,7 @@ export default async function navigationRoutes(fastify) {
       return { error: 'Group name is required' }
     }
 
-    const icon = normalizeText(request.body?.icon, '📁') || '📁'
+    const icon = normalizeText(request.body?.icon, 'D') || 'D'
     const color = normalizeText(request.body?.color, '#3b82f6') || '#3b82f6'
 
     const result = await withTransaction(async (client) => {
@@ -229,11 +230,17 @@ export default async function navigationRoutes(fastify) {
 
     const groupId = normalizeText(request.body?.groupId)
     const title = normalizeText(request.body?.title)
-    const url = normalizeText(request.body?.url)
+    const rawUrl = normalizeText(request.body?.url)
+    const url = normalizeHttpUrl(rawUrl)
 
-    if (!groupId || !title || !url) {
+    if (!groupId || !title || !rawUrl) {
       reply.code(400)
       return { error: 'Group, title, and url are required' }
+    }
+
+    if (!url) {
+      reply.code(400)
+      return { error: 'Only valid http and https URLs can be saved' }
     }
 
     const ownedGroup = await requireOwnedGroup(request.currentUser.id, groupId, reply)
@@ -244,8 +251,30 @@ export default async function navigationRoutes(fastify) {
     const favicon = normalizeText(request.body?.favicon)
     const description = normalizeText(request.body?.description)
     const tags = normalizeTags(request.body?.tags)
+    const deduplicate = Boolean(request.body?.deduplicate)
 
     const result = await withTransaction(async (client) => {
+      if (deduplicate) {
+        const existingResult = await client.query(
+          `
+            SELECT *
+            FROM nav_bookmarks
+            WHERE user_id = $1
+              AND group_id = $2
+              AND LOWER(url) = LOWER($3)
+            LIMIT 1
+          `,
+          [request.currentUser.id, groupId, url]
+        )
+
+        if (existingResult.rows.length) {
+          return {
+            created: false,
+            row: existingResult.rows[0]
+          }
+        }
+      }
+
       const orderResult = await client.query(
         'SELECT COALESCE(MAX(display_order), -1) + 1 AS next_order FROM nav_bookmarks WHERE user_id = $1 AND group_id = $2',
         [request.currentUser.id, groupId]
@@ -253,7 +282,7 @@ export default async function navigationRoutes(fastify) {
 
       const nextOrder = Number(orderResult.rows[0].next_order || 0)
 
-      return client.query(
+      const insertResult = await client.query(
         `
           INSERT INTO nav_bookmarks (
             user_id,
@@ -269,10 +298,18 @@ export default async function navigationRoutes(fastify) {
         `,
         [request.currentUser.id, groupId, title, url, favicon, description, JSON.stringify(tags), nextOrder]
       )
+
+      return {
+        created: true,
+        row: insertResult.rows[0]
+      }
     })
 
-    reply.code(201)
-    return { bookmark: mapBookmark(result.rows[0]) }
+    reply.code(result.created ? 201 : 200)
+    return {
+      bookmark: mapBookmark(result.row),
+      created: result.created
+    }
   })
 
   fastify.put('/bookmarks/:bookmarkId', async (request, reply) => {
@@ -285,10 +322,16 @@ export default async function navigationRoutes(fastify) {
 
     const groupId = normalizeText(request.body?.groupId, existing.group_id) || existing.group_id
     const title = normalizeText(request.body?.title, existing.title) || existing.title
-    const url = normalizeText(request.body?.url, existing.url) || existing.url
+    const rawUrl = normalizeText(request.body?.url, existing.url) || existing.url
+    const url = normalizeHttpUrl(rawUrl)
     const favicon = normalizeText(request.body?.favicon, existing.favicon)
     const description = normalizeText(request.body?.description, existing.description)
     const tags = request.body?.tags === undefined ? existing.tags : normalizeTags(request.body.tags)
+
+    if (!url) {
+      reply.code(400)
+      return { error: 'Only valid http and https URLs can be saved' }
+    }
 
     const ownedGroup = await requireOwnedGroup(request.currentUser.id, groupId, reply)
     if (!ownedGroup) {

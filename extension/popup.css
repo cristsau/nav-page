@@ -2,6 +2,11 @@
   box-sizing: border-box;
 }
 
+:focus-visible {
+  outline: 3px solid rgba(95, 138, 111, 0.3);
+  outline-offset: 2px;
+}
+
 body {
   margin: 0;
   font-family: "Segoe UI", "PingFang SC", sans-serif;
@@ -109,6 +114,36 @@ body {
   color: rgba(237, 244, 239, 0.82);
 }
 
+.shortcut-tip {
+  display: flex;
+  align-items: center;
+  gap: 5px;
+  margin: -2px 0 14px;
+  padding: 9px 11px;
+  color: #4a5b51;
+  background: #f2f6f3;
+  border: 1px solid #d8e3dc;
+  border-radius: 12px;
+  font-size: 11px;
+}
+
+.shortcut-tip > span:first-child {
+  margin-right: auto;
+  font-weight: 600;
+}
+
+kbd {
+  min-width: 22px;
+  padding: 3px 5px;
+  color: #223028;
+  background: #fff;
+  border: 1px solid #cad8cf;
+  border-bottom-width: 2px;
+  border-radius: 5px;
+  font: 600 10px/1.2 "Segoe UI", sans-serif;
+  text-align: center;
+}
+
 .field {
   display: grid;
   gap: 6px;
@@ -150,6 +185,12 @@ button {
 
 button:hover {
   transform: translateY(-1px);
+}
+
+button:disabled {
+  cursor: not-allowed;
+  opacity: 0.55;
+  transform: none;
 }
 
 .primary-btn {

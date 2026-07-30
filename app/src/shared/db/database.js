@@ -320,7 +320,7 @@ export async function addGroup(group) {
   const newGroup = {
     id: generateId(),
     name: group.name,
-    icon: group.icon || '📁',
+    icon: group.icon || 'D',
     color: group.color || '#3b82f6',
     order: count,
     collapsed: false,
@@ -451,7 +451,7 @@ export async function getNotesByDate(year, month) {
   const notes = await db.notes.where('type').equals('diary').toArray()
   return notes
     .filter((note) => {
-      const date = new Date(note.createdAt)
+      const date = new Date(note.entryDate ? `${note.entryDate}T00:00:00` : note.createdAt)
       return date.getFullYear() === year && date.getMonth() === month
     })
     .sort((a, b) => b.createdAt - a.createdAt)
@@ -481,6 +481,12 @@ export async function addNote(note) {
       viewCount: 0
     },
     tags: Array.isArray(note.tags) ? [...note.tags] : [],
+    entryDate: note.type === 'diary'
+      ? (note.entryDate || new Date(now).toISOString().slice(0, 10))
+      : '',
+    mood: note.type === 'diary' ? String(note.mood || '') : '',
+    dueAt: note.type === 'memo' ? (note.dueAt || null) : null,
+    completed: note.type === 'memo' && Boolean(note.completed),
     createdAt: now,
     updatedAt: now
   }
@@ -538,7 +544,7 @@ export async function addCustomEngine(engine) {
   const newEngine = {
     id: generateId(),
     name: engine.name,
-    icon: engine.icon || '🔍',
+    icon: engine.icon || 'S',
     url: engine.url,
     order: count,
     createdAt: getTimestamp()
@@ -563,6 +569,9 @@ export async function createShare(noteId, expireAt = null) {
   const db = requireUserDb()
   const note = await db.notes.get(noteId)
   if (!note) return null
+  if (note.encrypted) {
+    throw new Error('加密笔记不能创建公开分享')
+  }
 
   const shareCode = generateShareCode()
   const share = {
@@ -595,8 +604,10 @@ export async function getShareByCode(code) {
   if (!share) return null
   if (share.expireAt && share.expireAt < getTimestamp()) return null
 
-  await db.shares.update(share.id, { viewCount: share.viewCount + 1 })
   const note = await db.notes.get(share.noteId)
+  if (!note || note.encrypted) return null
+
+  await db.shares.update(share.id, { viewCount: share.viewCount + 1 })
   return { share, note }
 }
 
@@ -641,9 +652,10 @@ export async function deleteExpiredShares() {
 
 function generateShareCode() {
   const chars = 'ABCDEFGHJKLMNPQRSTUVWXYZabcdefghijkmnpqrstuvwxyz23456789'
+  const values = crypto.getRandomValues(new Uint32Array(8))
   let code = ''
-  for (let index = 0; index < 8; index += 1) {
-    code += chars.charAt(Math.floor(Math.random() * chars.length))
+  for (const value of values) {
+    code += chars.charAt(value % chars.length)
   }
   return code
 }

@@ -1,6 +1,7 @@
 <script setup>
 import { computed, onMounted, ref } from 'vue'
 import { useConfig } from '@/shared/composables/useConfig'
+import Icon from '@/shared/components/Icon.vue'
 import { getCustomEngines, addCustomEngine, updateCustomEngine, deleteCustomEngine } from '@/shared/db/database'
 import { testBackendAiProvider } from '@/shared/services/aiSearchApi'
 import {
@@ -18,7 +19,7 @@ const showAddModal = ref(false)
 const editingEngine = ref(null)
 const formData = ref({
   name: '',
-  icon: '🔍',
+  icon: 'S',
   url: ''
 })
 
@@ -82,7 +83,7 @@ function isQuickAccess(engineId) {
 
 function openAddModal() {
   editingEngine.value = null
-  formData.value = { name: '', icon: '🔍', url: '' }
+  formData.value = { name: '', icon: 'S', url: '' }
   showAddModal.value = true
 }
 
@@ -152,6 +153,26 @@ function isAggregateEngine(engineId) {
 function setProviderMessage(provider, type, message) {
   providerMessages.value[provider] = message
   providerMessageTypes.value[provider] = type
+}
+
+function updateChatApiMode(apiMode) {
+  updateConfig('search.providers.chatgpt.apiMode', apiMode)
+
+  const endpoint = String(config.value.search?.providers?.chatgpt?.endpoint || '').trim()
+  const officialEndpoints = [
+    '',
+    'https://api.openai.com/v1/responses',
+    'https://api.openai.com/v1/chat/completions'
+  ]
+
+  if (officialEndpoints.includes(endpoint)) {
+    updateConfig(
+      'search.providers.chatgpt.endpoint',
+      apiMode === 'responses'
+        ? 'https://api.openai.com/v1/responses'
+        : 'https://api.openai.com/v1/chat/completions'
+    )
+  }
 }
 
 async function handleProviderTest(provider) {
@@ -265,7 +286,7 @@ async function handleProviderTest(provider) {
     <div class="settings-item settings-item--stack">
       <div class="settings-item__info">
         <div class="settings-item__label">ChatGPT / OpenAI 接入</div>
-        <div class="settings-item__desc">配置完成后，首页切到 ChatGPT Search 会优先通过服务器代理返回 AI 答案。</div>
+        <div class="settings-item__desc">推荐使用 Responses API；开启联网搜索后，答案下方会显示可点击的引用来源。</div>
       </div>
       <div class="provider-grid">
         <label class="provider-field">
@@ -288,6 +309,17 @@ async function handleProviderTest(provider) {
           </select>
         </label>
         <label class="provider-field">
+          <span>API 格式</span>
+          <select
+            class="input"
+            :value="config.search?.providers?.chatgpt?.apiMode || (config.search?.providers?.chatgpt?.cliProxyBaseUrl ? 'chat-completions' : 'responses')"
+            @change="updateChatApiMode($event.target.value)"
+          >
+            <option value="responses">Responses API（推荐）</option>
+            <option value="chat-completions">Chat Completions（兼容网关）</option>
+          </select>
+        </label>
+        <label class="provider-field">
           <span>Proxy Base URL</span>
           <input
             class="input"
@@ -303,7 +335,7 @@ async function handleProviderTest(provider) {
             class="input"
             type="text"
             :value="config.search?.providers?.chatgpt?.endpoint"
-            placeholder="https://api.openai.com/v1/chat/completions"
+            placeholder="https://api.openai.com/v1/responses"
             @input="updateConfig('search.providers.chatgpt.endpoint', $event.target.value)"
           >
         </label>
@@ -323,13 +355,37 @@ async function handleProviderTest(provider) {
             class="input"
             type="text"
             :value="config.search?.providers?.chatgpt?.model"
-            placeholder="gpt-4.1-mini / gpt-5 ..."
+            placeholder="gpt-5.6-terra"
             @input="updateConfig('search.providers.chatgpt.model', $event.target.value)"
+          >
+        </label>
+        <label class="provider-field">
+          <span>推理强度</span>
+          <select
+            class="input"
+            :value="config.search?.providers?.chatgpt?.reasoningEffort || 'low'"
+            @change="updateConfig('search.providers.chatgpt.reasoningEffort', $event.target.value)"
+          >
+            <option value="none">无</option>
+            <option value="minimal">极低</option>
+            <option value="low">低（推荐）</option>
+            <option value="medium">中</option>
+            <option value="high">高</option>
+            <option value="xhigh">极高</option>
+          </select>
+        </label>
+        <label class="provider-field provider-field--toggle">
+          <span>联网搜索</span>
+          <input
+            type="checkbox"
+            :checked="config.search?.providers?.chatgpt?.webSearchEnabled !== false"
+            @change="updateConfig('search.providers.chatgpt.webSearchEnabled', $event.target.checked)"
           >
         </label>
       </div>
       <div class="provider-actions">
-        <button class="btn btn--secondary" :disabled="providerTesting.chatgpt" @click="handleProviderTest('chatgpt')">
+        <button type="button" class="btn btn--secondary" :disabled="providerTesting.chatgpt" @click="handleProviderTest('chatgpt')">
+          <Icon :name="providerTesting.chatgpt ? 'refresh' : 'check'" :size="16" />
           {{ providerTesting.chatgpt ? '测试中...' : '测试连接' }}
         </button>
       </div>
@@ -464,7 +520,9 @@ async function handleProviderTest(provider) {
       <div class="modal-content">
         <div class="modal__header">
           <h3>{{ editingEngine ? '编辑搜索引擎' : '添加搜索引擎' }}</h3>
-          <button class="modal__close" @click="showAddModal = false">×</button>
+          <button class="modal__close" type="button" aria-label="关闭" @click="showAddModal = false">
+            <Icon name="close" :size="16" />
+          </button>
         </div>
         <div class="modal__body">
           <div class="form-group">
@@ -473,7 +531,7 @@ async function handleProviderTest(provider) {
           </div>
           <div class="form-group">
             <label class="form-label">图标</label>
-            <input v-model="formData.icon" type="text" class="input" placeholder="🔍">
+            <input v-model="formData.icon" type="text" class="input" placeholder="例如 G 或 AI">
           </div>
           <div class="form-group">
             <label class="form-label">搜索 URL</label>
@@ -633,6 +691,16 @@ async function handleProviderTest(provider) {
   grid-column: 1 / -1;
 }
 
+.provider-field--toggle {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  min-height: 42px;
+  padding: 8px 12px;
+  background: var(--bg-secondary);
+  border-radius: var(--radius-md);
+}
+
 .provider-actions {
   display: flex;
   justify-content: flex-end;
@@ -760,6 +828,13 @@ async function handleProviderTest(provider) {
   border: none;
   border-radius: var(--radius-md);
   cursor: pointer;
+}
+
+.btn {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  gap: 7px;
 }
 
 .btn--primary {

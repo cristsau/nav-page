@@ -5,6 +5,7 @@ import { useGroups, useBookmarks } from '@/shared/composables/useDB'
 import { useTheme } from '@/shared/composables/useTheme'
 import { useConfig } from '@/shared/composables/useConfig'
 import SearchBox from '@/shared/components/SearchBox.vue'
+import Icon from '@/shared/components/Icon.vue'
 import NavGroup from './components/NavGroup.vue'
 import AddToNav from './components/AddToNav.vue'
 
@@ -19,9 +20,22 @@ const modalMode = ref('bookmark')
 const editingItem = ref(null)
 const defaultGroupId = ref('')
 const activeGroupId = ref('')
+const pendingGroupId = ref('')
+const pendingBookmarkId = ref('')
+const savingItem = ref(false)
+const status = ref({ message: '', type: '' })
+let statusTimer = null
 
 async function loadData() {
   await Promise.all([loadGroups(), loadBookmarks()])
+}
+
+function setStatus(message, type = 'info') {
+  status.value = { message, type }
+  if (statusTimer) window.clearTimeout(statusTimer)
+  statusTimer = window.setTimeout(() => {
+    status.value = { message: '', type: '' }
+  }, 3200)
 }
 
 function handleAddGroup() {
@@ -40,8 +54,21 @@ async function handleDeleteGroup(group) {
   if (!confirm(`确定删除分组「${group.name}」及其所有书签吗？`)) {
     return
   }
-  await removeGroup(group.id)
-  await loadData()
+
+  pendingGroupId.value = group.id
+  try {
+    await removeGroup(group.id)
+    await loadData()
+    if (activeGroupId.value === group.id) {
+      activeGroupId.value = groups.value[0]?.id || ''
+    }
+    setStatus(`分组「${group.name}」已删除`, 'success')
+  } catch (error) {
+    console.error('Failed to delete group:', error)
+    setStatus(`删除失败：${error.message || '请稍后重试'}`, 'error')
+  } finally {
+    pendingGroupId.value = ''
+  }
 }
 
 function handleAddBookmark(group) {
@@ -61,27 +88,52 @@ async function handleDeleteBookmark(bookmark) {
   if (!confirm(`确定删除书签「${bookmark.title}」吗？`)) {
     return
   }
-  await removeBookmark(bookmark.id)
-  await loadBookmarks()
+
+  pendingBookmarkId.value = bookmark.id
+  try {
+    await removeBookmark(bookmark.id)
+    await loadBookmarks()
+    setStatus(`书签「${bookmark.title}」已删除`, 'success')
+  } catch (error) {
+    console.error('Failed to delete bookmark:', error)
+    setStatus(`删除失败：${error.message || '请稍后重试'}`, 'error')
+  } finally {
+    pendingBookmarkId.value = ''
+  }
 }
 
 async function handleModalSubmit({ mode, data }) {
-  if (mode === 'group') {
-    if (editingItem.value) {
-      await updateGroup(editingItem.value.id, data)
-    } else {
-      const newGroup = await createGroup(data)
-      activeGroupId.value = newGroup.id
-    }
-  } else if (editingItem.value) {
-    await updateBookmark(editingItem.value.id, data)
-  } else {
-    await createBookmark(data)
-  }
+  if (savingItem.value) return
+  savingItem.value = true
 
-  showModal.value = false
-  editingItem.value = null
-  await loadData()
+  try {
+    const isEditing = Boolean(editingItem.value)
+    if (mode === 'group') {
+      if (isEditing) {
+        await updateGroup(editingItem.value.id, data)
+      } else {
+        const newGroup = await createGroup(data)
+        activeGroupId.value = newGroup.id
+      }
+    } else if (isEditing) {
+      await updateBookmark(editingItem.value.id, data)
+    } else {
+      await createBookmark(data)
+    }
+
+    showModal.value = false
+    editingItem.value = null
+    await loadData()
+    setStatus(
+      `${mode === 'group' ? '分组' : '书签'}${isEditing ? '已更新' : '已添加'}`,
+      'success'
+    )
+  } catch (error) {
+    console.error('Failed to save navigation item:', error)
+    setStatus(`保存失败：${error.message || '请稍后重试'}`, 'error')
+  } finally {
+    savingItem.value = false
+  }
 }
 
 function goToSettings() {
@@ -104,23 +156,34 @@ onMounted(async () => {
   <div class="page">
     <header class="header">
       <div class="header__logo">
-        <span class="header__logo-icon">{{ getSiteIcon() }}</span>
+        <span class="header__logo-icon">
+          <Icon v-if="!getSiteIcon() || getSiteIcon() === '🧭'" name="compass" :size="22" />
+          <span v-else>{{ getSiteIcon() }}</span>
+        </span>
         <span class="header__logo-text">{{ getSiteName() }}</span>
       </div>
       <div class="header__actions">
         <button
           v-if="isModuleEnabled('whisper')"
           class="header__btn"
-          title="时光"
+          type="button"
+          aria-label="打开日记和备忘录"
+          title="日记与备忘录"
           @click="goToWhisper"
         >
-          📝
+          <Icon name="note" :size="19" />
         </button>
-        <button class="header__btn" :title="isDark ? '切到亮色模式' : '切到暗色模式'" @click="toggleTheme">
-          {{ isDark ? '☀️' : '🌙' }}
+        <button
+          class="header__btn"
+          type="button"
+          :aria-label="isDark ? '切到亮色模式' : '切到暗色模式'"
+          :title="isDark ? '切到亮色模式' : '切到暗色模式'"
+          @click="toggleTheme"
+        >
+          <Icon :name="isDark ? 'sun' : 'moon'" :size="19" />
         </button>
-        <button class="header__btn" title="设置" @click="goToSettings">
-          ⚙️
+        <button class="header__btn" type="button" aria-label="打开设置" title="设置" @click="goToSettings">
+          <Icon name="settings" :size="19" />
         </button>
       </div>
     </header>
@@ -135,6 +198,10 @@ onMounted(async () => {
         <NavGroup
           :groups="groups"
           :bookmarks="bookmarks"
+          :active-group-id="activeGroupId"
+          :pending-group-id="pendingGroupId"
+          :pending-bookmark-id="pendingBookmarkId"
+          @select-group="activeGroupId = $event.id"
           @add-group="handleAddGroup"
           @edit-group="handleEditGroup"
           @delete-group="handleDeleteGroup"
@@ -143,6 +210,19 @@ onMounted(async () => {
           @delete-bookmark="handleDeleteBookmark"
         />
       </section>
+
+      <Transition name="status-slide">
+        <div
+          v-if="status.message"
+          class="page-status"
+          :class="`is-${status.type}`"
+          role="status"
+          aria-live="polite"
+        >
+          <Icon :name="status.type === 'error' ? 'circle-x' : 'circle-check'" :size="18" />
+          <span>{{ status.message }}</span>
+        </div>
+      </Transition>
 
       <footer class="page-footer">
         <span>{{ getSiteName() }}</span>
@@ -156,6 +236,7 @@ onMounted(async () => {
       :groups="groups"
       :editing-item="editingItem"
       :default-group-id="defaultGroupId"
+      :saving="savingItem"
       @close="showModal = false"
       @submit="handleModalSubmit"
     />
@@ -189,7 +270,15 @@ onMounted(async () => {
 }
 
 .header__logo-icon {
-  font-size: 24px;
+  width: 36px;
+  height: 36px;
+  display: grid;
+  place-items: center;
+  color: var(--accent-color);
+  background: var(--accent-bg);
+  border: 1px solid var(--border-color);
+  border-radius: 12px;
+  font-size: 18px;
 }
 
 .header__logo-text {
@@ -216,11 +305,13 @@ onMounted(async () => {
   font-size: 18px;
   cursor: pointer;
   transition: all var(--transition-fast);
+  color: var(--text-secondary);
 }
 
 .header__btn:hover {
   background: var(--bg-hover);
-  transform: scale(1.05);
+  color: var(--text-primary);
+  transform: translateY(-1px);
 }
 
 .main {
@@ -243,6 +334,43 @@ onMounted(async () => {
 
 .content-section {
   min-height: 300px;
+}
+
+.page-status {
+  position: fixed;
+  right: 24px;
+  bottom: 24px;
+  z-index: 500;
+  display: flex;
+  align-items: center;
+  gap: 9px;
+  max-width: min(420px, calc(100vw - 32px));
+  padding: 13px 16px;
+  color: var(--text-primary);
+  background: var(--bg-card);
+  border: 1px solid var(--border-color);
+  border-radius: 14px;
+  box-shadow: var(--shadow-lg);
+}
+
+.page-status.is-success {
+  border-color: color-mix(in srgb, var(--success-color) 52%, var(--border-color));
+}
+
+.page-status.is-error {
+  color: var(--error-color);
+  border-color: color-mix(in srgb, var(--error-color) 55%, var(--border-color));
+}
+
+.status-slide-enter-active,
+.status-slide-leave-active {
+  transition: opacity var(--transition-fast), transform var(--transition-fast);
+}
+
+.status-slide-enter-from,
+.status-slide-leave-to {
+  opacity: 0;
+  transform: translateY(8px);
 }
 
 .page-footer {
@@ -277,6 +405,11 @@ onMounted(async () => {
 
   .page-footer {
     flex-direction: column;
+  }
+
+  .page-status {
+    right: 16px;
+    bottom: 16px;
   }
 }
 </style>

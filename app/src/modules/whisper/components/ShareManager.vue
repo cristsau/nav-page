@@ -1,7 +1,8 @@
 <script setup>
-import { ref, computed, onMounted } from 'vue'
+import { ref, onMounted } from 'vue'
 import { createShare as createLocalShare, cancelShare as cancelLocalShare, getAllActiveShares as getLocalActiveShares } from '@/shared/db/database'
 import { cancelBackendShare, createBackendShare, fetchBackendShares, shouldUseBackendNotes } from '@/shared/services/notesApi'
+import Icon from '@/shared/components/Icon.vue'
 
 const props = defineProps({
   show: {
@@ -64,6 +65,10 @@ function getExpireAt() {
 // 创建分享
 async function handleShare() {
   if (!props.note || isSharing.value) return
+  if (props.note.encrypted) {
+    alert('加密笔记不能创建公开分享')
+    return
+  }
 
   isSharing.value = true
   try {
@@ -142,19 +147,22 @@ watch(() => props.show, (val) => {
 
 <template>
   <div v-if="show" class="share-modal" @click.self="close">
-    <div class="share-content">
+    <div class="share-content" role="dialog" aria-modal="true" aria-label="分享笔记">
       <!-- 头部 -->
       <div class="share__header">
-        <h3 class="share__title">🔗 分享笔记</h3>
-        <button class="share__close" @click="close">✕</button>
+        <h3 class="share__title"><Icon name="share" :size="19" /> 分享笔记</h3>
+        <button class="share__close" type="button" aria-label="关闭分享设置" @click="close">
+          <Icon name="close" :size="17" />
+        </button>
       </div>
 
       <!-- 笔记信息 -->
       <div class="share__note-info">
         <div class="share__note-title">{{ note?.title }}</div>
         <div class="share__note-type">
-          {{ note?.type === 'memo' ? '📋 备忘录' : '📖 日记' }}
-          <span v-if="note?.encrypted">🔒 已加密</span>
+          <Icon :name="note?.type === 'memo' ? 'list' : 'book'" :size="14" />
+          {{ note?.type === 'memo' ? '备忘录' : '日记' }}
+          <span v-if="note?.encrypted"><Icon name="lock" :size="13" /> 已加密</span>
         </div>
       </div>
 
@@ -170,10 +178,10 @@ watch(() => props.show, (val) => {
             <span class="share__views">浏览 {{ share.viewCount }} 次</span>
           </div>
           <div class="share__item-actions">
-            <button class="btn-text" @click="copyLink(`${window.location.origin}/share/${share.code}`)">
+            <button type="button" class="btn-text" @click="copyLink(`${window.location.origin}/share/${share.code}`)">
               复制链接
             </button>
-            <button class="btn-text btn-text--danger" @click="handleCancelShare(share.id)">
+            <button type="button" class="btn-text btn-text--danger" @click="handleCancelShare(share.id)">
               取消分享
             </button>
           </div>
@@ -215,6 +223,7 @@ watch(() => props.show, (val) => {
         <!-- 创建按钮 -->
         <button
           class="btn btn--primary btn--block"
+          type="button"
           :disabled="isSharing"
           @click="handleShare"
         >
@@ -223,7 +232,7 @@ watch(() => props.show, (val) => {
 
         <!-- 分享成功 -->
         <div v-if="shareLink" class="share__success">
-          <p>✅ 分享链接已创建并复制到剪贴板</p>
+          <p><Icon name="circle-check" :size="16" /> 分享链接已创建并复制到剪贴板</p>
           <div class="share__link">{{ shareLink }}</div>
         </div>
       </div>
@@ -231,10 +240,10 @@ watch(() => props.show, (val) => {
       <!-- 提示 -->
       <div class="share__tips">
         <p v-if="note?.encrypted">
-          ⚠️ 加密内容分享后，查看者需要输入密码才能解密
+          <Icon name="alert" :size="16" /> 加密笔记不能创建公开分享
         </p>
         <p v-else>
-          💡 分享链接可以让任何人查看这篇笔记
+          <Icon name="alert" :size="16" /> 获得链接的人都能查看，请勿分享敏感内容
         </p>
       </div>
     </div>
@@ -279,6 +288,9 @@ watch(() => props.show, (val) => {
 }
 
 .share__title {
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
   font-size: 18px;
   font-weight: 600;
   color: var(--text-primary);
@@ -310,8 +322,17 @@ watch(() => props.show, (val) => {
 }
 
 .share__note-type {
+  display: flex;
+  align-items: center;
+  gap: 6px;
   font-size: 13px;
   color: var(--text-muted);
+}
+
+.share__note-type span {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
 }
 
 .share__existing {
@@ -468,6 +489,9 @@ watch(() => props.show, (val) => {
 }
 
 .share__success p {
+  display: flex;
+  align-items: center;
+  gap: 7px;
   color: var(--success-color);
   font-size: 14px;
   margin-bottom: 8px;
@@ -487,6 +511,9 @@ watch(() => props.show, (val) => {
 }
 
 .share__tips p {
+  display: flex;
+  align-items: flex-start;
+  gap: 7px;
   font-size: 13px;
   color: var(--text-muted);
 }

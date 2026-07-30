@@ -3,6 +3,7 @@ import { computed, onMounted, ref, watch } from 'vue'
 import { useRoute, useRouter } from 'vue-router'
 import { useAuth } from '@/shared/composables/useAuth'
 import { useBookmarks, useGroups } from '@/shared/composables/useDB'
+import Icon from '@/shared/components/Icon.vue'
 
 const DEFAULT_GROUP_NAME = '默认分组'
 
@@ -26,6 +27,26 @@ const statusMessage = ref('')
 const statusType = ref('')
 
 const groups = computed(() => groupStore.groups.value || [])
+const bookmarks = computed(() => bookmarkStore.bookmarks.value || [])
+
+function normalizeWebUrl(value) {
+  const input = String(value || '').trim()
+  if (!input) return ''
+
+  const withProtocol = /^[a-z][a-z\d+.-]*:/i.test(input)
+    ? input
+    : `https://${input}`
+
+  try {
+    const parsed = new URL(withProtocol)
+    if (!['http:', 'https:'].includes(parsed.protocol)) return ''
+    parsed.username = ''
+    parsed.password = ''
+    return parsed.toString()
+  } catch {
+    return ''
+  }
+}
 
 function syncFromQuery() {
   form.value.title = String(route.query.title || '')
@@ -37,7 +58,7 @@ watch(() => route.query, syncFromQuery, { immediate: true })
 
 onMounted(async () => {
   await initAuth()
-  await groupStore.load()
+  await Promise.all([groupStore.load(), bookmarkStore.load()])
 
   if (groups.value.length > 0 && !form.value.groupId) {
     form.value.groupId = groups.value[0].id
@@ -51,7 +72,7 @@ async function ensureDefaultGroup() {
 
   return groupStore.create({
     name: DEFAULT_GROUP_NAME,
-    icon: '📁',
+    icon: 'D',
     color: '#6b8c7a'
   })
 }
@@ -66,7 +87,7 @@ async function handleCreateGroup() {
   try {
     const group = await groupStore.create({
       name,
-      icon: '📁',
+      icon: 'D',
       color: '#6b8c7a'
     })
 
@@ -82,10 +103,15 @@ async function handleCreateGroup() {
 
 async function handleSave() {
   const title = form.value.title.trim()
-  const url = form.value.url.trim()
+  const url = normalizeWebUrl(form.value.url)
 
-  if (!title || !url || saving.value) {
+  if (!title || !form.value.url.trim() || saving.value) {
     setStatus('请先填写标题和网址', 'error')
+    return
+  }
+
+  if (!url) {
+    setStatus('仅支持有效的 http 或 https 网页地址', 'error')
     return
   }
 
@@ -101,12 +127,23 @@ async function handleSave() {
       form.value.groupId = groupId
     }
 
+    const duplicate = bookmarks.value.find((bookmark) => (
+      bookmark.groupId === groupId &&
+      normalizeWebUrl(bookmark.url).toLowerCase() === url.toLowerCase()
+    ))
+
+    if (duplicate) {
+      setStatus('该网页已在这个分组中，没有重复添加', 'success')
+      return
+    }
+
     await bookmarkStore.create({
       groupId,
       title,
       url,
       favicon: form.value.favicon,
-      description: form.value.description.trim()
+      description: form.value.description.trim(),
+      deduplicate: true
     })
 
     setStatus('已成功添加到 DOMO NAV', 'success')
@@ -132,10 +169,10 @@ function goHome() {
     <main class="panel">
       <div class="panel__header">
         <div>
-          <h1>快速添加到 DOMO NAV</h1>
+          <h1><Icon name="browser" :size="24" /> 快速添加到 DOMO NAV</h1>
           <p>适合浏览器扩展、右键菜单、iPhone 快捷指令和手动快速收藏使用。</p>
         </div>
-        <button class="ghost-btn" @click="goHome">返回首页</button>
+        <button class="ghost-btn" type="button" @click="goHome">返回首页</button>
       </div>
 
       <div class="form-grid">
@@ -163,7 +200,7 @@ function goHome() {
           <span>快速创建分组</span>
           <div class="inline-row">
             <input v-model="newGroupName" type="text" placeholder="输入新分组名">
-            <button class="secondary-btn" :disabled="creatingGroup" @click="handleCreateGroup">
+            <button type="button" class="secondary-btn" :disabled="creatingGroup" @click="handleCreateGroup">
               {{ creatingGroup ? '创建中...' : '创建' }}
             </button>
           </div>
@@ -175,13 +212,13 @@ function goHome() {
         </label>
       </div>
 
-      <div v-if="statusMessage" class="status" :class="`is-${statusType}`">
+      <div v-if="statusMessage" class="status" :class="`is-${statusType}`" role="status" aria-live="polite">
         {{ statusMessage }}
       </div>
 
       <div class="actions">
-        <button class="secondary-btn" @click="goHome">稍后再说</button>
-        <button class="primary-btn" :disabled="saving" @click="handleSave">
+        <button class="secondary-btn" type="button" @click="goHome">稍后再说</button>
+        <button class="primary-btn" type="button" :disabled="saving" @click="handleSave">
           {{ saving ? '保存中...' : '添加到 DOMO NAV' }}
         </button>
       </div>
@@ -217,6 +254,9 @@ function goHome() {
 }
 
 .panel__header h1 {
+  display: flex;
+  align-items: center;
+  gap: 9px;
   margin: 0;
   color: var(--text-primary);
 }

@@ -1,9 +1,15 @@
+import { createHash } from 'node:crypto'
+import {
+  buildChatRequest,
+  extractAiText,
+  extractResponseSources
+} from '../lib/aiResponses.js'
 import { getUserSettingValue } from '../lib/userSettings.js'
 
 const DEFAULT_BRAVE_ENDPOINT = 'https://api.search.brave.com/res/v1/web/search'
-const DEFAULT_OPENAI_ENDPOINT = 'https://api.openai.com/v1/chat/completions'
-const DEFAULT_OPENAI_MODEL = 'gpt-4.1-mini'
 const DEFAULT_OPENCLAW_MODEL = 'gpt-4.1-mini'
+const REQUEST_TIMEOUT_MS = 45000
+const MAX_QUERY_LENGTH = 2000
 
 function normalizeText(value, fallback = '') {
   return String(value ?? fallback).trim()
@@ -32,17 +38,43 @@ function extractErrorMessage(payload, fallback) {
 }
 
 async function fetchJson(url, options, fallbackErrorMessage) {
-  const response = await fetch(url, options)
-  const contentType = response.headers.get('content-type') || ''
-  const payload = contentType.includes('application/json')
-    ? await response.json()
-    : await response.text()
-
-  if (!response.ok) {
-    throw new Error(extractErrorMessage(payload, fallbackErrorMessage))
+  let parsedUrl
+  try {
+    parsedUrl = new URL(url)
+  } catch {
+    throw new Error('接口地址格式无效')
   }
 
-  return payload
+  if (!['http:', 'https:'].includes(parsedUrl.protocol)) {
+    throw new Error('接口地址只支持 HTTP 或 HTTPS')
+  }
+
+  const controller = new AbortController()
+  const timeout = setTimeout(() => controller.abort(), REQUEST_TIMEOUT_MS)
+
+  try {
+    const response = await fetch(parsedUrl, {
+      ...options,
+      signal: controller.signal
+    })
+    const contentType = response.headers.get('content-type') || ''
+    const payload = contentType.includes('application/json')
+      ? await response.json()
+      : await response.text()
+
+    if (!response.ok) {
+      throw new Error(extractErrorMessage(payload, fallbackErrorMessage))
+    }
+
+    return payload
+  } catch (error) {
+    if (error?.name === 'AbortError') {
+      throw new Error(`${fallbackErrorMessage}：请求超时`)
+    }
+    throw error
+  } finally {
+    clearTimeout(timeout)
+  }
 }
 
 function buildExternalUrl(engineId, query) {
@@ -60,20 +92,6 @@ function buildExternalUrl(engineId, query) {
   }
 }
 
-function resolveChatEndpoint(provider) {
-  const endpoint = normalizeText(provider?.endpoint)
-  if (endpoint) {
-    return endpoint
-  }
-
-  const proxyBaseUrl = normalizeText(provider?.cliProxyBaseUrl)
-  if (proxyBaseUrl) {
-    return `${proxyBaseUrl.replace(/\/$/, '')}/v1/chat/completions`
-  }
-
-  return DEFAULT_OPENAI_ENDPOINT
-}
-
 function resolveOpenClawEndpoint(provider) {
   const endpoint = normalizeText(provider?.endpoint)
   if (endpoint) {
@@ -86,55 +104,6 @@ function resolveOpenClawEndpoint(provider) {
   }
 
   return `${baseUrl.replace(/\/$/, '')}/v1/chat/completions`
-}
-
-function extractChatText(payload) {
-  if (!payload) return ''
-
-  if (typeof payload.output_text === 'string' && payload.output_text.trim()) {
-    return payload.output_text.trim()
-  }
-
-  if (Array.isArray(payload.output)) {
-    const parts = []
-
-    for (const item of payload.output) {
-      if (Array.isArray(item?.content)) {
-        for (const content of item.content) {
-          if (typeof content?.text === 'string') {
-            parts.push(content.text)
-          }
-        }
-      }
-    }
-
-    if (parts.length) {
-      return parts.join('\n').trim()
-    }
-  }
-
-  if (Array.isArray(payload.choices) && payload.choices.length) {
-    const choice = payload.choices[0]
-    const content = choice?.message?.content
-
-    if (typeof content === 'string') {
-      return content.trim()
-    }
-
-    if (Array.isArray(content)) {
-      const text = content
-        .map((item) => item?.text || item?.content || '')
-        .filter(Boolean)
-        .join('\n')
-        .trim()
-
-      if (text) {
-        return text
-      }
-    }
-  }
-
-  return ''
 }
 
 async function runBraveSearch(provider, queryText) {
@@ -186,7 +155,7 @@ async function runBraveSearch(provider, queryText) {
   }
 }
 
-async function runChatSearch(provider, queryText) {
+async function runChatSearch(provider, queryText, userId = '') {
   if (!provider?.enabled) {
     throw new Error('请先在设置中启用 ChatGPT / OpenAI 接入')
   }
@@ -196,20 +165,25 @@ async function runChatSearch(provider, queryText) {
     throw new Error('请先在设置中填写 ChatGPT / OpenAI API Key')
   }
 
-  const endpoint = resolveChatEndpoint(provider)
-  const model = normalizeText(provider.model, DEFAULT_OPENAI_MODEL) || DEFAULT_OPENAI_MODEL
   const systemPrompt = [
-      '你是 DOMO NAV 的 AI 搜索助手。',
+    '你是 DOMO NAV 的 AI 搜索助手。',
     '请用简洁中文回答用户问题。',
-    '如果没有联网或无法确认事实，请明确说明不确定，不要编造来源。',
+    '如使用联网搜索，请只依据找到的来源回答；无法确认的事实要明确说明不确定。',
     '优先给出可执行结论，再补充必要细节。'
   ].join(' ')
 
-  const userPrompt = `用户搜索词：${queryText}`
-  const usesResponsesApi = endpoint.includes('/responses')
+  const safetyIdentifier = userId
+    ? createHash('sha256').update(`domo-nav:${userId}`).digest('hex')
+    : ''
+  const chatRequest = buildChatRequest(
+    provider,
+    queryText,
+    systemPrompt,
+    safetyIdentifier
+  )
 
   const payload = await fetchJson(
-    endpoint,
+    chatRequest.endpoint,
     {
       method: 'POST',
       headers: {
@@ -217,27 +191,12 @@ async function runChatSearch(provider, queryText) {
         Authorization: `Bearer ${apiKey}`,
         'Content-Type': 'application/json'
       },
-      body: JSON.stringify(
-        usesResponsesApi
-          ? {
-              model,
-              input: `${systemPrompt}\n\n${userPrompt}`
-            }
-          : {
-              model,
-              temperature: 0.3,
-              stream: false,
-              messages: [
-                { role: 'system', content: systemPrompt },
-                { role: 'user', content: userPrompt }
-              ]
-            }
-      )
+      body: JSON.stringify(chatRequest.body)
     },
     'AI 搜索请求失败'
   )
 
-  const answer = extractChatText(payload)
+  const answer = extractAiText(payload)
 
   if (!answer) {
     throw new Error('AI 搜索未返回可解析的内容，请检查接口地址和模型配置')
@@ -249,8 +208,10 @@ async function runChatSearch(provider, queryText) {
     query: queryText,
     mode: 'answer',
     answer,
-    items: [],
-    externalUrl: buildExternalUrl('chatgpt', queryText)
+    items: chatRequest.apiMode === 'responses' ? extractResponseSources(payload) : [],
+    externalUrl: buildExternalUrl('chatgpt', queryText),
+    model: chatRequest.model,
+    usage: payload?.usage || null
   }
 }
 
@@ -267,7 +228,7 @@ async function runOpenClawSearch(provider, queryText) {
   const model = normalizeText(provider.model, DEFAULT_OPENCLAW_MODEL) || DEFAULT_OPENCLAW_MODEL
   const apiKey = normalizeText(provider.apiKey)
   const systemPrompt = [
-      '你是 DOMO NAV 的 OpenClaw 搜索助手。',
+    '你是 DOMO NAV 的 OpenClaw 搜索助手。',
     '请用简洁中文回答用户问题。',
     '如果无法确认事实，请明确说明不确定。'
   ].join(' ')
@@ -294,7 +255,7 @@ async function runOpenClawSearch(provider, queryText) {
     'OpenClaw 搜索请求失败'
   )
 
-  const answer = extractChatText(payload)
+  const answer = extractAiText(payload)
 
   if (!answer) {
     throw new Error('OpenClaw 未返回可解析内容，请检查接口地址和模型配置')
@@ -320,7 +281,7 @@ export default async function aiSearchRoutes(fastify) {
 
     try {
       if (provider === 'brave') {
-    const result = await runBraveSearch(inputConfig, 'DOMO NAV 浏览器书签 AI 搜索')
+        const result = await runBraveSearch(inputConfig, 'DOMO NAV 浏览器书签 AI 搜索')
         return {
           ok: true,
           provider,
@@ -331,7 +292,7 @@ export default async function aiSearchRoutes(fastify) {
       }
 
       if (provider === 'chatgpt') {
-        const result = await runChatSearch(inputConfig, '请只回复：连接成功')
+        const result = await runChatSearch(inputConfig, '请只回复：连接成功', request.currentUser.id)
         return {
           ok: true,
           provider,
@@ -374,6 +335,11 @@ export default async function aiSearchRoutes(fastify) {
       return { error: 'Search query is required' }
     }
 
+    if (queryText.length > MAX_QUERY_LENGTH) {
+      reply.code(400)
+      return { error: `Search query must be ${MAX_QUERY_LENGTH} characters or fewer` }
+    }
+
     const appConfig = await getUserSettingValue(request.currentUser.id, 'appConfig', {})
     const providers = appConfig?.search?.providers || {}
 
@@ -383,7 +349,13 @@ export default async function aiSearchRoutes(fastify) {
       }
 
       if (engineId === 'chatgpt') {
-        return { result: await runChatSearch(providers.chatgpt || {}, queryText) }
+        return {
+          result: await runChatSearch(
+            providers.chatgpt || {},
+            queryText,
+            request.currentUser.id
+          )
+        }
       }
 
       if (engineId === 'openclaw') {

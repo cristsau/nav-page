@@ -1,5 +1,6 @@
 <script setup>
-import { computed, ref } from 'vue'
+import { computed, ref, watch } from 'vue'
+import Icon from '@/shared/components/Icon.vue'
 import NavItem from './NavItem.vue'
 
 const props = defineProps({
@@ -10,6 +11,18 @@ const props = defineProps({
   bookmarks: {
     type: Array,
     default: () => []
+  },
+  activeGroupId: {
+    type: String,
+    default: ''
+  },
+  pendingGroupId: {
+    type: String,
+    default: ''
+  },
+  pendingBookmarkId: {
+    type: String,
+    default: ''
   }
 })
 
@@ -24,6 +37,24 @@ const emit = defineEmits([
 ])
 
 const activeGroupId = ref('')
+
+watch(
+  () => props.activeGroupId,
+  (value) => {
+    if (value) activeGroupId.value = value
+  },
+  { immediate: true }
+)
+
+watch(
+  () => props.groups,
+  (value) => {
+    if (!value.some((group) => group.id === activeGroupId.value)) {
+      activeGroupId.value = value[0]?.id || ''
+    }
+  },
+  { deep: true }
+)
 
 // 当前选中的分组
 const activeGroup = computed(() => {
@@ -76,34 +107,45 @@ function handleDeleteBookmark(bookmark) {
   <div class="nav-groups">
     <!-- 分组 Tab -->
     <div class="groups-tabs">
-      <div class="groups-tabs__list">
+      <div class="groups-tabs__list" role="tablist" aria-label="导航分组">
         <div
           v-for="group in groups"
           :key="group.id"
           class="groups-tabs__tab"
           :class="{ 'is-active': activeGroup?.id === group.id }"
+          role="tab"
+          :aria-selected="activeGroup?.id === group.id"
+          :tabindex="activeGroup?.id === group.id ? 0 : -1"
           @click="selectGroup(group)"
+          @keydown.enter.prevent="selectGroup(group)"
+          @keydown.space.prevent="selectGroup(group)"
         >
           <span class="groups-tabs__icon">{{ group.icon }}</span>
           <span class="groups-tabs__name">{{ group.name }}</span>
           <button
             class="groups-tabs__edit"
             title="编辑"
+            type="button"
+            :aria-label="`编辑分组 ${group.name}`"
             @click="handleEditGroup(group, $event)"
           >
-            ✏️
+            <Icon name="edit" :size="14" />
           </button>
           <button
             class="groups-tabs__delete"
             title="删除"
+            type="button"
+            :aria-label="`删除分组 ${group.name}`"
+            :disabled="pendingGroupId === group.id"
             @click="handleDeleteGroup(group, $event)"
           >
-            ×
+            <span v-if="pendingGroupId === group.id" class="mini-spinner" aria-hidden="true"></span>
+            <Icon v-else name="trash" :size="14" />
           </button>
         </div>
       </div>
-      <button class="groups-tabs__add" title="添加分组" @click="handleAddGroup">
-        ➕
+      <button class="groups-tabs__add" type="button" title="添加分组" aria-label="添加分组" @click="handleAddGroup">
+        <Icon name="plus" :size="18" />
       </button>
     </div>
 
@@ -112,10 +154,10 @@ function handleDeleteBookmark(bookmark) {
       <Transition name="tab-slide" mode="out-in">
         <div :key="activeGroup?.id" class="bookmarks-grid">
           <!-- 添加书签卡片 -->
-          <div class="bookmark-card bookmark-card--add" @click="handleAddBookmark">
-            <div class="bookmark-card__icon">➕</div>
+          <button v-if="activeGroup" class="bookmark-card bookmark-card--add" type="button" @click="handleAddBookmark">
+            <div class="bookmark-card__icon"><Icon name="plus" :size="28" /></div>
             <div class="bookmark-card__title">添加书签</div>
-          </div>
+          </button>
 
           <!-- 书签列表 -->
           <TransitionGroup name="list">
@@ -123,6 +165,7 @@ function handleDeleteBookmark(bookmark) {
               v-for="bookmark in activeBookmarks"
               :key="bookmark.id"
               :bookmark="bookmark"
+              :deleting="pendingBookmarkId === bookmark.id"
               @edit="handleEditBookmark"
               @delete="handleDeleteBookmark"
             />
@@ -132,9 +175,9 @@ function handleDeleteBookmark(bookmark) {
 
       <!-- 空状态 -->
       <div v-if="activeBookmarks.length === 0 && groups.length === 0" class="empty-state">
-        <div class="empty-state__icon">📭</div>
+        <div class="empty-state__icon"><Icon name="folder" :size="42" /></div>
         <div class="empty-state__text">还没有分组</div>
-        <button class="btn btn--primary" @click="handleAddGroup">
+        <button class="btn btn--primary" type="button" @click="handleAddGroup">
           创建第一个分组
         </button>
       </div>
@@ -211,7 +254,7 @@ function handleDeleteBookmark(bookmark) {
 
 .groups-tabs__edit,
 .groups-tabs__delete {
-  opacity: 0;
+  opacity: 1;
   width: 22px;
   height: 22px;
   display: flex;
@@ -223,10 +266,13 @@ function handleDeleteBookmark(bookmark) {
   cursor: pointer;
   font-size: 10px;
   transition: all var(--transition-fast);
+  color: var(--text-muted);
 }
 
 .groups-tabs__tab:hover .groups-tabs__edit,
-.groups-tabs__tab:hover .groups-tabs__delete {
+.groups-tabs__tab:hover .groups-tabs__delete,
+.groups-tabs__tab:focus-within .groups-tabs__edit,
+.groups-tabs__tab:focus-within .groups-tabs__delete {
   opacity: 1;
 }
 
@@ -239,6 +285,11 @@ function handleDeleteBookmark(bookmark) {
   color: #fff;
 }
 
+.groups-tabs__delete:disabled {
+  opacity: 1;
+  cursor: wait;
+}
+
 .groups-tabs__add {
   padding: 12px 16px;
   background: var(--accent-color);
@@ -248,6 +299,7 @@ function handleDeleteBookmark(bookmark) {
   font-size: 16px;
   transition: all var(--transition-fast);
   flex-shrink: 0;
+  color: #fff;
 }
 
 .groups-tabs__add:hover {
@@ -280,6 +332,7 @@ function handleDeleteBookmark(bookmark) {
   border-radius: var(--radius-md);
   cursor: pointer;
   transition: all var(--transition-normal) var(--ease-smooth);
+  color: var(--text-secondary);
 }
 
 .bookmark-card--add:hover {
@@ -305,8 +358,23 @@ function handleDeleteBookmark(bookmark) {
 }
 
 .empty-state__icon {
-  font-size: 48px;
+  display: flex;
+  justify-content: center;
+  color: var(--text-muted);
   margin-bottom: 16px;
+}
+
+.mini-spinner {
+  width: 12px;
+  height: 12px;
+  border: 2px solid currentColor;
+  border-right-color: transparent;
+  border-radius: 50%;
+  animation: spin 0.75s linear infinite;
+}
+
+@keyframes spin {
+  to { transform: rotate(360deg); }
 }
 
 .empty-state__text {
@@ -384,6 +452,13 @@ function handleDeleteBookmark(bookmark) {
   .bookmarks-grid {
     grid-template-columns: repeat(auto-fill, minmax(90px, 1fr));
     gap: 12px;
+  }
+}
+
+@media (hover: none), (pointer: coarse) {
+  .groups-tabs__edit,
+  .groups-tabs__delete {
+    opacity: 1;
   }
 }
 </style>

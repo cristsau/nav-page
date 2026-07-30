@@ -1,3 +1,12 @@
+* {
+  box-sizing: border-box;
+}
+
+:focus-visible {
+  outline: 3px solid rgba(95, 138, 111, 0.3);
+  outline-offset: 2px;
+}
+
 body {
   margin: 0;
   font-family: "Segoe UI", "PingFang SC", sans-serif;
@@ -85,6 +94,12 @@ button:hover {
   transform: translateY(-1px);
 }
 
+button:disabled {
+  cursor: wait;
+  opacity: 0.6;
+  transform: none;
+}
+
 .primary-btn {
   background: #5f8a6f;
   color: #fff;
@@ -97,8 +112,17 @@ button:hover {
 }
 
 .status {
+  min-height: 20px;
   margin-top: 14px;
   color: #64756b;
+}
+
+.status.is-error {
+  color: #b42318;
+}
+
+.status.is-success {
+  color: #287a4b;
 }
 
 .footer {

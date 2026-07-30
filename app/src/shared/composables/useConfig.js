@@ -21,7 +21,7 @@ const defaultCustomTheme = {
 const defaultConfig = {
   site: {
     name: 'DOMO NAV',
-    icon: '🧭',
+    icon: 'D',
     favicon: ''
   },
   searchEngine: 'baidu',
@@ -35,11 +35,14 @@ const defaultConfig = {
     providers: {
       chatgpt: {
         enabled: false,
-        mode: 'proxy',
-        endpoint: '',
+        mode: 'api',
+        apiMode: '',
+        endpoint: 'https://api.openai.com/v1/responses',
         apiKey: '',
-        model: '',
-        cliProxyBaseUrl: ''
+        model: 'gpt-5.6-terra',
+        cliProxyBaseUrl: '',
+        webSearchEnabled: true,
+        reasoningEffort: 'low'
       },
       brave: {
         enabled: false,
@@ -77,16 +80,16 @@ const defaultConfig = {
 }
 
 export const searchEngines = {
-  baidu: { id: 'baidu', name: '百度', url: 'https://www.baidu.com/s?wd=', icon: '🔎', type: 'web', isBuiltIn: true },
-  google: { id: 'google', name: 'Google', url: 'https://www.google.com/search?q=', icon: '🌐', type: 'web', isBuiltIn: true },
-  bing: { id: 'bing', name: 'Bing', url: 'https://www.bing.com/search?q=', icon: '🧭', type: 'web', isBuiltIn: true },
-  brave: { id: 'brave', name: 'Brave Search', url: 'https://search.brave.com/search?q=', icon: '🦁', type: 'web', isBuiltIn: true },
-  openclaw: { id: 'openclaw', name: 'OpenClaw', url: 'https://ai.skrskr.net/', icon: '🧠', type: 'openclaw', isBuiltIn: true },
-  chatgpt: { id: 'chatgpt', name: 'ChatGPT Search', url: 'https://chatgpt.com/', icon: '✨', type: 'chatgpt', isBuiltIn: true },
-  zhihu: { id: 'zhihu', name: '知乎', url: 'https://www.zhihu.com/search?type=content&q=', icon: '💡', type: 'web', isBuiltIn: true },
-  bilibili: { id: 'bilibili', name: 'Bilibili', url: 'https://search.bilibili.com/all?keyword=', icon: '📺', type: 'web', isBuiltIn: true },
-  github: { id: 'github', name: 'GitHub', url: 'https://github.com/search?q=', icon: '🐙', type: 'web', isBuiltIn: true },
-  weibo: { id: 'weibo', name: '微博', url: 'https://s.weibo.com/weibo?q=', icon: '📣', type: 'web', isBuiltIn: true }
+  baidu: { id: 'baidu', name: '百度', url: 'https://www.baidu.com/s?wd=', icon: '百', type: 'web', isBuiltIn: true },
+  google: { id: 'google', name: 'Google', url: 'https://www.google.com/search?q=', icon: 'G', type: 'web', isBuiltIn: true },
+  bing: { id: 'bing', name: 'Bing', url: 'https://www.bing.com/search?q=', icon: 'B', type: 'web', isBuiltIn: true },
+  brave: { id: 'brave', name: 'Brave Search', url: 'https://search.brave.com/search?q=', icon: 'BR', type: 'web', isBuiltIn: true },
+  openclaw: { id: 'openclaw', name: 'OpenClaw', url: 'https://ai.skrskr.net/', icon: 'OC', type: 'openclaw', isBuiltIn: true },
+  chatgpt: { id: 'chatgpt', name: 'ChatGPT Search', url: 'https://chatgpt.com/', icon: 'AI', type: 'chatgpt', isBuiltIn: true },
+  zhihu: { id: 'zhihu', name: '知乎', url: 'https://www.zhihu.com/search?type=content&q=', icon: '知', type: 'web', isBuiltIn: true },
+  bilibili: { id: 'bilibili', name: 'Bilibili', url: 'https://search.bilibili.com/all?keyword=', icon: '哔', type: 'web', isBuiltIn: true },
+  github: { id: 'github', name: 'GitHub', url: 'https://github.com/search?q=', icon: 'GH', type: 'web', isBuiltIn: true },
+  weibo: { id: 'weibo', name: '微博', url: 'https://s.weibo.com/weibo?q=', icon: '微', type: 'web', isBuiltIn: true }
 }
 
 export const colorSchemes = {
@@ -390,7 +393,7 @@ function isAiSearchEnabled(engineId) {
   }
 
   if (engineId === 'openclaw') {
-    return true
+    return Boolean(config.value.search?.providers?.openclaw?.enabled)
   }
 
   if (engineId === 'brave') {
@@ -540,7 +543,7 @@ export function useConfig() {
         }
       }
 
-      window.open(engine.url + encodeURIComponent(query), '_blank')
+      window.open(engine.url + encodeURIComponent(query), '_blank', 'noopener,noreferrer')
       return {
         mode: 'external'
       }
@@ -566,12 +569,12 @@ export function useConfig() {
     return cardSizeOptions[config.value.style?.cardSize] || cardSizeOptions.medium
   }
 
-function getSiteName() {
+  function getSiteName() {
     return config.value.site?.name || 'DOMO NAV'
   }
 
   function getSiteIcon() {
-    return config.value.site?.icon || '🧭'
+    return config.value.site?.icon || 'D'
   }
 
   function getColorScheme() {

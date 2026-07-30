@@ -1,3 +1,4 @@
+import { randomInt } from 'node:crypto'
 import { query, withTransaction } from '../db/index.js'
 import { mapNote, mapShare } from '../lib/notes.js'
 
@@ -22,12 +23,38 @@ function normalizeExpireAt(value) {
   return date.toISOString()
 }
 
+function normalizeNoteType(value, fallback = 'memo') {
+  const type = normalizeText(value, fallback).toLowerCase()
+  return ['memo', 'diary'].includes(type) ? type : fallback
+}
+
+function normalizeDateOnly(value, fallback = null) {
+  const input = normalizeText(value)
+  if (!input) return fallback
+  if (!/^\d{4}-\d{2}-\d{2}$/.test(input)) return fallback
+
+  const date = new Date(`${input}T00:00:00Z`)
+  if (Number.isNaN(date.getTime()) || date.toISOString().slice(0, 10) !== input) {
+    return fallback
+  }
+
+  return input
+}
+
+function normalizeOptionalTimestamp(value, fallback = null) {
+  if (value === undefined) return fallback
+  if (!value) return null
+
+  const date = new Date(value)
+  return Number.isNaN(date.getTime()) ? fallback : date.toISOString()
+}
+
 function createShareCode(length = 8) {
   const alphabet = 'ABCDEFGHJKLMNPQRSTUVWXYZabcdefghijkmnpqrstuvwxyz23456789'
   let output = ''
 
   for (let index = 0; index < length; index += 1) {
-    output += alphabet.charAt(Math.floor(Math.random() * alphabet.length))
+    output += alphabet.charAt(randomInt(alphabet.length))
   }
 
   return output
@@ -148,6 +175,11 @@ export default async function notesRoutes(fastify) {
           AND (
             LOWER(n.title) LIKE $2
             OR LOWER(n.content) LIKE $2
+            OR EXISTS (
+              SELECT 1
+              FROM jsonb_array_elements_text(n.tags) AS tag
+              WHERE LOWER(tag) LIKE $2
+            )
           )
         ORDER BY n.updated_at DESC
       `,
@@ -195,17 +227,28 @@ export default async function notesRoutes(fastify) {
   fastify.post('/notes', async (request, reply) => {
     await fastify.requireAuth(request, reply)
 
-    const type = normalizeText(request.body?.type, 'memo') || 'memo'
+    const type = normalizeNoteType(request.body?.type)
     const title = normalizeText(request.body?.title)
     const content = String(request.body?.content || '')
     const encrypted = Boolean(request.body?.encrypted)
     const passwordHash = normalizeText(request.body?.password)
     const pinned = Boolean(request.body?.pinned)
     const tags = normalizeTags(request.body?.tags)
+    const entryDate = type === 'diary'
+      ? normalizeDateOnly(request.body?.entryDate, new Date().toISOString().slice(0, 10))
+      : null
+    const mood = type === 'diary' ? normalizeText(request.body?.mood).slice(0, 40) : ''
+    const dueAt = type === 'memo' ? normalizeOptionalTimestamp(request.body?.dueAt) : null
+    const completed = type === 'memo' && Boolean(request.body?.completed)
 
     if (!title) {
       reply.code(400)
       return { error: 'Title is required' }
+    }
+
+    if (encrypted && !passwordHash) {
+      reply.code(400)
+      return { error: 'Encrypted notes require a password hash' }
     }
 
     const { rows } = await query(
@@ -218,11 +261,28 @@ export default async function notesRoutes(fastify) {
           encrypted,
           password_hash,
           pinned,
-          tags
-        ) VALUES ($1, $2, $3, $4, $5, $6, $7, $8::jsonb)
+          tags,
+          entry_date,
+          mood,
+          due_at,
+          completed
+        ) VALUES ($1, $2, $3, $4, $5, $6, $7, $8::jsonb, $9, $10, $11, $12)
         RETURNING *
       `,
-      [request.currentUser.id, type, title, content, encrypted, passwordHash, pinned, JSON.stringify(tags)]
+      [
+        request.currentUser.id,
+        type,
+        title,
+        content,
+        encrypted,
+        passwordHash,
+        pinned,
+        JSON.stringify(tags),
+        entryDate,
+        mood,
+        dueAt,
+        completed
+      ]
     )
 
     reply.code(201)
@@ -237,15 +297,34 @@ export default async function notesRoutes(fastify) {
       return { error: 'Note not found' }
     }
 
-    const type = normalizeText(request.body?.type, existing.type) || existing.type
+    const type = normalizeNoteType(request.body?.type, existing.type)
     const title = normalizeText(request.body?.title, existing.title) || existing.title
     const content = request.body?.content === undefined ? existing.content : String(request.body.content || '')
     const encrypted = request.body?.encrypted === undefined ? existing.encrypted : Boolean(request.body.encrypted)
-    const passwordHash = request.body?.password === undefined
+    let passwordHash = request.body?.password === undefined
       ? existing.password_hash
       : normalizeText(request.body.password)
     const pinned = request.body?.pinned === undefined ? existing.pinned : Boolean(request.body.pinned)
     const tags = request.body?.tags === undefined ? existing.tags : normalizeTags(request.body.tags)
+    const entryDate = type === 'diary'
+      ? normalizeDateOnly(request.body?.entryDate, existing.entry_date || new Date().toISOString().slice(0, 10))
+      : null
+    const mood = type === 'diary'
+      ? normalizeText(request.body?.mood, existing.mood).slice(0, 40)
+      : ''
+    const dueAt = type === 'memo'
+      ? normalizeOptionalTimestamp(request.body?.dueAt, existing.due_at)
+      : null
+    const completed = type === 'memo'
+      ? (request.body?.completed === undefined ? existing.completed : Boolean(request.body.completed))
+      : false
+
+    if (!encrypted) {
+      passwordHash = ''
+    } else if (!passwordHash) {
+      reply.code(400)
+      return { error: 'Encrypted notes require a password hash' }
+    }
 
     const { rows } = await query(
       `
@@ -257,6 +336,10 @@ export default async function notesRoutes(fastify) {
             password_hash = $7,
             pinned = $8,
             tags = $9::jsonb,
+            entry_date = $10,
+            mood = $11,
+            due_at = $12,
+            completed = $13,
             updated_at = NOW()
         WHERE id = $1
           AND user_id = $2
@@ -271,7 +354,11 @@ export default async function notesRoutes(fastify) {
         encrypted,
         passwordHash,
         pinned,
-        JSON.stringify(tags)
+        JSON.stringify(tags),
+        entryDate,
+        mood,
+        dueAt,
+        completed
       ]
     )
 
@@ -351,6 +438,12 @@ export default async function notesRoutes(fastify) {
     }
 
     const expireAt = normalizeExpireAt(request.body?.expireAt)
+
+    if (note.encrypted) {
+      reply.code(400)
+      return { error: 'Encrypted notes cannot be shared' }
+    }
+
     const code = createShareCode()
 
     const { rows } = await query(
@@ -417,10 +510,15 @@ export default async function notesRoutes(fastify) {
           FROM notes n
           JOIN note_shares s ON s.note_id = n.id
           WHERE s.id = $1
+            AND n.encrypted = FALSE
           LIMIT 1
         `,
         [share.id]
       )
+
+      if (!noteResult.rows.length) {
+        return null
+      }
 
       await client.query(
         'UPDATE note_shares SET view_count = view_count + 1 WHERE id = $1',
@@ -438,7 +536,7 @@ export default async function notesRoutes(fastify) {
       }
     })
 
-    if (!result) {
+    if (!result || !result.note) {
       reply.code(404)
       return { error: 'Share not found' }
     }

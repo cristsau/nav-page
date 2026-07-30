@@ -23,6 +23,10 @@ const props = defineProps({
   defaultGroupId: {
     type: String,
     default: ''
+  },
+  saving: {
+    type: Boolean,
+    default: false
   }
 })
 
@@ -38,9 +42,10 @@ const formData = ref({
   description: '',
   // 分组字段
   name: '',
-  icon: '📁',
+  icon: 'D',
   color: '#3b82f6'
 })
+const formError = ref('')
 
 const title = computed(() => {
   if (props.editingItem) {
@@ -58,9 +63,10 @@ function resetForm() {
     favicon: '',
     description: '',
     name: '',
-    icon: '📁',
+    icon: 'D',
     color: '#3b82f6'
   }
+  formError.value = ''
 }
 
 // 监听显示状态，初始化表单
@@ -76,7 +82,7 @@ watch(() => props.show, (val) => {
           favicon: props.editingItem.favicon || '',
           description: props.editingItem.description || '',
           name: '',
-          icon: '📁',
+          icon: 'D',
           color: '#3b82f6'
         }
       } else {
@@ -97,36 +103,75 @@ watch(() => props.show, (val) => {
   }
 })
 
+function normalizeWebUrl(value) {
+  const input = String(value || '').trim()
+  if (!input) return ''
+
+  const withProtocol = /^[a-z][a-z\d+.-]*:/i.test(input)
+    ? input
+    : `https://${input}`
+
+  try {
+    const parsed = new URL(withProtocol)
+    if (!['http:', 'https:'].includes(parsed.protocol)) return ''
+    parsed.username = ''
+    parsed.password = ''
+    return parsed.toString()
+  } catch {
+    return ''
+  }
+}
+
 // 自动获取 favicon
 async function fetchFavicon() {
   if (!formData.value.url) return
 
-  try {
-    const url = new URL(formData.value.url)
-    formData.value.favicon = `${url.origin}/favicon.ico`
-  } catch (e) {
-    // URL 格式无效
+  const normalizedUrl = normalizeWebUrl(formData.value.url)
+  if (normalizedUrl) {
+    try {
+      const url = new URL(normalizedUrl)
+      formData.value.url = normalizedUrl
+      formData.value.favicon = `${url.origin}/favicon.ico`
+    } catch {
+      // normalizeWebUrl already validates this; leave the field untouched on failure.
+    }
   }
 }
 
 // 提交表单
 function handleSubmit() {
+  formError.value = ''
+
   if (props.mode === 'bookmark') {
     if (!formData.value.title.trim() || !formData.value.url.trim()) {
+      formError.value = '请填写书签标题和网址'
       return
     }
+
+    if (!formData.value.groupId) {
+      formError.value = '请先创建或选择一个分组'
+      return
+    }
+
+    const normalizedUrl = normalizeWebUrl(formData.value.url)
+    if (!normalizedUrl) {
+      formError.value = '请输入有效的 http 或 https 网址'
+      return
+    }
+
     emit('submit', {
       mode: 'bookmark',
       data: {
         groupId: formData.value.groupId,
         title: formData.value.title.trim(),
-        url: formData.value.url.trim(),
+        url: normalizedUrl,
         favicon: formData.value.favicon.trim(),
         description: formData.value.description.trim()
       }
     })
   } else {
     if (!formData.value.name.trim()) {
+      formError.value = '请填写分组名称'
       return
     }
     emit('submit', {
@@ -151,7 +196,7 @@ function close() {
     <template v-if="mode === 'bookmark'">
       <div class="form-group">
         <label class="form-label">分组</label>
-        <select v-model="formData.groupId" class="input">
+        <select v-model="formData.groupId" class="input" :disabled="saving">
           <option v-for="group in groups" :key="group.id" :value="group.id">
             {{ group.icon }} {{ group.name }}
           </option>
@@ -164,6 +209,7 @@ function close() {
           type="text"
           class="input"
           placeholder="输入书签标题"
+          :disabled="saving"
         >
       </div>
       <div class="form-group">
@@ -173,6 +219,7 @@ function close() {
           type="url"
           class="input"
           placeholder="https://example.com"
+          :disabled="saving"
           @blur="fetchFavicon"
         >
       </div>
@@ -183,6 +230,7 @@ function close() {
           type="text"
           class="input"
           placeholder="自动获取或手动输入"
+          :disabled="saving"
         >
       </div>
       <div class="form-group">
@@ -192,6 +240,7 @@ function close() {
           class="input"
           rows="2"
           placeholder="可选描述"
+          :disabled="saving"
         />
       </div>
     </template>
@@ -205,15 +254,18 @@ function close() {
           type="text"
           class="input"
           placeholder="输入分组名称"
+          :disabled="saving"
         >
       </div>
       <div class="form-group">
-        <label class="form-label">图标</label>
+        <label class="form-label">图标或短文字</label>
         <input
           v-model="formData.icon"
           type="text"
           class="input"
-          placeholder="选择一个 emoji"
+          maxlength="4"
+          placeholder="例如 D、工、AI"
+          :disabled="saving"
         >
       </div>
       <div class="form-group">
@@ -223,14 +275,17 @@ function close() {
           type="color"
           class="input"
           style="height: 40px; padding: 4px;"
+          :disabled="saving"
         >
       </div>
     </template>
 
+    <div v-if="formError" class="form-error" role="alert">{{ formError }}</div>
+
     <template #footer>
-      <Button type="ghost" @click="close">取消</Button>
-      <Button type="primary" @click="handleSubmit">
-        {{ editingItem ? '保存' : '添加' }}
+      <Button type="ghost" :disabled="saving" @click="close">取消</Button>
+      <Button type="primary" :loading="saving" @click="handleSubmit">
+        {{ saving ? '保存中' : (editingItem ? '保存' : '添加') }}
       </Button>
     </template>
   </Modal>
@@ -252,5 +307,14 @@ function close() {
 textarea.input {
   resize: vertical;
   min-height: 60px;
+}
+
+.form-error {
+  padding: 11px 13px;
+  color: var(--error-color);
+  background: color-mix(in srgb, var(--error-color) 9%, var(--bg-secondary));
+  border: 1px solid color-mix(in srgb, var(--error-color) 34%, var(--border-color));
+  border-radius: 12px;
+  font-size: 13px;
 }
 </style>

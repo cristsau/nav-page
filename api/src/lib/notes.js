@@ -25,6 +25,10 @@ export function mapNote(record) {
     password: '',
     pinned: record.pinned,
     tags: Array.isArray(record.tags) ? record.tags : [],
+    entryDate: record.entry_date || '',
+    mood: record.mood || '',
+    dueAt: record.due_at || null,
+    completed: Boolean(record.completed),
     createdAt: record.created_at,
     updatedAt: record.updated_at,
     share: {

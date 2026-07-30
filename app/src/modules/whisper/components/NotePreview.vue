@@ -1,4 +1,6 @@
 <script setup>
+import Icon from '@/shared/components/Icon.vue'
+
 const props = defineProps({
   show: {
     type: Boolean,
@@ -16,32 +18,53 @@ function formatDate(timestamp) {
   if (!timestamp) return '-'
   return new Date(timestamp).toLocaleString('zh-CN', { hour12: false })
 }
+
+function formatEntryDate(value) {
+  if (!value) return '-'
+  return new Date(`${value}T00:00:00`).toLocaleDateString('zh-CN', {
+    year: 'numeric',
+    month: 'long',
+    day: 'numeric'
+  })
+}
 </script>
 
 <template>
   <div v-if="show && note" class="preview-modal" @click.self="emit('close')">
-    <div class="preview-card">
+    <div class="preview-card" role="dialog" aria-modal="true" :aria-label="note.title">
       <div class="preview-card__header">
         <div>
           <div class="preview-card__type">{{ note.type === 'memo' ? '备忘录' : '日记' }}</div>
           <h3 class="preview-card__title">{{ note.title }}</h3>
         </div>
-        <button class="preview-card__close" @click="emit('close')">✕</button>
+        <button type="button" class="preview-card__close" aria-label="关闭预览" @click="emit('close')">
+          <Icon name="close" :size="18" />
+        </button>
       </div>
 
       <div class="preview-card__meta">
         <span>更新时间：{{ formatDate(note.updatedAt) }}</span>
+        <span v-if="note.type === 'diary'">记录日期：{{ formatEntryDate(note.entryDate) }}</span>
+        <span v-if="note.mood">心情：{{ note.mood }}</span>
+        <span v-if="note.dueAt">截止时间：{{ formatDate(note.dueAt) }}</span>
+        <span v-if="note.completed" class="preview-card__completed">
+          <Icon name="circle-check" :size="14" /> 已完成
+        </span>
         <span v-if="note.tags?.length">标签：{{ note.tags.join(' / ') }}</span>
       </div>
 
       <div class="preview-card__body">
-        <div v-if="note.encrypted" class="preview-card__encrypted">该内容已加密，请点击编辑后输入密码查看。</div>
+        <div v-if="note.encrypted && !note._unlocked" class="preview-card__encrypted">
+          该内容已加密，请先从笔记卡片解锁。
+        </div>
         <pre v-else class="preview-card__content">{{ note.content }}</pre>
       </div>
 
       <div class="preview-card__footer">
-        <button class="btn btn--secondary" @click="emit('close')">关闭</button>
-        <button class="btn btn--primary" @click="emit('edit', note)">编辑</button>
+        <button type="button" class="btn btn--secondary" @click="emit('close')">关闭</button>
+        <button type="button" class="btn btn--primary" @click="emit('edit', note)">
+          <Icon name="edit" :size="16" /> 编辑
+        </button>
       </div>
     </div>
   </div>
@@ -116,6 +139,13 @@ function formatDate(timestamp) {
   font-size: 12px;
 }
 
+.preview-card__completed {
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+  color: var(--success-color);
+}
+
 .preview-card__body {
   padding: 18px 22px;
   overflow: auto;
@@ -137,6 +167,9 @@ function formatDate(timestamp) {
 }
 
 .btn {
+  display: inline-flex;
+  align-items: center;
+  gap: 7px;
   padding: 10px 18px;
   border: none;
   border-radius: 14px;

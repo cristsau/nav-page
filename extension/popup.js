@@ -16,6 +16,8 @@ const authStatusText = document.getElementById('authStatusText')
 let navBaseUrl = DEFAULT_NAV_BASE_URL
 let currentTab = null
 let groups = []
+let authenticated = false
+let busy = false
 
 init().catch((error) => {
   setStatus(error.message || '初始化失败', 'error')
@@ -33,15 +35,33 @@ async function init() {
   currentTab = tabs[0] || null
 
   titleInput.value = currentTab?.title || ''
-  urlInput.value = currentTab?.url || ''
+  urlInput.value = isHttpUrl(currentTab?.url) ? currentTab.url : ''
 
   loginBtn.addEventListener('click', () => chrome.tabs.create({ url: `${navBaseUrl}/auth` }))
   openOptionsBtn.addEventListener('click', () => chrome.runtime.openOptionsPage())
   createGroupBtn.addEventListener('click', handleCreateGroup)
   saveBtn.addEventListener('click', handleSave)
+  groupSelect.addEventListener('change', rememberSelectedGroup)
+  newGroupInput.addEventListener('keydown', (event) => {
+    if (event.key === 'Enter') handleCreateGroup()
+  })
 
-  await loadGroups()
-  await loadSession()
+  authenticated = await loadSession()
+  setInteractiveState()
+
+  if (authenticated) {
+    await loadGroups()
+  } else {
+    setStatus('请先登录 DOMO NAV，再回到这里添加。', 'error')
+  }
+}
+
+function isHttpUrl(value) {
+  try {
+    return ['http:', 'https:'].includes(new URL(value).protocol)
+  } catch {
+    return false
+  }
 }
 
 async function request(path, options = {}) {
@@ -60,37 +80,11 @@ async function request(path, options = {}) {
     : { error: await response.text() }
 
   if (!response.ok) {
+    if (response.status === 401) throw new Error('登录状态已失效，请重新登录')
     throw new Error(payload.error || '请求失败')
   }
 
   return payload
-}
-
-async function loadGroups() {
-  groups = []
-  groupSelect.innerHTML = ''
-  setStatus('正在加载分组...')
-
-  try {
-    const payload = await request('/groups', { method: 'GET' })
-    groups = payload.groups || []
-
-    if (groups.length === 0) {
-      appendGroupOption('', `${DEFAULT_GROUP_NAME}（保存时自动创建）`)
-      groupSelect.value = ''
-      setStatus('当前还没有分组，保存时会自动创建默认分组。')
-      return
-    }
-
-    for (const group of groups) {
-      appendGroupOption(group.id, group.name)
-    }
-
-    groupSelect.value = groups[0].id
-    setStatus('分组已加载')
-  } catch (error) {
-    setStatus(error.message || '无法加载分组，请先登录 DOMO NAV', 'error')
-  }
 }
 
 async function loadSession() {
@@ -99,12 +93,45 @@ async function loadSession() {
     if (payload.user?.username) {
       authStatusText.textContent = `已登录：${payload.user.username}`
       authStatusText.className = 'auth-status is-success'
-      return
+      loginBtn.hidden = true
+      return true
     }
-  } catch {}
+  } catch {
+    // The explicit signed-out state below is more useful than a raw network error here.
+  }
 
-  authStatusText.textContent = '未检测到 DOMO NAV 登录状态，请先打开登录页。'
+  authStatusText.textContent = '未检测到登录状态'
   authStatusText.className = 'auth-status is-error'
+  loginBtn.hidden = false
+  return false
+}
+
+async function loadGroups(preferredId = '') {
+  groups = []
+  groupSelect.innerHTML = ''
+  setStatus('正在加载分组...')
+
+  const payload = await request('/groups', { method: 'GET' })
+  groups = payload.groups || []
+  const stored = await chrome.storage.sync.get({ lastGroupId: '' })
+
+  if (groups.length === 0) {
+    appendGroupOption('', `${DEFAULT_GROUP_NAME}（保存时创建）`)
+    setStatus('还没有分组，首次保存会自动创建默认分组。')
+    return
+  }
+
+  for (const group of groups) {
+    appendGroupOption(group.id, group.name)
+  }
+
+  const selectedId = preferredId || stored.lastGroupId
+  groupSelect.value = groups.some((group) => group.id === selectedId)
+    ? selectedId
+    : groups[0].id
+
+  await rememberSelectedGroup()
+  setStatus('已就绪，可直接保存。', 'success')
 }
 
 function appendGroupOption(id, label) {
@@ -112,6 +139,16 @@ function appendGroupOption(id, label) {
   option.value = id
   option.textContent = label
   groupSelect.appendChild(option)
+}
+
+async function rememberSelectedGroup() {
+  const group = groups.find((item) => item.id === groupSelect.value)
+  if (!group) return
+
+  await chrome.storage.sync.set({
+    lastGroupId: group.id,
+    lastGroupName: group.name
+  })
 }
 
 async function ensureDefaultGroup() {
@@ -123,41 +160,41 @@ async function ensureDefaultGroup() {
     method: 'POST',
     body: JSON.stringify({
       name: DEFAULT_GROUP_NAME,
-      icon: '📁',
+      icon: 'D',
       color: '#6b8c7a'
     })
   })
 
-  const group = payload.group
-  groups = [group]
-  await loadGroups()
-  return group
+  groups = [payload.group]
+  await loadGroups(payload.group.id)
+  return payload.group
 }
 
 async function handleCreateGroup() {
   const name = newGroupInput.value.trim()
-  if (!name) {
-    setStatus('请输入分组名称', 'error')
+  if (!name || busy || !authenticated) {
+    if (!name) setStatus('请输入分组名称', 'error')
     return
   }
 
+  setBusy(true)
   try {
     const payload = await request('/groups', {
       method: 'POST',
       body: JSON.stringify({
         name,
-        icon: '📁',
+        icon: 'D',
         color: '#6b8c7a'
       })
     })
 
     newGroupInput.value = ''
-    groups.push(payload.group)
-    await loadGroups()
-    groupSelect.value = payload.group.id
-    setStatus('分组创建成功', 'success')
+    await loadGroups(payload.group.id)
+    setStatus(`已创建「${payload.group.name}」`, 'success')
   } catch (error) {
     setStatus(error.message || '创建分组失败', 'error')
+  } finally {
+    setBusy(false)
   }
 }
 
@@ -170,34 +207,60 @@ async function handleSave() {
     return
   }
 
-  saveBtn.disabled = true
+  if (!isHttpUrl(url)) {
+    setStatus('仅支持 http 或 https 网页地址', 'error')
+    return
+  }
+
+  if (busy || !authenticated) return
+
+  setBusy(true)
   setStatus('正在保存...')
 
   try {
-    let groupId = groupSelect.value
+    let group = groups.find((item) => item.id === groupSelect.value)
+    group ||= await ensureDefaultGroup()
 
-    if (!groupId) {
-      const group = await ensureDefaultGroup()
-      groupId = group.id
-    }
-
-    await request('/bookmarks', {
+    const payload = await request('/bookmarks', {
       method: 'POST',
       body: JSON.stringify({
-        groupId,
+        groupId: group.id,
         title,
         url,
         favicon: currentTab?.favIconUrl || '',
-        description: ''
+        description: '',
+        deduplicate: true
       })
     })
 
-    setStatus('已成功添加到 DOMO NAV', 'success')
+    await chrome.storage.sync.set({
+      lastGroupId: group.id,
+      lastGroupName: group.name
+    })
+
+    setStatus(
+      payload.created === false
+        ? `「${title}」已在这个分组中`
+        : `已添加到「${group.name}」`,
+      'success'
+    )
   } catch (error) {
     setStatus(error.message || '保存失败，请先登录 DOMO NAV', 'error')
   } finally {
-    saveBtn.disabled = false
+    setBusy(false)
   }
+}
+
+function setBusy(value) {
+  busy = value
+  setInteractiveState()
+  saveBtn.textContent = value ? '处理中...' : '添加到 DOMO NAV'
+}
+
+function setInteractiveState() {
+  saveBtn.disabled = busy || !authenticated
+  createGroupBtn.disabled = busy || !authenticated
+  groupSelect.disabled = busy || !authenticated
 }
 
 function setStatus(message, type = '') {

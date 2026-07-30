@@ -1,6 +1,7 @@
 <script setup>
 import { computed, onMounted, ref } from 'vue'
 import { useConfig } from '@/shared/composables/useConfig'
+import Icon from '@/shared/components/Icon.vue'
 
 const {
   getSearchEngine,
@@ -16,6 +17,7 @@ const showSwitcher = ref(false)
 const isSearching = ref(false)
 const searchError = ref('')
 const searchResult = ref(null)
+const copied = ref(false)
 const currentEngine = computed(() => getSearchEngine())
 const allEngines = computed(() => getQuickAccessSearchEngines())
 
@@ -60,11 +62,26 @@ function selectEngine(engineId) {
 function closeResultPanel() {
   searchResult.value = null
   searchError.value = ''
+  copied.value = false
 }
 
 function openExternalResult() {
   if (!searchResult.value?.externalUrl) return
-  window.open(searchResult.value.externalUrl, '_blank')
+  window.open(searchResult.value.externalUrl, '_blank', 'noopener,noreferrer')
+}
+
+async function copyAnswer() {
+  if (!searchResult.value?.answer) return
+
+  try {
+    await navigator.clipboard.writeText(searchResult.value.answer)
+    copied.value = true
+    window.setTimeout(() => {
+      copied.value = false
+    }, 1800)
+  } catch {
+    searchError.value = '复制失败，请手动选择答案文本'
+  }
 }
 </script>
 
@@ -72,10 +89,16 @@ function openExternalResult() {
   <div class="search-shell">
     <div class="search-box" :class="{ 'is-focused': isFocused }">
       <div class="search-box__engine-wrap">
-        <button class="search-box__engine" @click="showSwitcher = !showSwitcher">
-          <span class="search-box__icon">{{ currentEngine.icon }}</span>
+        <button
+          class="search-box__engine"
+          type="button"
+          :aria-expanded="showSwitcher"
+          aria-label="切换搜索引擎"
+          @click="showSwitcher = !showSwitcher"
+        >
+          <span class="search-box__icon" aria-hidden="true">{{ currentEngine.icon }}</span>
           <span class="search-box__name">{{ currentEngine.name }}</span>
-          <span class="search-box__chevron">▾</span>
+          <Icon name="more-horizontal" :size="15" />
         </button>
 
         <div v-if="showSwitcher" class="engine-switcher">
@@ -83,6 +106,7 @@ function openExternalResult() {
             v-for="engine in allEngines"
             :key="engine.id"
             class="engine-switcher__item"
+            type="button"
             :class="{ 'is-active': currentEngine.id === engine.id }"
             @click="selectEngine(engine.id)"
           >
@@ -101,7 +125,8 @@ function openExternalResult() {
         @blur="isFocused = false"
         @keydown="handleKeydown"
       >
-      <button class="search-box__btn" :disabled="isSearching" @click="handleSearch">
+      <button class="search-box__btn" type="button" :disabled="isSearching" @click="handleSearch">
+        <Icon :name="isSearching ? 'refresh' : 'search'" :size="17" />
         <span>{{ isSearching ? '搜索中...' : '搜索' }}</span>
       </button>
     </div>
@@ -114,9 +139,12 @@ function openExternalResult() {
           </div>
           <div class="search-result-panel__meta">
             {{ searchResult?.query || query }}
+            <span v-if="searchResult?.model"> · {{ searchResult.model }}</span>
           </div>
         </div>
-        <button class="search-result-panel__close" @click="closeResultPanel">关闭</button>
+        <button class="search-result-panel__close" type="button" aria-label="关闭搜索结果" @click="closeResultPanel">
+          <Icon name="close" :size="16" /> 关闭
+        </button>
       </div>
 
       <div v-if="isSearching" class="search-result-panel__state">
@@ -132,28 +160,45 @@ function openExternalResult() {
           {{ searchResult.answer }}
         </div>
 
-        <div v-if="searchResult.items?.length" class="search-result-list">
-          <a
-            v-for="(item, index) in searchResult.items"
-            :key="item.url || index"
-            class="search-result-item"
-            :href="item.url"
-            target="_blank"
-            rel="noreferrer"
-          >
-            <div class="search-result-item__source">{{ item.source || '搜索结果' }}</div>
-            <div class="search-result-item__title">{{ item.title }}</div>
-            <div v-if="item.description" class="search-result-item__desc">{{ item.description }}</div>
-            <div class="search-result-item__url">{{ item.url }}</div>
-          </a>
+        <div v-if="searchResult.items?.length" class="search-result-sources">
+          <div class="search-result-sources__title">
+            <Icon name="external-link" :size="15" />
+            {{ searchResult.mode === 'answer' ? '引用来源' : '搜索结果' }}
+          </div>
+          <div class="search-result-list">
+            <a
+              v-for="(item, index) in searchResult.items"
+              :key="item.url || index"
+              class="search-result-item"
+              :href="item.url"
+              target="_blank"
+              rel="noopener noreferrer"
+            >
+              <div class="search-result-item__source">{{ item.source || '搜索结果' }}</div>
+              <div class="search-result-item__title">{{ item.title }}</div>
+              <div v-if="item.description" class="search-result-item__desc">{{ item.description }}</div>
+              <div class="search-result-item__url">{{ item.url }}</div>
+            </a>
+          </div>
         </div>
 
         <div class="search-result-panel__actions">
           <button
+            v-if="searchResult.answer"
+            class="search-result-panel__link"
+            type="button"
+            @click="copyAnswer"
+          >
+            <Icon :name="copied ? 'check' : 'copy'" :size="16" />
+            {{ copied ? '已复制' : '复制答案' }}
+          </button>
+          <button
             v-if="searchResult.externalUrl"
             class="search-result-panel__link"
+            type="button"
             @click="openExternalResult"
           >
+            <Icon name="external-link" :size="16" />
             在原始站点打开
           </button>
         </div>
@@ -209,7 +254,14 @@ function openExternalResult() {
 }
 
 .search-box__icon {
-  font-size: 18px;
+  min-width: 27px;
+  padding: 4px 6px;
+  color: var(--accent-color);
+  background: var(--accent-bg);
+  border-radius: 9px;
+  font-size: 11px;
+  font-weight: 700;
+  text-align: center;
 }
 
 .search-box__name {
@@ -269,6 +321,10 @@ function openExternalResult() {
 }
 
 .search-box__btn {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  gap: 7px;
   padding: 10px 24px;
   background: var(--accent-color);
   color: #fff;
@@ -289,6 +345,14 @@ function openExternalResult() {
 .search-box__btn:disabled {
   opacity: 0.7;
   cursor: wait;
+}
+
+.search-box__btn:disabled svg {
+  animation: search-spin 0.9s linear infinite;
+}
+
+@keyframes search-spin {
+  to { transform: rotate(360deg); }
 }
 
 .search-result-panel {
@@ -324,6 +388,10 @@ function openExternalResult() {
 
 .search-result-panel__close,
 .search-result-panel__link {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  gap: 6px;
   padding: 10px 16px;
   background: var(--bg-secondary);
   color: var(--text-primary);
@@ -339,6 +407,20 @@ function openExternalResult() {
   color: var(--text-primary);
   line-height: 1.8;
   white-space: pre-wrap;
+}
+
+.search-result-sources {
+  margin-top: 14px;
+}
+
+.search-result-sources__title {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  margin: 0 4px 10px;
+  color: var(--text-secondary);
+  font-size: 13px;
+  font-weight: 600;
 }
 
 .search-result-panel__state {
@@ -398,6 +480,7 @@ function openExternalResult() {
 .search-result-panel__actions {
   display: flex;
   justify-content: flex-end;
+  gap: 8px;
   margin-top: 16px;
 }
 

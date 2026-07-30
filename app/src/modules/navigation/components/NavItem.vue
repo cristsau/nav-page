@@ -1,18 +1,22 @@
 <script setup>
-import { ref, computed } from 'vue'
+import { computed } from 'vue'
 import { useConfig } from '@/shared/composables/useConfig'
+import Icon from '@/shared/components/Icon.vue'
 
 const props = defineProps({
   bookmark: {
     type: Object,
     required: true
+  },
+  deleting: {
+    type: Boolean,
+    default: false
   }
 })
 
 const emit = defineEmits(['edit', 'delete'])
 
 const { config } = useConfig()
-const showActions = ref(false)
 
 const cardStyle = computed(() => {
   const size = config.value.style.cardSize
@@ -25,7 +29,13 @@ const cardStyle = computed(() => {
 })
 
 function openUrl() {
-  window.open(props.bookmark.url, '_blank')
+  try {
+    const url = new URL(props.bookmark.url)
+    if (!['http:', 'https:'].includes(url.protocol)) return
+    window.open(url.toString(), '_blank', 'noopener')
+  } catch {
+    // Invalid URLs are rejected when saving; keep this as a final safety guard.
+  }
 }
 
 function handleEdit(e) {
@@ -55,22 +65,39 @@ function getFavicon(url) {
 <template>
   <div
     class="bookmark-card card-float"
+    :class="{ 'is-deleting': deleting }"
     :style="{ width: cardStyle.width }"
+    role="link"
+    tabindex="0"
+    :aria-label="`打开 ${bookmark.title}`"
     @click="openUrl"
-    @mouseenter="showActions = true"
-    @mouseleave="showActions = false"
+    @keydown.enter.prevent="openUrl"
+    @keydown.space.prevent="openUrl"
   >
     <!-- 操作按钮 -->
-    <Transition name="fade">
-      <div v-if="showActions" class="bookmark-card__actions">
-        <button class="action-btn" title="编辑" @click="handleEdit">
-          ✏️
+    <div class="bookmark-card__actions">
+        <button
+          class="action-btn"
+          type="button"
+          title="编辑"
+          :aria-label="`编辑书签 ${bookmark.title}`"
+          :disabled="deleting"
+          @click="handleEdit"
+        >
+          <Icon name="edit" :size="15" />
         </button>
-        <button class="action-btn action-btn--danger" title="删除" @click="handleDelete">
-          🗑️
+        <button
+          class="action-btn action-btn--danger"
+          type="button"
+          title="删除"
+          :aria-label="`删除书签 ${bookmark.title}`"
+          :disabled="deleting"
+          @click="handleDelete"
+        >
+          <span v-if="deleting" class="mini-spinner" aria-hidden="true"></span>
+          <Icon v-else name="trash" :size="15" />
         </button>
-      </div>
-    </Transition>
+    </div>
 
     <!-- 图标 -->
     <div class="bookmark-card__icon" :style="{ fontSize: cardStyle.iconSize }">
@@ -80,7 +107,7 @@ function getFavicon(url) {
         :alt="bookmark.title"
         @error="$event.target.style.display = 'none'"
       >
-      <span v-else class="bookmark-card__icon-fallback">🔗</span>
+      <Icon v-else class="bookmark-card__icon-fallback" name="link" :size="28" />
     </div>
 
     <!-- 标题 -->
@@ -103,18 +130,28 @@ function getFavicon(url) {
   flex-direction: column;
   align-items: center;
   justify-content: center;
-  padding: 20px 12px;
+  padding: 44px 12px 20px;
   background: var(--bg-card);
   border-radius: var(--radius-md);
   cursor: pointer;
   text-align: center;
   box-shadow: var(--shadow-card);
   transition: all var(--transition-normal) var(--ease-smooth);
+  border: 1px solid transparent;
 }
 
 .bookmark-card:hover {
   transform: translateY(-4px);
   box-shadow: var(--shadow-card-hover);
+}
+
+.bookmark-card:focus-visible {
+  border-color: var(--accent-color);
+}
+
+.bookmark-card.is-deleting {
+  opacity: 0.65;
+  pointer-events: none;
 }
 
 .bookmark-card:active {
@@ -127,6 +164,15 @@ function getFavicon(url) {
   right: 8px;
   display: flex;
   gap: 4px;
+  opacity: 1;
+  transform: none;
+  transition: opacity var(--transition-fast), transform var(--transition-fast);
+}
+
+.bookmark-card:hover .bookmark-card__actions,
+.bookmark-card:focus-within .bookmark-card__actions {
+  opacity: 1;
+  transform: translateY(0);
 }
 
 .action-btn {
@@ -141,6 +187,7 @@ function getFavicon(url) {
   cursor: pointer;
   font-size: 12px;
   transition: all var(--transition-fast);
+  color: var(--text-muted);
 }
 
 .action-btn:hover {
@@ -150,6 +197,7 @@ function getFavicon(url) {
 
 .action-btn--danger:hover {
   background: var(--error-color);
+  color: #fff;
 }
 
 .bookmark-card__icon {
@@ -194,13 +242,23 @@ function getFavicon(url) {
 }
 
 /* Fade transition */
-.fade-enter-active,
-.fade-leave-active {
-  transition: opacity 0.15s ease;
+.mini-spinner {
+  width: 13px;
+  height: 13px;
+  border: 2px solid currentColor;
+  border-right-color: transparent;
+  border-radius: 50%;
+  animation: spin 0.75s linear infinite;
 }
 
-.fade-enter-from,
-.fade-leave-to {
-  opacity: 0;
+@keyframes spin {
+  to { transform: rotate(360deg); }
+}
+
+@media (hover: none), (pointer: coarse) {
+  .bookmark-card__actions {
+    opacity: 1;
+    transform: none;
+  }
 }
 </style>
