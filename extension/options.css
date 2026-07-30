@@ -42,7 +42,10 @@ body {
 .hero__avatar {
   width: 72px;
   height: 72px;
-  border-radius: 20px;
+  object-fit: contain;
+  background: #fff;
+  border: 1px solid rgba(95, 138, 111, 0.14);
+  border-radius: 50%;
   box-shadow: 0 12px 26px rgba(26, 41, 31, 0.12);
 }
 

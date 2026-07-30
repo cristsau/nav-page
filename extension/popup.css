@@ -38,7 +38,9 @@ body {
 .popup__avatar {
   width: 58px;
   height: 58px;
-  border-radius: 18px;
+  object-fit: contain;
+  border: 1px solid rgba(95, 138, 111, 0.14);
+  border-radius: 50%;
   box-shadow: 0 10px 24px rgba(44, 54, 47, 0.12);
   background: #fff;
 }
@@ -99,7 +101,9 @@ body {
 .hero__mark {
   width: 56px;
   height: 56px;
-  border-radius: 16px;
+  object-fit: contain;
+  background: #fff;
+  border-radius: 50%;
 }
 
 .hero__title {

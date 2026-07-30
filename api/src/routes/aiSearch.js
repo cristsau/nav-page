@@ -4,6 +4,8 @@ import {
   extractAiText,
   extractResponseSources
 } from '../lib/aiResponses.js'
+import { assertSafeOutboundEndpoint } from '../lib/outboundEndpoints.js'
+import { resolveProviderTestConfig } from '../lib/settingsSecrets.js'
 import { getUserSettingValue } from '../lib/userSettings.js'
 
 const DEFAULT_BRAVE_ENDPOINT = 'https://api.search.brave.com/res/v1/web/search'
@@ -38,16 +40,7 @@ function extractErrorMessage(payload, fallback) {
 }
 
 async function fetchJson(url, options, fallbackErrorMessage) {
-  let parsedUrl
-  try {
-    parsedUrl = new URL(url)
-  } catch {
-    throw new Error('接口地址格式无效')
-  }
-
-  if (!['http:', 'https:'].includes(parsedUrl.protocol)) {
-    throw new Error('接口地址只支持 HTTP 或 HTTPS')
-  }
+  const parsedUrl = await assertSafeOutboundEndpoint(url)
 
   const controller = new AbortController()
   const timeout = setTimeout(() => controller.abort(), REQUEST_TIMEOUT_MS)
@@ -55,7 +48,8 @@ async function fetchJson(url, options, fallbackErrorMessage) {
   try {
     const response = await fetch(parsedUrl, {
       ...options,
-      signal: controller.signal
+      signal: controller.signal,
+      redirect: 'error'
     })
     const contentType = response.headers.get('content-type') || ''
     const payload = contentType.includes('application/json')
@@ -278,10 +272,12 @@ export default async function aiSearchRoutes(fastify) {
 
     const provider = normalizeText(request.body?.provider).toLowerCase()
     const inputConfig = request.body?.config || {}
+    const appConfig = await getUserSettingValue(request.currentUser.id, 'appConfig', {})
+    const providerConfig = resolveProviderTestConfig(provider, inputConfig, appConfig)
 
     try {
       if (provider === 'brave') {
-        const result = await runBraveSearch(inputConfig, 'DOMO NAV 浏览器书签 AI 搜索')
+        const result = await runBraveSearch(providerConfig, 'DOMO NAV 浏览器书签 AI 搜索')
         return {
           ok: true,
           provider,
@@ -292,7 +288,7 @@ export default async function aiSearchRoutes(fastify) {
       }
 
       if (provider === 'chatgpt') {
-        const result = await runChatSearch(inputConfig, '请只回复：连接成功', request.currentUser.id)
+        const result = await runChatSearch(providerConfig, '请只回复：连接成功', request.currentUser.id)
         return {
           ok: true,
           provider,
@@ -301,7 +297,7 @@ export default async function aiSearchRoutes(fastify) {
       }
 
       if (provider === 'openclaw') {
-        const result = await runOpenClawSearch(inputConfig, '请只回复：连接成功')
+        const result = await runOpenClawSearch(providerConfig, '请只回复：连接成功')
         return {
           ok: true,
           provider,
@@ -349,9 +345,16 @@ export default async function aiSearchRoutes(fastify) {
       }
 
       if (engineId === 'chatgpt') {
+        const chatProvider = request.body?.webSearchEnabled === false
+          ? {
+              ...(providers.chatgpt || {}),
+              webSearchEnabled: false
+            }
+          : (providers.chatgpt || {})
+
         return {
           result: await runChatSearch(
-            providers.chatgpt || {},
+            chatProvider,
             queryText,
             request.currentUser.id
           )

@@ -112,10 +112,12 @@ export function useAuth() {
 
     const request = await registerUser(payload)
 
-    try {
-      await sendRegistrationNotification(request)
-    } catch (error) {
-      console.error('Failed to notify Telegram about registration:', error)
+    if (!request.autoApproved) {
+      try {
+        await sendRegistrationNotification(request)
+      } catch (error) {
+        console.error('Failed to notify Telegram about registration:', error)
+      }
     }
 
     return request

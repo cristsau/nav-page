@@ -1,24 +1,20 @@
 <script setup>
 import { ref, watch } from 'vue'
+import Icon from '@/shared/components/Icon.vue'
 import { useConfig } from '@/shared/composables/useConfig'
 
 const { config, updateConfig } = useConfig()
+const DEFAULT_LOGO = '/domo-logo.png'
 
 const siteName = ref('')
-const siteIcon = ref('')
-const customIcon = ref('')
-const favicon = ref('')
-
-const presetIcons = ['💠', '🌐', '📚', '🗂', '✨', '🧭', '🚀', '📝', '🔎', '🪄', '📌', '🌙', '☀️', '🎯', '🛠️', '🔐']
+const favicon = ref(DEFAULT_LOGO)
 
 watch(
   () => config.value.site,
   (site) => {
     if (!site) return
     siteName.value = site.name || 'DOMO NAV'
-    siteIcon.value = site.icon || '💠'
-    customIcon.value = site.icon || ''
-    favicon.value = site.favicon || ''
+    favicon.value = site.favicon || DEFAULT_LOGO
   },
   { immediate: true, deep: true }
 )
@@ -26,22 +22,9 @@ watch(
 function saveSettings() {
   updateConfig('site', {
     name: siteName.value.trim() || 'DOMO NAV',
-    icon: siteIcon.value || customIcon.value || '💠',
-    favicon: favicon.value
+    icon: DEFAULT_LOGO,
+    favicon: favicon.value || DEFAULT_LOGO
   })
-}
-
-function selectIcon(icon) {
-  siteIcon.value = icon
-  customIcon.value = icon
-  saveSettings()
-}
-
-function applyCustomIcon() {
-  const icon = customIcon.value.trim()
-  if (!icon) return
-  siteIcon.value = icon.slice(0, 2)
-  saveSettings()
 }
 
 function handleFaviconUpload(event) {
@@ -56,8 +39,8 @@ function handleFaviconUpload(event) {
   reader.readAsDataURL(file)
 }
 
-function clearFavicon() {
-  favicon.value = ''
+function resetFavicon() {
+  favicon.value = DEFAULT_LOGO
   saveSettings()
 }
 </script>
@@ -78,33 +61,13 @@ function clearFavicon() {
 
     <div class="settings-item">
       <div class="settings-item__info">
-        <div class="settings-item__label">网站图标</div>
-        <div class="settings-item__desc">支持预设图标，也支持输入自己的 Emoji 或短文字。</div>
+        <div class="settings-item__label">品牌 Logo</div>
+        <div class="settings-item__desc">使用你提供的头像，统一显示在导航、登录页、关于页和浏览器扩展中。</div>
       </div>
       <div class="settings-item__control">
-        <div class="icon-selector">
-          <div class="icon-preview">{{ siteIcon }}</div>
-          <div class="icon-grid">
-            <button
-              v-for="icon in presetIcons"
-              :key="icon"
-              class="icon-btn"
-              :class="{ 'is-active': siteIcon === icon }"
-              @click="selectIcon(icon)"
-            >
-              {{ icon }}
-            </button>
-          </div>
-          <div class="custom-icon-row">
-            <input
-              v-model="customIcon"
-              type="text"
-              class="input input--small"
-              placeholder="输入自定义图标"
-              @keydown.enter.prevent="applyCustomIcon"
-            >
-            <button class="btn btn--secondary" @click="applyCustomIcon">应用</button>
-          </div>
+        <div class="brand-preview">
+          <img :src="DEFAULT_LOGO" alt="">
+          <span>DOMO NAV</span>
         </div>
       </div>
     </div>
@@ -116,14 +79,22 @@ function clearFavicon() {
       </div>
       <div class="settings-item__control">
         <div class="favicon-upload">
-          <div v-if="favicon" class="favicon-preview">
+          <div class="favicon-preview">
             <img :src="favicon" alt="favicon">
-            <button class="favicon-clear" @click="clearFavicon">×</button>
           </div>
           <label class="upload-btn">
-            {{ favicon ? '更换图片' : '上传图片' }}
+            更换图片
             <input type="file" accept="image/*" hidden @change="handleFaviconUpload">
           </label>
+          <button
+            v-if="favicon !== DEFAULT_LOGO"
+            class="favicon-reset"
+            type="button"
+            @click="resetFavicon"
+          >
+            <Icon name="refresh" :size="15" />
+            恢复默认
+          </button>
         </div>
       </div>
     </div>
@@ -196,55 +167,28 @@ function clearFavicon() {
   border-color: var(--accent-color);
 }
 
-.input--small {
-  width: 160px;
-}
-
-.icon-selector {
-  width: 260px;
-}
-
-.icon-preview {
-  width: 56px;
-  height: 56px;
-  display: flex;
+.brand-preview {
+  display: inline-flex;
   align-items: center;
-  justify-content: center;
+  gap: 10px;
+  min-width: 180px;
+  padding: 8px 14px 8px 8px;
   background: var(--bg-secondary);
-  border-radius: var(--radius-md);
-  font-size: 30px;
-  margin-bottom: 12px;
-  border: 2px solid var(--border-color);
+  border: 1px solid var(--border-light);
+  border-radius: 999px;
+  color: var(--text-primary);
+  font-size: 13px;
+  font-weight: 700;
+  letter-spacing: 0.12em;
 }
 
-.icon-grid {
-  display: grid;
-  grid-template-columns: repeat(8, 1fr);
-  gap: 6px;
-}
-
-.icon-btn {
-  width: 28px;
-  height: 28px;
-  display: flex;
-  align-items: center;
-  justify-content: center;
-  background: var(--bg-secondary);
-  border: none;
-  border-radius: 6px;
-  font-size: 14px;
-  cursor: pointer;
-}
-
-.icon-btn.is-active {
-  background: var(--accent-color);
-  box-shadow: 0 0 0 2px var(--accent-light);
-}
-
-.custom-icon-row {
-  display: flex;
-  gap: 8px;
-  margin-top: 12px;
+.brand-preview img {
+  width: 44px;
+  height: 44px;
+  display: block;
+  object-fit: contain;
+  background: #fff;
+  border-radius: 50%;
 }
 
 .favicon-upload {
@@ -268,16 +212,15 @@ function clearFavicon() {
   object-fit: contain;
 }
 
-.favicon-clear {
-  position: absolute;
-  top: -6px;
-  right: -6px;
-  width: 18px;
-  height: 18px;
+.favicon-reset {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  padding: 8px 12px;
   border: none;
-  border-radius: 50%;
-  background: var(--error-color);
-  color: #fff;
+  border-radius: var(--radius-md);
+  background: transparent;
+  color: var(--text-secondary);
   cursor: pointer;
 }
 
@@ -300,14 +243,12 @@ function clearFavicon() {
 
   .settings-item__info,
   .settings-item__control,
-  .input,
-  .icon-selector,
-  .input--small {
+  .input {
     width: 100%;
   }
 
-  .custom-icon-row {
-    flex-direction: column;
+  .favicon-upload {
+    flex-wrap: wrap;
   }
 }
 </style>

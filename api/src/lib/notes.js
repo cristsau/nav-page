@@ -18,6 +18,9 @@ export function mapNote(record) {
 
   return {
     id: record.id,
+    numberId: record.number_id === null || record.number_id === undefined
+      ? null
+      : Number(record.number_id),
     type: record.type,
     title: record.title,
     content: record.content,

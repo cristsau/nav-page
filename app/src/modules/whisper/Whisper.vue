@@ -1,6 +1,6 @@
 <script setup>
 import { ref, computed, onMounted } from 'vue'
-import { useRouter } from 'vue-router'
+import { useRoute, useRouter } from 'vue-router'
 import { getCurrentUserId, getNotes as getLocalNotes, addNote as addLocalNote, updateNote as updateLocalNote, deleteNote as deleteLocalNote, toggleNotePin as toggleLocalNotePin, getSetting as getLocalSetting, setSetting as setLocalSetting } from '@/shared/db/database'
 import { fetchBackendSetting, saveBackendSetting, shouldUseBackendSettings } from '@/shared/services/settingsApi'
 import { createBackendNote, deleteBackendNote, fetchBackendNotes, shouldUseBackendNotes, toggleBackendNotePin, updateBackendNote } from '@/shared/services/notesApi'
@@ -11,6 +11,7 @@ import NotePreview from './components/NotePreview.vue'
 import ShareManager from './components/ShareManager.vue'
 
 const router = useRouter()
+const route = useRoute()
 
 // 笔记数据
 const notes = ref([])
@@ -112,6 +113,7 @@ function setStatus(message, type = 'success') {
 // 筛选后的笔记
 const filteredNotes = computed(() => {
   const term = searchQuery.value.trim().toLowerCase()
+  const numberTerm = term.replace(/^#/, '')
 
   return notes.value.filter((note) => {
     if (filterType.value !== 'all' && note.type !== filterType.value) return false
@@ -123,7 +125,13 @@ const filteredNotes = computed(() => {
 
     if (!term) return true
 
-    return [
+    const numberIdMatches = Boolean(
+      numberTerm &&
+      note.numberId &&
+      String(note.numberId).includes(numberTerm)
+    )
+
+    return numberIdMatches || [
       note.title,
       note.encrypted ? '' : note.content,
       ...(note.tags || []),
@@ -204,9 +212,69 @@ function handleEditNote(note) {
   showEditor.value = true
 }
 
+function handleAiNote(note) {
+  showPreview.value = false
+  previewingNote.value = null
+  editingNote.value = { ...note, _openAi: true }
+  showEditor.value = true
+}
+
 function handlePreviewNote(note) {
   previewingNote.value = note
   showPreview.value = true
+}
+
+async function copyText(value) {
+  await navigator.clipboard.writeText(value)
+}
+
+async function handleCopyNoteId(note) {
+  if (!note?.numberId) {
+    setStatus('这条记录暂时没有数字 ID', 'error')
+    return
+  }
+
+  try {
+    await copyText(String(note.numberId))
+    setStatus(`已复制数字 ID #${note.numberId}`)
+  } catch {
+    setStatus('复制数字 ID 失败，请手动复制', 'error')
+  }
+}
+
+function buildNoteExtract(note) {
+  const lines = [
+    `ID: ${note.numberId ? `#${note.numberId}` : note.id}`,
+    `类型: ${note.type === 'diary' ? '日记' : '备忘录'}`,
+    `标题: ${note.title || '无标题'}`
+  ]
+
+  if (note.type === 'diary' && note.entryDate) {
+    lines.push(`日期: ${note.entryDate}`)
+  }
+  if (note.type === 'memo' && note.dueAt) {
+    lines.push(`截止: ${new Date(note.dueAt).toLocaleString('zh-CN', { hour12: false })}`)
+  }
+  if (note.tags?.length) {
+    lines.push(`标签: ${note.tags.join(', ')}`)
+  }
+
+  lines.push('', note.content || '')
+  return lines.join('\n').trim()
+}
+
+async function handleCopyNoteExtract(note) {
+  if (note.encrypted && !note._unlocked) {
+    setStatus('请先解锁加密记录再快速复制', 'error')
+    return
+  }
+
+  try {
+    await copyText(buildNoteExtract(note))
+    setStatus(`已复制 #${note.numberId || note.id} 的 ID、标题和正文`)
+  } catch {
+    setStatus('快速复制失败，请手动复制', 'error')
+  }
 }
 
 // 保存笔记
@@ -301,6 +369,27 @@ function goBack() {
 // 初始化
 onMounted(async () => {
   await loadNotes()
+
+  const requestedSearch = Array.isArray(route.query.search)
+    ? route.query.search[0]
+    : route.query.search
+  const requestedNoteId = Array.isArray(route.query.note)
+    ? route.query.note[0]
+    : route.query.note
+
+  if (requestedSearch) {
+    searchQuery.value = String(requestedSearch)
+    filterType.value = 'all'
+    memoStatus.value = 'all'
+  }
+
+  if (requestedNoteId) {
+    const requestedNote = notes.value.find((note) => String(note.id) === String(requestedNoteId))
+    if (requestedNote && !requestedNote.encrypted) {
+      handlePreviewNote(requestedNote)
+    }
+  }
+
   // 加载时光模块背景图
   const bg = await getSetting('whisperBgImage')
   if (bg) whisperBgImage.value = bg
@@ -420,6 +509,9 @@ onMounted(async () => {
               :note="note"
               @preview="handlePreviewNote"
               @edit="handleEditNote"
+              @ai="handleAiNote"
+              @copy-id="handleCopyNoteId"
+              @copy-extract="handleCopyNoteExtract"
               @delete="handleDeleteNote"
               @togglePin="handleTogglePin"
               @toggleComplete="handleToggleComplete"
@@ -440,6 +532,9 @@ onMounted(async () => {
                 :note="note"
                 @preview="handlePreviewNote"
                 @edit="handleEditNote"
+                @ai="handleAiNote"
+                @copy-id="handleCopyNoteId"
+                @copy-extract="handleCopyNoteExtract"
                 @delete="handleDeleteNote"
                 @togglePin="handleTogglePin"
                 @toggleComplete="handleToggleComplete"
@@ -459,6 +554,9 @@ onMounted(async () => {
               :note="note"
               @preview="handlePreviewNote"
               @edit="handleEditNote"
+              @ai="handleAiNote"
+              @copy-id="handleCopyNoteId"
+              @copy-extract="handleCopyNoteExtract"
               @delete="handleDeleteNote"
               @togglePin="handleTogglePin"
               @toggleComplete="handleToggleComplete"
@@ -493,6 +591,9 @@ onMounted(async () => {
       :note="previewingNote"
       @close="showPreview = false; previewingNote = null"
       @edit="showPreview = false; handleEditNote($event)"
+      @ai="handleAiNote"
+      @copy-id="handleCopyNoteId"
+      @copy-extract="handleCopyNoteExtract"
     />
 
     <!-- 分享管理弹窗 -->
@@ -1073,7 +1174,7 @@ onMounted(async () => {
   position: fixed;
   left: 50%;
   bottom: 28px;
-  z-index: 400;
+  z-index: 1600;
   display: flex;
   align-items: center;
   gap: 8px;

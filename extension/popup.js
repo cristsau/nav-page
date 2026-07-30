@@ -65,13 +65,16 @@ function isHttpUrl(value) {
 }
 
 async function request(path, options = {}) {
+  const headers = { ...(options.headers || {}) }
+
+  if (options.body !== undefined && options.body !== null) {
+    headers['Content-Type'] = headers['Content-Type'] || 'application/json'
+  }
+
   const response = await fetch(`${navBaseUrl}/api${path}`, {
     credentials: 'include',
-    headers: {
-      'Content-Type': 'application/json',
-      ...(options.headers || {})
-    },
-    ...options
+    ...options,
+    headers
   })
 
   const contentType = response.headers.get('content-type') || ''
@@ -160,7 +163,7 @@ async function ensureDefaultGroup() {
     method: 'POST',
     body: JSON.stringify({
       name: DEFAULT_GROUP_NAME,
-      icon: 'D',
+      icon: 'folder',
       color: '#6b8c7a'
     })
   })
@@ -183,7 +186,7 @@ async function handleCreateGroup() {
       method: 'POST',
       body: JSON.stringify({
         name,
-        icon: 'D',
+        icon: 'folder',
         color: '#6b8c7a'
       })
     })

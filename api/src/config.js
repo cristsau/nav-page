@@ -10,6 +10,8 @@ export const config = {
   sessionTtlDays: Number(process.env.SESSION_TTL_DAYS || 14),
   sessionCookieSecure: process.env.SESSION_COOKIE_SECURE === 'true',
   corsOrigin: process.env.CORS_ORIGIN || 'http://localhost:5174',
+  allowPrivateAiEndpoints: process.env.ALLOW_PRIVATE_AI_ENDPOINTS === 'true',
+  allowInsecureAiEndpoints: process.env.ALLOW_INSECURE_AI_ENDPOINTS === 'true',
   adminUsername: process.env.ADMIN_USERNAME || '',
   adminPassword: process.env.ADMIN_PASSWORD || '',
   migrationsDir: path.resolve(process.cwd(), 'src', 'db', 'migrations')

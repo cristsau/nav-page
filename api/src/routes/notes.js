@@ -152,6 +152,10 @@ export default async function notesRoutes(fastify) {
     if (!term) {
       return { notes: [] }
     }
+    const numericTerm = /^#?\d{1,15}$/.test(term)
+      ? Number(term.replace(/^#/, ''))
+      : null
+    const numberId = Number.isSafeInteger(numericTerm) ? numericTerm : null
 
     const { rows } = await query(
       `
@@ -173,17 +177,24 @@ export default async function notesRoutes(fastify) {
         WHERE n.user_id = $1
           AND n.encrypted = FALSE
           AND (
-            LOWER(n.title) LIKE $2
+            ($3::bigint IS NOT NULL AND n.number_id = $3)
+            OR LOWER(n.title) LIKE $2
             OR LOWER(n.content) LIKE $2
             OR EXISTS (
               SELECT 1
-              FROM jsonb_array_elements_text(n.tags) AS tag
+              FROM jsonb_array_elements_text(
+                CASE
+                  WHEN jsonb_typeof(n.tags) = 'array' THEN n.tags
+                  ELSE '[]'::jsonb
+                END
+              ) AS tag
               WHERE LOWER(tag) LIKE $2
             )
-          )
+        )
         ORDER BY n.updated_at DESC
+        LIMIT 50
       `,
-      [request.currentUser.id, `%${term}%`]
+      [request.currentUser.id, `%${term}%`, numberId]
     )
 
     return { notes: rows.map(mapNote) }

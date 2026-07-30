@@ -35,6 +35,9 @@ pnpm-debug.log*
 .env.local
 .env.*.local
 
+# Local AI assistant settings
+.claude/
+
 # Test
 coverage/
 *.lcov

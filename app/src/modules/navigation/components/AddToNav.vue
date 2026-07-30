@@ -2,6 +2,8 @@
 import { ref, computed, watch } from 'vue'
 import Modal from '@/shared/components/Modal.vue'
 import Button from '@/shared/components/Button.vue'
+import Icon from '@/shared/components/Icon.vue'
+import { GROUP_ICON_OPTIONS, resolveGroupIcon } from '../navigationUi'
 
 const props = defineProps({
   show: {
@@ -42,8 +44,8 @@ const formData = ref({
   description: '',
   // 分组字段
   name: '',
-  icon: 'D',
-  color: '#3b82f6'
+  icon: 'folder',
+  color: '#a08060'
 })
 const formError = ref('')
 
@@ -63,8 +65,8 @@ function resetForm() {
     favicon: '',
     description: '',
     name: '',
-    icon: 'D',
-    color: '#3b82f6'
+    icon: 'folder',
+    color: '#a08060'
   }
   formError.value = ''
 }
@@ -82,8 +84,8 @@ watch(() => props.show, (val) => {
           favicon: props.editingItem.favicon || '',
           description: props.editingItem.description || '',
           name: '',
-          icon: 'D',
-          color: '#3b82f6'
+          icon: 'folder',
+          color: '#a08060'
         }
       } else {
         formData.value = {
@@ -93,8 +95,8 @@ watch(() => props.show, (val) => {
           favicon: '',
           description: '',
           name: props.editingItem.name,
-          icon: props.editingItem.icon,
-          color: props.editingItem.color
+          icon: resolveGroupIcon(props.editingItem.icon, props.editingItem.name),
+          color: props.editingItem.color || '#a08060'
         }
       }
     } else {
@@ -178,7 +180,7 @@ function handleSubmit() {
       mode: 'group',
       data: {
         name: formData.value.name.trim(),
-        icon: formData.value.icon,
+        icon: resolveGroupIcon(formData.value.icon, formData.value.name),
         color: formData.value.color
       }
     })
@@ -198,7 +200,7 @@ function close() {
         <label class="form-label">分组</label>
         <select v-model="formData.groupId" class="input" :disabled="saving">
           <option v-for="group in groups" :key="group.id" :value="group.id">
-            {{ group.icon }} {{ group.name }}
+            {{ group.name }}
           </option>
         </select>
       </div>
@@ -258,15 +260,26 @@ function close() {
         >
       </div>
       <div class="form-group">
-        <label class="form-label">图标或短文字</label>
-        <input
-          v-model="formData.icon"
-          type="text"
-          class="input"
-          maxlength="4"
-          placeholder="例如 D、工、AI"
-          :disabled="saving"
-        >
+        <span class="form-label">分组图标</span>
+        <div class="icon-picker" role="radiogroup" aria-label="选择分组图标">
+          <button
+            v-for="option in GROUP_ICON_OPTIONS"
+            :key="option.name"
+            class="icon-picker__item"
+            :class="{ 'is-selected': formData.icon === option.name }"
+            type="button"
+            role="radio"
+            :aria-checked="formData.icon === option.name"
+            :aria-label="option.label"
+            :disabled="saving"
+            @click="formData.icon = option.name"
+          >
+            <span class="icon-picker__glyph" aria-hidden="true">
+              <Icon :name="option.name" :size="18" />
+            </span>
+            <span>{{ option.label }}</span>
+          </button>
+        </div>
       </div>
       <div class="form-group">
         <label class="form-label">颜色</label>
@@ -316,5 +329,74 @@ textarea.input {
   border: 1px solid color-mix(in srgb, var(--error-color) 34%, var(--border-color));
   border-radius: 12px;
   font-size: 13px;
+}
+
+.icon-picker {
+  display: grid;
+  grid-template-columns: repeat(4, minmax(0, 1fr));
+  gap: 8px;
+}
+
+.icon-picker__item {
+  min-width: 0;
+  display: grid;
+  justify-items: center;
+  gap: 6px;
+  padding: 10px 6px;
+  color: var(--text-secondary);
+  background: var(--bg-secondary);
+  border: 1px solid transparent;
+  border-radius: 13px;
+  font: inherit;
+  font-size: 12px;
+  cursor: pointer;
+  transition:
+    color var(--transition-fast),
+    background var(--transition-fast),
+    border-color var(--transition-fast),
+    transform var(--transition-fast);
+}
+
+.icon-picker__item:hover:not(:disabled) {
+  color: var(--text-primary);
+  background: var(--bg-hover);
+  transform: translateY(-1px);
+}
+
+.icon-picker__item:focus-visible {
+  outline: 2px solid var(--accent-color);
+  outline-offset: 2px;
+}
+
+.icon-picker__item.is-selected {
+  color: var(--accent-color);
+  background: var(--accent-bg);
+  border-color: color-mix(in srgb, var(--accent-color) 46%, transparent);
+  box-shadow: 0 6px 18px color-mix(in srgb, var(--accent-color) 12%, transparent);
+}
+
+.icon-picker__glyph {
+  display: grid;
+  place-items: center;
+  width: 30px;
+  height: 30px;
+  border-radius: 10px;
+  background: color-mix(in srgb, currentColor 9%, transparent);
+}
+
+@media (max-width: 520px) {
+  .icon-picker {
+    grid-template-columns: repeat(3, minmax(0, 1fr));
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .icon-picker__item {
+    transition: none;
+  }
+
+  .icon-picker__item:hover:not(:disabled) {
+    transform: none;
+  }
 }
 </style>

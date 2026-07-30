@@ -1,5 +1,10 @@
 import { query, withTransaction } from '../db/index.js'
-import { mapCustomSearchEngine } from '../lib/searchEngines.js'
+import {
+  isValidSearchUrl,
+  mapCustomSearchEngine,
+  normalizeEngineMonogram,
+  removeSearchEngineReferences
+} from '../lib/searchEngines.js'
 
 function normalizeText(value, fallback = '') {
   return String(value ?? fallback).trim()
@@ -27,11 +32,16 @@ export default async function customSearchEngineRoutes(fastify) {
 
     const name = normalizeText(request.body?.name)
     const url = normalizeText(request.body?.url)
-    const icon = normalizeText(request.body?.icon, '🔍') || '🔍'
+    const icon = normalizeEngineMonogram(request.body?.icon)
 
     if (!name || !url) {
       reply.code(400)
       return { error: 'Name and url are required' }
+    }
+
+    if (!isValidSearchUrl(url)) {
+      reply.code(400)
+      return { error: 'Search url must use http or https' }
     }
 
     const result = await withTransaction(async (client) => {
@@ -71,7 +81,14 @@ export default async function customSearchEngineRoutes(fastify) {
     const row = existing.rows[0]
     const name = normalizeText(request.body?.name, row.name) || row.name
     const url = normalizeText(request.body?.url, row.url) || row.url
-    const icon = normalizeText(request.body?.icon, row.icon) || row.icon
+    const icon = request.body?.icon === undefined
+      ? normalizeEngineMonogram(row.icon)
+      : normalizeEngineMonogram(request.body.icon)
+
+    if (!isValidSearchUrl(url)) {
+      reply.code(400)
+      return { error: 'Search url must use http or https' }
+    }
 
     const { rows } = await query(
       `
@@ -93,10 +110,47 @@ export default async function customSearchEngineRoutes(fastify) {
   fastify.delete('/search-engines/custom/:engineId', async (request, reply) => {
     await fastify.requireAuth(request, reply)
 
-    const result = await query(
-      'DELETE FROM custom_search_engines WHERE id = $1 AND user_id = $2 RETURNING id',
-      [request.params.engineId, request.currentUser.id]
-    )
+    const result = await withTransaction(async (client) => {
+      const deleted = await client.query(
+        'DELETE FROM custom_search_engines WHERE id = $1 AND user_id = $2 RETURNING id',
+        [request.params.engineId, request.currentUser.id]
+      )
+
+      if (!deleted.rows.length) {
+        return deleted
+      }
+
+      const setting = await client.query(
+        `
+          SELECT value
+          FROM user_settings
+          WHERE user_id = $1
+            AND key = 'appConfig'
+          FOR UPDATE
+        `,
+        [request.currentUser.id]
+      )
+
+      if (setting.rows.length) {
+        const updatedConfig = removeSearchEngineReferences(
+          setting.rows[0].value,
+          request.params.engineId
+        )
+
+        await client.query(
+          `
+            UPDATE user_settings
+            SET value = $2::jsonb,
+                updated_at = NOW()
+            WHERE user_id = $1
+              AND key = 'appConfig'
+          `,
+          [request.currentUser.id, JSON.stringify(updatedConfig)]
+        )
+      }
+
+      return deleted
+    })
 
     if (!result.rows.length) {
       reply.code(404)

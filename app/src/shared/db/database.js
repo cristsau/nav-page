@@ -1,13 +1,12 @@
 import Dexie from 'dexie'
 
-export const DEFAULT_ADMIN_USERNAME = 'cristsau'
-export const DEFAULT_ADMIN_PASSWORD = '52217192'
 export const CURRENT_USER_STORAGE_KEY = 'nav-current-user-id'
 export const TELEGRAM_CONFIG_META_ID = 'telegram-config'
 
-const DEFAULT_ADMIN_ID = 'user-cristsau-admin'
 const SYSTEM_DB_NAME = 'NavPageSystemDB'
 const USER_DB_PREFIX = 'NavPageDB_'
+const MIN_NOTE_NUMBER_ID = 1000
+const MAX_NOTE_NUMBER_ID = 999999999999999
 
 const systemDb = new Dexie(SYSTEM_DB_NAME)
 systemDb.version(1).stores({
@@ -29,7 +28,85 @@ function createUserDb(userId) {
     shares: 'id, noteId, code, expireAt, createdAt',
     settings: 'id'
   })
+  db.version(2).stores({
+    groups: 'id, name, order, createdAt',
+    bookmarks: 'id, groupId, title, url, order, createdAt',
+    notes: 'id, numberId, type, title, pinned, encrypted, createdAt, updatedAt',
+    customEngines: 'id, name, order',
+    shares: 'id, noteId, code, expireAt, createdAt',
+    settings: 'id'
+  }).upgrade(async (transaction) => {
+    const notes = await transaction.table('notes').toArray()
+    if (notes.length) {
+      await transaction.table('notes').bulkPut(ensureNoteNumberIds(notes))
+    }
+  })
+  db.version(3).stores({
+    groups: 'id, name, order, createdAt',
+    bookmarks: 'id, groupId, title, url, order, createdAt',
+    notes: 'id, &numberId, type, title, pinned, encrypted, createdAt, updatedAt',
+    customEngines: 'id, name, order',
+    shares: 'id, noteId, code, expireAt, createdAt',
+    settings: 'id'
+  }).upgrade(async (transaction) => {
+    const notes = await transaction.table('notes').toArray()
+    if (notes.length) {
+      await transaction.table('notes').bulkPut(ensureNoteNumberIds(notes))
+    }
+  })
   return db
+}
+
+export function ensureNoteNumberIds(notes = []) {
+  const normalized = notes.map((note) => ({ ...note }))
+  const used = new Set()
+
+  for (const note of normalized) {
+    const value = Number(note.numberId)
+    if (
+      Number.isSafeInteger(value)
+      && value >= MIN_NOTE_NUMBER_ID
+      && value <= MAX_NOTE_NUMBER_ID
+      && !used.has(value)
+    ) {
+      note.numberId = value
+      used.add(value)
+    } else {
+      note.numberId = null
+    }
+  }
+
+  let nextNumber = MIN_NOTE_NUMBER_ID
+  for (const note of normalized) {
+    if (note.numberId) continue
+    while (used.has(nextNumber)) nextNumber += 1
+    if (nextNumber > MAX_NOTE_NUMBER_ID) {
+      throw new Error('笔记数字 ID 已达到上限')
+    }
+    note.numberId = nextNumber
+    used.add(nextNumber)
+    nextNumber += 1
+  }
+
+  return normalized
+}
+
+async function getNextNoteNumberId(db) {
+  const notes = ensureNoteNumberIds(await db.notes.toArray())
+  if (notes.length) {
+    await db.notes.bulkPut(notes)
+  }
+
+  const nextNumber = notes.reduce(
+    (largest, note) => Math.max(largest, Number(note.numberId) || 999),
+    999
+  ) + 1
+
+  if (nextNumber > MAX_NOTE_NUMBER_ID) {
+    throw new Error('笔记数字 ID 已达到上限')
+  }
+
+  return nextNumber
 }
 
 function getUserDb(userId = getCurrentUserId()) {
@@ -128,22 +205,7 @@ export async function setTelegramConfig(config) {
 
 export async function bootstrapSystem() {
   if (!bootstrapPromise) {
-    bootstrapPromise = (async () => {
-      const existingAdmin = await systemDb.users.get(DEFAULT_ADMIN_ID)
-      if (!existingAdmin) {
-        const now = getTimestamp()
-        await systemDb.users.put({
-          id: DEFAULT_ADMIN_ID,
-          username: DEFAULT_ADMIN_USERNAME,
-          passwordHash: await hashText(DEFAULT_ADMIN_PASSWORD),
-          role: 'admin',
-          status: 'approved',
-          createdAt: now,
-          updatedAt: now,
-          approvedAt: now
-        })
-      }
-    })()
+    bootstrapPromise = systemDb.open()
   }
 
   await bootstrapPromise
@@ -194,28 +256,59 @@ export async function registerUser({ username, password }) {
     throw new Error('请填写用户名和密码')
   }
 
-  const existingUser = await systemDb.users.where('username').equals(normalized).first()
-  if (existingUser) {
-    throw new Error('用户名已存在')
-  }
+  const passwordHash = await hashText(password)
 
-  const existingRequest = await systemDb.registrationRequests.where('username').equals(normalized).first()
-  if (existingRequest && existingRequest.status === 'pending') {
-    throw new Error('该账号正在等待审批')
-  }
+  return systemDb.transaction(
+    'rw',
+    [systemDb.users, systemDb.registrationRequests],
+    async () => {
+      const existingUser = await systemDb.users.where('username').equals(normalized).first()
+      if (existingUser) {
+        throw new Error('用户名已存在')
+      }
 
-  const now = getTimestamp()
-  const request = {
-    id: generateId(),
-    username: normalized,
-    passwordHash: await hashText(password),
-    status: 'pending',
-    createdAt: now,
-    updatedAt: now
-  }
+      const existingRequest = await systemDb.registrationRequests
+        .where('username')
+        .equals(normalized)
+        .first()
+      if (existingRequest && existingRequest.status === 'pending') {
+        throw new Error('该账号正在等待审批')
+      }
 
-  await systemDb.registrationRequests.put(request)
-  return request
+      const now = getTimestamp()
+      const approvedUser = await systemDb.users.where('status').equals('approved').first()
+
+      if (!approvedUser) {
+        const initialAdmin = {
+          id: `user-${generateId()}`,
+          username: normalized,
+          passwordHash,
+          role: 'admin',
+          status: 'approved',
+          createdAt: now,
+          updatedAt: now,
+          approvedAt: now
+        }
+        await systemDb.users.put(initialAdmin)
+        return {
+          ...sanitizeUser(initialAdmin),
+          autoApproved: true
+        }
+      }
+
+      const request = {
+        id: generateId(),
+        username: normalized,
+        passwordHash,
+        status: 'pending',
+        createdAt: now,
+        updatedAt: now
+      }
+
+      await systemDb.registrationRequests.put(request)
+      return request
+    }
+  )
 }
 
 export async function getApprovedUsers() {
@@ -241,7 +334,7 @@ export async function getRegistrationHistory() {
   return requests.sort((a, b) => b.updatedAt - a.updatedAt)
 }
 
-export async function approveRegistration(requestId, decidedBy = DEFAULT_ADMIN_USERNAME) {
+export async function approveRegistration(requestId, decidedBy = 'local-admin') {
   await bootstrapSystem()
   const request = await systemDb.registrationRequests.get(requestId)
 
@@ -279,7 +372,7 @@ export async function approveRegistration(requestId, decidedBy = DEFAULT_ADMIN_U
   return updatedRequest
 }
 
-export async function rejectRegistration(requestId, decidedBy = DEFAULT_ADMIN_USERNAME) {
+export async function rejectRegistration(requestId, decidedBy = 'local-admin') {
   await bootstrapSystem()
   const request = await systemDb.registrationRequests.get(requestId)
 
@@ -465,33 +558,36 @@ export async function getNote(id) {
 
 export async function addNote(note) {
   const db = requireUserDb()
-  const now = getTimestamp()
-  const newNote = {
-    id: generateId(),
-    type: note.type || 'memo',
-    title: note.title || '无标题',
-    content: note.content || '',
-    encrypted: note.encrypted || false,
-    password: note.password || '',
-    pinned: note.pinned || false,
-    share: {
-      enabled: false,
-      code: '',
-      expireAt: null,
-      viewCount: 0
-    },
-    tags: Array.isArray(note.tags) ? [...note.tags] : [],
-    entryDate: note.type === 'diary'
-      ? (note.entryDate || new Date(now).toISOString().slice(0, 10))
-      : '',
-    mood: note.type === 'diary' ? String(note.mood || '') : '',
-    dueAt: note.type === 'memo' ? (note.dueAt || null) : null,
-    completed: note.type === 'memo' && Boolean(note.completed),
-    createdAt: now,
-    updatedAt: now
-  }
-  await db.notes.add(newNote)
-  return newNote
+  return db.transaction('rw', db.notes, async () => {
+    const now = getTimestamp()
+    const newNote = {
+      id: generateId(),
+      numberId: await getNextNoteNumberId(db),
+      type: note.type || 'memo',
+      title: note.title || '无标题',
+      content: note.content || '',
+      encrypted: note.encrypted || false,
+      password: note.password || '',
+      pinned: note.pinned || false,
+      share: {
+        enabled: false,
+        code: '',
+        expireAt: null,
+        viewCount: 0
+      },
+      tags: Array.isArray(note.tags) ? [...note.tags] : [],
+      entryDate: note.type === 'diary'
+        ? (note.entryDate || new Date(now).toISOString().slice(0, 10))
+        : '',
+      mood: note.type === 'diary' ? String(note.mood || '') : '',
+      dueAt: note.type === 'memo' ? (note.dueAt || null) : null,
+      completed: note.type === 'memo' && Boolean(note.completed),
+      createdAt: now,
+      updatedAt: now
+    }
+    await db.notes.add(newNote)
+    return newNote
+  })
 }
 
 export async function updateNote(id, updates) {
@@ -519,10 +615,14 @@ export async function toggleNotePin(id) {
 export async function searchNotes(query) {
   const db = getUserDb()
   if (!db) return []
-  const lowerQuery = query.toLowerCase()
+  const lowerQuery = String(query || '').trim().toLowerCase()
+  const numberQuery = /^#?\d+$/.test(lowerQuery)
+    ? lowerQuery.replace(/^#/, '')
+    : ''
   const notes = await db.notes.toArray()
   return notes.filter((note) =>
     !note.encrypted && (
+      (numberQuery && String(note.numberId || '') === numberQuery) ||
       note.title.toLowerCase().includes(lowerQuery) ||
       note.content.toLowerCase().includes(lowerQuery) ||
       note.tags?.some((tag) => tag.toLowerCase().includes(lowerQuery))
@@ -711,7 +811,7 @@ export async function importData(data) {
 
     if (data.groups?.length) await db.groups.bulkAdd(data.groups)
     if (data.bookmarks?.length) await db.bookmarks.bulkAdd(data.bookmarks)
-    if (data.notes?.length) await db.notes.bulkAdd(data.notes)
+    if (data.notes?.length) await db.notes.bulkAdd(ensureNoteNumberIds(data.notes))
     if (data.customEngines?.length) await db.customEngines.bulkAdd(data.customEngines)
     if (data.shares?.length) await db.shares.bulkAdd(data.shares)
     if (data.settings?.length) await db.settings.bulkAdd(data.settings)

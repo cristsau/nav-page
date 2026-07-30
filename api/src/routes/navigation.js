@@ -216,8 +216,19 @@ export default async function navigationRoutes(fastify) {
             LOWER(title) LIKE $2
             OR LOWER(url) LIKE $2
             OR LOWER(description) LIKE $2
-          )
+            OR EXISTS (
+              SELECT 1
+              FROM jsonb_array_elements_text(
+                CASE
+                  WHEN jsonb_typeof(tags) = 'array' THEN tags
+                  ELSE '[]'::jsonb
+                END
+              ) AS tag
+              WHERE LOWER(tag) LIKE $2
+            )
+        )
         ORDER BY updated_at DESC
+        LIMIT 50
       `,
       [request.currentUser.id, `%${search}%`]
     )
