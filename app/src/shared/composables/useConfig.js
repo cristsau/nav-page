@@ -295,6 +295,11 @@ function syncStyleConfig() {
 }
 
 export async function loadCustomSearchEngines() {
+  if (shouldUseBackendSearchEngines() && !getCurrentUserId()) {
+    customSearchEngines.value = []
+    return
+  }
+
   try {
     customSearchEngines.value = shouldUseBackendSearchEngines()
       ? await fetchBackendCustomSearchEngines()
