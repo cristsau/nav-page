@@ -1,5 +1,8 @@
 <script setup>
+import { nextTick, onBeforeUnmount, ref, watch } from 'vue'
 import Icon from '@/shared/components/Icon.vue'
+import CopyableNoteContent from './CopyableNoteContent.vue'
+import CopyableValue from './CopyableValue.vue'
 
 const props = defineProps({
   show: {
@@ -12,7 +15,9 @@ const props = defineProps({
   }
 })
 
-const emit = defineEmits(['close', 'edit', 'ai', 'copyId', 'copyExtract'])
+const emit = defineEmits(['close', 'edit', 'ai', 'copyId', 'copyExtract', 'copyValue'])
+const dialogRef = ref(null)
+let previouslyFocusedElement = null
 
 function formatDate(timestamp) {
   if (!timestamp) return '-'
@@ -27,15 +32,96 @@ function formatEntryDate(value) {
     day: 'numeric'
   })
 }
+
+function forwardCopy(payload) {
+  emit('copyValue', payload)
+}
+
+function restorePreviousFocus() {
+  if (previouslyFocusedElement instanceof HTMLElement && previouslyFocusedElement.isConnected) {
+    previouslyFocusedElement.focus()
+  }
+  previouslyFocusedElement = null
+}
+
+function requestClose() {
+  emit('close')
+}
+
+function handleDialogKeydown(event) {
+  if (event.key === 'Escape') {
+    event.preventDefault()
+    requestClose()
+    return
+  }
+
+  if (event.key !== 'Tab' || !dialogRef.value) return
+
+  const focusable = [...dialogRef.value.querySelectorAll(
+    'button:not([disabled]), [href], input:not([disabled]), select:not([disabled]), textarea:not([disabled]), [tabindex]:not([tabindex="-1"])'
+  )].filter((element) => element.getClientRects().length > 0)
+
+  if (!focusable.length) {
+    event.preventDefault()
+    dialogRef.value.focus()
+    return
+  }
+
+  const first = focusable[0]
+  const last = focusable.at(-1)
+  const active = document.activeElement
+
+  if (event.shiftKey && (active === first || !dialogRef.value.contains(active))) {
+    event.preventDefault()
+    last.focus()
+  } else if (!event.shiftKey && active === last) {
+    event.preventDefault()
+    first.focus()
+  }
+}
+
+watch(
+  () => props.show,
+  async (show) => {
+    if (show) {
+      previouslyFocusedElement = document.activeElement
+      await nextTick()
+      dialogRef.value?.focus()
+      return
+    }
+
+    await nextTick()
+    if (document.querySelector('[role="dialog"][aria-modal="true"]')) {
+      previouslyFocusedElement = null
+      return
+    }
+
+    restorePreviousFocus()
+  }
+)
+
+onBeforeUnmount(restorePreviousFocus)
 </script>
 
 <template>
-  <div v-if="show && note" class="preview-modal" @click.self="emit('close')">
-    <div class="preview-card" role="dialog" aria-modal="true" :aria-label="note.title">
+  <div v-if="show && note" class="preview-modal" @click.self="requestClose">
+    <div
+      ref="dialogRef"
+      class="preview-card"
+      role="dialog"
+      aria-modal="true"
+      aria-labelledby="note-preview-title"
+      tabindex="-1"
+      @keydown="handleDialogKeydown"
+    >
       <div class="preview-card__header">
         <div>
           <div class="preview-card__type">{{ note.type === 'memo' ? '备忘录' : '日记' }}</div>
-          <h3 class="preview-card__title">{{ note.title }}</h3>
+          <h3 id="note-preview-title" class="preview-card__title">
+            <CopyableValue :value="note.title" label="标题" @copy="forwardCopy">
+              {{ note.title }}
+            </CopyableValue>
+          </h3>
         </div>
         <button type="button" class="preview-card__close" aria-label="关闭预览" @click="emit('close')">
           <Icon name="close" :size="18" />
@@ -52,21 +138,67 @@ function formatEntryDate(value) {
         >
           <Icon name="copy" :size="13" /> ID #{{ note.numberId }}
         </button>
-        <span>更新时间：{{ formatDate(note.updatedAt) }}</span>
-        <span v-if="note.type === 'diary'">记录日期：{{ formatEntryDate(note.entryDate) }}</span>
-        <span v-if="note.mood">心情：{{ note.mood }}</span>
-        <span v-if="note.dueAt">截止时间：{{ formatDate(note.dueAt) }}</span>
-        <span v-if="note.completed" class="preview-card__completed">
+        <CopyableValue
+          :value="formatDate(note.updatedAt)"
+          label="更新时间"
+          @copy="forwardCopy"
+        >
+          更新时间：{{ formatDate(note.updatedAt) }}
+        </CopyableValue>
+        <CopyableValue
+          v-if="note.type === 'diary'"
+          :value="formatEntryDate(note.entryDate)"
+          label="记录日期"
+          @copy="forwardCopy"
+        >
+          记录日期：{{ formatEntryDate(note.entryDate) }}
+        </CopyableValue>
+        <CopyableValue
+          v-if="note.mood"
+          :value="note.mood"
+          label="心情"
+          @copy="forwardCopy"
+        >
+          心情：{{ note.mood }}
+        </CopyableValue>
+        <CopyableValue
+          v-if="note.dueAt"
+          :value="formatDate(note.dueAt)"
+          label="截止时间"
+          @copy="forwardCopy"
+        >
+          截止时间：{{ formatDate(note.dueAt) }}
+        </CopyableValue>
+        <CopyableValue
+          v-if="note.completed"
+          value="已完成"
+          label="完成状态"
+          class="preview-card__completed"
+          @copy="forwardCopy"
+        >
           <Icon name="circle-check" :size="14" /> 已完成
-        </span>
-        <span v-if="note.tags?.length">标签：{{ note.tags.join(' / ') }}</span>
+        </CopyableValue>
+        <CopyableValue
+          v-if="note.tags?.length"
+          :value="note.tags.join(' / ')"
+          label="标签"
+          @copy="forwardCopy"
+        >
+          标签：{{ note.tags.join(' / ') }}
+        </CopyableValue>
       </div>
 
       <div class="preview-card__body">
         <div v-if="note.encrypted && !note._unlocked" class="preview-card__encrypted">
           该内容已加密，请先从笔记卡片解锁。
         </div>
-        <pre v-else class="preview-card__content">{{ note.content }}</pre>
+        <div v-else class="preview-card__content">
+          <div class="preview-card__copy-hint">
+            <Icon name="copy" :size="13" />
+            悬停高亮可复制单项，行尾按钮复制字段值或整行
+          </div>
+          <CopyableNoteContent :content="note.content" @copy="forwardCopy" />
+        </div>
       </div>
 
       <div class="preview-card__footer">
@@ -109,6 +241,10 @@ function formatEntryDate(value) {
   overflow: hidden;
 }
 
+.preview-card:focus {
+  outline: none;
+}
+
 .preview-card__header,
 .preview-card__footer {
   display: flex;
@@ -117,6 +253,11 @@ function formatEntryDate(value) {
   gap: 12px;
   padding: 18px 22px;
   border-bottom: 1px solid var(--border-light);
+}
+
+.preview-card__header > div {
+  flex: 1 1 auto;
+  min-width: 0;
 }
 
 .preview-card__footer {
@@ -131,8 +272,10 @@ function formatEntryDate(value) {
 }
 
 .preview-card__title {
+  min-width: 0;
   margin-top: 6px;
   color: var(--text-primary);
+  overflow-wrap: anywhere;
 }
 
 .preview-card__close {
@@ -152,6 +295,10 @@ function formatEntryDate(value) {
   padding: 14px 22px 0;
   color: var(--text-muted);
   font-size: 12px;
+}
+
+.preview-card__meta > * {
+  max-width: 100%;
 }
 
 .preview-card__id {
@@ -183,9 +330,16 @@ function formatEntryDate(value) {
 .preview-card__content {
   margin: 0;
   font: inherit;
-  white-space: pre-wrap;
-  line-height: 1.8;
   color: var(--text-primary);
+}
+
+.preview-card__copy-hint {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  margin-bottom: 10px;
+  color: var(--text-muted);
+  font-size: 11px;
 }
 
 .preview-card__encrypted {
@@ -231,7 +385,10 @@ function formatEntryDate(value) {
     grid-template-columns: repeat(2, minmax(0, 1fr));
   }
 
+  .preview-card__close,
+  .preview-card__id,
   .btn {
+    min-height: 44px;
     justify-content: center;
   }
 }

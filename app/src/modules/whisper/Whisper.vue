@@ -9,6 +9,7 @@ import NoteCard from './components/NoteCard.vue'
 import NoteEditor from './components/NoteEditor.vue'
 import NotePreview from './components/NotePreview.vue'
 import ShareManager from './components/ShareManager.vue'
+import { buildFullNoteText } from './utils/noteCopyText'
 
 const router = useRouter()
 const route = useRoute()
@@ -242,27 +243,6 @@ async function handleCopyNoteId(note) {
   }
 }
 
-function buildNoteExtract(note) {
-  const lines = [
-    `ID: ${note.numberId ? `#${note.numberId}` : note.id}`,
-    `类型: ${note.type === 'diary' ? '日记' : '备忘录'}`,
-    `标题: ${note.title || '无标题'}`
-  ]
-
-  if (note.type === 'diary' && note.entryDate) {
-    lines.push(`日期: ${note.entryDate}`)
-  }
-  if (note.type === 'memo' && note.dueAt) {
-    lines.push(`截止: ${new Date(note.dueAt).toLocaleString('zh-CN', { hour12: false })}`)
-  }
-  if (note.tags?.length) {
-    lines.push(`标签: ${note.tags.join(', ')}`)
-  }
-
-  lines.push('', note.content || '')
-  return lines.join('\n').trim()
-}
-
 async function handleCopyNoteExtract(note) {
   if (note.encrypted && !note._unlocked) {
     setStatus('请先解锁加密记录再快速复制', 'error')
@@ -270,10 +250,23 @@ async function handleCopyNoteExtract(note) {
   }
 
   try {
-    await copyText(buildNoteExtract(note))
-    setStatus(`已复制 #${note.numberId || note.id} 的 ID、标题和正文`)
+    await copyText(buildFullNoteText(note))
+    setStatus(`已复制 #${note.numberId || note.id} 的整条笔记内容`)
   } catch {
     setStatus('快速复制失败，请手动复制', 'error')
+  }
+}
+
+async function handleCopyValue(payload) {
+  const value = String(payload?.value ?? '').trim()
+  const label = String(payload?.label || '内容').trim()
+  if (!value) return
+
+  try {
+    await copyText(value)
+    setStatus(`已复制${label === '整行' ? '整行内容' : label}`)
+  } catch {
+    setStatus('复制失败，请手动复制', 'error')
   }
 }
 
@@ -590,10 +583,11 @@ onMounted(async () => {
       :show="showPreview"
       :note="previewingNote"
       @close="showPreview = false; previewingNote = null"
-      @edit="showPreview = false; handleEditNote($event)"
+      @edit="showPreview = false; previewingNote = null; handleEditNote($event)"
       @ai="handleAiNote"
       @copy-id="handleCopyNoteId"
       @copy-extract="handleCopyNoteExtract"
+      @copy-value="handleCopyValue"
     />
 
     <!-- 分享管理弹窗 -->
