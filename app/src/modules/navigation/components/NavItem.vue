@@ -106,6 +106,18 @@ function getFavicon(url) {
       >
         {{ bookmark.description }}
       </span>
+      <span
+        v-if="bookmark.tags?.length"
+        class="bookmark-card__tags"
+        :aria-label="`标签：${bookmark.tags.join('、')}`"
+      >
+        <span v-for="tag in bookmark.tags.slice(0, 2)" :key="tag" class="bookmark-card__tag">
+          {{ tag }}
+        </span>
+        <span v-if="bookmark.tags.length > 2" class="bookmark-card__tag-count">
+          +{{ bookmark.tags.length - 2 }}
+        </span>
+      </span>
     </button>
 
     <!-- 操作按钮：主链接排在前面，键盘用户先打开，再访问 AI / 编辑 / 删除。 -->
@@ -320,6 +332,35 @@ function getFavicon(url) {
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
+}
+
+.bookmark-card__tags {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  gap: 5px;
+  max-width: 100%;
+  margin-top: 8px;
+}
+
+.bookmark-card__tag,
+.bookmark-card__tag-count {
+  max-width: 78px;
+  overflow: hidden;
+  padding: 3px 7px;
+  color: var(--accent-color);
+  background: var(--accent-bg);
+  border-radius: 999px;
+  font-size: 10px;
+  line-height: 1.3;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.bookmark-card__tag-count {
+  flex: 0 0 auto;
+  color: var(--text-secondary);
+  background: var(--bg-secondary);
 }
 
 /* Fade transition */

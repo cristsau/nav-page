@@ -1,6 +1,11 @@
 <script setup>
 import { computed, nextTick, ref, watch } from 'vue'
 import { encrypt, hashPassword } from '@/shared/utils/crypto'
+import {
+  MAX_NOTE_TAGS,
+  mergeSuggestedNoteTags,
+  normalizeNoteTag
+} from '@/shared/utils/noteTags'
 import Icon from '@/shared/components/Icon.vue'
 import NoteAiPanel from './NoteAiPanel.vue'
 
@@ -38,6 +43,8 @@ const formData = ref({
 
 // 标签输入
 const tagInput = ref('')
+const tagMessage = ref('')
+const tagMessageType = ref('')
 const initialSnapshot = ref('')
 const copiedId = ref(false)
 const titleInputRef = ref(null)
@@ -101,6 +108,8 @@ watch(() => props.show, async (val) => {
     } else {
       resetForm(props.note?.type || 'memo')
     }
+    tagMessage.value = ''
+    tagMessageType.value = ''
     initialSnapshot.value = currentSnapshot()
     await nextTick()
     titleInputRef.value?.focus()
@@ -122,20 +131,45 @@ function resetForm(type = 'memo') {
     completed: false
   }
   tagInput.value = ''
+  tagMessage.value = ''
+  tagMessageType.value = ''
 }
 
 // 添加标签
 function addTag() {
-  const tag = tagInput.value.trim()
-  if (tag && !formData.value.tags.includes(tag)) {
-    formData.value.tags.push(tag)
-    tagInput.value = ''
+  const tag = normalizeNoteTag(tagInput.value)
+  if (!tag) {
+    tagMessage.value = '标签需为 1–32 个字符，且不能包含网址、网络地址、邮箱、密钥或敏感编号。'
+    tagMessageType.value = 'error'
+    return
   }
+
+  if (formData.value.tags.length >= MAX_NOTE_TAGS) {
+    tagMessage.value = `每条记录最多保留 ${MAX_NOTE_TAGS} 个标签。`
+    tagMessageType.value = 'error'
+    return
+  }
+
+  const duplicate = formData.value.tags.some(
+    (item) => normalizeNoteTag(item).toLocaleLowerCase('zh-CN') === tag.toLocaleLowerCase('zh-CN')
+  )
+  if (duplicate) {
+    tagMessage.value = '这个标签已经存在。'
+    tagMessageType.value = 'error'
+    return
+  }
+
+  formData.value.tags.push(tag)
+  tagInput.value = ''
+  tagMessage.value = '标签已加入编辑器，保存后生效。'
+  tagMessageType.value = 'success'
 }
 
 // 移除标签
 function removeTag(index) {
   formData.value.tags.splice(index, 1)
+  tagMessage.value = ''
+  tagMessageType.value = ''
 }
 
 async function copyNoteId() {
@@ -161,6 +195,22 @@ function insertAiText(text) {
 
 function replaceAiText(text) {
   formData.value.content = text
+}
+
+function applyAiTags(tags) {
+  const merged = mergeSuggestedNoteTags(formData.value.tags, tags)
+  formData.value.tags = merged.tags
+
+  if (!merged.added.length) {
+    tagMessage.value = merged.limitReached
+      ? `已达到 ${MAX_NOTE_TAGS} 个标签上限，没有添加新标签。`
+      : 'AI 建议与现有标签重复，没有添加新标签。'
+    tagMessageType.value = 'error'
+    return
+  }
+
+  tagMessage.value = `已加入 ${merged.added.length} 个 AI 标签，保存记录后生效。`
+  tagMessageType.value = 'success'
 }
 
 function buildDefaultTitle() {
@@ -323,11 +373,13 @@ function close() {
         :type="formData.type"
         :title="formData.title"
         :content="formData.content"
+        :tags="formData.tags"
         :encrypted="formData.encrypted"
         :auto-open="Boolean(note?._openAi)"
         :disabled="saving"
         @insert="insertAiText"
         @replace="replaceAiText"
+        @apply-tags="applyAiTags"
       />
 
       <!-- 标签 -->
@@ -356,6 +408,14 @@ function close() {
             @keydown.enter.prevent="addTag"
           >
         </div>
+        <p
+          v-if="tagMessage"
+          class="tags-input__message"
+          :class="`is-${tagMessageType}`"
+          aria-live="polite"
+        >
+          {{ tagMessage }}
+        </p>
       </div>
 
       <!-- 加密选项 -->
@@ -643,6 +703,22 @@ function close() {
   padding: 4px 8px;
   background: transparent;
   border: none;
+}
+
+.tags-input__message {
+  width: 100%;
+  margin: 0;
+  color: var(--text-muted);
+  font-size: 11px;
+  line-height: 1.5;
+}
+
+.tags-input__message.is-success {
+  color: var(--success-color);
+}
+
+.tags-input__message.is-error {
+  color: var(--error-color);
 }
 
 /* 复选框 */

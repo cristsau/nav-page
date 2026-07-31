@@ -55,6 +55,22 @@ test('Notion-style AI prompts keep the requested editing action explicit', () =>
   assert.match(prompts.userPrompt, /明天联系供应商/)
 })
 
+test('AI tags use a strict JSON contract and include existing tags', () => {
+  const prompts = buildNoteAiPrompts({
+    action: 'tags',
+    type: 'memo',
+    title: '生产部署',
+    content: '发布 Docker 服务并检查健康状态。',
+    tags: ['运维']
+  })
+
+  assert.equal(prompts.action, 'tags')
+  assert.equal(prompts.label, '智能标签')
+  assert.match(prompts.systemPrompt, /\{"tags":\["标签一","标签二"\]\}/)
+  assert.match(prompts.systemPrompt, /不要 Markdown/)
+  assert.match(prompts.userPrompt, /已有标签：运维/)
+})
+
 test('note AI panel discards responses generated from stale editor content', async () => {
   const panelUrl = new URL(
     '../../app/src/modules/whisper/components/NoteAiPanel.vue',
@@ -66,6 +82,13 @@ test('note AI panel discards responses generated from stale editor content', asy
   assert.match(source, /const requestId = \+\+requestSequence/)
   assert.match(source, /if \(requestId !== requestSequence\) return/)
   assert.match(source, /本次 AI 草稿已作废/)
+  assert.match(source, /JSON\.stringify\(props\.tags\)/)
+  assert.match(source, /props\.encrypted/)
+  assert.match(source, /encrypted: props\.encrypted/)
+  assert.match(source, /resultEncryptionAcknowledged/)
+  assert.match(source, /这些 AI 标签会作为未加密元数据保存/)
+  assert.match(source, /apply-tags/)
+  assert.match(source, /生成的标签将作为未加密元数据保存/)
 })
 
 test('note AI reuses the configured CLI proxy without enabling web search', () => {
@@ -94,6 +117,43 @@ test('note AI reuses the configured CLI proxy without enabling web search', () =
   assert.equal(request.body.max_tokens, 2000)
   assert.equal(JSON.stringify(request.body).includes('server-only-secret'), false)
   assert.equal('tools' in request.body, false)
+})
+
+test('note AI tag request disables web search and limits its output budget', () => {
+  const provider = selectNoteAiProvider({
+    chatgpt: {
+      enabled: true,
+      mode: 'proxy',
+      cliProxyBaseUrl: 'https://ap.example.test',
+      apiMode: 'chat-completions',
+      model: 'gpt-5.6-terra',
+      apiKey: 'server-only-secret'
+    }
+  })
+  const request = buildNoteAiRequest(provider, {
+    action: 'tags',
+    type: 'memo',
+    title: '部署清单',
+    content: '',
+    tags: ['已有']
+  }, 'user-1')
+
+  assert.equal(request.body.max_tokens, 300)
+  assert.equal('tools' in request.body, false)
+  assert.match(request.body.messages[1].content, /已有标签：已有/)
+})
+
+test('note editor merges AI tags without bypassing the normal save flow', async () => {
+  const editorUrl = new URL(
+    '../../app/src/modules/whisper/components/NoteEditor.vue',
+    import.meta.url
+  )
+  const source = await fs.readFile(fileURLToPath(editorUrl), 'utf8')
+
+  assert.match(source, /@apply-tags="applyAiTags"/)
+  assert.match(source, /mergeSuggestedNoteTags/)
+  assert.match(source, /保存记录后生效/)
+  assert.doesNotMatch(source, /applyAiTags[\s\S]{0,500}(?:createBackendNote|updateBackendNote)/)
 })
 
 test('note AI endpoint requires authentication before reading provider settings', async () => {

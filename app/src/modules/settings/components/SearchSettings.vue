@@ -11,6 +11,11 @@ import {
   shouldUseBackendSearchEngines,
   updateBackendCustomSearchEngine
 } from '@/shared/services/searchEnginesApi'
+import {
+  AI_MODEL_CATALOG_VERIFIED_AT,
+  getChatModelOptions,
+  resolveConfiguredChatApiMode
+} from '@/shared/config/aiModels'
 import { normalizeEngineMonogram } from '@/shared/utils/unifiedSearch'
 
 const {
@@ -67,6 +72,13 @@ const providerKeySaving = ref({
 const allEngines = computed(() => getAllSearchEngines())
 const aggregateEnabled = computed(() => config.value.search?.aggregate?.enabled || false)
 const quickAccessIds = computed(() => config.value.search?.quickAccessEngineIds || [])
+const chatApiMode = computed(() => resolveConfiguredChatApiMode(
+  config.value.search?.providers?.chatgpt
+))
+const chatUsesResponsesApi = computed(() => chatApiMode.value === 'responses')
+const chatModelOptions = computed(() => getChatModelOptions(
+  config.value.search?.providers?.chatgpt?.model
+))
 
 async function loadCustomEngines() {
   try {
@@ -491,7 +503,7 @@ async function handleProviderTest(provider) {
           <span>API 格式</span>
           <select
             class="input"
-            :value="config.search?.providers?.chatgpt?.apiMode || (config.search?.providers?.chatgpt?.cliProxyBaseUrl ? 'chat-completions' : 'responses')"
+            :value="chatApiMode"
             @change="updateChatApiMode($event.target.value)"
           >
             <option value="responses">Responses API（推荐）</option>
@@ -560,19 +572,29 @@ async function handleProviderTest(provider) {
         </div>
         <label class="provider-field">
           <span>Model</span>
-          <input
+          <select
             class="input"
-            type="text"
             :value="config.search?.providers?.chatgpt?.model"
-            placeholder="gpt-5.6-terra"
-            @input="updateConfig('search.providers.chatgpt.model', $event.target.value)"
+            @change="updateConfig('search.providers.chatgpt.model', $event.target.value)"
           >
+            <option
+              v-for="model in chatModelOptions"
+              :key="model.id"
+              :value="model.id"
+            >
+              {{ model.id }} · {{ model.description }}
+            </option>
+          </select>
+          <span class="provider-key__hint">
+            依据当前生产验收与代理配置，最多显示 6 个；核验于 {{ AI_MODEL_CATALOG_VERIFIED_AT }}。
+          </span>
         </label>
-        <label class="provider-field">
+        <label class="provider-field" :class="{ 'is-disabled': !chatUsesResponsesApi }">
           <span>推理强度</span>
           <select
             class="input"
             :value="config.search?.providers?.chatgpt?.reasoningEffort || 'low'"
+            :disabled="!chatUsesResponsesApi"
             @change="updateConfig('search.providers.chatgpt.reasoningEffort', $event.target.value)"
           >
             <option value="none">无</option>
@@ -583,14 +605,22 @@ async function handleProviderTest(provider) {
             <option value="xhigh">极高</option>
           </select>
         </label>
-        <label class="provider-field provider-field--toggle">
+        <label
+          class="provider-field provider-field--toggle"
+          :class="{ 'is-disabled': !chatUsesResponsesApi }"
+        >
           <span>联网搜索</span>
           <input
             type="checkbox"
             :checked="config.search?.providers?.chatgpt?.webSearchEnabled !== false"
+            :disabled="!chatUsesResponsesApi"
             @change="updateConfig('search.providers.chatgpt.webSearchEnabled', $event.target.checked)"
           >
         </label>
+        <p v-if="!chatUsesResponsesApi" class="provider-grid__notice">
+          <Icon name="alert" :size="15" />
+          当前为 Chat Completions 兼容网关，推理强度和内置联网搜索参数不会发送。
+        </p>
       </div>
       <div class="provider-actions">
         <button type="button" class="btn btn--secondary" :disabled="providerTesting.chatgpt" @click="handleProviderTest('chatgpt')">
@@ -1094,6 +1124,28 @@ async function handleProviderTest(provider) {
   border-radius: var(--radius-md);
 }
 
+.provider-field.is-disabled {
+  opacity: 0.58;
+}
+
+.provider-grid__notice {
+  grid-column: 1 / -1;
+  display: flex;
+  align-items: flex-start;
+  gap: 8px;
+  margin: 0;
+  padding: 10px 12px;
+  color: var(--text-secondary);
+  background: color-mix(in srgb, var(--warning-color) 8%, var(--bg-secondary));
+  border-radius: var(--radius-md);
+  font-size: 11px;
+  line-height: 1.55;
+}
+
+.provider-grid__notice .app-icon {
+  margin-top: 1px;
+}
+
 .provider-key__label {
   display: flex;
   align-items: center;
@@ -1125,8 +1177,8 @@ async function handleProviderTest(provider) {
 }
 
 .provider-key__hint {
-  color: var(--text-muted);
-  font-size: 11px;
+  color: var(--text-secondary);
+  font-size: 12px;
   line-height: 1.5;
 }
 

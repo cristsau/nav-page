@@ -1,5 +1,5 @@
 <script setup>
-import { nextTick, onMounted, ref } from 'vue'
+import { computed, nextTick, onMounted, ref } from 'vue'
 import { useRouter } from 'vue-router'
 import { useGroups, useBookmarks } from '@/shared/composables/useDB'
 import { useTheme } from '@/shared/composables/useTheme'
@@ -7,11 +7,15 @@ import { useConfig } from '@/shared/composables/useConfig'
 import SearchBox from '@/shared/components/SearchBox.vue'
 import Icon from '@/shared/components/Icon.vue'
 import { runBackendAiSearch, shouldUseBackendAiSearch } from '@/shared/services/aiSearchApi'
+import { suggestBackendBookmarkTags } from '@/shared/services/navigationApi'
+import { mergeSuggestedNoteTags } from '@/shared/utils/noteTags'
 import NavGroup from './components/NavGroup.vue'
 import AddToNav from './components/AddToNav.vue'
 import BookmarkAiPanel from './components/BookmarkAiPanel.vue'
 import {
   buildBookmarkAiPrompt,
+  isCurrentBookmarkTagSave,
+  resolveBookmarkGenerativeAiProvider,
   resolveBookmarkAiProvider
 } from './navigationUi'
 
@@ -36,9 +40,21 @@ const aiBookmark = ref(null)
 const aiResult = ref(null)
 const aiError = ref('')
 const aiNeedsSetup = ref(false)
+const aiTagResult = ref(null)
+const aiTagLoading = ref(false)
+const aiTagSaving = ref(false)
+const aiTagError = ref('')
+const aiTagMessage = ref('')
 let statusTimer = null
 let aiRequestId = 0
+let aiTagRequestId = 0
+let aiTagSaveRequestId = 0
 let aiTriggerElement = null
+
+const canGenerateBookmarkTags = computed(() => (
+  shouldUseBackendAiSearch()
+  && Boolean(resolveBookmarkGenerativeAiProvider(config.value))
+))
 
 async function loadData() {
   await Promise.all([loadGroups(), loadBookmarks()])
@@ -100,6 +116,8 @@ function handleEditBookmark(bookmark) {
 
 async function handleAiBookmark(bookmark, triggerElement = null) {
   const requestId = ++aiRequestId
+  aiTagRequestId += 1
+  aiTagSaveRequestId += 1
   const providerId = resolveBookmarkAiProvider(config.value)
 
   if (triggerElement instanceof HTMLElement) {
@@ -109,6 +127,11 @@ async function handleAiBookmark(bookmark, triggerElement = null) {
   aiResult.value = null
   aiError.value = ''
   aiNeedsSetup.value = false
+  aiTagResult.value = null
+  aiTagLoading.value = false
+  aiTagSaving.value = false
+  aiTagError.value = ''
+  aiTagMessage.value = ''
   showBookmarkAi.value = true
 
   if (!shouldUseBackendAiSearch() || !providerId) {
@@ -139,12 +162,91 @@ async function handleAiBookmark(bookmark, triggerElement = null) {
 async function closeBookmarkAi(restoreFocus = true) {
   const triggerElement = aiTriggerElement
   aiRequestId += 1
+  aiTagRequestId += 1
+  aiTagSaveRequestId += 1
   showBookmarkAi.value = false
   analyzingBookmarkId.value = ''
+  aiTagLoading.value = false
+  aiTagSaving.value = false
 
   if (restoreFocus && triggerElement?.isConnected) {
     await nextTick()
     triggerElement.focus()
+  }
+}
+
+async function handleSuggestBookmarkTags() {
+  const bookmarkId = aiBookmark.value?.id
+  if (!bookmarkId || aiTagLoading.value || aiTagSaving.value) return
+
+  if (!canGenerateBookmarkTags.value) {
+    aiTagError.value = '智能标签需要服务器账户和 ChatGPT / OpenAI 或 OpenClaw。'
+    return
+  }
+
+  const requestId = ++aiTagRequestId
+  aiTagLoading.value = true
+  aiTagResult.value = null
+  aiTagError.value = ''
+  aiTagMessage.value = ''
+
+  try {
+    const result = await suggestBackendBookmarkTags(bookmarkId)
+    if (requestId !== aiTagRequestId) return
+    aiTagResult.value = result
+  } catch (error) {
+    if (requestId !== aiTagRequestId) return
+    aiTagError.value = error.message || '智能标签生成失败，请稍后重试'
+  } finally {
+    if (requestId === aiTagRequestId) {
+      aiTagLoading.value = false
+    }
+  }
+}
+
+async function handleApplyBookmarkTags() {
+  if (aiTagSaving.value || !aiTagResult.value?.tags?.length) return
+
+  const bookmark = bookmarks.value.find(
+    (item) => item.id === aiBookmark.value?.id
+  ) || aiBookmark.value
+  if (!bookmark?.id) return
+
+  const merged = mergeSuggestedNoteTags(bookmark.tags, aiTagResult.value.tags)
+  if (!merged.added.length) {
+    aiTagError.value = merged.limitReached
+      ? '书签已达到 20 个标签上限。'
+      : 'AI 建议与现有标签重复，没有需要添加的新标签。'
+    return
+  }
+
+  const saveRequestId = ++aiTagSaveRequestId
+  const bookmarkId = bookmark.id
+  const isCurrentSave = () => isCurrentBookmarkTagSave({
+    requestId: saveRequestId,
+    currentRequestId: aiTagSaveRequestId,
+    bookmarkId,
+    currentBookmarkId: aiBookmark.value?.id,
+    panelOpen: showBookmarkAi.value
+  })
+  aiTagSaving.value = true
+  aiTagError.value = ''
+  aiTagMessage.value = ''
+
+  try {
+    await updateBookmark(bookmarkId, { tags: merged.tags })
+    if (!isCurrentSave()) return
+    aiBookmark.value = { ...bookmark, tags: merged.tags }
+    aiTagResult.value = null
+    aiTagMessage.value = `已保存 ${merged.added.length} 个智能标签`
+    setStatus(`已为「${bookmark.title}」添加智能标签`, 'success')
+  } catch (error) {
+    if (!isCurrentSave()) return
+    aiTagError.value = error.message || '标签保存失败，请稍后重试'
+  } finally {
+    if (isCurrentSave()) {
+      aiTagSaving.value = false
+    }
   }
 }
 
@@ -318,9 +420,17 @@ onMounted(async () => {
       :loading="Boolean(analyzingBookmarkId)"
       :error="aiError"
       :needs-setup="aiNeedsSetup"
+      :tag-result="aiTagResult"
+      :tag-loading="aiTagLoading"
+      :tag-saving="aiTagSaving"
+      :tag-error="aiTagError"
+      :tag-message="aiTagMessage"
+      :can-generate-tags="canGenerateBookmarkTags"
       @close="closeBookmarkAi"
       @retry="handleAiBookmark(aiBookmark)"
       @open-settings="openAiSettings"
+      @suggest-tags="handleSuggestBookmarkTags"
+      @apply-tags="handleApplyBookmarkTags"
     />
   </div>
 </template>

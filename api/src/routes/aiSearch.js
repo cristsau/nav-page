@@ -1,8 +1,10 @@
 import { createHash } from 'node:crypto'
+import { consumeAiRateLimit } from '../lib/aiRateLimit.js'
 import {
   buildChatRequest,
   extractAiText,
-  extractResponseSources
+  extractResponseSources,
+  normalizeAiModelId
 } from '../lib/aiResponses.js'
 import { assertSafeOutboundEndpoint } from '../lib/outboundEndpoints.js'
 import { resolveProviderTestConfig } from '../lib/settingsSecrets.js'
@@ -219,7 +221,7 @@ async function runOpenClawSearch(provider, queryText) {
     throw new Error('请先在设置中填写 OpenClaw Base URL 或 Endpoint')
   }
 
-  const model = normalizeText(provider.model, DEFAULT_OPENCLAW_MODEL) || DEFAULT_OPENCLAW_MODEL
+  const model = normalizeAiModelId(provider.model, DEFAULT_OPENCLAW_MODEL)
   const apiKey = normalizeText(provider.apiKey)
   const systemPrompt = [
     '你是 DOMO NAV 的 OpenClaw 搜索助手。',
@@ -270,6 +272,13 @@ export default async function aiSearchRoutes(fastify) {
   fastify.post('/ai-search/providers/test', async (request, reply) => {
     await fastify.requireAuth(request, reply)
 
+    const rateLimit = consumeAiRateLimit(request.currentUser.id)
+    if (!rateLimit.allowed) {
+      reply.header('Retry-After', String(rateLimit.retryAfterSeconds))
+      reply.code(429)
+      return { error: 'AI 请求过于频繁，请稍后再试' }
+    }
+
     const provider = normalizeText(request.body?.provider).toLowerCase()
     const inputConfig = request.body?.config || {}
     const appConfig = await getUserSettingValue(request.currentUser.id, 'appConfig', {})
@@ -317,6 +326,13 @@ export default async function aiSearchRoutes(fastify) {
 
   fastify.post('/ai-search', async (request, reply) => {
     await fastify.requireAuth(request, reply)
+
+    const rateLimit = consumeAiRateLimit(request.currentUser.id)
+    if (!rateLimit.allowed) {
+      reply.header('Retry-After', String(rateLimit.retryAfterSeconds))
+      reply.code(429)
+      return { error: 'AI 请求过于频繁，请稍后再试' }
+    }
 
     const engineId = normalizeText(request.body?.engineId).toLowerCase()
     const queryText = normalizeText(request.body?.query)

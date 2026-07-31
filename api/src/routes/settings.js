@@ -4,6 +4,7 @@ import {
   mergeAppConfigSecrets,
   redactAppConfigSecrets
 } from '../lib/settingsSecrets.js'
+import { validateAppConfigModelIds } from '../lib/aiModelSettings.js'
 
 function normalizeKey(value) {
   return String(value || '').trim()
@@ -61,6 +62,13 @@ export default async function settingsRoutes(fastify) {
       if (!hasRequestedValue || !isPlainObject(requestedValue)) {
         reply.code(400)
         return { error: 'appConfig value must be an object' }
+      }
+
+      try {
+        validateAppConfigModelIds(requestedValue)
+      } catch (error) {
+        reply.code(400)
+        return { error: error.message || '模型 ID 格式无效' }
       }
 
       const existing = await query(

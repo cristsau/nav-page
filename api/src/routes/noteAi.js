@@ -1,43 +1,24 @@
 import { getUserSettingValue } from '../lib/userSettings.js'
+import { consumeAiRateLimit } from '../lib/aiRateLimit.js'
 import {
   NOTE_AI_ACTIONS,
   runNoteAi,
   selectNoteAiProvider
 } from '../lib/noteAi.js'
+import { normalizeExistingNoteTags } from '../lib/noteTags.js'
 
 const MAX_TITLE_LENGTH = 300
 const MAX_CONTENT_LENGTH = 40_000
-const RATE_LIMIT_WINDOW_MS = 60_000
-const RATE_LIMIT_MAX_REQUESTS = 10
-const requestWindows = new Map()
 
 function normalizeText(value, fallback = '') {
   return String(value ?? fallback).trim()
-}
-
-function consumeRateLimit(userId, now = Date.now()) {
-  const existing = requestWindows.get(userId)
-  const windowRecord = !existing || now - existing.startedAt >= RATE_LIMIT_WINDOW_MS
-    ? { startedAt: now, count: 0 }
-    : existing
-
-  windowRecord.count += 1
-  requestWindows.set(userId, windowRecord)
-
-  return {
-    allowed: windowRecord.count <= RATE_LIMIT_MAX_REQUESTS,
-    retryAfterSeconds: Math.max(
-      1,
-      Math.ceil((windowRecord.startedAt + RATE_LIMIT_WINDOW_MS - now) / 1000)
-    )
-  }
 }
 
 export default async function noteAiRoutes(fastify) {
   fastify.post('/notes/ai', async (request, reply) => {
     await fastify.requireAuth(request, reply)
 
-    const rateLimit = consumeRateLimit(request.currentUser.id)
+    const rateLimit = consumeAiRateLimit(request.currentUser.id)
     if (!rateLimit.allowed) {
       reply.header('Retry-After', String(rateLimit.retryAfterSeconds))
       reply.code(429)
@@ -50,13 +31,19 @@ export default async function noteAiRoutes(fastify) {
       : 'memo'
     const title = normalizeText(request.body?.title).slice(0, MAX_TITLE_LENGTH)
     const content = String(request.body?.content || '').trim()
+    const tags = normalizeExistingNoteTags(request.body?.tags)
 
     if (!NOTE_AI_ACTIONS[action]) {
       reply.code(400)
       return { error: '请选择有效的 AI 编辑操作' }
     }
 
-    if (!content) {
+    if (action === 'tags' && !title && !content) {
+      reply.code(400)
+      return { error: '请先输入标题或正文内容' }
+    }
+
+    if (action !== 'tags' && !content) {
       reply.code(400)
       return { error: '请先输入正文内容' }
     }
@@ -80,7 +67,8 @@ export default async function noteAiRoutes(fastify) {
           action,
           type,
           title,
-          content
+          content,
+          tags
         }, request.currentUser.id)
       }
     } catch (error) {

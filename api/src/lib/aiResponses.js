@@ -3,9 +3,25 @@ export const DEFAULT_OPENAI_MODEL = 'gpt-5.6-terra'
 
 const RESPONSE_API_MODES = new Set(['responses', 'chat-completions'])
 const REASONING_EFFORTS = new Set(['none', 'minimal', 'low', 'medium', 'high', 'xhigh'])
+const MODEL_ID_CONTROL_PATTERN = /[\p{Cc}\p{Cf}]/u
+const MAX_MODEL_ID_LENGTH = 256
 
 function normalizeText(value, fallback = '') {
   return String(value ?? fallback).trim()
+}
+
+export function normalizeAiModelId(value, fallback = DEFAULT_OPENAI_MODEL) {
+  const model = normalizeText(value, fallback) || fallback
+
+  if (
+    !model
+    || [...model].length > MAX_MODEL_ID_LENGTH
+    || MODEL_ID_CONTROL_PATTERN.test(model)
+  ) {
+    throw new Error('模型 ID 格式无效，请检查模型配置')
+  }
+
+  return model
 }
 
 export function resolveChatApiMode(provider = {}, endpoint = '') {
@@ -129,7 +145,7 @@ export function extractResponseSources(payload) {
 export function buildChatRequest(provider, queryText, systemPrompt, safetyIdentifier = '') {
   const endpoint = resolveChatEndpoint(provider)
   const apiMode = resolveChatApiMode(provider, endpoint)
-  const model = normalizeText(provider.model, DEFAULT_OPENAI_MODEL) || DEFAULT_OPENAI_MODEL
+  const model = normalizeAiModelId(provider.model)
 
   if (apiMode === 'chat-completions') {
     return {
