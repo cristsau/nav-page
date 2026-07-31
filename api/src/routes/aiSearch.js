@@ -5,6 +5,10 @@ import {
   extractAiText,
   extractResponseSources
 } from '../lib/aiResponses.js'
+import {
+  resolveChatProviderModel,
+  toPublicModelCatalogResponse
+} from '../lib/aiModelCatalog.js'
 import { assertSafeOutboundEndpoint } from '../lib/outboundEndpoints.js'
 import { resolveProviderTestConfig } from '../lib/settingsSecrets.js'
 import { getUserSettingValue } from '../lib/userSettings.js'
@@ -134,11 +138,14 @@ async function runBraveSearch(provider, queryText) {
 }
 
 async function runChatSearch(provider, queryText, userId = '') {
-  if (!provider?.enabled) {
+  const providerResolution = await resolveChatProviderModel(provider)
+  const resolvedProvider = providerResolution.provider
+
+  if (!resolvedProvider?.enabled) {
     throw new Error('请先在设置中启用 ChatGPT / OpenAI 接入')
   }
 
-  const apiKey = normalizeText(provider.apiKey)
+  const apiKey = normalizeText(resolvedProvider.apiKey)
   if (!apiKey) {
     throw new Error('请先在设置中填写 ChatGPT / OpenAI API Key')
   }
@@ -154,7 +161,7 @@ async function runChatSearch(provider, queryText, userId = '') {
     ? createHash('sha256').update(`domo-nav:${userId}`).digest('hex')
     : ''
   const chatRequest = buildChatRequest(
-    provider,
+    resolvedProvider,
     queryText,
     systemPrompt,
     safetyIdentifier
@@ -194,6 +201,30 @@ async function runChatSearch(provider, queryText, userId = '') {
 }
 
 export default async function aiSearchRoutes(fastify) {
+  fastify.get('/ai-search/providers/chatgpt/models', async (request, reply) => {
+    await fastify.requireAuth(request, reply)
+
+    const appConfig = await getUserSettingValue(
+      request.currentUser.id,
+      'appConfig',
+      {}
+    )
+
+    try {
+      const resolution = await resolveChatProviderModel(
+        appConfig?.search?.providers?.chatgpt || {},
+        { discoverPinned: true }
+      )
+
+      return toPublicModelCatalogResponse(resolution.catalog)
+    } catch {
+      reply.code(503)
+      return {
+        error: 'AI 模型目录暂时不可用，请检查服务端 CLI Proxy 配置'
+      }
+    }
+  })
+
   fastify.post('/ai-search/providers/test', async (request, reply) => {
     await fastify.requireAuth(request, reply)
 

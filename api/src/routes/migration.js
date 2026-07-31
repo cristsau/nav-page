@@ -9,10 +9,88 @@ import {
   isValidSearchUrl,
   normalizeEngineMonogram
 } from '../lib/searchEngines.js'
-import { sanitizeRetiredSearchProviders } from '../lib/settingsSecrets.js'
+import {
+  sanitizeRetiredSearchProviders
+} from '../lib/settingsSecrets.js'
 
 const MIN_NOTE_NUMBER_ID = 1000
 const MAX_IMPORTED_NOTE_NUMBER_ID = 999999999
+const BACKUP_SCHEMA = 'domo-nav-backup'
+const BACKUP_VERSION = 1
+const EXCLUDED_SETTING_KEYS = new Set([
+  'telegramConfig',
+  'telegramUpdateOffset'
+])
+const EXPORTABLE_SETTING_KEYS = new Set([
+  'appConfig',
+  'theme',
+  'whisperBgImage'
+])
+const SENSITIVE_SETTING_NAME_PATTERN = /(api.?key|access.?key|token|secret|password|passwd|credential|cookie|authorization|private.?key|client.?secret)/i
+const APP_CONFIG_EXPORT_SCHEMA = Object.freeze({
+  site: {
+    name: true,
+    icon: true,
+    favicon: true
+  },
+  searchEngine: true,
+  search: {
+    aggregate: {
+      enabled: true,
+      engines: true
+    },
+    quickAccessEngineIds: true,
+    hiddenEngineIds: true,
+    providers: {
+      chatgpt: {
+        enabled: true,
+        mode: true,
+        apiMode: true,
+        endpoint: true,
+        modelMode: true,
+        model: true,
+        cliProxyBaseUrl: true,
+        webSearchEnabled: true,
+        reasoningEffort: true
+      },
+      brave: {
+        enabled: true,
+        endpoint: true
+      }
+    }
+  },
+  modules: {
+    navigation: true,
+    whisper: true,
+    settings: true
+  },
+  style: {
+    colorScheme: true,
+    accentColor: true,
+    borderRadius: true,
+    cardSize: true,
+    animationsEnabled: true,
+    backgroundImage: true,
+    customTheme: {
+      primary: true,
+      bg: true,
+      bgSecondary: true,
+      bgCard: true,
+      textPrimary: true,
+      textSecondary: true,
+      darkBg: true,
+      darkBgSecondary: true,
+      darkBgCard: true,
+      darkTextPrimary: true,
+      darkTextSecondary: true
+    }
+  },
+  layout: {
+    columns: true,
+    showDescription: true,
+    showFavicon: true
+  }
+})
 
 function toTimestamp(value) {
   if (value === null || value === undefined || value === '') {
@@ -61,7 +139,358 @@ function createHttpError(message, statusCode) {
   return error
 }
 
+function cloneJson(value) {
+  if (value === undefined) return null
+  return JSON.parse(JSON.stringify(value))
+}
+
+function isSensitiveSettingName(value) {
+  const name = String(value || '').replace(/[^a-z0-9]/gi, '')
+  if (!name || /(configured|redacted)$/i.test(name)) return false
+  return SENSITIVE_SETTING_NAME_PATTERN.test(name)
+}
+
+function projectAllowedSettingFields(value, schema, path, excludedPaths) {
+  if (schema === true) {
+    return cloneJson(value)
+  }
+
+  if (
+    !value
+    || typeof value !== 'object'
+    || Array.isArray(value)
+    || !schema
+    || typeof schema !== 'object'
+  ) {
+    return undefined
+  }
+
+  const projected = {}
+  for (const [key, nestedValue] of Object.entries(value)) {
+    const nestedPath = path ? `${path}.${key}` : key
+    if (!Object.prototype.hasOwnProperty.call(schema, key)) {
+      excludedPaths.push(nestedPath)
+      continue
+    }
+
+    const projectedValue = projectAllowedSettingFields(
+      nestedValue,
+      schema[key],
+      nestedPath,
+      excludedPaths
+    )
+    if (projectedValue !== undefined) {
+      projected[key] = projectedValue
+    }
+  }
+
+  return projected
+}
+
+export function sanitizeSettingForBackendExport(record = {}) {
+  const key = String(record.key || '').trim()
+  if (!key) {
+    return {
+      excluded: {
+        key: '(empty)',
+        reason: 'invalid-setting-key'
+      },
+      redactedPaths: []
+    }
+  }
+
+  if (EXCLUDED_SETTING_KEYS.has(key)) {
+    return {
+      excluded: {
+        key,
+        reason: 'operational-or-secret-setting'
+      },
+      redactedPaths: []
+    }
+  }
+
+  if (isSensitiveSettingName(key) || !EXPORTABLE_SETTING_KEYS.has(key)) {
+    return {
+      excluded: {
+        key,
+        reason: isSensitiveSettingName(key)
+          ? 'sensitive-setting-key'
+          : 'setting-key-not-allowlisted'
+      },
+      redactedPaths: []
+    }
+  }
+
+  const redactedPaths = []
+  const value = key === 'appConfig'
+    ? projectAllowedSettingFields(
+        sanitizeRetiredSearchProviders(record.value),
+        APP_CONFIG_EXPORT_SCHEMA,
+        `data.settings.${key}.value`,
+        redactedPaths
+      )
+    : cloneJson(record.value)
+
+  return {
+    setting: {
+      id: key,
+      value
+    },
+    redactedPaths
+  }
+}
+
+function mapBackendExportGroup(record) {
+  return {
+    id: record.id,
+    name: record.name,
+    icon: record.icon,
+    color: record.color,
+    order: record.display_order,
+    collapsed: Boolean(record.collapsed),
+    createdAt: toTimestamp(record.created_at),
+    updatedAt: toTimestamp(record.updated_at)
+  }
+}
+
+function mapBackendExportBookmark(record) {
+  return {
+    id: record.id,
+    groupId: record.group_id,
+    title: record.title,
+    url: record.url,
+    favicon: record.favicon || '',
+    description: record.description || '',
+    tags: Array.isArray(record.tags) ? cloneJson(record.tags) : [],
+    order: record.display_order,
+    createdAt: toTimestamp(record.created_at),
+    updatedAt: toTimestamp(record.updated_at)
+  }
+}
+
+function mapBackendExportNote(record) {
+  return {
+    id: record.id,
+    numberId: normalizeNoteNumberId(record.number_id),
+    type: record.type === 'diary' ? 'diary' : 'memo',
+    title: record.title,
+    content: record.content || '',
+    encrypted: Boolean(record.encrypted),
+    password: '',
+    pinned: Boolean(record.pinned),
+    tags: Array.isArray(record.tags) ? cloneJson(record.tags) : [],
+    attachments: normalizeNoteAttachments(record.attachments, {
+      maxBytes: Number.MAX_SAFE_INTEGER
+    }),
+    entryDate: record.type === 'diary' ? toDateOnly(record.entry_date) : null,
+    mood: record.type === 'diary' ? String(record.mood || '') : '',
+    dueAt: record.type === 'memo' ? toTimestamp(record.due_at) : null,
+    completed: record.type === 'memo' && Boolean(record.completed),
+    createdAt: toTimestamp(record.created_at),
+    updatedAt: toTimestamp(record.updated_at)
+  }
+}
+
+function mapBackendExportShare(record) {
+  return {
+    id: record.id,
+    noteId: record.note_id,
+    code: record.code,
+    expireAt: toTimestamp(record.expire_at),
+    viewCount: Number(record.view_count || 0),
+    createdAt: toTimestamp(record.created_at)
+  }
+}
+
+function mapBackendExportEngine(record) {
+  return {
+    id: record.id,
+    name: record.name,
+    icon: normalizeEngineMonogram(record.icon),
+    url: record.url,
+    order: record.display_order,
+    createdAt: toTimestamp(record.created_at),
+    updatedAt: toTimestamp(record.updated_at)
+  }
+}
+
+function createBackendExportFileName(exportedAt) {
+  const timestamp = exportedAt
+    .replace(/\.\d{3}Z$/, 'Z')
+    .replaceAll('-', '')
+    .replaceAll(':', '')
+    .replace('T', '-')
+  return `domo-nav-cloud-backup-${timestamp}.json`
+}
+
+export async function buildBackendExport(client, userId, {
+  exportedAt = new Date().toISOString()
+} = {}) {
+  const params = [userId]
+  const groupsResult = await client.query(
+    `
+      SELECT *
+      FROM nav_groups
+      WHERE user_id = $1
+      ORDER BY display_order ASC, created_at ASC
+    `,
+    params
+  )
+  const bookmarksResult = await client.query(
+    `
+      SELECT *
+      FROM nav_bookmarks
+      WHERE user_id = $1
+      ORDER BY group_id ASC, display_order ASC, created_at ASC
+    `,
+    params
+  )
+  const notesResult = await client.query(
+    `
+      SELECT *
+      FROM notes
+      WHERE user_id = $1
+      ORDER BY updated_at DESC, created_at DESC
+    `,
+    params
+  )
+  const sharesResult = await client.query(
+    `
+      SELECT s.*
+      FROM note_shares s
+      JOIN notes n
+        ON n.id = s.note_id
+       AND n.user_id = $1
+      WHERE s.user_id = $1
+      ORDER BY s.created_at ASC
+    `,
+    params
+  )
+  const enginesResult = await client.query(
+    `
+      SELECT *
+      FROM custom_search_engines
+      WHERE user_id = $1
+      ORDER BY display_order ASC, created_at ASC
+    `,
+    params
+  )
+  const settingsResult = await client.query(
+    `
+      SELECT key, value
+      FROM user_settings
+      WHERE user_id = $1
+      ORDER BY key ASC
+    `,
+    params
+  )
+
+  const groups = groupsResult.rows.map(mapBackendExportGroup)
+  const bookmarks = bookmarksResult.rows.map(mapBackendExportBookmark)
+  const notes = notesResult.rows.map(mapBackendExportNote)
+  const shares = sharesResult.rows.map(mapBackendExportShare)
+  const customEngines = enginesResult.rows.map(mapBackendExportEngine)
+  const settings = []
+  const excludedSettings = []
+  const redactedPaths = []
+
+  for (const record of settingsResult.rows) {
+    const sanitized = sanitizeSettingForBackendExport(record)
+    if (sanitized.setting) settings.push(sanitized.setting)
+    if (sanitized.excluded) excludedSettings.push(sanitized.excluded)
+    redactedPaths.push(...sanitized.redactedPaths)
+  }
+
+  const counts = {
+    groups: groups.length,
+    bookmarks: bookmarks.length,
+    notes: notes.length,
+    customEngines: customEngines.length,
+    shares: shares.length,
+    settings: settings.length,
+    attachments: notes.reduce(
+      (total, note) => total + note.attachments.length,
+      0
+    )
+  }
+
+  return {
+    schema: BACKUP_SCHEMA,
+    version: BACKUP_VERSION,
+    exportedAt,
+    fileName: createBackendExportFileName(exportedAt),
+    manifest: {
+      schema: BACKUP_SCHEMA,
+      version: BACKUP_VERSION,
+      source: 'postgresql',
+      scope: 'authenticated-user',
+      counts: {
+        ...counts,
+        totalRecords: (
+          counts.groups
+          + counts.bookmarks
+          + counts.notes
+          + counts.customEngines
+          + counts.shares
+          + counts.settings
+        )
+      },
+      attachments: {
+        count: counts.attachments,
+        binaryIncluded: false,
+        content: 'external-url-metadata'
+      },
+      security: {
+        credentialSecretsIncluded: false,
+        policy: 'allowlisted-and-excluded',
+        redactedPaths: [...new Set(redactedPaths)].sort(),
+        excludedSettings,
+        encryptedNotes: {
+          count: notes.filter((note) => note.encrypted).length,
+          ciphertextIncluded: true,
+          passwordVerifierIncluded: false
+        },
+        publicShareCodes: {
+          count: shares.length,
+          included: true,
+          warning: 'Share codes are bearer links; protect this backup as sensitive data.'
+        }
+      }
+    },
+    data: {
+      groups,
+      bookmarks,
+      notes,
+      customEngines,
+      shares,
+      settings
+    }
+  }
+}
+
 export default async function migrationRoutes(fastify) {
+  fastify.get('/migration/export-cloud', async (request, reply) => {
+    await fastify.requireAuth(request, reply)
+
+    const backup = await withTransaction(async (client) => {
+      await client.query(
+        'SET TRANSACTION ISOLATION LEVEL REPEATABLE READ READ ONLY'
+      )
+      return buildBackendExport(client, request.currentUser.id)
+    })
+
+    reply.header('Cache-Control', 'no-store, max-age=0')
+    reply.header('Pragma', 'no-cache')
+    reply.header('Surrogate-Control', 'no-store')
+    reply.header('X-Content-Type-Options', 'nosniff')
+    reply.header(
+      'Content-Disposition',
+      `attachment; filename="${backup.fileName}"`
+    )
+
+    return backup
+  })
+
   fastify.post('/migration/import-local', async (request, reply) => {
     await fastify.requireAuth(request, reply)
 

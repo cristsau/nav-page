@@ -33,6 +33,10 @@ function sendJson(res, statusCode, payload) {
   res.end(JSON.stringify(payload))
 }
 
+function isExplicitlyEnabled(value) {
+  return ['1', 'true', 'yes', 'on'].includes(String(value || '').trim().toLowerCase())
+}
+
 function createTelegramProxyPlugin(env) {
   return {
     name: 'telegram-dev-api',
@@ -124,18 +128,24 @@ function createTelegramProxyPlugin(env) {
 
 export default defineConfig(({ mode }) => {
   const env = loadEnv(mode, process.cwd(), '')
+  const plugins = [vue()]
+
+  if (isExplicitlyEnabled(env.NAV_ENABLE_TELEGRAM_DEV_PROXY)) {
+    plugins.push(createTelegramProxyPlugin(env))
+  }
 
   return {
-    plugins: [vue(), createTelegramProxyPlugin(env)],
+    plugins,
     resolve: {
       alias: {
         '@': fileURLToPath(new URL('./src', import.meta.url))
       }
     },
     server: {
-      host: '0.0.0.0',
+      host: '127.0.0.1',
       port: 5174,
-      open: true
+      strictPort: true,
+      open: false
     },
     build: {
       outDir: 'dist',

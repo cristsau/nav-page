@@ -1,5 +1,6 @@
 import { query, withTransaction } from '../db/index.js'
 import { consumeAiRateLimit } from '../lib/aiRateLimit.js'
+import { resolveChatProviderModel } from '../lib/aiModelCatalog.js'
 import { buildBookmarkAiTagInput } from '../lib/bookmarkAi.js'
 import { normalizeBookmarkUserTags } from '../lib/bookmarkTags.js'
 import { mapBookmark, mapGroup } from '../lib/navigation.js'
@@ -259,14 +260,20 @@ export default async function navigationRoutes(fastify) {
       'appConfig',
       {}
     )
-    const provider = selectNoteAiProvider(appConfig?.search?.providers || {})
-
-    if (!provider) {
-      reply.code(503)
-      return { error: '请先在设置中启用 ChatGPT / OpenAI，再生成书签标签' }
-    }
 
     try {
+      const resolution = await resolveChatProviderModel(
+        appConfig?.search?.providers?.chatgpt || {}
+      )
+      const provider = selectNoteAiProvider({
+        chatgpt: resolution.provider
+      })
+
+      if (!provider) {
+        reply.code(503)
+        return { error: '请先在设置中启用 ChatGPT / OpenAI，再生成书签标签' }
+      }
+
       return {
         result: await runNoteAi(
           provider,

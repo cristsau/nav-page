@@ -4,6 +4,11 @@ import { runBackendAiSearch, shouldUseBackendAiSearch } from '@/shared/services/
 import { fetchBackendCustomSearchEngines, shouldUseBackendSearchEngines } from '@/shared/services/searchEnginesApi'
 import { fetchBackendSetting, saveBackendSetting, shouldUseBackendSettings } from '@/shared/services/settingsApi'
 import {
+  DEFAULT_CHAT_MODEL_ID,
+  DEFAULT_CHAT_MODEL_MODE,
+  normalizeChatModelMode
+} from '@/shared/config/aiModels'
+import {
   buildWebSearchUrl,
   normalizeEngineMonogram
 } from '@/shared/utils/unifiedSearch'
@@ -43,7 +48,8 @@ const defaultConfig = {
         apiMode: '',
         endpoint: 'https://api.openai.com/v1/responses',
         apiKey: '',
-        model: 'gpt-5.6-terra',
+        modelMode: DEFAULT_CHAT_MODEL_MODE,
+        model: DEFAULT_CHAT_MODEL_ID,
         cliProxyBaseUrl: '',
         webSearchEnabled: true,
         reasoningEffort: 'low'
@@ -226,6 +232,21 @@ export function sanitizeRetiredSearchConfig(value) {
     && !Array.isArray(search.providers)
   ) {
     delete search.providers.openclaw
+
+    const chatProvider = search.providers.chatgpt
+    if (chatProvider && typeof chatProvider === 'object' && !Array.isArray(chatProvider)) {
+      const configuredModel = String(chatProvider.model || '').trim()
+      const hasExplicitModelMode = Object.prototype.hasOwnProperty.call(chatProvider, 'modelMode')
+
+      chatProvider.modelMode = hasExplicitModelMode
+        ? normalizeChatModelMode(chatProvider.modelMode)
+        : (
+            !configuredModel || configuredModel === DEFAULT_CHAT_MODEL_ID
+              ? DEFAULT_CHAT_MODEL_MODE
+              : 'pinned'
+          )
+      chatProvider.model = configuredModel || DEFAULT_CHAT_MODEL_ID
+    }
   }
 
   for (const key of ['quickAccessEngineIds', 'hiddenEngineIds']) {

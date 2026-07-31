@@ -9,6 +9,13 @@ function normalizePositiveInteger(value, fallback) {
 
 const nodeEnv = process.env.NODE_ENV || 'development'
 
+function normalizeTrustedProxyAddresses(value) {
+  return String(value || '')
+    .split(',')
+    .map((address) => address.trim().toLowerCase())
+    .filter(Boolean)
+}
+
 export const config = {
   nodeEnv,
   port: Number(process.env.PORT || 3001),
@@ -17,9 +24,54 @@ export const config = {
   sessionCookieName: process.env.SESSION_COOKIE_NAME || 'nav_session',
   sessionTtlDays: Number(process.env.SESSION_TTL_DAYS || 14),
   sessionCookieSecure: process.env.SESSION_COOKIE_SECURE === 'true',
+  sessionTouchIntervalSeconds: normalizePositiveInteger(
+    process.env.SESSION_TOUCH_INTERVAL_SECONDS,
+    300
+  ),
+  sessionCleanupIntervalSeconds: normalizePositiveInteger(
+    process.env.SESSION_CLEANUP_INTERVAL_SECONDS,
+    900
+  ),
+  authLoginRateLimitMax: normalizePositiveInteger(
+    process.env.AUTH_LOGIN_RATE_LIMIT_MAX,
+    10
+  ),
+  authLoginRateLimitWindowSeconds: normalizePositiveInteger(
+    process.env.AUTH_LOGIN_RATE_LIMIT_WINDOW_SECONDS,
+    900
+  ),
+  authRegisterRateLimitMax: normalizePositiveInteger(
+    process.env.AUTH_REGISTER_RATE_LIMIT_MAX,
+    5
+  ),
+  authRegisterRateLimitWindowSeconds: normalizePositiveInteger(
+    process.env.AUTH_REGISTER_RATE_LIMIT_WINDOW_SECONDS,
+    3600
+  ),
+  authRecoveryRateLimitMax: normalizePositiveInteger(
+    process.env.AUTH_RECOVERY_RATE_LIMIT_MAX,
+    5
+  ),
+  authRecoveryRateLimitWindowSeconds: normalizePositiveInteger(
+    process.env.AUTH_RECOVERY_RATE_LIMIT_WINDOW_SECONDS,
+    1800
+  ),
+  authenticatedWriteRateLimitMax: normalizePositiveInteger(
+    process.env.AUTHENTICATED_WRITE_RATE_LIMIT_MAX,
+    120
+  ),
+  authenticatedWriteRateLimitWindowSeconds: normalizePositiveInteger(
+    process.env.AUTHENTICATED_WRITE_RATE_LIMIT_WINDOW_SECONDS,
+    60
+  ),
+  trustedProxyAddresses: normalizeTrustedProxyAddresses(
+    process.env.TRUSTED_PROXY_ADDRESSES
+  ),
   corsOrigin: process.env.CORS_ORIGIN || 'http://localhost:5174',
   allowPrivateAiEndpoints: process.env.ALLOW_PRIVATE_AI_ENDPOINTS === 'true',
   allowInsecureAiEndpoints: process.env.ALLOW_INSECURE_AI_ENDPOINTS === 'true',
+  aiCliProxyBaseUrl: String(process.env.NAV_AI_CLI_PROXY_BASE_URL || '').trim(),
+  aiCliProxyApiKeyFile: String(process.env.NAV_AI_CLI_PROXY_API_KEY_FILE || '').trim(),
   adminUsername: process.env.ADMIN_USERNAME || '',
   adminPassword: process.env.ADMIN_PASSWORD || '',
   imgBedBaseUrl: String(process.env.NAV_IMGBED_BASE_URL || '').trim(),

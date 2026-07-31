@@ -33,7 +33,7 @@ DOMO NAV 是一个面向个人与小团队的私有化导航工作台。它已�
 ### 前端
 
 - Vue 3
-- Vite 5
+- Vite 6
 - Vue Router 4
 
 ### 后端
