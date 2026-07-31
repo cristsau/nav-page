@@ -40,27 +40,13 @@ export function resolveGroupIcon(icon, groupName = '') {
 }
 
 export function resolveBookmarkAiProvider(config) {
+  const generativeProvider = resolveBookmarkGenerativeAiProvider(config)
+  if (generativeProvider) {
+    return generativeProvider
+  }
+
   const providers = config?.search?.providers || {}
-  const chatgpt = providers.chatgpt || {}
-  const openclaw = providers.openclaw || {}
   const brave = providers.brave || {}
-
-  if (
-    chatgpt.enabled
-    && (
-      chatgpt.apiKeyConfigured
-      || Boolean(String(chatgpt.apiKey || '').trim())
-    )
-  ) {
-    return 'chatgpt'
-  }
-
-  if (
-    openclaw.enabled
-    && Boolean(String(openclaw.endpoint || openclaw.baseUrl || '').trim())
-  ) {
-    return 'openclaw'
-  }
 
   if (
     brave.enabled
@@ -73,6 +59,36 @@ export function resolveBookmarkAiProvider(config) {
   }
 
   return ''
+}
+
+export function resolveBookmarkGenerativeAiProvider(config) {
+  const providers = config?.search?.providers || {}
+  const chatgpt = providers.chatgpt || {}
+  const chatgptHasKey = chatgpt.apiKeyConfigured
+    || Boolean(String(chatgpt.apiKey || '').trim())
+  const chatgptUsesProxy = String(chatgpt.mode || '').trim().toLowerCase() === 'proxy'
+    || Boolean(String(chatgpt.cliProxyBaseUrl || '').trim())
+
+  if (chatgpt.enabled && (chatgptHasKey || chatgptUsesProxy)) {
+    return 'chatgpt'
+  }
+
+  return ''
+}
+
+export function isCurrentBookmarkTagSave({
+  requestId,
+  currentRequestId,
+  bookmarkId,
+  currentBookmarkId,
+  panelOpen
+}) {
+  return Boolean(
+    panelOpen
+    && bookmarkId
+    && requestId === currentRequestId
+    && bookmarkId === currentBookmarkId
+  )
 }
 
 export function sanitizeBookmarkUrl(value) {

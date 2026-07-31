@@ -14,6 +14,7 @@ import customSearchEngineRoutes from './routes/customSearchEngines.js'
 import migrationRoutes from './routes/migration.js'
 import navigationRoutes from './routes/navigation.js'
 import noteAiRoutes from './routes/noteAi.js'
+import noteImagesRoutes from './routes/noteImages.js'
 import notesRoutes from './routes/notes.js'
 import settingsRoutes from './routes/settings.js'
 
@@ -82,6 +83,7 @@ export function createApp() {
   app.register(migrationRoutes, { prefix: '/api' })
   app.register(navigationRoutes, { prefix: '/api' })
   app.register(noteAiRoutes, { prefix: '/api' })
+  app.register(noteImagesRoutes, { prefix: '/api' })
   app.register(notesRoutes, { prefix: '/api' })
   app.register(settingsRoutes, { prefix: '/api' })
 

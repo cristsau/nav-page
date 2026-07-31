@@ -3,7 +3,8 @@ import assert from 'node:assert/strict'
 import {
   mergeAppConfigSecrets,
   redactAppConfigSecrets,
-  resolveProviderTestConfig
+  resolveProviderTestConfig,
+  sanitizeRetiredSearchProviders
 } from '../src/lib/settingsSecrets.js'
 
 function makeConfig(apiKey = '') {
@@ -19,14 +20,27 @@ function makeConfig(apiKey = '') {
         brave: {
           enabled: false,
           apiKey: ''
-        },
-        openclaw: {
-          enabled: false,
-          apiKey: ''
         }
       }
     }
   }
+}
+
+function withRetiredOpenClaw(config = makeConfig('')) {
+  config.searchEngine = 'openclaw'
+  config.search.quickAccessEngineIds = ['baidu', 'openclaw']
+  config.search.hiddenEngineIds = ['openclaw', 'weibo']
+  config.search.aggregate = {
+    enabled: true,
+    engines: ['openclaw', 'bing']
+  }
+  config.search.providers.openclaw = {
+    enabled: true,
+    endpoint: 'https://retired.example.test/v1/chat/completions',
+    apiKey: 'retired-provider-secret',
+    model: 'retired-model'
+  }
+  return config
 }
 
 test('app config responses redact provider keys and expose configuration state', () => {
@@ -35,6 +49,24 @@ test('app config responses redact provider keys and expose configuration state',
   assert.equal(redacted.search.providers.chatgpt.apiKey, '')
   assert.equal(redacted.search.providers.chatgpt.apiKeyConfigured, true)
   assert.equal(JSON.stringify(redacted).includes('server-secret'), false)
+})
+
+test('retired provider config and secrets are removed before settings reach the browser', () => {
+  const stale = withRetiredOpenClaw()
+  const sanitized = sanitizeRetiredSearchProviders(stale)
+  const redacted = redactAppConfigSecrets(stale)
+  const merged = mergeAppConfigSecrets(stale, stale)
+
+  for (const config of [sanitized, redacted, merged]) {
+    assert.equal(config.searchEngine, 'baidu')
+    assert.deepEqual(config.search.quickAccessEngineIds, ['baidu'])
+    assert.deepEqual(config.search.hiddenEngineIds, ['weibo'])
+    assert.deepEqual(config.search.aggregate.engines, ['bing'])
+    assert.equal(config.search.providers.openclaw, undefined)
+    assert.equal(JSON.stringify(config).includes('retired-provider-secret'), false)
+  }
+
+  assert.equal(stale.search.providers.openclaw.apiKey, 'retired-provider-secret')
 })
 
 test('blank provider keys preserve stored secrets during settings updates', () => {

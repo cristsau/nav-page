@@ -26,10 +26,40 @@ const props = defineProps({
   needsSetup: {
     type: Boolean,
     default: false
+  },
+  canGenerateTags: {
+    type: Boolean,
+    default: false
+  },
+  tagResult: {
+    type: Object,
+    default: null
+  },
+  tagLoading: {
+    type: Boolean,
+    default: false
+  },
+  tagSaving: {
+    type: Boolean,
+    default: false
+  },
+  tagError: {
+    type: String,
+    default: ''
+  },
+  tagMessage: {
+    type: String,
+    default: ''
   }
 })
 
-const emit = defineEmits(['close', 'retry', 'openSettings'])
+const emit = defineEmits([
+  'close',
+  'retry',
+  'openSettings',
+  'suggestTags',
+  'applyTags'
+])
 const closeButton = ref(null)
 const panelSheet = ref(null)
 const copied = ref(false)
@@ -177,6 +207,74 @@ async function copyAnswer() {
               </div>
             </section>
           </template>
+
+          <section
+            v-if="!needsSetup && canGenerateTags"
+            class="ai-panel__tag-workspace"
+          >
+            <div class="ai-panel__tag-heading">
+              <span class="ai-panel__tag-icon" aria-hidden="true">
+                <Icon name="tag" :size="17" />
+              </span>
+              <div>
+                <strong>智能标签</strong>
+                <p>单独生成可搜索的短标签，确认后才会保存到书签。</p>
+              </div>
+            </div>
+
+            <div v-if="tagLoading" class="ai-panel__tag-state" aria-live="polite">
+              <span class="ai-panel__loader" aria-hidden="true"></span>
+              <span>正在生成 3–5 个标签</span>
+            </div>
+
+            <div v-if="tagError" class="ai-panel__tag-feedback is-error" role="alert">
+              <Icon name="alert" :size="15" />
+              <span>{{ tagError }}</span>
+            </div>
+
+            <div v-if="tagMessage" class="ai-panel__tag-feedback is-success" role="status">
+              <Icon name="circle-check" :size="15" />
+              <span>{{ tagMessage }}</span>
+            </div>
+
+            <template v-if="tagResult && !tagLoading">
+              <div
+                v-if="tagResult.tags?.length"
+                class="ai-panel__tags"
+                aria-label="AI 建议标签"
+              >
+                <span v-for="tag in tagResult.tags" :key="tag" class="ai-panel__tag">
+                  <Icon name="tag" :size="13" />
+                  {{ tag }}
+                </span>
+              </div>
+              <p v-else class="ai-panel__tag-empty">没有发现适合添加的新标签。</p>
+            </template>
+
+            <div class="ai-panel__tag-actions">
+              <button
+                class="ai-panel__button"
+                type="button"
+                :disabled="loading || tagLoading || tagSaving"
+                @click="emit('suggestTags')"
+              >
+                <span v-if="tagLoading" class="ai-panel__button-spinner" aria-hidden="true"></span>
+                <Icon v-else name="sparkles" :size="16" />
+                {{ tagResult ? '重新生成' : '生成标签' }}
+              </button>
+              <button
+                v-if="tagResult?.tags?.length"
+                class="ai-panel__button ai-panel__button--primary"
+                type="button"
+                :disabled="tagLoading || tagSaving"
+                @click="emit('applyTags')"
+              >
+                <span v-if="tagSaving" class="ai-panel__button-spinner" aria-hidden="true"></span>
+                <Icon v-else name="tag" :size="16" />
+                {{ tagSaving ? '保存中' : `添加 ${tagResult.tags.length} 个标签` }}
+              </button>
+            </div>
+          </section>
 
           <footer class="ai-panel__footer">
             <span class="ai-panel__hint">
@@ -439,6 +537,127 @@ async function copyAnswer() {
   font-size: 11px;
 }
 
+.ai-panel__tag-workspace {
+  display: grid;
+  gap: 12px;
+  margin-top: 18px;
+  padding: 16px;
+  background:
+    linear-gradient(
+      135deg,
+      color-mix(in srgb, var(--accent-color) 9%, var(--bg-secondary)),
+      var(--bg-secondary)
+    );
+  border: 1px solid color-mix(in srgb, var(--accent-color) 22%, var(--border-light));
+  border-radius: 18px;
+}
+
+.ai-panel__tag-heading {
+  display: flex;
+  align-items: flex-start;
+  gap: 10px;
+}
+
+.ai-panel__tag-heading > div {
+  min-width: 0;
+}
+
+.ai-panel__tag-heading strong {
+  display: block;
+  color: var(--text-primary);
+  font-size: 14px;
+}
+
+.ai-panel__tag-heading p {
+  margin: 3px 0 0;
+  color: var(--text-secondary);
+  font-size: 12px;
+  line-height: 1.55;
+}
+
+.ai-panel__tag-icon {
+  width: 32px;
+  height: 32px;
+  flex: 0 0 auto;
+  display: grid;
+  place-items: center;
+  color: var(--accent-color);
+  background: var(--accent-bg);
+  border-radius: 10px;
+}
+
+.ai-panel__tag-state,
+.ai-panel__tag-feedback {
+  min-height: 36px;
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 9px 11px;
+  color: var(--text-secondary);
+  background: color-mix(in srgb, var(--bg-card) 82%, transparent);
+  border-radius: 11px;
+  font-size: 12px;
+}
+
+.ai-panel__tag-state .ai-panel__loader {
+  width: 18px;
+  height: 18px;
+  border-width: 2px;
+}
+
+.ai-panel__tag-feedback.is-error {
+  color: var(--error-color);
+  background: color-mix(in srgb, var(--error-color) 8%, var(--bg-card));
+}
+
+.ai-panel__tag-feedback.is-success {
+  color: var(--success-color);
+  background: color-mix(in srgb, var(--success-color) 9%, var(--bg-card));
+}
+
+.ai-panel__tags {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+}
+
+.ai-panel__tag {
+  min-height: 31px;
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  max-width: 100%;
+  padding: 6px 10px;
+  color: var(--accent-color);
+  background: var(--accent-bg);
+  border: 1px solid color-mix(in srgb, var(--accent-color) 24%, transparent);
+  border-radius: 999px;
+  font-size: 12px;
+  overflow-wrap: anywhere;
+}
+
+.ai-panel__tag-empty {
+  margin: 0;
+  color: var(--text-secondary);
+  font-size: 12px;
+}
+
+.ai-panel__tag-actions {
+  display: flex;
+  justify-content: flex-end;
+  gap: 8px;
+  flex-wrap: wrap;
+}
+
+.ai-panel__button-spinner {
+  width: 14px;
+  height: 14px;
+  border: 2px solid currentColor;
+  border-right-color: transparent;
+  border-radius: 50%;
+  animation: ai-spin 0.75s linear infinite;
+}
+
 .ai-panel__footer {
   margin-top: 20px;
   padding-top: 16px;
@@ -475,6 +694,11 @@ async function copyAnswer() {
   color: #fff;
   background: var(--accent-color);
   border-color: var(--accent-color);
+}
+
+.ai-panel__button:disabled {
+  opacity: 0.52;
+  cursor: not-allowed;
 }
 
 .ai-panel-enter-active,
@@ -539,7 +763,8 @@ async function copyAnswer() {
     transform: none;
   }
 
-  .ai-panel__loader {
+  .ai-panel__loader,
+  .ai-panel__button-spinner {
     animation-duration: 1.8s;
   }
 }

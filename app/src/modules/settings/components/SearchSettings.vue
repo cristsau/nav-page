@@ -11,6 +11,11 @@ import {
   shouldUseBackendSearchEngines,
   updateBackendCustomSearchEngine
 } from '@/shared/services/searchEnginesApi'
+import {
+  AI_MODEL_CATALOG_VERIFIED_AT,
+  getChatModelOptions,
+  resolveConfiguredChatApiMode
+} from '@/shared/config/aiModels'
 import { normalizeEngineMonogram } from '@/shared/utils/unifiedSearch'
 
 const {
@@ -36,37 +41,39 @@ const formData = ref({
 
 const providerTesting = ref({
   chatgpt: false,
-  brave: false,
-  openclaw: false
+  brave: false
 })
 
 const providerMessages = ref({
   chatgpt: '',
-  brave: '',
-  openclaw: ''
+  brave: ''
 })
 
 const providerMessageTypes = ref({
   chatgpt: '',
-  brave: '',
-  openclaw: ''
+  brave: ''
 })
 
 const providerApiKeyDrafts = ref({
   chatgpt: '',
-  brave: '',
-  openclaw: ''
+  brave: ''
 })
 
 const providerKeySaving = ref({
   chatgpt: false,
-  brave: false,
-  openclaw: false
+  brave: false
 })
 
 const allEngines = computed(() => getAllSearchEngines())
 const aggregateEnabled = computed(() => config.value.search?.aggregate?.enabled || false)
 const quickAccessIds = computed(() => config.value.search?.quickAccessEngineIds || [])
+const chatApiMode = computed(() => resolveConfiguredChatApiMode(
+  config.value.search?.providers?.chatgpt
+))
+const chatUsesResponsesApi = computed(() => chatApiMode.value === 'responses')
+const chatModelOptions = computed(() => getChatModelOptions(
+  config.value.search?.providers?.chatgpt?.model
+))
 
 async function loadCustomEngines() {
   try {
@@ -339,7 +346,7 @@ async function handleProviderTest(provider) {
     <div class="settings-item">
       <div class="settings-item__info">
         <div class="settings-item__label">默认搜索引擎</div>
-        <div class="settings-item__desc">支持百度、Google、Bing、Brave Search、ChatGPT Search、OpenClaw 和自定义搜索。</div>
+        <div class="settings-item__desc">支持百度、Google、Bing、Brave Search、ChatGPT Search 和自定义搜索。</div>
       </div>
       <div class="settings-item__control">
         <div class="engine-grid">
@@ -491,7 +498,7 @@ async function handleProviderTest(provider) {
           <span>API 格式</span>
           <select
             class="input"
-            :value="config.search?.providers?.chatgpt?.apiMode || (config.search?.providers?.chatgpt?.cliProxyBaseUrl ? 'chat-completions' : 'responses')"
+            :value="chatApiMode"
             @change="updateChatApiMode($event.target.value)"
           >
             <option value="responses">Responses API（推荐）</option>
@@ -560,19 +567,29 @@ async function handleProviderTest(provider) {
         </div>
         <label class="provider-field">
           <span>Model</span>
-          <input
+          <select
             class="input"
-            type="text"
             :value="config.search?.providers?.chatgpt?.model"
-            placeholder="gpt-5.6-terra"
-            @input="updateConfig('search.providers.chatgpt.model', $event.target.value)"
+            @change="updateConfig('search.providers.chatgpt.model', $event.target.value)"
           >
+            <option
+              v-for="model in chatModelOptions"
+              :key="model.id"
+              :value="model.id"
+            >
+              {{ model.id }} · {{ model.description }}
+            </option>
+          </select>
+          <span class="provider-key__hint">
+            依据当前生产验收与代理配置，最多显示 6 个；核验于 {{ AI_MODEL_CATALOG_VERIFIED_AT }}。
+          </span>
         </label>
-        <label class="provider-field">
+        <label class="provider-field" :class="{ 'is-disabled': !chatUsesResponsesApi }">
           <span>推理强度</span>
           <select
             class="input"
             :value="config.search?.providers?.chatgpt?.reasoningEffort || 'low'"
+            :disabled="!chatUsesResponsesApi"
             @change="updateConfig('search.providers.chatgpt.reasoningEffort', $event.target.value)"
           >
             <option value="none">无</option>
@@ -583,14 +600,22 @@ async function handleProviderTest(provider) {
             <option value="xhigh">极高</option>
           </select>
         </label>
-        <label class="provider-field provider-field--toggle">
+        <label
+          class="provider-field provider-field--toggle"
+          :class="{ 'is-disabled': !chatUsesResponsesApi }"
+        >
           <span>联网搜索</span>
           <input
             type="checkbox"
             :checked="config.search?.providers?.chatgpt?.webSearchEnabled !== false"
+            :disabled="!chatUsesResponsesApi"
             @change="updateConfig('search.providers.chatgpt.webSearchEnabled', $event.target.checked)"
           >
         </label>
+        <p v-if="!chatUsesResponsesApi" class="provider-grid__notice">
+          <Icon name="alert" :size="15" />
+          当前为 Chat Completions 兼容网关，推理强度和内置联网搜索参数不会发送。
+        </p>
       </div>
       <div class="provider-actions">
         <button type="button" class="btn btn--secondary" :disabled="providerTesting.chatgpt" @click="handleProviderTest('chatgpt')">
@@ -683,105 +708,6 @@ async function handleProviderTest(provider) {
         :class="`is-${providerMessageTypes.brave}`"
       >
         {{ providerMessages.brave }}
-      </div>
-    </div>
-
-    <div class="settings-item settings-item--stack">
-      <div class="settings-item__info">
-        <div class="settings-item__label">OpenClaw 接入</div>
-        <div class="settings-item__desc">适合接你自己的 OpenClaw 或 OpenAI-compatible 网关，配置完成后首页会直接返回答案面板。</div>
-      </div>
-      <div class="provider-grid">
-        <label class="provider-field">
-          <span>启用</span>
-          <input
-            type="checkbox"
-            :checked="config.search?.providers?.openclaw?.enabled"
-            @change="updateConfig('search.providers.openclaw.enabled', $event.target.checked)"
-          >
-        </label>
-        <label class="provider-field">
-          <span>Base URL</span>
-          <input
-            class="input"
-            type="text"
-            :value="config.search?.providers?.openclaw?.baseUrl"
-            placeholder="https://your-openclaw.example.com"
-            @input="updateConfig('search.providers.openclaw.baseUrl', $event.target.value)"
-          >
-        </label>
-        <label class="provider-field">
-          <span>Endpoint</span>
-          <input
-            class="input"
-            type="text"
-            :value="config.search?.providers?.openclaw?.endpoint"
-            placeholder="留空时自动拼接 /v1/chat/completions"
-            @input="updateConfig('search.providers.openclaw.endpoint', $event.target.value)"
-          >
-        </label>
-        <div class="provider-field provider-field--full">
-          <div class="provider-key__label">
-            <span>API Key</span>
-            <span
-              class="provider-key__status"
-              :class="{ 'is-configured': isProviderKeyConfigured('openclaw') }"
-            >
-              {{ isProviderKeyConfigured('openclaw') ? '已安全保存' : '未配置' }}
-            </span>
-          </div>
-          <div class="provider-key__row">
-            <input
-              v-model="providerApiKeyDrafts.openclaw"
-              class="input"
-              type="password"
-              autocomplete="new-password"
-              :placeholder="isProviderKeyConfigured('openclaw') ? '留空将继续使用已保存密钥' : '网关需要鉴权时填写'"
-              @keydown.enter="saveProviderApiKey('openclaw')"
-            >
-            <button
-              class="btn btn--secondary"
-              type="button"
-              :disabled="providerKeySaving.openclaw || !providerApiKeyDrafts.openclaw.trim()"
-              @click="saveProviderApiKey('openclaw')"
-            >
-              <Icon name="lock" :size="15" />
-              保存密钥
-            </button>
-            <button
-              v-if="isProviderKeyConfigured('openclaw')"
-              class="btn btn--danger-quiet"
-              type="button"
-              :disabled="providerKeySaving.openclaw"
-              @click="clearProviderApiKey('openclaw')"
-            >
-              清除
-            </button>
-          </div>
-          <span class="provider-key__hint">OpenClaw 不需要鉴权时可保持未配置。</span>
-        </div>
-        <label class="provider-field provider-field--full">
-          <span>Model</span>
-          <input
-            class="input"
-            type="text"
-            :value="config.search?.providers?.openclaw?.model"
-            placeholder="例如 gpt-4.1-mini / claude / qwen ..."
-            @input="updateConfig('search.providers.openclaw.model', $event.target.value)"
-          >
-        </label>
-      </div>
-      <div class="provider-actions">
-        <button class="btn btn--secondary" :disabled="providerTesting.openclaw" @click="handleProviderTest('openclaw')">
-          {{ providerTesting.openclaw ? '测试中...' : '测试连接' }}
-        </button>
-      </div>
-      <div
-        v-if="providerMessages.openclaw"
-        class="provider-message"
-        :class="`is-${providerMessageTypes.openclaw}`"
-      >
-        {{ providerMessages.openclaw }}
       </div>
     </div>
 
@@ -1094,6 +1020,28 @@ async function handleProviderTest(provider) {
   border-radius: var(--radius-md);
 }
 
+.provider-field.is-disabled {
+  opacity: 0.58;
+}
+
+.provider-grid__notice {
+  grid-column: 1 / -1;
+  display: flex;
+  align-items: flex-start;
+  gap: 8px;
+  margin: 0;
+  padding: 10px 12px;
+  color: var(--text-secondary);
+  background: color-mix(in srgb, var(--warning-color) 8%, var(--bg-secondary));
+  border-radius: var(--radius-md);
+  font-size: 11px;
+  line-height: 1.55;
+}
+
+.provider-grid__notice .app-icon {
+  margin-top: 1px;
+}
+
 .provider-key__label {
   display: flex;
   align-items: center;
@@ -1125,8 +1073,8 @@ async function handleProviderTest(provider) {
 }
 
 .provider-key__hint {
-  color: var(--text-muted);
-  font-size: 11px;
+  color: var(--text-secondary);
+  font-size: 12px;
   line-height: 1.5;
 }
 

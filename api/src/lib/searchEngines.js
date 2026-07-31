@@ -38,6 +38,11 @@ export function removeSearchEngineReferences(appConfig, engineId) {
       .filter((id) => id !== engineId)
   }
 
+  if (Array.isArray(search.hiddenEngineIds)) {
+    search.hiddenEngineIds = search.hiddenEngineIds
+      .filter((id) => id !== engineId)
+  }
+
   if (
     search.aggregate
     && typeof search.aggregate === 'object'

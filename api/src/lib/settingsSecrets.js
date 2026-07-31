@@ -1,8 +1,10 @@
-const PROVIDER_IDS = ['chatgpt', 'brave', 'openclaw']
+import { removeSearchEngineReferences } from './searchEngines.js'
+
+const PROVIDER_IDS = ['chatgpt', 'brave']
+const RETIRED_OPENCLAW_ID = 'openclaw'
 const PROVIDER_DESTINATION_FIELDS = Object.freeze({
   chatgpt: ['mode', 'apiMode', 'endpoint', 'cliProxyBaseUrl'],
-  brave: ['endpoint'],
-  openclaw: ['baseUrl', 'endpoint']
+  brave: ['endpoint']
 })
 
 function clone(value) {
@@ -47,6 +49,23 @@ function normalizeDestinationValue(value) {
   return String(value ?? '').trim()
 }
 
+export function sanitizeRetiredSearchProviders(value) {
+  if (!isPlainObject(value)) {
+    return value
+  }
+
+  // Retired providers must be removed before active-provider redaction so a
+  // historical credential can never bypass the current allowlist.
+  const sanitized = removeSearchEngineReferences(value, RETIRED_OPENCLAW_ID)
+  const providers = sanitized?.search?.providers
+
+  if (isPlainObject(providers)) {
+    delete providers[RETIRED_OPENCLAW_ID]
+  }
+
+  return sanitized
+}
+
 export function hasProviderDestinationChanged(
   providerId,
   incomingProvider,
@@ -75,10 +94,11 @@ export function redactAppConfigSecrets(value) {
     return value
   }
 
-  const redacted = clone(value)
+  const sanitized = sanitizeRetiredSearchProviders(value)
+  const redacted = clone(sanitized)
 
   for (const providerId of PROVIDER_IDS) {
-    const sourceProvider = getProvider(value, providerId)
+    const sourceProvider = getProvider(sanitized, providerId)
     const targetProvider = ensureProvider(redacted, providerId)
     targetProvider.apiKey = ''
     targetProvider.apiKeyConfigured = Boolean(normalizeKey(sourceProvider.apiKey))
@@ -93,11 +113,12 @@ export function mergeAppConfigSecrets(incomingValue, existingValue) {
     throw new TypeError('appConfig value must be an object')
   }
 
-  const merged = clone(incomingValue)
+  const merged = sanitizeRetiredSearchProviders(incomingValue)
+  const sanitizedExisting = sanitizeRetiredSearchProviders(existingValue)
 
   for (const providerId of PROVIDER_IDS) {
-    const incomingProvider = getProvider(incomingValue, providerId)
-    const existingProvider = getProvider(existingValue, providerId)
+    const incomingProvider = getProvider(merged, providerId)
+    const existingProvider = getProvider(sanitizedExisting, providerId)
     const targetProvider = ensureProvider(merged, providerId)
     const incomingKey = normalizeKey(incomingProvider.apiKey)
     const existingKey = normalizeKey(existingProvider.apiKey)

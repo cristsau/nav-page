@@ -1,4 +1,5 @@
 import { createHash } from 'node:crypto'
+import { consumeAiRateLimit } from '../lib/aiRateLimit.js'
 import {
   buildChatRequest,
   extractAiText,
@@ -9,7 +10,6 @@ import { resolveProviderTestConfig } from '../lib/settingsSecrets.js'
 import { getUserSettingValue } from '../lib/userSettings.js'
 
 const DEFAULT_BRAVE_ENDPOINT = 'https://api.search.brave.com/res/v1/web/search'
-const DEFAULT_OPENCLAW_MODEL = 'gpt-4.1-mini'
 const REQUEST_TIMEOUT_MS = 45000
 const MAX_QUERY_LENGTH = 2000
 
@@ -77,27 +77,11 @@ function buildExternalUrl(engineId, query) {
   switch (engineId) {
     case 'brave':
       return `https://search.brave.com/search?q=${encoded}`
-    case 'openclaw':
-      return ''
     case 'chatgpt':
       return 'https://chatgpt.com/'
     default:
       return ''
   }
-}
-
-function resolveOpenClawEndpoint(provider) {
-  const endpoint = normalizeText(provider?.endpoint)
-  if (endpoint) {
-    return endpoint
-  }
-
-  const baseUrl = normalizeText(provider?.baseUrl)
-  if (!baseUrl) {
-    return ''
-  }
-
-  return `${baseUrl.replace(/\/$/, '')}/v1/chat/completions`
 }
 
 async function runBraveSearch(provider, queryText) {
@@ -209,69 +193,25 @@ async function runChatSearch(provider, queryText, userId = '') {
   }
 }
 
-async function runOpenClawSearch(provider, queryText) {
-  if (!provider?.enabled) {
-    throw new Error('请先在设置中启用 OpenClaw 接入')
-  }
-
-  const endpoint = resolveOpenClawEndpoint(provider)
-  if (!endpoint) {
-    throw new Error('请先在设置中填写 OpenClaw Base URL 或 Endpoint')
-  }
-
-  const model = normalizeText(provider.model, DEFAULT_OPENCLAW_MODEL) || DEFAULT_OPENCLAW_MODEL
-  const apiKey = normalizeText(provider.apiKey)
-  const systemPrompt = [
-    '你是 DOMO NAV 的 OpenClaw 搜索助手。',
-    '请用简洁中文回答用户问题。',
-    '如果无法确认事实，请明确说明不确定。'
-  ].join(' ')
-
-  const payload = await fetchJson(
-    endpoint,
-    {
-      method: 'POST',
-      headers: {
-        Accept: 'application/json',
-        'Content-Type': 'application/json',
-        ...(apiKey ? { Authorization: `Bearer ${apiKey}` } : {})
-      },
-      body: JSON.stringify({
-        model,
-        temperature: 0.3,
-        stream: false,
-        messages: [
-          { role: 'system', content: systemPrompt },
-          { role: 'user', content: `用户搜索词：${queryText}` }
-        ]
-      })
-    },
-    'OpenClaw 搜索请求失败'
-  )
-
-  const answer = extractAiText(payload)
-
-  if (!answer) {
-    throw new Error('OpenClaw 未返回可解析内容，请检查接口地址和模型配置')
-  }
-
-  return {
-    engineId: 'openclaw',
-    label: 'OpenClaw',
-    query: queryText,
-    mode: 'answer',
-    answer,
-    items: [],
-    externalUrl: normalizeText(provider.baseUrl)
-  }
-}
-
 export default async function aiSearchRoutes(fastify) {
   fastify.post('/ai-search/providers/test', async (request, reply) => {
     await fastify.requireAuth(request, reply)
 
+    const rateLimit = consumeAiRateLimit(request.currentUser.id)
+    if (!rateLimit.allowed) {
+      reply.header('Retry-After', String(rateLimit.retryAfterSeconds))
+      reply.code(429)
+      return { error: 'AI 请求过于频繁，请稍后再试' }
+    }
+
     const provider = normalizeText(request.body?.provider).toLowerCase()
     const inputConfig = request.body?.config || {}
+
+    if (!['brave', 'chatgpt'].includes(provider)) {
+      reply.code(400)
+      return { error: 'Unsupported AI provider' }
+    }
+
     const appConfig = await getUserSettingValue(request.currentUser.id, 'appConfig', {})
     const providerConfig = resolveProviderTestConfig(provider, inputConfig, appConfig)
 
@@ -296,15 +236,6 @@ export default async function aiSearchRoutes(fastify) {
         }
       }
 
-      if (provider === 'openclaw') {
-        const result = await runOpenClawSearch(providerConfig, '请只回复：连接成功')
-        return {
-          ok: true,
-          provider,
-          message: `连接成功，返回内容：${result.answer.slice(0, 120)}`
-        }
-      }
-
       reply.code(400)
       return { error: 'Unsupported AI provider' }
     } catch (error) {
@@ -317,6 +248,13 @@ export default async function aiSearchRoutes(fastify) {
 
   fastify.post('/ai-search', async (request, reply) => {
     await fastify.requireAuth(request, reply)
+
+    const rateLimit = consumeAiRateLimit(request.currentUser.id)
+    if (!rateLimit.allowed) {
+      reply.header('Retry-After', String(rateLimit.retryAfterSeconds))
+      reply.code(429)
+      return { error: 'AI 请求过于频繁，请稍后再试' }
+    }
 
     const engineId = normalizeText(request.body?.engineId).toLowerCase()
     const queryText = normalizeText(request.body?.query)
@@ -359,10 +297,6 @@ export default async function aiSearchRoutes(fastify) {
             request.currentUser.id
           )
         }
-      }
-
-      if (engineId === 'openclaw') {
-        return { result: await runOpenClawSearch(providers.openclaw || {}, queryText) }
       }
 
       reply.code(400)

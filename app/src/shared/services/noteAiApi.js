@@ -12,9 +12,31 @@ export async function runBackendNoteAi(action, note) {
       action,
       type: note?.type || 'memo',
       title: note?.title || '',
-      content: note?.content || ''
+      content: note?.content || '',
+      tags: Array.isArray(note?.tags) ? note.tags : []
     })
   })
 
-  return payload.result
+  const result = payload?.result
+
+  if (action === 'tags') {
+    if (
+      result?.kind !== 'tags'
+      || !Array.isArray(result.tags)
+      || result.tags.some((tag) => typeof tag !== 'string')
+    ) {
+      throw new Error('AI 标签结果格式无效，请重新生成。')
+    }
+
+    return result
+  }
+
+  if (!result || typeof result.text !== 'string') {
+    throw new Error('AI 编辑结果格式无效，请重新生成。')
+  }
+
+  return {
+    ...result,
+    kind: result.kind || 'text'
+  }
 }

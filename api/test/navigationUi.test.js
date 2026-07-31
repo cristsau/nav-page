@@ -21,7 +21,6 @@ test('bookmark AI provider prioritizes the configured ChatGPT backend', () => {
     search: {
       providers: {
         brave: { enabled: true, apiKeyConfigured: true },
-        openclaw: { enabled: true, endpoint: 'https://openclaw.example.test/v1/chat/completions' },
         chatgpt: { enabled: true, apiKeyConfigured: true }
       }
     }
@@ -31,7 +30,7 @@ test('bookmark AI provider prioritizes the configured ChatGPT backend', () => {
   assert.equal(resolveBookmarkAiProvider({ search: { providers: {} } }), '')
 })
 
-test('bookmark AI skips enabled providers that are not ready', () => {
+test('bookmark AI ignores retired providers and skips enabled providers that are not ready', () => {
   const config = {
     search: {
       providers: {
@@ -45,7 +44,7 @@ test('bookmark AI skips enabled providers that are not ready', () => {
     }
   }
 
-  assert.equal(resolveBookmarkAiProvider(config), 'openclaw')
+  assert.equal(resolveBookmarkAiProvider(config), 'brave')
 })
 
 test('bookmark URL sent for AI analysis excludes credentials, query and fragment', () => {

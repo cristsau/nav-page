@@ -85,3 +85,24 @@ export async function searchBackendBookmarks(query) {
 
   return payload.bookmarks || []
 }
+
+export async function suggestBackendBookmarkTags(bookmarkId) {
+  const payload = await request(
+    `/bookmarks/${encodeURIComponent(bookmarkId)}/ai/tags`,
+    {
+      method: 'POST',
+      body: JSON.stringify({})
+    }
+  )
+  const result = payload?.result
+
+  if (
+    result?.kind !== 'tags'
+    || !Array.isArray(result.tags)
+    || result.tags.some((tag) => typeof tag !== 'string')
+  ) {
+    throw new Error('AI 标签结果格式无效，请重新生成。')
+  }
+
+  return result
+}

@@ -51,6 +51,14 @@ function readZipEntries(archive) {
   return entries
 }
 
+function canonicalExtensionContent(relativePath, content) {
+  if (relativePath.endsWith('.png')) {
+    return content
+  }
+
+  return Buffer.from(content.toString('utf8').replace(/\r\n/g, '\n'))
+}
+
 test('browser extension uses least-privilege default access and exposes quick add', async () => {
   const manifestUrl = new URL('../../extension/manifest.json', import.meta.url)
   const manifest = JSON.parse(await readFile(manifestUrl, 'utf8'))
@@ -108,9 +116,11 @@ test('downloadable extension archive matches the reviewed source files', async (
     const archived = archiveEntries.get(relativePath)
 
     assert.ok(archived, `${relativePath} is missing from nav-extension.zip`)
+    const canonicalSource = canonicalExtensionContent(relativePath, source)
+    const canonicalArchived = canonicalExtensionContent(relativePath, archived)
     assert.equal(
-      createHash('sha256').update(archived).digest('hex'),
-      createHash('sha256').update(source).digest('hex'),
+      createHash('sha256').update(canonicalArchived).digest('hex'),
+      createHash('sha256').update(canonicalSource).digest('hex'),
       `${relativePath} differs between source and nav-extension.zip`
     )
   }

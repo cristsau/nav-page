@@ -202,6 +202,9 @@ async function handleDecrypt() {
       <span v-if="note.completed" class="note-card__completed">
         <Icon name="circle-check" :size="14" /> 已完成
       </span>
+      <span v-if="note.attachments?.length" class="note-card__image-count">
+        <Icon name="image" :size="14" /> {{ note.attachments.length }}
+      </span>
       <span v-if="note.share?.enabled" class="note-card__share-status">已分享</span>
     </div>
 
@@ -427,10 +430,15 @@ async function handleDecrypt() {
   color: var(--success-color);
 }
 
-.note-card__completed {
+.note-card__completed,
+.note-card__image-count {
   display: inline-flex;
   align-items: center;
   gap: 4px;
+}
+
+.note-card__image-count {
+  color: var(--text-muted);
 }
 
 .note-card__actions {

@@ -1,3 +1,5 @@
+import { normalizeNoteAttachments } from './noteAttachments.js'
+
 export function mapShare(record) {
   if (!record) return null
 
@@ -28,6 +30,9 @@ export function mapNote(record) {
     password: '',
     pinned: record.pinned,
     tags: Array.isArray(record.tags) ? record.tags : [],
+    attachments: normalizeNoteAttachments(record.attachments, {
+      maxBytes: Number.MAX_SAFE_INTEGER
+    }),
     entryDate: record.entry_date || '',
     mood: record.mood || '',
     dueAt: record.due_at || null,

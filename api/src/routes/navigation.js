@@ -1,15 +1,14 @@
 import { query, withTransaction } from '../db/index.js'
+import { consumeAiRateLimit } from '../lib/aiRateLimit.js'
+import { buildBookmarkAiTagInput } from '../lib/bookmarkAi.js'
+import { normalizeBookmarkUserTags } from '../lib/bookmarkTags.js'
 import { mapBookmark, mapGroup } from '../lib/navigation.js'
+import { runNoteAi, selectNoteAiProvider } from '../lib/noteAi.js'
+import { getUserSettingValue } from '../lib/userSettings.js'
 import { normalizeHttpUrl } from '../lib/urls.js'
 
 function normalizeText(value, fallback = '') {
   return String(value ?? fallback).trim()
-}
-
-function normalizeTags(value) {
-  return Array.isArray(value)
-    ? value.map((item) => String(item || '').trim()).filter(Boolean)
-    : []
 }
 
 async function requireOwnedGroup(userId, groupId, reply) {
@@ -236,6 +235,53 @@ export default async function navigationRoutes(fastify) {
     return { bookmarks: rows.map(mapBookmark) }
   })
 
+  fastify.post('/bookmarks/:bookmarkId/ai/tags', async (request, reply) => {
+    await fastify.requireAuth(request, reply)
+
+    const bookmark = await requireOwnedBookmark(
+      request.currentUser.id,
+      request.params.bookmarkId,
+      reply
+    )
+    if (!bookmark) {
+      return { error: 'Bookmark not found' }
+    }
+
+    const rateLimit = consumeAiRateLimit(request.currentUser.id)
+    if (!rateLimit.allowed) {
+      reply.header('Retry-After', String(rateLimit.retryAfterSeconds))
+      reply.code(429)
+      return { error: 'AI 请求过于频繁，请稍后再试' }
+    }
+
+    const appConfig = await getUserSettingValue(
+      request.currentUser.id,
+      'appConfig',
+      {}
+    )
+    const provider = selectNoteAiProvider(appConfig?.search?.providers || {})
+
+    if (!provider) {
+      reply.code(503)
+      return { error: '请先在设置中启用 ChatGPT / OpenAI，再生成书签标签' }
+    }
+
+    try {
+      return {
+        result: await runNoteAi(
+          provider,
+          buildBookmarkAiTagInput(bookmark),
+          request.currentUser.id
+        )
+      }
+    } catch (error) {
+      reply.code(502)
+      return {
+        error: error.message || '书签智能标签生成失败'
+      }
+    }
+  })
+
   fastify.post('/bookmarks', async (request, reply) => {
     await fastify.requireAuth(request, reply)
 
@@ -261,7 +307,7 @@ export default async function navigationRoutes(fastify) {
 
     const favicon = normalizeText(request.body?.favicon)
     const description = normalizeText(request.body?.description)
-    const tags = normalizeTags(request.body?.tags)
+    const tags = normalizeBookmarkUserTags(request.body?.tags)
     const deduplicate = Boolean(request.body?.deduplicate)
 
     const result = await withTransaction(async (client) => {
@@ -337,7 +383,9 @@ export default async function navigationRoutes(fastify) {
     const url = normalizeHttpUrl(rawUrl)
     const favicon = normalizeText(request.body?.favicon, existing.favicon)
     const description = normalizeText(request.body?.description, existing.description)
-    const tags = request.body?.tags === undefined ? existing.tags : normalizeTags(request.body.tags)
+    const tags = request.body?.tags === undefined
+      ? existing.tags
+      : normalizeBookmarkUserTags(request.body.tags)
 
     if (!url) {
       reply.code(400)

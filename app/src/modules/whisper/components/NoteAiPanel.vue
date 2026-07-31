@@ -19,6 +19,10 @@ const props = defineProps({
     type: String,
     default: ''
   },
+  tags: {
+    type: Array,
+    default: () => []
+  },
   encrypted: {
     type: Boolean,
     default: false
@@ -33,13 +37,14 @@ const props = defineProps({
   }
 })
 
-const emit = defineEmits(['insert', 'replace'])
+const emit = defineEmits(['insert', 'replace', 'apply-tags'])
 
 const actions = [
   { id: 'summarize', label: '总结', icon: 'list' },
   { id: 'polish', label: '润色', icon: 'edit' },
   { id: 'tasks', label: '提取待办', icon: 'check' },
-  { id: 'continue', label: '续写', icon: 'plus' }
+  { id: 'continue', label: '续写', icon: 'plus' },
+  { id: 'tags', label: '智能标签', icon: 'tag' }
 ]
 
 const expanded = ref(props.autoOpen)
@@ -47,14 +52,29 @@ const workingAction = ref('')
 const result = ref(null)
 const errorMessage = ref('')
 const copied = ref(false)
+const resultEncryptionAcknowledged = ref(false)
 let requestSequence = 0
 
-const canRun = computed(() => (
-  canUseBackendNoteAi()
-  && Boolean(props.content.trim())
-  && !props.disabled
-  && !workingAction.value
-))
+const copyText = computed(() => {
+  if (result.value?.kind === 'tags') {
+    return result.value.tags.map((tag) => `#${tag}`).join(' ')
+  }
+
+  return result.value?.text || ''
+})
+
+function canRunAction(action) {
+  const hasSource = action === 'tags'
+    ? Boolean(props.title.trim() || props.content.trim())
+    : Boolean(props.content.trim())
+
+  return (
+    canUseBackendNoteAi()
+    && hasSource
+    && !props.disabled
+    && !workingAction.value
+  )
+}
 
 watch(
   () => props.autoOpen,
@@ -64,15 +84,22 @@ watch(
 )
 
 watch(
-  () => [props.type, props.title, props.content],
+  () => [
+    props.type,
+    props.title,
+    props.content,
+    JSON.stringify(props.tags),
+    props.encrypted
+  ],
   () => {
     requestSequence += 1
     if (result.value) {
       result.value = null
     }
+    resultEncryptionAcknowledged.value = false
     copied.value = false
     errorMessage.value = workingAction.value
-      ? '正文已更改，本次 AI 草稿已作废；请求结束后请重新生成。'
+      ? '记录已更改，本次 AI 草稿已作废；请求结束后请重新生成。'
       : ''
   }
 )
@@ -87,31 +114,41 @@ async function runAction(action) {
     return
   }
 
-  if (!props.content.trim()) {
-    errorMessage.value = '请先写一些正文，再调用 AI。'
+  if (!canRunAction(action)) {
+    errorMessage.value = action === 'tags'
+      ? '请先填写标题或正文，再生成智能标签。'
+      : '请先写一些正文，再调用 AI。'
     return
   }
 
   if (
     props.encrypted
-    && !window.confirm('AI 编辑会把当前明文发送到你在后台配置的 AI 服务。确定继续吗？')
+    && !window.confirm(
+      action === 'tags'
+        ? '生成智能标签会把当前明文发送到你在后台配置的 AI 服务，生成的标签将作为未加密元数据保存。确定继续吗？'
+        : 'AI 编辑会把当前明文发送到你在后台配置的 AI 服务。确定继续吗？'
+    )
   ) {
     return
   }
 
   workingAction.value = action
   result.value = null
+  resultEncryptionAcknowledged.value = false
   const requestId = ++requestSequence
   const snapshot = {
     type: props.type,
     title: props.title,
-    content: props.content
+    content: props.content,
+    tags: [...props.tags],
+    encrypted: props.encrypted
   }
 
   try {
     const response = await runBackendNoteAi(action, snapshot)
     if (requestId !== requestSequence) return
     result.value = response
+    resultEncryptionAcknowledged.value = snapshot.encrypted
   } catch (error) {
     if (requestId !== requestSequence) return
     errorMessage.value = error.message || 'AI 编辑失败，请稍后重试。'
@@ -121,10 +158,10 @@ async function runAction(action) {
 }
 
 async function copyResult() {
-  if (!result.value?.text) return
+  if (!copyText.value) return
 
   try {
-    await navigator.clipboard.writeText(result.value.text)
+    await navigator.clipboard.writeText(copyText.value)
     copied.value = true
     window.setTimeout(() => {
       copied.value = false
@@ -135,8 +172,24 @@ async function copyResult() {
 }
 
 function applyResult(mode) {
-  if (!result.value?.text) return
+  if (result.value?.kind !== 'text' || !result.value.text) return
   emit(mode, result.value.text)
+  result.value = null
+  errorMessage.value = ''
+}
+
+function applySuggestedTags() {
+  if (result.value?.kind !== 'tags' || !result.value.tags.length) return
+
+  if (
+    props.encrypted
+    && !resultEncryptionAcknowledged.value
+    && !window.confirm('这些 AI 标签会作为未加密元数据保存。确定添加吗？')
+  ) {
+    return
+  }
+
+  emit('apply-tags', result.value.tags)
   result.value = null
   errorMessage.value = ''
 }
@@ -168,7 +221,7 @@ function applyResult(mode) {
           type="button"
           class="note-ai__action"
           :class="{ 'is-loading': workingAction === action.id }"
-          :disabled="!canRun"
+          :disabled="!canRunAction(action.id)"
           @click="runAction(action.id)"
         >
           <span v-if="workingAction === action.id" class="note-ai__spinner" aria-hidden="true"></span>
@@ -181,7 +234,11 @@ function applyResult(mode) {
         当前为本地模式。请使用服务器账户并在设置中启用 AI 服务。
       </p>
       <p v-else class="note-ai__hint">
-        点击操作会把当前标题和正文发送到后台已配置的模型。AI 只生成草稿，确认后再插入或替换。
+        点击操作会把当前标题、正文和已有标签发送到后台模型。AI 只生成建议，确认后才会加入编辑器。
+      </p>
+      <p v-if="encrypted" class="note-ai__hint note-ai__hint--warning">
+        <Icon name="lock" :size="14" />
+        智能标签会以未加密元数据保存；切换加密状态会自动作废当前 AI 结果。
       </p>
 
       <div v-if="errorMessage" class="note-ai__error" role="alert">
@@ -197,17 +254,41 @@ function applyResult(mode) {
           </div>
           <span class="note-ai__model">{{ result.model }}</span>
         </div>
-        <pre>{{ result.text }}</pre>
+        <pre v-if="result.kind === 'text'">{{ result.text }}</pre>
+        <div v-else-if="result.tags.length" class="note-ai__tags" aria-label="AI 建议标签">
+          <span v-for="tag in result.tags" :key="tag" class="note-ai__tag">
+            <Icon name="tag" :size="13" />
+            {{ tag }}
+          </span>
+        </div>
+        <p v-else class="note-ai__empty">没有发现适合添加的新标签。</p>
         <div class="note-ai__result-actions">
-          <button type="button" class="note-ai__secondary" @click="copyResult">
+          <button
+            v-if="copyText"
+            type="button"
+            class="note-ai__secondary"
+            @click="copyResult"
+          >
             <Icon :name="copied ? 'circle-check' : 'copy'" :size="15" />
             {{ copied ? '已复制' : '复制结果' }}
           </button>
-          <button type="button" class="note-ai__secondary" @click="applyResult('insert')">
-            <Icon name="plus" :size="15" /> 插入正文末尾
-          </button>
-          <button type="button" class="note-ai__primary" @click="applyResult('replace')">
-            <Icon name="edit" :size="15" /> 替换正文
+          <template v-if="result.kind === 'text'">
+            <button type="button" class="note-ai__secondary" @click="applyResult('insert')">
+              <Icon name="plus" :size="15" /> 插入正文末尾
+            </button>
+            <button type="button" class="note-ai__primary" @click="applyResult('replace')">
+              <Icon name="edit" :size="15" /> 替换正文
+            </button>
+          </template>
+          <button
+            v-else
+            type="button"
+            class="note-ai__primary"
+            :disabled="!result.tags.length"
+            @click="applySuggestedTags"
+          >
+            <Icon name="tag" :size="15" />
+            {{ result.tags.length ? `添加 ${result.tags.length} 个标签` : '没有新标签' }}
           </button>
         </div>
       </div>
@@ -271,8 +352,8 @@ function applyResult(mode) {
 
 .note-ai__trigger small {
   overflow: hidden;
-  color: var(--text-muted);
-  font-size: 11px;
+  color: var(--text-secondary);
+  font-size: 12px;
   font-weight: 400;
   text-overflow: ellipsis;
   white-space: nowrap;
@@ -296,7 +377,7 @@ function applyResult(mode) {
 
 .note-ai__actions {
   display: grid;
-  grid-template-columns: repeat(4, minmax(0, 1fr));
+  grid-template-columns: repeat(auto-fit, minmax(94px, 1fr));
   gap: 7px;
   padding-top: 12px;
 }
@@ -334,9 +415,24 @@ function applyResult(mode) {
 
 .note-ai__hint {
   margin: 0;
-  color: var(--text-muted);
-  font-size: 11px;
+  color: var(--text-secondary);
+  font-size: 12px;
   line-height: 1.55;
+}
+
+.note-ai__hint--warning {
+  display: flex;
+  align-items: flex-start;
+  gap: 7px;
+  padding: 9px 10px;
+  color: var(--warning-color);
+  background: color-mix(in srgb, var(--warning-color) 8%, var(--bg-card));
+  border-radius: 10px;
+}
+
+.note-ai__hint--warning .app-icon {
+  flex: 0 0 auto;
+  margin-top: 2px;
 }
 
 .note-ai__error {
@@ -371,7 +467,7 @@ function applyResult(mode) {
 
 .note-ai__result-kicker,
 .note-ai__model {
-  color: var(--text-muted);
+  color: var(--text-secondary);
   font-size: 10px;
   letter-spacing: 0.08em;
   text-transform: uppercase;
@@ -411,6 +507,39 @@ function applyResult(mode) {
 
 .note-ai__primary:hover {
   background: var(--accent-hover);
+}
+
+.note-ai__primary:disabled {
+  opacity: 0.5;
+  cursor: not-allowed;
+}
+
+.note-ai__tags {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+  margin: 14px 0;
+}
+
+.note-ai__tag {
+  min-height: 32px;
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  max-width: 100%;
+  padding: 6px 10px;
+  color: var(--accent-color);
+  background: var(--accent-bg);
+  border: 1px solid color-mix(in srgb, var(--accent-color) 24%, transparent);
+  border-radius: 999px;
+  font-size: 12px;
+  overflow-wrap: anywhere;
+}
+
+.note-ai__empty {
+  margin: 14px 0;
+  color: var(--text-muted);
+  font-size: 12px;
 }
 
 .note-ai__spinner {

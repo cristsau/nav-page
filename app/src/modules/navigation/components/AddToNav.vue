@@ -3,6 +3,10 @@ import { ref, computed, watch } from 'vue'
 import Modal from '@/shared/components/Modal.vue'
 import Button from '@/shared/components/Button.vue'
 import Icon from '@/shared/components/Icon.vue'
+import {
+  MAX_NOTE_TAGS,
+  normalizeNoteTag
+} from '@/shared/utils/noteTags'
 import { GROUP_ICON_OPTIONS, resolveGroupIcon } from '../navigationUi'
 
 const props = defineProps({
@@ -42,12 +46,15 @@ const formData = ref({
   url: '',
   favicon: '',
   description: '',
+  tags: [],
   // 分组字段
   name: '',
   icon: 'folder',
   color: '#a08060'
 })
 const formError = ref('')
+const tagInput = ref('')
+const tagMessage = ref('')
 
 const title = computed(() => {
   if (props.editingItem) {
@@ -64,16 +71,23 @@ function resetForm() {
     url: '',
     favicon: '',
     description: '',
+    tags: [],
     name: '',
     icon: 'folder',
     color: '#a08060'
   }
   formError.value = ''
+  tagInput.value = ''
+  tagMessage.value = ''
 }
 
 // 监听显示状态，初始化表单
 watch(() => props.show, (val) => {
   if (val) {
+    formError.value = ''
+    tagInput.value = ''
+    tagMessage.value = ''
+
     if (props.editingItem) {
       // 编辑模式：填充现有数据
       if (props.mode === 'bookmark') {
@@ -83,6 +97,9 @@ watch(() => props.show, (val) => {
           url: props.editingItem.url,
           favicon: props.editingItem.favicon || '',
           description: props.editingItem.description || '',
+          tags: Array.isArray(props.editingItem.tags)
+            ? [...props.editingItem.tags]
+            : [],
           name: '',
           icon: 'folder',
           color: '#a08060'
@@ -94,6 +111,7 @@ watch(() => props.show, (val) => {
           url: '',
           favicon: '',
           description: '',
+          tags: [],
           name: props.editingItem.name,
           icon: resolveGroupIcon(props.editingItem.icon, props.editingItem.name),
           color: props.editingItem.color || '#a08060'
@@ -104,6 +122,37 @@ watch(() => props.show, (val) => {
     }
   }
 })
+
+function addTag() {
+  const tag = normalizeNoteTag(tagInput.value)
+  if (!tag) {
+    tagMessage.value = '标签需为 1–32 个字符，且不能包含网址、网络地址、邮箱、密钥或敏感编号。'
+    return false
+  }
+
+  if (formData.value.tags.length >= MAX_NOTE_TAGS) {
+    tagMessage.value = `每个书签最多保留 ${MAX_NOTE_TAGS} 个标签。`
+    return false
+  }
+
+  const duplicate = formData.value.tags.some(
+    (item) => normalizeNoteTag(item).toLocaleLowerCase('zh-CN') === tag.toLocaleLowerCase('zh-CN')
+  )
+  if (duplicate) {
+    tagMessage.value = '这个标签已经存在。'
+    return false
+  }
+
+  formData.value.tags.push(tag)
+  tagInput.value = ''
+  tagMessage.value = ''
+  return true
+}
+
+function removeTag(index) {
+  formData.value.tags.splice(index, 1)
+  tagMessage.value = ''
+}
 
 function normalizeWebUrl(value) {
   const input = String(value || '').trim()
@@ -145,6 +194,11 @@ function handleSubmit() {
   formError.value = ''
 
   if (props.mode === 'bookmark') {
+    if (tagInput.value.trim() && !addTag()) {
+      formError.value = '请先修正尚未加入的标签。'
+      return
+    }
+
     if (!formData.value.title.trim() || !formData.value.url.trim()) {
       formError.value = '请填写书签标题和网址'
       return
@@ -168,7 +222,8 @@ function handleSubmit() {
         title: formData.value.title.trim(),
         url: normalizedUrl,
         favicon: formData.value.favicon.trim(),
-        description: formData.value.description.trim()
+        description: formData.value.description.trim(),
+        tags: [...formData.value.tags]
       }
     })
   } else {
@@ -245,6 +300,39 @@ function close() {
           :disabled="saving"
         />
       </div>
+      <div class="form-group">
+        <label class="form-label" for="bookmark-tags-field">标签</label>
+        <div class="bookmark-tags-input">
+          <span v-for="(tag, index) in formData.tags" :key="`${tag}-${index}`" class="bookmark-tag">
+            {{ tag }}
+            <button
+              type="button"
+              :aria-label="`移除标签 ${tag}`"
+              :disabled="saving"
+              @click="removeTag(index)"
+            >
+              <Icon name="close" :size="12" />
+            </button>
+          </span>
+          <input
+            id="bookmark-tags-field"
+            v-model="tagInput"
+            type="text"
+            placeholder="输入标签后按回车"
+            :aria-describedby="tagMessage ? 'bookmark-tags-message' : undefined"
+            :disabled="saving"
+            @keydown.enter.prevent="addTag"
+          >
+        </div>
+        <p
+          v-if="tagMessage"
+          id="bookmark-tags-message"
+          class="bookmark-tags-message"
+          role="alert"
+        >
+          {{ tagMessage }}
+        </p>
+      </div>
     </template>
 
     <!-- 分组表单 -->
@@ -320,6 +408,78 @@ function close() {
 textarea.input {
   resize: vertical;
   min-height: 60px;
+}
+
+.bookmark-tags-input {
+  min-height: 44px;
+  display: flex;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: 7px;
+  padding: 7px 9px;
+  background: var(--bg-secondary);
+  border: 1px solid var(--border-light);
+  border-radius: 13px;
+}
+
+.bookmark-tags-input:focus-within {
+  border-color: var(--accent-color);
+  box-shadow: 0 0 0 3px color-mix(in srgb, var(--accent-color) 14%, transparent);
+}
+
+.bookmark-tags-input input {
+  min-width: 138px;
+  flex: 1;
+  padding: 5px 2px;
+  color: var(--text-primary);
+  background: transparent;
+  border: 0;
+  outline: 0;
+  font: inherit;
+  font-size: 13px;
+}
+
+.bookmark-tag {
+  min-height: 28px;
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  max-width: 100%;
+  padding: 4px 6px 4px 9px;
+  color: var(--accent-color);
+  background: var(--accent-bg);
+  border-radius: 999px;
+  font-size: 12px;
+  overflow-wrap: anywhere;
+}
+
+.bookmark-tag button {
+  width: 22px;
+  height: 22px;
+  display: grid;
+  place-items: center;
+  padding: 0;
+  color: currentColor;
+  background: transparent;
+  border: 0;
+  border-radius: 50%;
+  cursor: pointer;
+}
+
+.bookmark-tag button:hover:not(:disabled) {
+  background: color-mix(in srgb, var(--accent-color) 13%, transparent);
+}
+
+.bookmark-tag button:focus-visible {
+  outline: 2px solid var(--accent-color);
+  outline-offset: 1px;
+}
+
+.bookmark-tags-message {
+  margin: 6px 0 0;
+  color: var(--error-color);
+  font-size: 12px;
+  line-height: 1.45;
 }
 
 .form-error {
