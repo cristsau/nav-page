@@ -1,5 +1,23 @@
 import { normalizeNoteAttachments } from './noteAttachments.js'
 
+const SHANGHAI_OFFSET_MS = 8 * 60 * 60 * 1000
+
+function toPublicDateOnly(value) {
+  if (!value) return null
+
+  const rawValue = String(value).trim()
+  if (/^\d{4}-\d{2}-\d{2}$/.test(rawValue)) {
+    return rawValue
+  }
+
+  const date = new Date(value)
+  if (Number.isNaN(date.getTime())) return null
+
+  return new Date(date.getTime() + SHANGHAI_OFFSET_MS)
+    .toISOString()
+    .slice(0, 10)
+}
+
 export function mapShare(record) {
   if (!record) return null
 
@@ -10,6 +28,42 @@ export function mapShare(record) {
     expireAt: record.expire_at,
     viewCount: record.view_count,
     createdAt: record.created_at
+  }
+}
+
+export function mapPublicShare(record) {
+  if (!record) return null
+
+  return {
+    date: toPublicDateOnly(record.created_at)
+  }
+}
+
+export function mapPublicNote(record, {
+  allowedAttachmentOrigin = ''
+} = {}) {
+  if (!record) return null
+
+  const attachments = allowedAttachmentOrigin
+    ? normalizeNoteAttachments(record.attachments, {
+        allowedOrigin: allowedAttachmentOrigin,
+        maxBytes: Number.MAX_SAFE_INTEGER
+      }).map(({ url, name }) => ({
+        url,
+        name
+      }))
+    : []
+
+  return {
+    title: String(record.title || ''),
+    content: String(record.content || ''),
+    tags: Array.isArray(record.tags)
+      ? record.tags
+          .map((tag) => String(tag || '').trim())
+          .filter(Boolean)
+      : [],
+    attachments,
+    entryDate: toPublicDateOnly(record.entry_date)
   }
 }
 

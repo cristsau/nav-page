@@ -1,13 +1,16 @@
 import path from 'node:path'
 import process from 'node:process'
+import { normalizePublicAppOrigin } from './lib/publicSharePage.js'
 
 function normalizePositiveInteger(value, fallback) {
   const parsed = Number(value)
   return Number.isSafeInteger(parsed) && parsed > 0 ? parsed : fallback
 }
 
+const nodeEnv = process.env.NODE_ENV || 'development'
+
 export const config = {
-  nodeEnv: process.env.NODE_ENV || 'development',
+  nodeEnv,
   port: Number(process.env.PORT || 3001),
   host: process.env.HOST || '0.0.0.0',
   databaseUrl: process.env.DATABASE_URL || 'postgres://nav:nav_password@127.0.0.1:5432/nav',
@@ -25,6 +28,18 @@ export const config = {
   imgBedMaxImageBytes: normalizePositiveInteger(
     process.env.NAV_IMGBED_MAX_IMAGE_BYTES,
     10 * 1024 * 1024
+  ),
+  publicAppOrigin: normalizePublicAppOrigin(
+    process.env.NAV_PUBLIC_APP_ORIGIN,
+    { production: nodeEnv === 'production' }
+  ),
+  frontendIndexPath: path.resolve(
+    String(
+      process.env.NAV_FRONTEND_INDEX_PATH
+      || (nodeEnv === 'production'
+        ? '/var/www/nav/index.html'
+        : path.resolve(process.cwd(), '..', 'app', 'dist', 'index.html'))
+    ).trim()
   ),
   migrationsDir: path.resolve(process.cwd(), 'src', 'db', 'migrations')
 }

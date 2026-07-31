@@ -1,6 +1,8 @@
 import { isBackendAuthEnabled } from '@/shared/services/authApi'
 import { apiRequest as request } from '@/shared/services/apiClient'
 
+const API_BASE_URL = import.meta.env?.VITE_API_BASE_URL || '/api'
+
 export function shouldUseBackendNotes() {
   return isBackendAuthEnabled()
 }
@@ -66,9 +68,23 @@ export async function searchBackendNotes(query) {
 }
 
 export async function fetchBackendShareByCode(code) {
-  const payload = await request(`/shares/${encodeURIComponent(code)}`, {
-    method: 'GET'
+  const response = await fetch(`${API_BASE_URL}/shares/${encodeURIComponent(code)}`, {
+    method: 'GET',
+    credentials: 'omit',
+    headers: {
+      Accept: 'application/json'
+    }
   })
+  const contentType = response.headers.get('content-type') || ''
+  const payload = contentType.includes('application/json')
+    ? await response.json().catch(() => ({}))
+    : { error: await response.text() }
+
+  if (!response.ok) {
+    const error = new Error(payload.error || `Request failed: ${response.status}`)
+    error.status = response.status
+    throw error
+  }
 
   return {
     share: payload.share,

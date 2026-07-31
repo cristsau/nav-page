@@ -29,6 +29,103 @@ const GROUP_ICON_KEYWORDS = [
   { pattern: /探索|发现|旅行|explore|travel/i, icon: 'compass' }
 ]
 
+function stableTextHash(value) {
+  let hash = 2166136261
+
+  for (const character of String(value || '')) {
+    hash ^= character.codePointAt(0)
+    hash = Math.imul(hash, 16777619)
+  }
+
+  return hash >>> 0
+}
+
+function decodePathSegment(value) {
+  try {
+    return decodeURIComponent(value)
+  } catch {
+    return value
+  }
+}
+
+function compactHostname(hostname) {
+  const normalized = String(hostname || '').replace(/^\[|\]$/g, '').replace(/^www\./i, '')
+  if (!normalized.includes(':') || normalized.length <= 28) {
+    return normalized
+  }
+
+  const parts = normalized.split(':').filter(Boolean)
+  if (parts.length < 3) {
+    return normalized
+  }
+
+  return `[${parts.slice(0, 2).join(':')}:…:${parts[parts.length - 1]}]`
+}
+
+function resolveBookmarkMonogram(hostname, title) {
+  const normalizedHost = String(hostname || '').replace(/^\[|\]$/g, '').replace(/^www\./i, '')
+  if (normalizedHost.includes(':') || /^\d{1,3}(?:\.\d{1,3}){3}$/.test(normalizedHost)) {
+    return 'IP'
+  }
+
+  const firstHostLabel = normalizedHost.split('.')[0]
+  const source = firstHostLabel && !firstHostLabel.startsWith('xn--')
+    ? firstHostLabel
+    : String(title || '')
+  const chunks = source.match(/[\p{L}\p{N}]+/gu) || []
+
+  if (chunks.length > 1) {
+    return chunks
+      .slice(0, 2)
+      .map((chunk) => Array.from(chunk)[0])
+      .join('')
+      .toLocaleUpperCase()
+  }
+
+  const characters = Array.from(chunks[0] || source).filter((character) => /[\p{L}\p{N}]/u.test(character))
+  return characters.slice(0, 2).join('').toLocaleUpperCase() || 'NA'
+}
+
+export function resolveBookmarkPresentation(bookmark = {}) {
+  const rawUrl = String(bookmark.url || '')
+  const title = String(bookmark.title || '')
+  let hostname = ''
+  let subtitle = ''
+  let fullSubtitle = ''
+
+  try {
+    const url = new URL(rawUrl)
+    hostname = url.hostname.replace(/^www\./i, '')
+    const pathSegments = url.pathname
+      .split('/')
+      .filter(Boolean)
+      .slice(0, 2)
+      .map((segment) => decodePathSegment(segment).replace(/\s+/g, ' ').trim())
+      .filter(Boolean)
+    const compactPath = pathSegments.length ? `/${pathSegments.join('/')}` : ''
+    subtitle = `${compactHostname(hostname)}${compactPath}`
+    url.username = ''
+    url.password = ''
+    url.search = ''
+    url.hash = ''
+    fullSubtitle = url.toString()
+  } catch {
+    subtitle = rawUrl ? '网址格式无效' : '未提供网址'
+    fullSubtitle = subtitle
+  }
+
+  const identity = hostname || rawUrl || title || 'bookmark'
+  const hash = stableTextHash(identity.toLocaleLowerCase())
+
+  return {
+    hash,
+    hue: hash % 360,
+    monogram: resolveBookmarkMonogram(hostname, title),
+    subtitle: subtitle || '未提供网址',
+    fullSubtitle: fullSubtitle || subtitle || '未提供网址'
+  }
+}
+
 export function resolveGroupIcon(icon, groupName = '') {
   const normalizedIcon = String(icon || '').trim().toLowerCase()
   if (GROUP_ICON_NAMES.has(normalizedIcon)) {

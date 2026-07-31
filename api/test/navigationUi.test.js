@@ -5,6 +5,7 @@ import { fileURLToPath } from 'node:url'
 import {
   buildBookmarkAiPrompt,
   resolveBookmarkAiProvider,
+  resolveBookmarkPresentation,
   resolveGroupIcon,
   sanitizeBookmarkUrl
 } from '../../app/src/modules/navigation/navigationUi.js'
@@ -53,6 +54,25 @@ test('bookmark URL sent for AI analysis excludes credentials, query and fragment
     'https://example.com/docs'
   )
   assert.equal(sanitizeBookmarkUrl('javascript:alert(1)'), '')
+})
+
+test('bookmark presentation is stable, useful and does not reveal URL secrets', () => {
+  const bookmark = {
+    title: 'Linux DO 公告',
+    url: 'https://user:secret@linux.do/c/announcements/42?token=private#staff'
+  }
+  const first = resolveBookmarkPresentation(bookmark)
+  const second = resolveBookmarkPresentation(bookmark)
+
+  assert.equal(first.hue, second.hue)
+  assert.equal(first.monogram, 'LI')
+  assert.equal(first.subtitle, 'linux.do/c/announcements')
+  assert.equal(first.fullSubtitle, 'https://linux.do/c/announcements/42')
+  assert.doesNotMatch(JSON.stringify(first), /secret|private|staff/)
+  assert.equal(
+    resolveBookmarkPresentation({ title: '坏链接', url: 'not a url?token=secret' }).subtitle,
+    '网址格式无效'
+  )
 })
 
 test('bookmark AI prompt contains actionable structure and only the sanitized URL', () => {

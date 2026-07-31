@@ -1,7 +1,8 @@
 <script setup>
-import { computed } from 'vue'
+import { computed, nextTick, ref, watch } from 'vue'
 import { useConfig } from '@/shared/composables/useConfig'
 import Icon from '@/shared/components/Icon.vue'
+import { resolveBookmarkPresentation } from '../navigationUi'
 
 const props = defineProps({
   bookmark: {
@@ -21,6 +22,11 @@ const props = defineProps({
 const emit = defineEmits(['ai', 'edit', 'delete'])
 
 const { config } = useConfig()
+const faviconFailed = ref(false)
+const showMobileActions = ref(false)
+const mobileMoreButton = ref(null)
+const mobileFirstAction = ref(null)
+const mobileActionSheet = ref(null)
 
 const cardStyle = computed(() => {
   const size = config.value.style.cardSize
@@ -31,6 +37,33 @@ const cardStyle = computed(() => {
   }
   return sizes[size] || sizes.medium
 })
+
+const bookmarkPresentation = computed(() => resolveBookmarkPresentation(props.bookmark))
+const faviconUrl = computed(() => {
+  if (props.bookmark.favicon) {
+    return props.bookmark.favicon
+  }
+
+  try {
+    const url = new URL(props.bookmark.url)
+    return `${url.origin}/favicon.ico`
+  } catch {
+    return ''
+  }
+})
+const fallbackStyle = computed(() => ({
+  '--bookmark-fallback-hue': bookmarkPresentation.value.hue
+}))
+const mobileMenuId = computed(() => (
+  `bookmark-actions-${String(props.bookmark.id || bookmarkPresentation.value.hash).replace(/[^a-z0-9_-]/gi, '-')}`
+))
+
+watch(
+  () => [props.bookmark.favicon, props.bookmark.url],
+  () => {
+    faviconFailed.value = false
+  }
+)
 
 function openUrl() {
   try {
@@ -57,17 +90,50 @@ function handleDelete(e) {
   emit('delete', props.bookmark)
 }
 
-// 获取 favicon URL
-function getFavicon(url) {
-  if (props.bookmark.favicon) {
-    return props.bookmark.favicon
+function openMobileActions(event) {
+  event.stopPropagation()
+  showMobileActions.value = true
+  nextTick(() => mobileFirstAction.value?.focus())
+}
+
+function closeMobileActions(restoreFocus = true) {
+  showMobileActions.value = false
+  if (restoreFocus) {
+    nextTick(() => mobileMoreButton.value?.focus())
   }
-  try {
-    const urlObj = new URL(url)
-    return `${urlObj.origin}/favicon.ico`
-  } catch {
-    return ''
+}
+
+function trapMobileActionFocus(event) {
+  const focusable = Array.from(
+    mobileActionSheet.value?.querySelectorAll('button:not(:disabled)') || []
+  )
+  if (!focusable.length) return
+
+  const first = focusable[0]
+  const last = focusable[focusable.length - 1]
+  if (event.shiftKey && document.activeElement === first) {
+    event.preventDefault()
+    last.focus()
+  } else if (!event.shiftKey && document.activeElement === last) {
+    event.preventDefault()
+    first.focus()
   }
+}
+
+function runMobileAction(action) {
+  showMobileActions.value = false
+
+  nextTick(() => {
+    mobileMoreButton.value?.focus()
+
+    if (action === 'ai') {
+      emit('ai', props.bookmark, mobileMoreButton.value)
+    } else if (action === 'edit') {
+      emit('edit', props.bookmark)
+    } else if (action === 'delete') {
+      emit('delete', props.bookmark)
+    }
+  })
 }
 </script>
 
@@ -81,23 +147,31 @@ function getFavicon(url) {
     <button
       class="bookmark-card__main"
       type="button"
-      :aria-label="`打开 ${bookmark.title}`"
+      :aria-label="`打开 ${bookmark.title}，${bookmarkPresentation.subtitle}`"
+      :title="`${bookmark.title}\n${bookmarkPresentation.fullSubtitle}`"
       :disabled="deleting || analyzing"
       @click="openUrl"
     >
       <!-- 图标 -->
-      <span class="bookmark-card__icon" :style="{ fontSize: cardStyle.iconSize }">
-        <Icon class="bookmark-card__icon-fallback" name="link" :size="28" />
+      <span
+        class="bookmark-card__icon"
+        :style="{ fontSize: cardStyle.iconSize, ...fallbackStyle }"
+        aria-hidden="true"
+      >
+        <span class="bookmark-card__monogram">{{ bookmarkPresentation.monogram }}</span>
         <img
-          v-if="getFavicon(bookmark.url)"
-          :src="getFavicon(bookmark.url)"
+          v-if="faviconUrl && !faviconFailed"
+          :src="faviconUrl"
           alt=""
-          @error="$event.target.style.display = 'none'"
+          @error="faviconFailed = true"
         >
       </span>
 
       <!-- 标题 -->
-      <span class="bookmark-card__title">{{ bookmark.title }}</span>
+      <span class="bookmark-card__title" :title="bookmark.title">{{ bookmark.title }}</span>
+      <span class="bookmark-card__subtitle" :title="bookmarkPresentation.fullSubtitle">
+        {{ bookmarkPresentation.subtitle }}
+      </span>
 
       <!-- 描述（可选显示） -->
       <span
@@ -155,6 +229,63 @@ function getFavicon(url) {
         <Icon v-else name="trash" :size="15" />
       </button>
     </div>
+
+    <button
+      ref="mobileMoreButton"
+      class="bookmark-card__more"
+      type="button"
+      aria-haspopup="dialog"
+      :aria-controls="mobileMenuId"
+      :aria-expanded="showMobileActions"
+      :aria-label="`更多书签操作：${bookmark.title}`"
+      :disabled="deleting || analyzing"
+      @click="openMobileActions"
+    >
+      <Icon name="more-horizontal" :size="21" />
+    </button>
+
+    <Teleport to="body">
+      <div
+        v-if="showMobileActions"
+        class="mobile-action-overlay"
+        @click.self="closeMobileActions()"
+        @keydown.esc.stop.prevent="closeMobileActions()"
+      >
+        <section
+          ref="mobileActionSheet"
+          :id="mobileMenuId"
+          class="mobile-action-sheet"
+          role="dialog"
+          aria-modal="true"
+          :aria-labelledby="`${mobileMenuId}-title`"
+          @keydown.tab="trapMobileActionFocus"
+        >
+          <header class="mobile-action-sheet__header">
+            <div>
+              <div class="mobile-action-sheet__eyebrow">书签操作</div>
+              <h2 :id="`${mobileMenuId}-title`">{{ bookmark.title }}</h2>
+            </div>
+            <button type="button" aria-label="关闭书签操作" @click="closeMobileActions()">
+              <Icon name="close" :size="20" />
+            </button>
+          </header>
+          <div class="mobile-action-sheet__actions">
+            <button ref="mobileFirstAction" type="button" @click="runMobileAction('ai')">
+              <Icon name="sparkles" :size="19" />
+              <span>AI 分析</span>
+            </button>
+            <button type="button" @click="runMobileAction('edit')">
+              <Icon name="edit" :size="19" />
+              <span>编辑书签</span>
+            </button>
+            <button class="is-danger" type="button" @click="runMobileAction('delete')">
+              <Icon name="trash" :size="19" />
+              <span>删除书签</span>
+            </button>
+          </div>
+        </section>
+      </div>
+    </Teleport>
   </article>
 </template>
 
@@ -294,8 +425,28 @@ function getFavicon(url) {
   align-items: center;
   justify-content: center;
   margin-bottom: 12px;
-  color: var(--accent-color);
   filter: drop-shadow(0 7px 12px color-mix(in srgb, var(--accent-color) 14%, transparent));
+}
+
+.bookmark-card__monogram {
+  width: 100%;
+  height: 100%;
+  display: grid;
+  place-items: center;
+  color: hsl(var(--bookmark-fallback-hue) 88% 88%);
+  background:
+    linear-gradient(
+      145deg,
+      hsl(var(--bookmark-fallback-hue) 62% 27%),
+      hsl(var(--bookmark-fallback-hue) 72% 17%)
+    );
+  border: 1px solid hsl(var(--bookmark-fallback-hue) 72% 42% / 0.42);
+  border-radius: 13px;
+  box-shadow: inset 0 1px hsl(0 0% 100% / 0.12);
+  font-size: 0.36em;
+  font-weight: 780;
+  letter-spacing: 0.03em;
+  line-height: 1;
 }
 
 .bookmark-card__icon img {
@@ -307,20 +458,31 @@ function getFavicon(url) {
   border-radius: 12px;
 }
 
-.bookmark-card__icon-fallback {
-  color: currentColor;
-}
-
 .bookmark-card__title {
   font-size: 14px;
   font-weight: 500;
   color: var(--text-primary);
   line-height: 1.3;
-  display: block;
+  display: -webkit-box;
   max-width: 100%;
   overflow: hidden;
+  -webkit-box-orient: vertical;
+  -webkit-line-clamp: 2;
+  line-clamp: 2;
+  min-height: calc(1.3em * 2);
+}
+
+.bookmark-card__subtitle {
+  display: block;
+  max-width: 100%;
+  margin-top: 5px;
+  overflow: hidden;
+  color: var(--text-muted);
+  font-size: 11px;
+  line-height: 1.35;
   text-overflow: ellipsis;
   white-space: nowrap;
+  direction: ltr;
 }
 
 .bookmark-card__desc {
@@ -363,6 +525,117 @@ function getFavicon(url) {
   background: var(--bg-secondary);
 }
 
+.bookmark-card__more {
+  position: absolute;
+  top: 8px;
+  right: 8px;
+  z-index: 3;
+  width: 44px;
+  height: 44px;
+  display: none;
+  place-items: center;
+  color: var(--text-secondary);
+  background: color-mix(in srgb, var(--bg-card) 92%, var(--accent-color) 8%);
+  border: 1px solid var(--border-color);
+  border-radius: 13px;
+  box-shadow: var(--shadow-sm);
+  cursor: pointer;
+}
+
+.bookmark-card__more:focus-visible {
+  outline: 2px solid var(--accent-color);
+  outline-offset: 2px;
+}
+
+.mobile-action-overlay {
+  position: fixed;
+  inset: 0;
+  z-index: 1200;
+  display: flex;
+  align-items: flex-end;
+  justify-content: center;
+  padding: 16px;
+  background: color-mix(in srgb, black 54%, transparent);
+  backdrop-filter: blur(5px);
+  overscroll-behavior: contain;
+}
+
+.mobile-action-sheet {
+  width: min(100%, 460px);
+  overflow: hidden;
+  color: var(--text-primary);
+  background: var(--bg-card);
+  border: 1px solid var(--border-color);
+  border-radius: 24px;
+  box-shadow: var(--shadow-lg);
+}
+
+.mobile-action-sheet__header {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 16px;
+  padding: 18px 18px 14px;
+  border-bottom: 1px solid var(--border-light);
+}
+
+.mobile-action-sheet__eyebrow {
+  margin-bottom: 4px;
+  color: var(--accent-color);
+  font-size: 11px;
+  font-weight: 750;
+  letter-spacing: 0.08em;
+}
+
+.mobile-action-sheet h2 {
+  margin: 0;
+  color: var(--text-primary);
+  font-size: 17px;
+  line-height: 1.35;
+}
+
+.mobile-action-sheet__header button,
+.mobile-action-sheet__actions button {
+  min-width: 44px;
+  min-height: 44px;
+  color: var(--text-primary);
+  background: transparent;
+  border: 0;
+  border-radius: 12px;
+  cursor: pointer;
+}
+
+.mobile-action-sheet__header button {
+  display: grid;
+  place-items: center;
+  flex: 0 0 auto;
+  background: var(--bg-secondary);
+}
+
+.mobile-action-sheet__actions {
+  display: grid;
+  gap: 6px;
+  padding: 10px;
+}
+
+.mobile-action-sheet__actions button {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  width: 100%;
+  padding: 11px 13px;
+  text-align: left;
+}
+
+.mobile-action-sheet__actions button:focus-visible {
+  outline: 2px solid var(--accent-color);
+  outline-offset: -2px;
+}
+
+.mobile-action-sheet__actions button.is-danger {
+  color: var(--error-color);
+}
+
 /* Fade transition */
 .mini-spinner {
   width: 13px;
@@ -379,9 +652,15 @@ function getFavicon(url) {
 
 @media (hover: none), (pointer: coarse) {
   .bookmark-card__actions {
-    opacity: 1;
-    transform: none;
-    pointer-events: auto;
+    display: none;
+  }
+
+  .bookmark-card__more {
+    display: grid;
+  }
+
+  .bookmark-card__main {
+    padding-top: 58px;
   }
 }
 

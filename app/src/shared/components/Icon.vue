@@ -49,6 +49,9 @@ const iconPaths = {
   check: [
     ['path', { d: 'm5 12 4 4L19 6' }]
   ],
+  'chevron-down': [
+    ['path', { d: 'm6 9 6 6 6-6' }]
+  ],
   'circle-check': [
     ['circle', { cx: 12, cy: 12, r: 9 }],
     ['path', { d: 'm8 12 2.7 2.7L16.5 9' }]
