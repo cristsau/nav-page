@@ -1,4 +1,4 @@
-import { ref, watch, onMounted } from 'vue'
+import { ref, watch, onMounted, unref } from 'vue'
 import { getCurrentUserId, getSetting, setSetting } from '@/shared/db/database'
 import { applyStyleConfig } from '@/shared/composables/useConfig'
 import { fetchBackendSetting, saveBackendSetting, shouldUseBackendSettings } from '@/shared/services/settingsApi'
@@ -16,7 +16,10 @@ function getSystemPrefersDark() {
 }
 
 function applyTheme(dark) {
-  document.documentElement.classList.toggle('dark', dark)
+  const root = document.documentElement
+  if (root.classList.contains('public-shell')) return
+
+  root.classList.toggle('dark', dark)
   applyStyleConfig()
 }
 
@@ -65,14 +68,32 @@ watch(isDark, (value) => {
   applyTheme(value)
 })
 
-export function useTheme() {
-  onMounted(async () => {
-    if (!initialized) {
-      initialized = true
-      await loadTheme()
-      startWatchingSystemTheme()
-    }
-  })
+async function initializeTheme() {
+  if (initialized) return
+
+  initialized = true
+  await loadTheme()
+  startWatchingSystemTheme()
+}
+
+export function useTheme(options = {}) {
+  const initializeIfReady = async () => {
+    if (unref(options.defer)) return
+    await initializeTheme()
+  }
+
+  onMounted(initializeIfReady)
+
+  if (options.defer !== undefined) {
+    watch(
+      () => Boolean(unref(options.defer)),
+      (deferred) => {
+        if (!deferred) {
+          initializeTheme()
+        }
+      }
+    )
+  }
 
   async function toggleTheme() {
     await setTheme(isDark.value ? 'light' : 'dark')

@@ -68,6 +68,48 @@ Token 只应授予上传权限，不要提交到 GitHub。当前第一版从笔�
 
 ## 反向代理说明
 
+### 公开分享的动态预览
+
+`/share/:code` 的初始 HTML 由 `nav-api` 生成，以便微信、Telegram、Slack 等不执行
+JavaScript 的抓取器读取动态标题、摘要、Open Graph、Twitter Card 和 canonical。API
+只读挂载当前前端发布目录，并且每次请求读取当前 `index.html`，避免前后端独立发布后
+继续引用旧的 Vite 哈希资源。
+
+生产 `api/.env` 必须配置：
+
+```dotenv
+NAV_PUBLIC_APP_ORIGIN=https://nav.skrskr.net
+NAV_FRONTEND_INDEX_PATH=/var/www/nav/index.html
+```
+
+前端构建同时使用同一个公开主域（仓库的 `app/.env.production` 已提供非敏感配置）：
+
+```dotenv
+VITE_PUBLIC_APP_ORIGIN=https://nav.skrskr.net
+```
+
+`NAV_PUBLIC_APP_ORIGIN` 是 canonical/OG URL 的固定可信来源，必须是无路径、无查询参数的
+HTTPS origin；不要从请求 `Host` 或 `X-Forwarded-Host` 动态生成。Compose 以只读方式把
+`/home/web/html/nav` 挂载到 `/var/www/nav`。
+
+在现有通用 SPA `location /` 之前增加下列精确路由。`proxy_pass` 不带尾部 URI，确保
+`/share/:code` 原样到达 Fastify：
+
+```nginx
+location ^~ /share/ {
+    proxy_pass http://127.0.0.1:3001;
+    proxy_http_version 1.1;
+    proxy_set_header Host $host;
+    proxy_set_header X-Real-IP $remote_addr;
+    proxy_set_header X-Forwarded-For $proxy_add_x_forwarded_for;
+    proxy_set_header X-Forwarded-Proto $scheme;
+}
+```
+
+这项变更不能单独发布 API：先确认前端目录只读挂载和两个环境变量，再发布 API，最后经
+`nginx -t` 验证后才可加载 nginx 配置。回滚时需同时恢复 nginx `/share/` 路由、API
+版本和 Compose 挂载。任何生产修改、重载或发布仍需单独授权。
+
 ### 当前源站
 
 - 源站域名：`nav.skrskr.net`

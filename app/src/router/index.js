@@ -31,7 +31,12 @@ const routes = [
     path: '/share/:code',
     name: 'ShareView',
     component: () => import('@/modules/whisper/ShareView.vue'),
-    meta: { title: '分享', public: true }
+    meta: {
+      title: '分享',
+      public: true,
+      publicShell: true,
+      skipSession: true
+    }
   },
   {
     path: '/settings',
@@ -51,16 +56,21 @@ const router = createRouter({
 })
 
 router.beforeEach(async (to) => {
+  const isPublic = Boolean(to.meta.public)
+
+  document.title = to.meta.title ? `${to.meta.title} - DOMO NAV` : 'DOMO NAV - 个人导航工作台'
+
+  const shouldResolveSession = !to.meta.skipSession
+  if (!shouldResolveSession) {
+    return true
+  }
+
   const currentUser = isBackendAuthEnabled()
     ? await fetchBackendSession()
     : await (async () => {
         await bootstrapSystem()
         return getCurrentUser()
       })()
-
-  const isPublic = Boolean(to.meta.public)
-
-  document.title = to.meta.title ? `${to.meta.title} - DOMO NAV` : 'DOMO NAV - 个人导航工作台'
 
   if (!currentUser && !isPublic) {
     return {

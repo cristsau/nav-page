@@ -6,7 +6,12 @@ import {
   getImgBedOrigin,
   normalizeNoteAttachments
 } from '../lib/noteAttachments.js'
-import { mapNote, mapShare } from '../lib/notes.js'
+import {
+  mapNote,
+  mapPublicNote,
+  mapPublicShare,
+  mapShare
+} from '../lib/notes.js'
 
 function normalizeText(value, fallback = '') {
   return String(value ?? fallback).trim()
@@ -513,7 +518,14 @@ export default async function notesRoutes(fastify) {
     return { ok: true }
   })
 
-  fastify.get('/shares/:code', async (request, reply) => {
+  fastify.get('/shares/:code', {
+    config: {
+      skipSession: true
+    }
+  }, async (request, reply) => {
+    reply.header('Cache-Control', 'private, no-store')
+    reply.header('X-Robots-Tag', 'noindex, noarchive, nofollow')
+
     const code = normalizeText(request.params?.code)
     if (!code) {
       reply.code(404)
@@ -523,7 +535,7 @@ export default async function notesRoutes(fastify) {
     const result = await withTransaction(async (client) => {
       const shareResult = await client.query(
         `
-          SELECT *
+          SELECT id, created_at
           FROM note_shares
           WHERE code = $1
             AND (expire_at IS NULL OR expire_at > NOW())
@@ -541,11 +553,11 @@ export default async function notesRoutes(fastify) {
       const noteResult = await client.query(
         `
           SELECT
-            n.*,
-            s.id AS share_id,
-            s.code AS share_code,
-            s.expire_at AS share_expire_at,
-            s.view_count AS share_view_count
+            n.title,
+            n.content,
+            n.tags,
+            n.attachments,
+            n.entry_date
           FROM notes n
           JOIN note_shares s ON s.note_id = n.id
           WHERE s.id = $1
@@ -564,13 +576,8 @@ export default async function notesRoutes(fastify) {
         [share.id]
       )
 
-      const updatedShare = {
-        ...share,
-        view_count: share.view_count + 1
-      }
-
       return {
-        share: updatedShare,
+        share,
         note: noteResult.rows[0]
       }
     })
@@ -581,8 +588,10 @@ export default async function notesRoutes(fastify) {
     }
 
     return {
-      share: mapShare(result.share),
-      note: mapNote(result.note)
+      share: mapPublicShare(result.share),
+      note: mapPublicNote(result.note, {
+        allowedAttachmentOrigin: getImgBedOrigin(config.imgBedBaseUrl)
+      })
     }
   })
 }

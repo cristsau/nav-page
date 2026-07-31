@@ -1,5 +1,5 @@
 <script setup>
-import { ref, computed, onMounted } from 'vue'
+import { ref, computed, nextTick, onBeforeUnmount, onMounted } from 'vue'
 import { useRoute, useRouter } from 'vue-router'
 import { getCurrentUserId, getNotes as getLocalNotes, addNote as addLocalNote, updateNote as updateLocalNote, deleteNote as deleteLocalNote, toggleNotePin as toggleLocalNotePin, getSetting as getLocalSetting, setSetting as setLocalSetting } from '@/shared/db/database'
 import { fetchBackendSetting, saveBackendSetting, shouldUseBackendSettings } from '@/shared/services/settingsApi'
@@ -31,6 +31,9 @@ const showEditor = ref(false)
 const editingNote = ref(null)
 const showPreview = ref(false)
 const previewingNote = ref(null)
+const createMenuOpen = ref(false)
+const createMenuRef = ref(null)
+const createMenuButtonRef = ref(null)
 
 // 分享管理
 const showShareManager = ref(false)
@@ -207,6 +210,56 @@ function handleCreateNote(type = 'memo') {
   showEditor.value = true
 }
 
+async function toggleCreateMenu() {
+  createMenuOpen.value = !createMenuOpen.value
+
+  if (createMenuOpen.value) {
+    await nextTick()
+    createMenuRef.value
+      ?.querySelector('[role="menuitem"]')
+      ?.focus()
+  }
+}
+
+function chooseCreateNote(type) {
+  createMenuOpen.value = false
+  handleCreateNote(type)
+}
+
+function handleCreateMenuPointerDown(event) {
+  if (!createMenuOpen.value || createMenuRef.value?.contains(event.target)) return
+  createMenuOpen.value = false
+}
+
+function handleCreateMenuKeydown(event) {
+  if (event.key !== 'Escape' || !createMenuOpen.value) return
+  event.preventDefault()
+  createMenuOpen.value = false
+  createMenuButtonRef.value?.focus()
+}
+
+function handleCreateMenuNavigation(event) {
+  if (!['ArrowDown', 'ArrowUp', 'Home', 'End'].includes(event.key)) return
+
+  const items = [...(createMenuRef.value?.querySelectorAll('[role="menuitem"]') || [])]
+  if (!items.length) return
+
+  event.preventDefault()
+  const currentIndex = Math.max(0, items.indexOf(document.activeElement))
+  let nextIndex = currentIndex
+
+  if (event.key === 'Home') {
+    nextIndex = 0
+  } else if (event.key === 'End') {
+    nextIndex = items.length - 1
+  } else {
+    const direction = event.key === 'ArrowDown' ? 1 : -1
+    nextIndex = (currentIndex + direction + items.length) % items.length
+  }
+
+  items[nextIndex]?.focus()
+}
+
 // 编辑笔记
 function handleEditNote(note) {
   editingNote.value = { ...note }
@@ -361,6 +414,9 @@ function goBack() {
 
 // 初始化
 onMounted(async () => {
+  document.addEventListener('pointerdown', handleCreateMenuPointerDown)
+  window.addEventListener('keydown', handleCreateMenuKeydown)
+
   await loadNotes()
 
   const requestedSearch = Array.isArray(route.query.search)
@@ -387,6 +443,11 @@ onMounted(async () => {
   const bg = await getSetting('whisperBgImage')
   if (bg) whisperBgImage.value = bg
 })
+
+onBeforeUnmount(() => {
+  document.removeEventListener('pointerdown', handleCreateMenuPointerDown)
+  window.removeEventListener('keydown', handleCreateMenuKeydown)
+})
 </script>
 
 <template>
@@ -406,18 +467,52 @@ onMounted(async () => {
         <button class="header__btn" type="button" aria-label="打开页面设置" title="设置" @click="showSettings = true">
           <Icon name="settings" :size="18" />
         </button>
-        <button class="header__btn header__diary-btn" type="button" aria-label="写日记" title="写日记" @click="handleCreateNote('diary')">
-          <Icon name="book" :size="18" />
-        </button>
-        <button class="btn btn--primary" type="button" @click="handleCreateNote('memo')">
-          <Icon name="plus" :size="17" /> 新建
-        </button>
+        <div ref="createMenuRef" class="create-menu">
+          <button
+            ref="createMenuButtonRef"
+            class="btn btn--primary"
+            type="button"
+            aria-haspopup="menu"
+            :aria-expanded="createMenuOpen"
+            aria-controls="note-create-menu"
+            @click="toggleCreateMenu"
+          >
+            <Icon name="plus" :size="17" />
+            新建
+            <Icon class="create-menu__chevron" name="chevron-down" :size="14" />
+          </button>
+          <Transition name="create-menu">
+            <div
+              v-if="createMenuOpen"
+              id="note-create-menu"
+              class="create-menu__panel"
+              role="menu"
+              aria-label="新建记录"
+              @keydown="handleCreateMenuNavigation"
+            >
+              <button type="button" role="menuitem" @click="chooseCreateNote('memo')">
+                <span class="create-menu__icon"><Icon name="list" :size="18" /></span>
+                <span>
+                  <strong>备忘录</strong>
+                  <small>记录任务、资料和灵感</small>
+                </span>
+              </button>
+              <button type="button" role="menuitem" @click="chooseCreateNote('diary')">
+                <span class="create-menu__icon"><Icon name="book" :size="18" /></span>
+                <span>
+                  <strong>日记</strong>
+                  <small>记录今天发生的事情</small>
+                </span>
+              </button>
+            </div>
+          </Transition>
+        </div>
       </div>
     </header>
 
     <!-- 主内容 -->
     <main class="main">
-      <section class="overview-strip" aria-label="记录概览">
+      <section v-if="notes.length > 0" class="overview-strip" aria-label="记录概览">
         <div><strong>{{ noteStats.openMemos }}</strong><span>待办备忘</span></div>
         <div><strong>{{ noteStats.completedMemos }}</strong><span>已完成</span></div>
         <div><strong>{{ noteStats.diaries }}</strong><span>日记</span></div>
@@ -475,11 +570,8 @@ onMounted(async () => {
         <div class="empty-state__title">开始记录你的时光</div>
         <div class="empty-state__desc">创建备忘录记录重要信息，或写日记记录生活点滴</div>
         <div class="empty-state__actions">
-          <button class="btn btn--primary" type="button" @click="handleCreateNote('memo')">
-            <Icon name="list" :size="17" /> 新建备忘录
-          </button>
-          <button class="btn btn--secondary" type="button" @click="handleCreateNote('diary')">
-            <Icon name="book" :size="17" /> 写日记
+          <button class="btn btn--primary" type="button" @click="toggleCreateMenu">
+            <Icon name="plus" :size="17" /> 新建第一条记录
           </button>
         </div>
       </div>
@@ -559,16 +651,6 @@ onMounted(async () => {
         </section>
       </div>
     </main>
-
-    <!-- 新建浮动按钮 -->
-    <div class="fab-group">
-      <button class="fab fab--memo" type="button" aria-label="新建备忘录" title="新建备忘录" @click="handleCreateNote('memo')">
-        <Icon name="list" :size="22" />
-      </button>
-      <button class="fab fab--diary" type="button" aria-label="写日记" title="写日记" @click="handleCreateNote('diary')">
-        <Icon name="book" :size="22" />
-      </button>
-    </div>
 
     <!-- 编辑器弹窗 -->
     <NoteEditor
@@ -717,6 +799,108 @@ onMounted(async () => {
   width: 36px;
   height: 36px;
   font-size: 16px;
+}
+
+.create-menu {
+  position: relative;
+}
+
+.create-menu .btn--primary {
+  min-height: 40px;
+}
+
+.create-menu__chevron {
+  transition: transform var(--transition-fast);
+}
+
+.create-menu .btn--primary[aria-expanded='true'] .create-menu__chevron {
+  transform: rotate(180deg);
+}
+
+.create-menu__panel {
+  position: absolute;
+  top: calc(100% + 10px);
+  right: 0;
+  z-index: 120;
+  width: min(280px, calc(100vw - 32px));
+  padding: 7px;
+  background: color-mix(in srgb, var(--bg-card) 96%, transparent);
+  border: 1px solid var(--border-light);
+  border-radius: 18px;
+  box-shadow: var(--shadow-lg);
+  backdrop-filter: blur(18px);
+}
+
+.create-menu__panel button {
+  width: 100%;
+  min-height: 62px;
+  display: grid;
+  grid-template-columns: 40px minmax(0, 1fr);
+  align-items: center;
+  gap: 11px;
+  padding: 9px 10px;
+  color: var(--text-primary);
+  background: transparent;
+  border: 0;
+  border-radius: 13px;
+  text-align: left;
+  cursor: pointer;
+  transition:
+    background var(--transition-fast),
+    color var(--transition-fast);
+}
+
+.create-menu__panel button:hover,
+.create-menu__panel button:focus-visible {
+  background: var(--bg-hover);
+}
+
+.create-menu__panel button:focus-visible {
+  outline: 2px solid var(--accent-color);
+  outline-offset: -2px;
+}
+
+.create-menu__panel button > span:last-child {
+  min-width: 0;
+  display: grid;
+  gap: 3px;
+}
+
+.create-menu__panel strong {
+  font-size: 14px;
+  font-weight: 650;
+}
+
+.create-menu__panel small {
+  overflow: hidden;
+  color: var(--text-muted);
+  font-size: 11px;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.create-menu__icon {
+  width: 40px;
+  height: 40px;
+  display: grid;
+  place-items: center;
+  color: var(--accent-color);
+  background: var(--accent-bg);
+  border-radius: 12px;
+}
+
+.create-menu-enter-active,
+.create-menu-leave-active {
+  transition:
+    opacity var(--transition-fast),
+    transform var(--transition-fast);
+  transform-origin: top right;
+}
+
+.create-menu-enter-from,
+.create-menu-leave-to {
+  opacity: 0;
+  transform: translateY(-5px) scale(0.98);
 }
 
 .header__actions .btn--primary {
@@ -958,43 +1142,6 @@ onMounted(async () => {
   display: grid;
   grid-template-columns: repeat(auto-fill, minmax(280px, 1fr));
   gap: 16px;
-}
-
-/* 浮动按钮组 */
-.fab-group {
-  position: fixed;
-  bottom: 24px;
-  right: 24px;
-  display: flex;
-  flex-direction: column;
-  gap: 12px;
-  z-index: 50;
-}
-
-.fab {
-  width: 56px;
-  height: 56px;
-  display: flex;
-  align-items: center;
-  justify-content: center;
-  border: none;
-  border-radius: 50%;
-  font-size: 24px;
-  cursor: pointer;
-  box-shadow: var(--shadow-lg);
-  transition: all var(--transition-fast);
-}
-
-.fab:hover {
-  transform: scale(1.1);
-}
-
-.fab--memo {
-  background: var(--accent-color);
-}
-
-.fab--diary {
-  background: var(--success-color);
 }
 
 /* 按钮 */
@@ -1253,8 +1400,13 @@ onMounted(async () => {
     flex-direction: column;
   }
 
-  .fab-group {
-    display: none;
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .create-menu__chevron,
+  .create-menu-enter-active,
+  .create-menu-leave-active {
+    transition: none;
   }
 }
 </style>

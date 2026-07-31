@@ -46,6 +46,8 @@ async function authPlugin(fastify) {
   })
 
   fastify.addHook('preHandler', async (request) => {
+    if (request.routeOptions.config?.skipSession) return
+
     const token = request.cookies[config.sessionCookieName]
     if (!token) return
 

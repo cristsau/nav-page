@@ -1,4 +1,4 @@
-import { ref, watch, onMounted } from 'vue'
+import { ref, watch, onMounted, unref } from 'vue'
 import { getCurrentUserId, getSetting, setSetting, getCustomEngines } from '@/shared/db/database'
 import { runBackendAiSearch, shouldUseBackendAiSearch } from '@/shared/services/aiSearchApi'
 import { fetchBackendCustomSearchEngines, shouldUseBackendSearchEngines } from '@/shared/services/searchEnginesApi'
@@ -348,6 +348,8 @@ export async function loadCustomSearchEngines() {
 
 export function applyStyleConfig() {
   const root = document.documentElement
+  if (root.classList.contains('public-shell')) return
+
   const style = config.value.style || {}
   const scheme = getResolvedColorScheme(style)
   const isDark = root.classList.contains('dark')
@@ -505,14 +507,32 @@ if (!watchInitialized) {
   )
 }
 
-export function useConfig() {
-  onMounted(async () => {
-    if (!initialized) {
-      initialized = true
-      await loadConfig()
-      await loadCustomSearchEngines()
-    }
-  })
+async function initializeConfig() {
+  if (initialized) return
+
+  initialized = true
+  await loadConfig()
+  await loadCustomSearchEngines()
+}
+
+export function useConfig(options = {}) {
+  const initializeIfReady = async () => {
+    if (unref(options.defer)) return
+    await initializeConfig()
+  }
+
+  onMounted(initializeIfReady)
+
+  if (options.defer !== undefined) {
+    watch(
+      () => Boolean(unref(options.defer)),
+      (deferred) => {
+        if (!deferred) {
+          initializeConfig()
+        }
+      }
+    )
+  }
 
   function updateConfig(path, value) {
     const keys = path.split('.')

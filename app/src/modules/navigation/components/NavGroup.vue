@@ -1,5 +1,5 @@
 <script setup>
-import { computed, ref, watch } from 'vue'
+import { computed, nextTick, ref, watch } from 'vue'
 import Icon from '@/shared/components/Icon.vue'
 import NavItem from './NavItem.vue'
 import { resolveGroupIcon } from '../navigationUi'
@@ -43,6 +43,10 @@ const emit = defineEmits([
 ])
 
 const activeGroupId = ref('')
+const mobileActionGroup = ref(null)
+const mobileGroupFirstAction = ref(null)
+const mobileGroupActionSheet = ref(null)
+let mobileGroupActionTrigger = null
 
 watch(
   () => props.activeGroupId,
@@ -132,11 +136,61 @@ function handleDeleteBookmark(bookmark) {
   emit('deleteBookmark', bookmark)
 }
 
+function openMobileGroupActions(group, event) {
+  event.stopPropagation()
+  mobileGroupActionTrigger = event.currentTarget
+  mobileActionGroup.value = group
+  nextTick(() => mobileGroupFirstAction.value?.focus())
+}
+
+function closeMobileGroupActions(restoreFocus = true) {
+  mobileActionGroup.value = null
+
+  if (restoreFocus) {
+    nextTick(() => mobileGroupActionTrigger?.focus())
+  }
+}
+
+function trapMobileGroupActionFocus(event) {
+  const focusable = Array.from(
+    mobileGroupActionSheet.value?.querySelectorAll('button:not(:disabled)') || []
+  )
+  if (!focusable.length) return
+
+  const first = focusable[0]
+  const last = focusable[focusable.length - 1]
+  if (event.shiftKey && document.activeElement === first) {
+    event.preventDefault()
+    last.focus()
+  } else if (!event.shiftKey && document.activeElement === last) {
+    event.preventDefault()
+    first.focus()
+  }
+}
+
+function runMobileGroupAction(action) {
+  const group = mobileActionGroup.value
+  if (!group) return
+
+  closeMobileGroupActions()
+  nextTick(() => {
+    if (action === 'edit') {
+      emit('editGroup', group)
+    } else if (action === 'delete') {
+      emit('deleteGroup', group)
+    }
+  })
+}
+
 function groupStyle(group) {
   return {
     '--group-color': group.color || 'var(--accent-color)'
   }
 }
+
+const mobileGroupMenuId = computed(() => (
+  `group-actions-${String(mobileActionGroup.value?.id || 'current').replace(/[^a-z0-9_-]/gi, '-')}`
+))
 </script>
 
 <template>
@@ -191,6 +245,17 @@ function groupStyle(group) {
               <Icon v-else name="trash" :size="13" />
             </button>
           </span>
+          <button
+            class="groups-tabs__mobile-more"
+            type="button"
+            aria-haspopup="dialog"
+            :aria-controls="mobileActionGroup?.id === group.id ? mobileGroupMenuId : undefined"
+            :aria-expanded="mobileActionGroup?.id === group.id"
+            :aria-label="`更多分组操作：${group.name}`"
+            @click="openMobileGroupActions(group, $event)"
+          >
+            <Icon name="more-horizontal" :size="20" />
+          </button>
         </div>
       </div>
       <button class="groups-tabs__add" type="button" title="添加分组" aria-label="添加分组" @click="handleAddGroup">
@@ -203,12 +268,6 @@ function groupStyle(group) {
     <div class="bookmarks-container">
       <Transition name="tab-slide" mode="out-in">
         <div :key="activeGroup?.id" class="bookmarks-grid">
-          <!-- 添加书签卡片 -->
-          <button v-if="activeGroup" class="bookmark-card bookmark-card--add" type="button" @click="handleAddBookmark">
-            <div class="bookmark-card__icon"><Icon name="plus" :size="28" /></div>
-            <div class="bookmark-card__title">添加书签</div>
-          </button>
-
           <!-- 书签列表 -->
           <TransitionGroup name="list">
             <NavItem
@@ -222,6 +281,12 @@ function groupStyle(group) {
               @delete="handleDeleteBookmark"
             />
           </TransitionGroup>
+
+          <!-- 添加书签卡片：放在真实内容之后，避免低频操作占据首位。 -->
+          <button v-if="activeGroup" class="bookmark-card bookmark-card--add" type="button" @click="handleAddBookmark">
+            <div class="bookmark-card__icon"><Icon name="plus" :size="28" /></div>
+            <div class="bookmark-card__title">添加书签</div>
+          </button>
         </div>
       </Transition>
 
@@ -234,6 +299,50 @@ function groupStyle(group) {
         </button>
       </div>
     </div>
+
+    <Teleport to="body">
+      <div
+        v-if="mobileActionGroup"
+        class="group-action-overlay"
+        @click.self="closeMobileGroupActions()"
+        @keydown.esc.stop.prevent="closeMobileGroupActions()"
+      >
+        <section
+          ref="mobileGroupActionSheet"
+          :id="mobileGroupMenuId"
+          class="group-action-sheet"
+          role="dialog"
+          aria-modal="true"
+          :aria-labelledby="`${mobileGroupMenuId}-title`"
+          @keydown.tab="trapMobileGroupActionFocus"
+        >
+          <header class="group-action-sheet__header">
+            <div>
+              <div class="group-action-sheet__eyebrow">分组操作</div>
+              <h2 :id="`${mobileGroupMenuId}-title`">{{ mobileActionGroup.name }}</h2>
+            </div>
+            <button type="button" aria-label="关闭分组操作" @click="closeMobileGroupActions()">
+              <Icon name="close" :size="20" />
+            </button>
+          </header>
+          <div class="group-action-sheet__actions">
+            <button ref="mobileGroupFirstAction" type="button" @click="runMobileGroupAction('edit')">
+              <Icon name="edit" :size="19" />
+              <span>编辑分组</span>
+            </button>
+            <button
+              class="is-danger"
+              type="button"
+              :disabled="pendingGroupId === mobileActionGroup.id"
+              @click="runMobileGroupAction('delete')"
+            >
+              <Icon name="trash" :size="19" />
+              <span>删除分组</span>
+            </button>
+          </div>
+        </section>
+      </div>
+    </Teleport>
   </div>
 </template>
 
@@ -287,11 +396,26 @@ function groupStyle(group) {
 }
 
 .groups-tabs__tab.is-active {
-  background: var(--bg-card);
-  border-color: color-mix(in srgb, var(--group-color) 32%, var(--border-light));
+  background: color-mix(in srgb, var(--group-color) 17%, var(--bg-card));
+  border-color: color-mix(in srgb, var(--group-color) 58%, var(--border-light));
   box-shadow:
-    0 8px 22px color-mix(in srgb, var(--group-color) 10%, transparent),
+    0 10px 24px color-mix(in srgb, var(--group-color) 18%, transparent),
+    inset 0 -3px color-mix(in srgb, var(--group-color) 72%, transparent),
     0 1px 0 color-mix(in srgb, white 72%, transparent) inset;
+}
+
+.groups-tabs__tab.is-active .groups-tabs__main {
+  font-weight: 700;
+}
+
+.groups-tabs__tab.is-active .groups-tabs__icon {
+  background: color-mix(in srgb, var(--group-color) 20%, var(--bg-card));
+  border-color: color-mix(in srgb, var(--group-color) 42%, transparent);
+}
+
+.groups-tabs__tab.is-active .groups-tabs__count {
+  color: color-mix(in srgb, var(--group-color) 76%, var(--text-primary));
+  background: color-mix(in srgb, var(--group-color) 14%, var(--bg-card));
 }
 
 .groups-tabs__main {
@@ -401,6 +525,25 @@ function groupStyle(group) {
   cursor: wait;
 }
 
+.groups-tabs__mobile-more {
+  width: 44px;
+  height: 44px;
+  display: none;
+  place-items: center;
+  flex: 0 0 auto;
+  margin: 1px 2px 1px 0;
+  color: var(--text-secondary);
+  background: transparent;
+  border: 1px solid transparent;
+  border-radius: 12px;
+  cursor: pointer;
+}
+
+.groups-tabs__mobile-more:focus-visible {
+  outline: 2px solid var(--group-color);
+  outline-offset: 1px;
+}
+
 .groups-tabs__add {
   min-height: 46px;
   display: inline-flex;
@@ -408,26 +551,29 @@ function groupStyle(group) {
   justify-content: center;
   gap: 7px;
   padding: 0 15px;
-  background: var(--accent-color);
-  border: 1px solid color-mix(in srgb, var(--accent-hover) 70%, transparent);
+  color: var(--text-secondary);
+  background: transparent;
+  border: 1px dashed color-mix(in srgb, var(--text-muted) 58%, var(--border-color));
   border-radius: 15px;
   cursor: pointer;
   font: inherit;
   font-size: 13px;
   font-weight: 650;
   flex-shrink: 0;
-  color: #fff;
-  box-shadow: 0 8px 20px color-mix(in srgb, var(--accent-color) 22%, transparent);
   transition:
+    color var(--transition-fast),
     background var(--transition-fast),
+    border-color var(--transition-fast),
     transform var(--transition-fast),
     box-shadow var(--transition-fast);
 }
 
 .groups-tabs__add:hover {
-  background: var(--accent-hover);
+  color: var(--accent-color);
+  background: var(--accent-bg);
+  border-color: color-mix(in srgb, var(--accent-color) 48%, var(--border-color));
   transform: translateY(-1px);
-  box-shadow: 0 10px 24px color-mix(in srgb, var(--accent-color) 28%, transparent);
+  box-shadow: 0 8px 18px color-mix(in srgb, var(--accent-color) 12%, transparent);
 }
 
 .groups-tabs__add:focus-visible {
@@ -553,6 +699,100 @@ function groupStyle(group) {
   background: var(--accent-hover);
 }
 
+.group-action-overlay {
+  position: fixed;
+  inset: 0;
+  z-index: 1200;
+  display: flex;
+  align-items: flex-end;
+  justify-content: center;
+  padding: 16px;
+  background: color-mix(in srgb, black 54%, transparent);
+  backdrop-filter: blur(5px);
+  overscroll-behavior: contain;
+}
+
+.group-action-sheet {
+  width: min(100%, 460px);
+  overflow: hidden;
+  color: var(--text-primary);
+  background: var(--bg-card);
+  border: 1px solid var(--border-color);
+  border-radius: 24px;
+  box-shadow: var(--shadow-lg);
+}
+
+.group-action-sheet__header {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 16px;
+  padding: 18px 18px 14px;
+  border-bottom: 1px solid var(--border-light);
+}
+
+.group-action-sheet__eyebrow {
+  margin-bottom: 4px;
+  color: var(--accent-color);
+  font-size: 11px;
+  font-weight: 750;
+  letter-spacing: 0.08em;
+}
+
+.group-action-sheet h2 {
+  margin: 0;
+  color: var(--text-primary);
+  font-size: 17px;
+  line-height: 1.35;
+}
+
+.group-action-sheet__header button,
+.group-action-sheet__actions button {
+  min-width: 44px;
+  min-height: 44px;
+  color: var(--text-primary);
+  background: transparent;
+  border: 0;
+  border-radius: 12px;
+  cursor: pointer;
+}
+
+.group-action-sheet__header button {
+  display: grid;
+  place-items: center;
+  flex: 0 0 auto;
+  background: var(--bg-secondary);
+}
+
+.group-action-sheet__actions {
+  display: grid;
+  gap: 6px;
+  padding: 10px;
+}
+
+.group-action-sheet__actions button {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  width: 100%;
+  padding: 11px 13px;
+  text-align: left;
+}
+
+.group-action-sheet__actions button:focus-visible {
+  outline: 2px solid var(--accent-color);
+  outline-offset: -2px;
+}
+
+.group-action-sheet__actions button.is-danger {
+  color: var(--error-color);
+}
+
+.group-action-sheet__actions button:disabled {
+  opacity: 0.55;
+  cursor: wait;
+}
+
 /* Tab 切换动画 */
 .tab-slide-enter-active,
 .tab-slide-leave-active {
@@ -617,11 +857,11 @@ function groupStyle(group) {
 
 @media (hover: none), (pointer: coarse) {
   .groups-tabs__actions {
-    width: 53px;
-    padding-right: 5px;
-    opacity: 1;
-    pointer-events: auto;
-    transform: none;
+    display: none;
+  }
+
+  .groups-tabs__mobile-more {
+    display: grid;
   }
 }
 

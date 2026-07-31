@@ -68,19 +68,20 @@
 
 /* 暗色模式 */
 .dark {
-  --bg-primary: #1a1815;
-  --bg-secondary: #252220;
-  --bg-tertiary: #302d2a;
-  --bg-card: #2d2a27;
-  --bg-hover: #353230;
-  --bg-active: #3d3a37;
+  /* 与 useConfig 中默认 cream 方案保持一致，避免配置加载前后跳色。 */
+  --bg-primary: #1e1815;
+  --bg-secondary: #2a211d;
+  --bg-tertiary: #332823;
+  --bg-card: #372b25;
+  --bg-hover: #403129;
+  --bg-active: #49362d;
 
-  --text-primary: #e8e4dd;
-  --text-secondary: #a9a49c;
-  --text-muted: #7a756d;
+  --text-primary: #f1e8df;
+  --text-secondary: #c7b7a7;
+  --text-muted: #88796c;
 
-  --border-color: #3d3a37;
-  --border-light: #353230;
+  --border-color: #4d3a31;
+  --border-light: #3d2f28;
 
   --accent-color: #c4a882;
   --accent-hover: #d4b892;

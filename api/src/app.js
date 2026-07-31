@@ -16,6 +16,7 @@ import navigationRoutes from './routes/navigation.js'
 import noteAiRoutes from './routes/noteAi.js'
 import noteImagesRoutes from './routes/noteImages.js'
 import notesRoutes from './routes/notes.js'
+import publicSharePageRoutes from './routes/publicSharePage.js'
 import settingsRoutes from './routes/settings.js'
 
 function stripBodylessDeleteJsonContentType(request) {
@@ -76,6 +77,7 @@ export function createApp() {
     service: 'nav-api'
   }))
 
+  app.register(publicSharePageRoutes)
   app.register(adminTelegramRoutes, { prefix: '/api' })
   app.register(aiSearchRoutes, { prefix: '/api' })
   app.register(authRoutes, { prefix: '/api' })
