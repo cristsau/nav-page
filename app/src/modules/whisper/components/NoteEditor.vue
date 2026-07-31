@@ -1,5 +1,5 @@
 <script setup>
-import { ref, watch, computed } from 'vue'
+import { computed, nextTick, ref, watch } from 'vue'
 import { encrypt, hashPassword } from '@/shared/utils/crypto'
 import Icon from '@/shared/components/Icon.vue'
 import NoteAiPanel from './NoteAiPanel.vue'
@@ -40,6 +40,7 @@ const formData = ref({
 const tagInput = ref('')
 const initialSnapshot = ref('')
 const copiedId = ref(false)
+const titleInputRef = ref(null)
 
 // 是否编辑模式
 const isEdit = computed(() => !!props.note?.id)
@@ -81,7 +82,7 @@ function currentSnapshot() {
 }
 
 // 监听显示状态，初始化表单
-watch(() => props.show, (val) => {
+watch(() => props.show, async (val) => {
   if (val) {
     if (props.note?.id) {
       formData.value = {
@@ -101,6 +102,8 @@ watch(() => props.show, (val) => {
       resetForm(props.note?.type || 'memo')
     }
     initialSnapshot.value = currentSnapshot()
+    await nextTick()
+    titleInputRef.value?.focus()
   }
 })
 
@@ -265,6 +268,7 @@ function close() {
       <!-- 标题 -->
       <div class="form-group">
         <input
+          ref="titleInputRef"
           v-model="formData.title"
           type="text"
           class="input"

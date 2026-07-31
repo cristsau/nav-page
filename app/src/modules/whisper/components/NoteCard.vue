@@ -258,7 +258,7 @@ async function handleDecrypt() {
       <button
         type="button"
         class="action-btn"
-        title="快速复制 ID、标题和正文"
+        title="快速复制整条笔记内容"
         :aria-label="`快速复制 ${note.title}`"
         @click="runAction('copyExtract')"
       >

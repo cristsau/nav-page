@@ -60,18 +60,5 @@ export function isUnsafeRequestOriginTrusted(request, allowedOriginValue) {
   }
 
   const allowedOrigins = new Set(parseAllowedOrigins(allowedOriginValue))
-  if (allowedOrigins.has(origin)) {
-    return true
-  }
-
-  try {
-    const originUrl = new URL(origin)
-    const forwardedHost = String(request.headers?.['x-forwarded-host'] || '')
-      .split(',')[0]
-      .trim()
-    const requestHost = forwardedHost || String(request.headers?.host || '').trim()
-    return Boolean(requestHost && originUrl.host === requestHost)
-  } catch {
-    return false
-  }
+  return allowedOrigins.has(origin)
 }
