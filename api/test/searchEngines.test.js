@@ -28,6 +28,7 @@ test('deleting a custom engine removes every saved config reference', () => {
     searchEngine: 'custom-1',
     search: {
       quickAccessEngineIds: ['baidu', 'custom-1'],
+      hiddenEngineIds: ['custom-1', 'weibo'],
       aggregate: {
         enabled: true,
         engines: ['custom-1', 'bing']
@@ -37,5 +38,6 @@ test('deleting a custom engine removes every saved config reference', () => {
 
   assert.equal(cleaned.searchEngine, 'baidu')
   assert.deepEqual(cleaned.search.quickAccessEngineIds, ['baidu'])
+  assert.deepEqual(cleaned.search.hiddenEngineIds, ['weibo'])
   assert.deepEqual(cleaned.search.aggregate.engines, ['bing'])
 })

@@ -1,6 +1,10 @@
 # DOMO NAV Status Report
 
-最后更新：2026-03-20
+最后更新：2026-07-31
+
+> 退役说明（2026-07-31）：OpenClaw 服务已经删除，DOMO NAV 中对应的搜索入口、设置和后端执行链路不再保留。
+
+> 发布状态（2026-07-31）：下述图片附件、iPhone 图标和 OpenClaw 清理目前是本地候选，尚未推送或发布到生产。
 
 ## 1. 当前目标
 
@@ -55,6 +59,9 @@ DOMO NAV 当前分成两个阶段目标：
 - 点击卡片预览
 - 分享链接生成
 - 公开分享页
+- 图片附件上传、预览和分享页显示
+- 图片由 NAV 后端代理上传到个人 CloudFlare-ImgBed，不落 NAV 本地磁盘
+- 加密笔记禁止添加公开图床图片
 
 ### 3.4 设置
 
@@ -81,7 +88,6 @@ DOMO NAV 当前分成两个阶段目标：
 - AI 搜索代理已接入：
   - ChatGPT / OpenAI-compatible
   - Brave Search API
-  - OpenClaw
 - 首页搜索框已支持 AI 结果面板
 - 设置页已支持 AI provider 配置
 - 已新增 AI provider “测试连接”按钮
@@ -178,7 +184,6 @@ DOMO NAV 当前分成两个阶段目标：
 2. 真实联调 AI provider
 - ChatGPT / OpenAI-compatible
 - Brave Search
-- OpenClaw
 
 目标：
 
@@ -241,7 +246,7 @@ DOMO NAV 当前分成两个阶段目标：
 ### 第一组：先收口当前可用链路
 
 1. 真实测试 Telegram 配置
-2. 真实测试 ChatGPT / Brave / OpenClaw
+2. 真实测试 ChatGPT / Brave
 3. 修完失败提示与输入校验
 
 实现效果：

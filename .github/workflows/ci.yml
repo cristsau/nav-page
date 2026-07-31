@@ -1,0 +1,42 @@
+name: NAV checks
+
+on:
+  pull_request:
+    branches: [master]
+  push:
+    branches:
+      - master
+      - codex/**
+
+permissions:
+  contents: read
+
+jobs:
+  test-and-build:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Set up Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: 20
+          cache: npm
+          cache-dependency-path: |
+            app/package-lock.json
+            api/package-lock.json
+
+      - name: Install frontend dependencies
+        run: npm ci --prefix app
+
+      - name: Install API dependencies
+        run: npm ci --prefix api
+
+      - name: Run API tests
+        run: npm test --prefix api
+
+      - name: Build frontend
+        run: npm run build --prefix app

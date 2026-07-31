@@ -1,5 +1,11 @@
 import { randomInt } from 'node:crypto'
+import { config } from '../config.js'
 import { query, withTransaction } from '../db/index.js'
+import {
+  assertAttachmentsAllowedForEncryption,
+  getImgBedOrigin,
+  normalizeNoteAttachments
+} from '../lib/noteAttachments.js'
 import { mapNote, mapShare } from '../lib/notes.js'
 
 function normalizeText(value, fallback = '') {
@@ -245,6 +251,11 @@ export default async function notesRoutes(fastify) {
     const passwordHash = normalizeText(request.body?.password)
     const pinned = Boolean(request.body?.pinned)
     const tags = normalizeTags(request.body?.tags)
+    const attachments = normalizeNoteAttachments(request.body?.attachments, {
+      allowedOrigin: getImgBedOrigin(config.imgBedBaseUrl),
+      maxBytes: config.imgBedMaxImageBytes,
+      strict: true
+    })
     const entryDate = type === 'diary'
       ? normalizeDateOnly(request.body?.entryDate, new Date().toISOString().slice(0, 10))
       : null
@@ -262,6 +273,8 @@ export default async function notesRoutes(fastify) {
       return { error: 'Encrypted notes require a password hash' }
     }
 
+    assertAttachmentsAllowedForEncryption(encrypted, attachments)
+
     const { rows } = await query(
       `
         INSERT INTO notes (
@@ -273,11 +286,12 @@ export default async function notesRoutes(fastify) {
           password_hash,
           pinned,
           tags,
+          attachments,
           entry_date,
           mood,
           due_at,
           completed
-        ) VALUES ($1, $2, $3, $4, $5, $6, $7, $8::jsonb, $9, $10, $11, $12)
+        ) VALUES ($1, $2, $3, $4, $5, $6, $7, $8::jsonb, $9::jsonb, $10, $11, $12, $13)
         RETURNING *
       `,
       [
@@ -289,6 +303,7 @@ export default async function notesRoutes(fastify) {
         passwordHash,
         pinned,
         JSON.stringify(tags),
+        JSON.stringify(attachments),
         entryDate,
         mood,
         dueAt,
@@ -317,6 +332,15 @@ export default async function notesRoutes(fastify) {
       : normalizeText(request.body.password)
     const pinned = request.body?.pinned === undefined ? existing.pinned : Boolean(request.body.pinned)
     const tags = request.body?.tags === undefined ? existing.tags : normalizeTags(request.body.tags)
+    const attachments = request.body?.attachments === undefined
+      ? normalizeNoteAttachments(existing.attachments, {
+          maxBytes: Number.MAX_SAFE_INTEGER
+        })
+      : normalizeNoteAttachments(request.body.attachments, {
+          allowedOrigin: getImgBedOrigin(config.imgBedBaseUrl),
+          maxBytes: config.imgBedMaxImageBytes,
+          strict: true
+        })
     const entryDate = type === 'diary'
       ? normalizeDateOnly(request.body?.entryDate, existing.entry_date || new Date().toISOString().slice(0, 10))
       : null
@@ -337,6 +361,8 @@ export default async function notesRoutes(fastify) {
       return { error: 'Encrypted notes require a password hash' }
     }
 
+    assertAttachmentsAllowedForEncryption(encrypted, attachments)
+
     const { rows } = await query(
       `
         UPDATE notes
@@ -347,10 +373,11 @@ export default async function notesRoutes(fastify) {
             password_hash = $7,
             pinned = $8,
             tags = $9::jsonb,
-            entry_date = $10,
-            mood = $11,
-            due_at = $12,
-            completed = $13,
+            attachments = $10::jsonb,
+            entry_date = $11,
+            mood = $12,
+            due_at = $13,
+            completed = $14,
             updated_at = NOW()
         WHERE id = $1
           AND user_id = $2
@@ -366,6 +393,7 @@ export default async function notesRoutes(fastify) {
         passwordHash,
         pinned,
         JSON.stringify(tags),
+        JSON.stringify(attachments),
         entryDate,
         mood,
         dueAt,

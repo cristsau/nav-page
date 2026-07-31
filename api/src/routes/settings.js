@@ -2,7 +2,8 @@ import { query } from '../db/index.js'
 import {
   isPlainObject,
   mergeAppConfigSecrets,
-  redactAppConfigSecrets
+  redactAppConfigSecrets,
+  sanitizeRetiredSearchProviders
 } from '../lib/settingsSecrets.js'
 import { validateAppConfigModelIds } from '../lib/aiModelSettings.js'
 
@@ -64,8 +65,10 @@ export default async function settingsRoutes(fastify) {
         return { error: 'appConfig value must be an object' }
       }
 
+      const sanitizedRequestedValue = sanitizeRetiredSearchProviders(requestedValue)
+
       try {
-        validateAppConfigModelIds(requestedValue)
+        validateAppConfigModelIds(sanitizedRequestedValue)
       } catch (error) {
         reply.code(400)
         return { error: error.message || '模型 ID 格式无效' }
@@ -82,7 +85,10 @@ export default async function settingsRoutes(fastify) {
         [request.currentUser.id, key]
       )
 
-      value = mergeAppConfigSecrets(requestedValue, existing.rows[0]?.value)
+      value = mergeAppConfigSecrets(
+        sanitizedRequestedValue,
+        existing.rows[0]?.value
+      )
     }
 
     const { rows } = await query(

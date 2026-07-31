@@ -121,6 +121,24 @@ function formatDate(timestamp) {
           </div>
         </div>
 
+        <div v-if="!note.encrypted && note.attachments?.length" class="share-body__images">
+          <a
+            v-for="(image, index) in note.attachments"
+            :key="image.id || image.url"
+            :href="image.url"
+            target="_blank"
+            rel="noopener noreferrer"
+            :aria-label="`打开图片 ${image.name || index + 1}`"
+          >
+            <img
+              :src="image.url"
+              :alt="image.name || `笔记图片 ${index + 1}`"
+              loading="lazy"
+            >
+            <span>{{ image.name || `图片 ${index + 1}` }}</span>
+          </a>
+        </div>
+
         <div v-if="note.tags?.length" class="share-body__tags">
           <span v-for="tag in note.tags" :key="tag" class="tag">{{ tag }}</span>
         </div>
@@ -249,6 +267,39 @@ function formatDate(timestamp) {
 
 .share-body__encrypted {
   min-height: 200px;
+}
+
+.share-body__images {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 12px;
+  margin-top: 24px;
+}
+
+.share-body__images a {
+  min-width: 0;
+  overflow: hidden;
+  color: var(--text-secondary);
+  background: var(--bg-secondary);
+  border: 1px solid var(--border-light);
+  border-radius: 16px;
+  text-decoration: none;
+}
+
+.share-body__images img {
+  width: 100%;
+  aspect-ratio: 4 / 3;
+  display: block;
+  object-fit: cover;
+}
+
+.share-body__images span {
+  display: block;
+  padding: 9px 11px;
+  overflow: hidden;
+  font-size: 11px;
+  text-overflow: ellipsis;
+  white-space: nowrap;
 }
 
 .share-body__locked {
@@ -386,6 +437,10 @@ function formatDate(timestamp) {
   .share-header,
   .share-body {
     padding: 24px 20px;
+  }
+
+  .share-body__images {
+    grid-template-columns: 1fr;
   }
 }
 

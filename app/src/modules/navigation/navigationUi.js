@@ -64,7 +64,6 @@ export function resolveBookmarkAiProvider(config) {
 export function resolveBookmarkGenerativeAiProvider(config) {
   const providers = config?.search?.providers || {}
   const chatgpt = providers.chatgpt || {}
-  const openclaw = providers.openclaw || {}
   const chatgptHasKey = chatgpt.apiKeyConfigured
     || Boolean(String(chatgpt.apiKey || '').trim())
   const chatgptUsesProxy = String(chatgpt.mode || '').trim().toLowerCase() === 'proxy'
@@ -72,13 +71,6 @@ export function resolveBookmarkGenerativeAiProvider(config) {
 
   if (chatgpt.enabled && (chatgptHasKey || chatgptUsesProxy)) {
     return 'chatgpt'
-  }
-
-  if (
-    openclaw.enabled
-    && Boolean(String(openclaw.endpoint || openclaw.baseUrl || '').trim())
-  ) {
-    return 'openclaw'
   }
 
   return ''

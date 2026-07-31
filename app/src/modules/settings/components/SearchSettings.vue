@@ -41,32 +41,27 @@ const formData = ref({
 
 const providerTesting = ref({
   chatgpt: false,
-  brave: false,
-  openclaw: false
+  brave: false
 })
 
 const providerMessages = ref({
   chatgpt: '',
-  brave: '',
-  openclaw: ''
+  brave: ''
 })
 
 const providerMessageTypes = ref({
   chatgpt: '',
-  brave: '',
-  openclaw: ''
+  brave: ''
 })
 
 const providerApiKeyDrafts = ref({
   chatgpt: '',
-  brave: '',
-  openclaw: ''
+  brave: ''
 })
 
 const providerKeySaving = ref({
   chatgpt: false,
-  brave: false,
-  openclaw: false
+  brave: false
 })
 
 const allEngines = computed(() => getAllSearchEngines())
@@ -351,7 +346,7 @@ async function handleProviderTest(provider) {
     <div class="settings-item">
       <div class="settings-item__info">
         <div class="settings-item__label">默认搜索引擎</div>
-        <div class="settings-item__desc">支持百度、Google、Bing、Brave Search、ChatGPT Search、OpenClaw 和自定义搜索。</div>
+        <div class="settings-item__desc">支持百度、Google、Bing、Brave Search、ChatGPT Search 和自定义搜索。</div>
       </div>
       <div class="settings-item__control">
         <div class="engine-grid">
@@ -713,105 +708,6 @@ async function handleProviderTest(provider) {
         :class="`is-${providerMessageTypes.brave}`"
       >
         {{ providerMessages.brave }}
-      </div>
-    </div>
-
-    <div class="settings-item settings-item--stack">
-      <div class="settings-item__info">
-        <div class="settings-item__label">OpenClaw 接入</div>
-        <div class="settings-item__desc">适合接你自己的 OpenClaw 或 OpenAI-compatible 网关，配置完成后首页会直接返回答案面板。</div>
-      </div>
-      <div class="provider-grid">
-        <label class="provider-field">
-          <span>启用</span>
-          <input
-            type="checkbox"
-            :checked="config.search?.providers?.openclaw?.enabled"
-            @change="updateConfig('search.providers.openclaw.enabled', $event.target.checked)"
-          >
-        </label>
-        <label class="provider-field">
-          <span>Base URL</span>
-          <input
-            class="input"
-            type="text"
-            :value="config.search?.providers?.openclaw?.baseUrl"
-            placeholder="https://your-openclaw.example.com"
-            @input="updateConfig('search.providers.openclaw.baseUrl', $event.target.value)"
-          >
-        </label>
-        <label class="provider-field">
-          <span>Endpoint</span>
-          <input
-            class="input"
-            type="text"
-            :value="config.search?.providers?.openclaw?.endpoint"
-            placeholder="留空时自动拼接 /v1/chat/completions"
-            @input="updateConfig('search.providers.openclaw.endpoint', $event.target.value)"
-          >
-        </label>
-        <div class="provider-field provider-field--full">
-          <div class="provider-key__label">
-            <span>API Key</span>
-            <span
-              class="provider-key__status"
-              :class="{ 'is-configured': isProviderKeyConfigured('openclaw') }"
-            >
-              {{ isProviderKeyConfigured('openclaw') ? '已安全保存' : '未配置' }}
-            </span>
-          </div>
-          <div class="provider-key__row">
-            <input
-              v-model="providerApiKeyDrafts.openclaw"
-              class="input"
-              type="password"
-              autocomplete="new-password"
-              :placeholder="isProviderKeyConfigured('openclaw') ? '留空将继续使用已保存密钥' : '网关需要鉴权时填写'"
-              @keydown.enter="saveProviderApiKey('openclaw')"
-            >
-            <button
-              class="btn btn--secondary"
-              type="button"
-              :disabled="providerKeySaving.openclaw || !providerApiKeyDrafts.openclaw.trim()"
-              @click="saveProviderApiKey('openclaw')"
-            >
-              <Icon name="lock" :size="15" />
-              保存密钥
-            </button>
-            <button
-              v-if="isProviderKeyConfigured('openclaw')"
-              class="btn btn--danger-quiet"
-              type="button"
-              :disabled="providerKeySaving.openclaw"
-              @click="clearProviderApiKey('openclaw')"
-            >
-              清除
-            </button>
-          </div>
-          <span class="provider-key__hint">OpenClaw 不需要鉴权时可保持未配置。</span>
-        </div>
-        <label class="provider-field provider-field--full">
-          <span>Model</span>
-          <input
-            class="input"
-            type="text"
-            :value="config.search?.providers?.openclaw?.model"
-            placeholder="例如 gpt-4.1-mini / claude / qwen ..."
-            @input="updateConfig('search.providers.openclaw.model', $event.target.value)"
-          >
-        </label>
-      </div>
-      <div class="provider-actions">
-        <button class="btn btn--secondary" :disabled="providerTesting.openclaw" @click="handleProviderTest('openclaw')">
-          {{ providerTesting.openclaw ? '测试中...' : '测试连接' }}
-        </button>
-      </div>
-      <div
-        v-if="providerMessages.openclaw"
-        class="provider-message"
-        :class="`is-${providerMessageTypes.openclaw}`"
-      >
-        {{ providerMessages.openclaw }}
       </div>
     </div>
 

@@ -100,16 +100,6 @@ test('Brave-only bookmark AI keeps analysis but disables generative tags', () =>
       }
     }
   }), 'chatgpt')
-  assert.equal(resolveBookmarkGenerativeAiProvider({
-    search: {
-      providers: {
-        openclaw: {
-          enabled: true,
-          endpoint: 'https://openclaw.example.test/v1/chat/completions'
-        }
-      }
-    }
-  }), 'openclaw')
 })
 
 test('bookmark tag save guard rejects closed, stale or switched panels', () => {

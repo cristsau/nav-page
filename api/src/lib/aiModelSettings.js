@@ -1,6 +1,6 @@
 import { normalizeAiModelId } from './aiResponses.js'
 
-const MODEL_PROVIDER_IDS = Object.freeze(['chatgpt', 'openclaw'])
+const MODEL_PROVIDER_IDS = Object.freeze(['chatgpt'])
 
 export function validateAppConfigModelIds(config = {}) {
   const providers = config?.search?.providers

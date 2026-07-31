@@ -263,7 +263,7 @@ export default async function navigationRoutes(fastify) {
 
     if (!provider) {
       reply.code(503)
-      return { error: '请先在设置中启用 ChatGPT / OpenAI 或 OpenClaw，再生成书签标签' }
+      return { error: '请先在设置中启用 ChatGPT / OpenAI，再生成书签标签' }
     }
 
     try {

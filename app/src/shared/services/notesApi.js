@@ -35,6 +35,19 @@ export async function deleteBackendNote(id) {
   })
 }
 
+export async function uploadBackendNoteImage(file) {
+  const payload = await request('/note-images', {
+    method: 'POST',
+    headers: {
+      'Content-Type': file.type,
+      'X-File-Name': encodeURIComponent(file.name || 'image')
+    },
+    body: file
+  })
+
+  return payload.attachment
+}
+
 export async function toggleBackendNotePin(id) {
   const payload = await request(`/notes/${encodeURIComponent(id)}/pin-toggle`, {
     method: 'POST',

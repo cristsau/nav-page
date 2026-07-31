@@ -119,6 +119,17 @@ test('note AI reuses the configured CLI proxy without enabling web search', () =
   assert.equal('tools' in request.body, false)
 })
 
+test('note AI ignores the retired OpenClaw provider', () => {
+  const provider = selectNoteAiProvider({
+    openclaw: {
+      enabled: true,
+      endpoint: 'https://retired.example.test/v1/chat/completions'
+    }
+  })
+
+  assert.equal(provider, null)
+})
+
 test('note AI tag request disables web search and limits its output budget', () => {
   const provider = selectNoteAiProvider({
     chatgpt: {

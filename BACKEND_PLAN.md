@@ -1,5 +1,7 @@
 # DOMO NAV Backend Plan
 
+> 退役说明（2026-07-31）：OpenClaw 服务已经删除，后续 AI 链路仅维护 ChatGPT / OpenAI-compatible 与 Brave Search。
+
 ## 当前状态
 
 DOMO NAV 已经完成第一阶段后端化，当前已在后端的能力包括：
@@ -53,7 +55,7 @@ DOMO NAV 已经完成第一阶段后端化，当前已在后端的能力包括�
 ### 第一阶段
 
 - 真实联调 Telegram
-- 真实联调 ChatGPT / Brave / OpenClaw
+- 真实联调 ChatGPT / Brave
 - 补清晰的失败提示
 
 ### 第二阶段

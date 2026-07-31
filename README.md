@@ -13,12 +13,12 @@ DOMO NAV 是一个面向个人与小团队的私有化导航工作台。它已�
 - 备忘录 / 日记 / 分享
   - 日记日期、心情、按月归档
   - 备忘录截止时间、完成状态、搜索与筛选
+  - 图片附件经 NAV 后端上传到个人 CloudFlare-ImgBed，不写入 NAV 磁盘
   - 加密笔记禁止公开分享
 - 设置页保存、退出、自定义主题、网站名称、图标、favicon
 - 搜索引擎配置与 AI 搜索代理
   - ChatGPT / OpenAI-compatible
   - Brave Search API
-  - OpenClaw
 - Telegram Bot 配置与审批同步
 - 浏览器扩展快速添加当前页
   - 记住上次分组
@@ -26,6 +26,7 @@ DOMO NAV 是一个面向个人与小团队的私有化导航工作台。它已�
   - 同分组网址防重复
 - `/quick-add` 快速添加页
 - iPhone 快捷指令接入入口
+- iPhone / PWA 主屏幕图标与中文应用名称
 
 ## 技术栈
 

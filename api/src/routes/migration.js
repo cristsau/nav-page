@@ -1,8 +1,15 @@
+import { config } from '../config.js'
 import { withTransaction } from '../db/index.js'
+import {
+  assertAttachmentsAllowedForEncryption,
+  getImgBedOrigin,
+  normalizeNoteAttachments
+} from '../lib/noteAttachments.js'
 import {
   isValidSearchUrl,
   normalizeEngineMonogram
 } from '../lib/searchEngines.js'
+import { sanitizeRetiredSearchProviders } from '../lib/settingsSecrets.js'
 
 const MIN_NOTE_NUMBER_ID = 1000
 const MAX_IMPORTED_NOTE_NUMBER_ID = 999999999
@@ -132,6 +139,17 @@ export default async function migrationRoutes(fastify) {
     if (new Set(importedNumberIds).size !== importedNumberIds.length) {
       reply.code(400)
       return { error: '导入数据包含重复的笔记数字 ID' }
+    }
+
+    const importedAttachmentsByNoteId = new Map()
+    for (const note of notes) {
+      const attachments = normalizeNoteAttachments(note?.attachments, {
+        allowedOrigin: getImgBedOrigin(config.imgBedBaseUrl),
+        maxBytes: config.imgBedMaxImageBytes,
+        strict: true
+      })
+      assertAttachmentsAllowedForEncryption(Boolean(note?.encrypted), attachments)
+      importedAttachmentsByNoteId.set(String(note?.id || ''), attachments)
     }
 
     await withTransaction(async (client) => {
@@ -284,6 +302,7 @@ export default async function migrationRoutes(fastify) {
               password_hash,
               pinned,
               tags,
+              attachments,
               entry_date,
               mood,
               due_at,
@@ -301,12 +320,13 @@ export default async function migrationRoutes(fastify) {
               $8,
               $9,
               $10::jsonb,
-              $11,
+              $11::jsonb,
               $12,
               $13,
               $14,
-              COALESCE($15, NOW()),
-              COALESCE($16, NOW())
+              $15,
+              COALESCE($16, NOW()),
+              COALESCE($17, NOW())
             )
           `,
           [
@@ -320,6 +340,7 @@ export default async function migrationRoutes(fastify) {
             String(note.password || ''),
             Boolean(note.pinned),
             toJsonArray(note.tags),
+            JSON.stringify(importedAttachmentsByNoteId.get(String(note.id || '')) || []),
             note.type === 'diary' ? toDateOnly(note.entryDate) : null,
             note.type === 'diary' ? String(note.mood || '').slice(0, 40) : '',
             note.type === 'memo' ? toTimestamp(note.dueAt) : null,
@@ -413,6 +434,10 @@ export default async function migrationRoutes(fastify) {
       }
 
       for (const setting of settings) {
+        const settingValue = setting.id === 'appConfig'
+          ? sanitizeRetiredSearchProviders(setting.value)
+          : setting.value
+
         await client.query(
           `
             INSERT INTO user_settings (user_id, key, value, updated_at)
@@ -422,7 +447,7 @@ export default async function migrationRoutes(fastify) {
               value = EXCLUDED.value,
               updated_at = NOW()
           `,
-          [request.currentUser.id, setting.id, JSON.stringify(setting.value)]
+          [request.currentUser.id, setting.id, JSON.stringify(settingValue)]
         )
       }
     })

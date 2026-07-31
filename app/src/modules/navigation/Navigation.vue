@@ -180,7 +180,7 @@ async function handleSuggestBookmarkTags() {
   if (!bookmarkId || aiTagLoading.value || aiTagSaving.value) return
 
   if (!canGenerateBookmarkTags.value) {
-    aiTagError.value = '智能标签需要服务器账户和 ChatGPT / OpenAI 或 OpenClaw。'
+    aiTagError.value = '智能标签需要服务器账户和 ChatGPT / OpenAI。'
     return
   }
 

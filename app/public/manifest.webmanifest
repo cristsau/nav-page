@@ -1,0 +1,26 @@
+{
+  "id": "/",
+  "name": "DOMO 导航",
+  "short_name": "DOMO",
+  "description": "轻量化、Notion 风格的个人导航工作台",
+  "lang": "zh-CN",
+  "start_url": "/",
+  "scope": "/",
+  "display": "standalone",
+  "background_color": "#faf8f5",
+  "theme_color": "#a08060",
+  "icons": [
+    {
+      "src": "/icons/pwa-192-v1.png",
+      "sizes": "192x192",
+      "type": "image/png",
+      "purpose": "any"
+    },
+    {
+      "src": "/icons/pwa-512-v1.png",
+      "sizes": "512x512",
+      "type": "image/png",
+      "purpose": "any maskable"
+    }
+  ]
+}

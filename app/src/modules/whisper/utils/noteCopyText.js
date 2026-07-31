@@ -34,6 +34,14 @@ export function buildFullNoteText(note = {}) {
   if (note.tags?.length) {
     lines.push(`标签: ${note.tags.join(', ')}`)
   }
+  if (note.attachments?.length) {
+    lines.push(
+      '图片:',
+      ...note.attachments.map((image, index) => (
+        `${index + 1}. ${image.name || '图片'} ${image.url || ''}`.trim()
+      ))
+    )
+  }
 
   lines.push('', String(note.content || ''))
   return lines.join('\n')

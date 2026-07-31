@@ -198,6 +198,24 @@ onBeforeUnmount(restorePreviousFocus)
             悬停高亮可复制单项，行尾按钮复制字段值或整行
           </div>
           <CopyableNoteContent :content="note.content" @copy="forwardCopy" />
+          <div v-if="note.attachments?.length" class="preview-card__images" aria-label="笔记图片">
+            <a
+              v-for="(image, index) in note.attachments"
+              :key="image.id || image.url"
+              :href="image.url"
+              class="preview-card__image"
+              target="_blank"
+              rel="noopener noreferrer"
+              :aria-label="`打开图片 ${image.name || index + 1}`"
+            >
+              <img
+                :src="image.url"
+                :alt="image.name || `笔记图片 ${index + 1}`"
+                loading="lazy"
+              >
+              <span>{{ image.name || `图片 ${index + 1}` }}</span>
+            </a>
+          </div>
         </div>
       </div>
 
@@ -349,6 +367,41 @@ onBeforeUnmount(restorePreviousFocus)
   color: var(--text-secondary);
 }
 
+.preview-card__images {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 12px;
+  margin-top: 20px;
+  padding-top: 18px;
+  border-top: 1px solid var(--border-light);
+}
+
+.preview-card__image {
+  min-width: 0;
+  overflow: hidden;
+  color: var(--text-secondary);
+  background: var(--bg-secondary);
+  border: 1px solid var(--border-light);
+  border-radius: 16px;
+  text-decoration: none;
+}
+
+.preview-card__image img {
+  width: 100%;
+  aspect-ratio: 4 / 3;
+  display: block;
+  object-fit: cover;
+}
+
+.preview-card__image span {
+  display: block;
+  padding: 8px 10px;
+  overflow: hidden;
+  font-size: 11px;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
 .btn {
   display: inline-flex;
   align-items: center;
@@ -390,6 +443,10 @@ onBeforeUnmount(restorePreviousFocus)
   .btn {
     min-height: 44px;
     justify-content: center;
+  }
+
+  .preview-card__images {
+    grid-template-columns: 1fr;
   }
 }
 </style>

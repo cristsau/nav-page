@@ -52,13 +52,6 @@ const defaultConfig = {
         enabled: false,
         endpoint: 'https://api.search.brave.com/res/v1/web/search',
         apiKey: ''
-      },
-      openclaw: {
-        enabled: false,
-        baseUrl: '',
-        endpoint: '',
-        apiKey: '',
-        model: ''
       }
     }
   },
@@ -88,7 +81,6 @@ export const searchEngines = {
   google: { id: 'google', name: 'Google', url: 'https://www.google.com/search?q=', icon: 'G', type: 'web', isBuiltIn: true },
   bing: { id: 'bing', name: 'Bing', url: 'https://www.bing.com/search?q=', icon: 'B', type: 'web', isBuiltIn: true },
   brave: { id: 'brave', name: 'Brave Search', url: 'https://search.brave.com/search?q=', icon: 'BR', type: 'web', isBuiltIn: true },
-  openclaw: { id: 'openclaw', name: 'OpenClaw', url: 'https://ai.skrskr.net/', icon: 'OC', type: 'openclaw', isBuiltIn: true },
   chatgpt: { id: 'chatgpt', name: 'ChatGPT Search', url: 'https://chatgpt.com/', icon: 'AI', type: 'chatgpt', isBuiltIn: true },
   zhihu: { id: 'zhihu', name: '知乎', url: 'https://www.zhihu.com/search?type=content&q=', icon: '知', type: 'web', isBuiltIn: true },
   bilibili: { id: 'bilibili', name: 'Bilibili', url: 'https://search.bilibili.com/all?keyword=', icon: '哔', type: 'web', isBuiltIn: true },
@@ -212,6 +204,44 @@ function clone(value) {
   return JSON.parse(JSON.stringify(value))
 }
 
+export function sanitizeRetiredSearchConfig(value) {
+  if (!value || typeof value !== 'object' || Array.isArray(value)) {
+    return value
+  }
+
+  const sanitized = clone(value)
+  const search = sanitized.search
+
+  if (sanitized.searchEngine === 'openclaw') {
+    sanitized.searchEngine = 'baidu'
+  }
+
+  if (!search || typeof search !== 'object' || Array.isArray(search)) {
+    return sanitized
+  }
+
+  if (
+    search.providers
+    && typeof search.providers === 'object'
+    && !Array.isArray(search.providers)
+  ) {
+    delete search.providers.openclaw
+  }
+
+  for (const key of ['quickAccessEngineIds', 'hiddenEngineIds']) {
+    if (Array.isArray(search[key])) {
+      search[key] = search[key].filter((engineId) => engineId !== 'openclaw')
+    }
+  }
+
+  if (Array.isArray(search.aggregate?.engines)) {
+    search.aggregate.engines = search.aggregate.engines
+      .filter((engineId) => engineId !== 'openclaw')
+  }
+
+  return sanitized
+}
+
 function mergeDeep(target, source) {
   const output = { ...target }
 
@@ -269,7 +299,9 @@ function mixColors(colorA, colorB, weight = 0.5) {
 }
 
 function ensureConfigShape() {
-  config.value = mergeDeep(clone(defaultConfig), config.value)
+  config.value = sanitizeRetiredSearchConfig(
+    mergeDeep(clone(defaultConfig), config.value)
+  )
 
   if (!Array.isArray(config.value.search.quickAccessEngineIds) || !config.value.search.quickAccessEngineIds.length) {
     config.value.search.quickAccessEngineIds = [...defaultConfig.search.quickAccessEngineIds]
@@ -392,16 +424,12 @@ function getAllSearchEngineList() {
 }
 
 function isAiSearchEngine(engineId) {
-  return engineId === 'brave' || engineId === 'chatgpt' || engineId === 'openclaw'
+  return engineId === 'brave' || engineId === 'chatgpt'
 }
 
 function isAiSearchEnabled(engineId) {
   if (!shouldUseBackendAiSearch() || !isAiSearchEngine(engineId)) {
     return false
-  }
-
-  if (engineId === 'openclaw') {
-    return Boolean(config.value.search?.providers?.openclaw?.enabled)
   }
 
   if (engineId === 'brave') {
@@ -431,12 +459,14 @@ export async function persistConfigNow() {
   }
 
   try {
+    const persistedConfig = sanitizeRetiredSearchConfig(config.value)
+
     if (canUseBackendSettings()) {
-      await saveBackendSetting('appConfig', clone(config.value))
+      await saveBackendSetting('appConfig', persistedConfig)
       return true
     }
 
-    await setSetting('appConfig', clone(config.value))
+    await setSetting('appConfig', persistedConfig)
     return true
   } catch (error) {
     console.error('Failed to persist config:', error)
@@ -451,7 +481,7 @@ export async function loadConfig() {
       : await getSetting('appConfig')
 
     config.value = savedConfig
-      ? mergeDeep(clone(defaultConfig), savedConfig)
+      ? mergeDeep(clone(defaultConfig), sanitizeRetiredSearchConfig(savedConfig))
       : clone(defaultConfig)
   } catch (error) {
     console.error('Failed to load config:', error)

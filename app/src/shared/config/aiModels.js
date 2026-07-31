@@ -30,7 +30,7 @@ export const CHAT_MODEL_CATALOG = Object.freeze([
   {
     id: 'glm-5-turbo',
     label: 'GLM 5 Turbo',
-    description: 'OpenClaw 当前默认'
+    description: '代理已配置'
   }
 ])
 

@@ -24,7 +24,7 @@ test('chat model catalog exposes six unique verified proxy models', () => {
   assert.equal(DEFAULT_CHAT_MODEL_ID, DEFAULT_OPENAI_MODEL)
   assert.deepEqual(
     new Set(CHAT_MODEL_CATALOG.map(({ description }) => description)),
-    new Set(['生产已验证', '代理已配置', 'OpenClaw 当前默认'])
+    new Set(['生产已验证', '代理已配置'])
   )
 })
 
@@ -88,30 +88,27 @@ test('settings model validation accepts catalog, blank and safe legacy IDs', () 
     assert.doesNotThrow(() => validateAppConfigModelIds({
       search: {
         providers: {
-          chatgpt: { model },
-          openclaw: { model }
+          chatgpt: { model }
         }
       }
     }))
   }
 })
 
-test('settings model validation rejects controls and excessive length for both providers', () => {
-  for (const providerId of ['chatgpt', 'openclaw']) {
-    for (const model of [
-      'gpt-5.4\ninjected',
-      `gpt-${'x'.repeat(260)}`
-    ]) {
-      const runValidation = () => validateAppConfigModelIds({
-        search: {
-          providers: {
-            [providerId]: { model }
-          }
+test('settings model validation rejects controls and excessive length', () => {
+  for (const model of [
+    'gpt-5.4\ninjected',
+    `gpt-${'x'.repeat(260)}`
+  ]) {
+    const runValidation = () => validateAppConfigModelIds({
+      search: {
+        providers: {
+          chatgpt: { model }
         }
-      })
+      }
+    })
 
-      assert.throws(runValidation, /模型 ID 格式无效/)
-    }
+    assert.throws(runValidation, /模型 ID 格式无效/)
   }
 })
 
@@ -155,13 +152,19 @@ test('settings API mode inference mirrors backend endpoint precedence', () => {
   }
 })
 
-test('settings route validates model IDs before merging and storing appConfig', async () => {
+test('settings route sanitizes retired providers before validating and storing appConfig', async () => {
   const settingsUrl = new URL('../src/routes/settings.js', import.meta.url)
   const source = await fs.readFile(fileURLToPath(settingsUrl), 'utf8')
-  const validationIndex = source.indexOf('validateAppConfigModelIds(requestedValue)')
-  const mergeIndex = source.indexOf('mergeAppConfigSecrets(requestedValue')
+  const sanitizationIndex = source.indexOf(
+    'sanitizeRetiredSearchProviders(requestedValue)'
+  )
+  const validationIndex = source.indexOf(
+    'validateAppConfigModelIds(sanitizedRequestedValue)'
+  )
+  const mergeIndex = source.indexOf('value = mergeAppConfigSecrets(')
 
-  assert.ok(validationIndex >= 0)
+  assert.ok(sanitizationIndex >= 0)
+  assert.ok(validationIndex > sanitizationIndex)
   assert.ok(mergeIndex > validationIndex)
 })
 

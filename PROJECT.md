@@ -49,6 +49,7 @@ DOMO NAV 是一个可私有化部署的导航工作台，目标不是只做静�
 - 日记
 - 预览
 - 分享
+- 个人图床图片附件
 
 ### 设置
 
@@ -77,7 +78,6 @@ DOMO NAV 是一个可私有化部署的导航工作台，目标不是只做静�
 
 - ChatGPT / OpenAI-compatible
 - Brave Search API
-- OpenClaw
 
 ### 浏览器扩展
 
@@ -95,6 +95,7 @@ DOMO NAV 是一个可私有化部署的导航工作台，目标不是只做静�
 ## 开发原则
 
 - 本地开发
+- npm 测试和前端生产构建默认交给 GitHub Actions
 - GitHub 作为代码主线
 - 服务器负责部署，不作为长期主开发机
 - 每个阶段收口前先更新 `STATUS_REPORT.md`

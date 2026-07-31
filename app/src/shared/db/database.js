@@ -582,6 +582,7 @@ export async function addNote(note) {
       mood: note.type === 'diary' ? String(note.mood || '') : '',
       dueAt: note.type === 'memo' ? (note.dueAt || null) : null,
       completed: note.type === 'memo' && Boolean(note.completed),
+      attachments: Array.isArray(note.attachments) ? [...note.attachments] : [],
       createdAt: now,
       updatedAt: now
     }

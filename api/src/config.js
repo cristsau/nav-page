@@ -1,6 +1,11 @@
 import path from 'node:path'
 import process from 'node:process'
 
+function normalizePositiveInteger(value, fallback) {
+  const parsed = Number(value)
+  return Number.isSafeInteger(parsed) && parsed > 0 ? parsed : fallback
+}
+
 export const config = {
   nodeEnv: process.env.NODE_ENV || 'development',
   port: Number(process.env.PORT || 3001),
@@ -14,6 +19,13 @@ export const config = {
   allowInsecureAiEndpoints: process.env.ALLOW_INSECURE_AI_ENDPOINTS === 'true',
   adminUsername: process.env.ADMIN_USERNAME || '',
   adminPassword: process.env.ADMIN_PASSWORD || '',
+  imgBedBaseUrl: String(process.env.NAV_IMGBED_BASE_URL || '').trim(),
+  imgBedUploadToken: String(process.env.NAV_IMGBED_UPLOAD_TOKEN || '').trim(),
+  imgBedUploadFolder: String(process.env.NAV_IMGBED_UPLOAD_FOLDER || 'nav-notes').trim(),
+  imgBedMaxImageBytes: normalizePositiveInteger(
+    process.env.NAV_IMGBED_MAX_IMAGE_BYTES,
+    10 * 1024 * 1024
+  ),
   migrationsDir: path.resolve(process.cwd(), 'src', 'db', 'migrations')
 }
 

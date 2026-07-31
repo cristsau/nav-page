@@ -6,8 +6,16 @@ import {
   mergeSuggestedNoteTags,
   normalizeNoteTag
 } from '@/shared/utils/noteTags'
+import {
+  shouldUseBackendNotes,
+  uploadBackendNoteImage
+} from '@/shared/services/notesApi'
 import Icon from '@/shared/components/Icon.vue'
 import NoteAiPanel from './NoteAiPanel.vue'
+
+const MAX_IMAGE_BYTES = 10 * 1024 * 1024
+const MAX_NOTE_IMAGES = 8
+const ALLOWED_IMAGE_TYPES = new Set(['image/jpeg', 'image/png', 'image/webp', 'image/gif'])
 
 const props = defineProps({
   show: {
@@ -38,7 +46,8 @@ const formData = ref({
   entryDate: '',
   mood: '',
   dueAt: '',
-  completed: false
+  completed: false,
+  attachments: []
 })
 
 // 标签输入
@@ -48,6 +57,10 @@ const tagMessageType = ref('')
 const initialSnapshot = ref('')
 const copiedId = ref(false)
 const titleInputRef = ref(null)
+const imageInputRef = ref(null)
+const uploadingImage = ref(false)
+const imageMessage = ref('')
+const imageMessageType = ref('')
 
 // 是否编辑模式
 const isEdit = computed(() => !!props.note?.id)
@@ -103,13 +116,16 @@ watch(() => props.show, async (val) => {
         entryDate: props.note.entryDate || today(),
         mood: props.note.mood || '',
         dueAt: toDateTimeLocal(props.note.dueAt),
-        completed: Boolean(props.note.completed)
+        completed: Boolean(props.note.completed),
+        attachments: [...(props.note.attachments || [])]
       }
     } else {
       resetForm(props.note?.type || 'memo')
     }
     tagMessage.value = ''
     tagMessageType.value = ''
+    imageMessage.value = ''
+    imageMessageType.value = ''
     initialSnapshot.value = currentSnapshot()
     await nextTick()
     titleInputRef.value?.focus()
@@ -128,11 +144,14 @@ function resetForm(type = 'memo') {
     entryDate: today(),
     mood: '',
     dueAt: '',
-    completed: false
+    completed: false,
+    attachments: []
   }
   tagInput.value = ''
   tagMessage.value = ''
   tagMessageType.value = ''
+  imageMessage.value = ''
+  imageMessageType.value = ''
 }
 
 // 添加标签
@@ -231,13 +250,95 @@ function buildDefaultTitle() {
   return `${label} ${timestamp}`
 }
 
+function formatImageSize(bytes) {
+  const value = Number(bytes || 0)
+  if (!value) return ''
+  if (value < 1024 * 1024) return `${Math.max(1, Math.round(value / 1024))} KB`
+  return `${(value / 1024 / 1024).toFixed(1)} MB`
+}
+
+function chooseImages() {
+  if (formData.value.encrypted) {
+    imageMessage.value = '加密笔记暂不支持公开图床图片，避免正文加密但图片仍可公开访问。'
+    imageMessageType.value = 'error'
+    return
+  }
+
+  if (!shouldUseBackendNotes()) {
+    imageMessage.value = '图片上传需要连接 NAV 服务端，密钥不会保存在浏览器。'
+    imageMessageType.value = 'error'
+    return
+  }
+
+  imageInputRef.value?.click()
+}
+
+async function handleImageUpload(event) {
+  const files = [...(event.target.files || [])]
+  event.target.value = ''
+  if (!files.length || uploadingImage.value) return
+
+  if (formData.value.attachments.length + files.length > MAX_NOTE_IMAGES) {
+    imageMessage.value = `每条笔记最多添加 ${MAX_NOTE_IMAGES} 张图片。`
+    imageMessageType.value = 'error'
+    return
+  }
+
+  const invalid = files.find((file) => (
+    !ALLOWED_IMAGE_TYPES.has(file.type) || file.size <= 0 || file.size > MAX_IMAGE_BYTES
+  ))
+  if (invalid) {
+    imageMessage.value = '仅支持 JPEG、PNG、WebP、GIF，单张图片不超过 10 MB。'
+    imageMessageType.value = 'error'
+    return
+  }
+
+  uploadingImage.value = true
+  imageMessage.value = `正在上传 ${files.length} 张图片到个人图床…`
+  imageMessageType.value = ''
+
+  try {
+    for (const file of files) {
+      const attachment = await uploadBackendNoteImage(file)
+      formData.value.attachments.push(attachment)
+    }
+    imageMessage.value = `已上传 ${files.length} 张图片，保存笔记后完成关联。`
+    imageMessageType.value = 'success'
+  } catch (error) {
+    imageMessage.value = `图片上传失败：${error.message || '请稍后重试'}`
+    imageMessageType.value = 'error'
+  } finally {
+    uploadingImage.value = false
+  }
+}
+
+function removeImage(index) {
+  formData.value.attachments.splice(index, 1)
+  imageMessage.value = '已从笔记移除图片引用；图床原文件暂不自动删除。'
+  imageMessageType.value = ''
+}
+
+function handleEncryptionToggle() {
+  if (formData.value.encrypted && formData.value.attachments.length) {
+    formData.value.encrypted = false
+    imageMessage.value = '请先移除图片再启用加密；公开图床图片不具备笔记端到端加密。'
+    imageMessageType.value = 'error'
+  }
+}
+
 // 提交表单
 async function handleSubmit() {
-  if (props.saving) return
+  if (props.saving || uploadingImage.value) return
 
   let content = formData.value.content
   let passwordHash = ''
   const title = formData.value.title.trim() || buildDefaultTitle()
+
+  if (formData.value.encrypted && formData.value.attachments.length) {
+    imageMessage.value = '加密笔记不能保存公开图床图片，请先移除图片。'
+    imageMessageType.value = 'error'
+    return
+  }
 
   // 如果需要加密
   if (formData.value.encrypted) {
@@ -265,11 +366,13 @@ async function handleSubmit() {
     dueAt: formData.value.type === 'memo' && formData.value.dueAt
       ? new Date(formData.value.dueAt).toISOString()
       : null,
-    completed: formData.value.type === 'memo' && formData.value.completed
+    completed: formData.value.type === 'memo' && formData.value.completed,
+    attachments: [...formData.value.attachments]
   })
 }
 
 function close() {
+  if (uploadingImage.value) return
   if (!props.saving && initialSnapshot.value && currentSnapshot() !== initialSnapshot.value) {
     if (!confirm('尚有未保存的修改，确定关闭吗？')) return
   }
@@ -369,6 +472,71 @@ function close() {
         <div class="editor__counter">{{ contentCount }} 字</div>
       </div>
 
+      <section class="form-group image-uploader" aria-labelledby="note-images-title">
+        <div class="image-uploader__header">
+          <div>
+            <h4 id="note-images-title">图片附件</h4>
+            <p>上传到 pic.skrskr.net，NAV 只保存图片链接，不占用 NAV 服务器磁盘。</p>
+          </div>
+          <button
+            type="button"
+            class="btn btn--secondary image-uploader__button"
+            :disabled="saving || uploadingImage || formData.encrypted || formData.attachments.length >= MAX_NOTE_IMAGES"
+            @click="chooseImages"
+          >
+            <span v-if="uploadingImage" class="button-spinner" aria-hidden="true"></span>
+            <Icon v-else name="upload" :size="16" />
+            {{ uploadingImage ? '上传中' : '添加图片' }}
+          </button>
+          <input
+            ref="imageInputRef"
+            class="image-uploader__input"
+            type="file"
+            accept="image/jpeg,image/png,image/webp,image/gif"
+            multiple
+            :disabled="saving || uploadingImage || formData.encrypted"
+            @change="handleImageUpload"
+          >
+        </div>
+
+        <div v-if="formData.attachments.length" class="image-uploader__grid">
+          <article
+            v-for="(image, index) in formData.attachments"
+            :key="image.id || image.url"
+            class="image-uploader__item"
+          >
+            <a :href="image.url" target="_blank" rel="noopener noreferrer" :aria-label="`打开图片 ${image.name || index + 1}`">
+              <img :src="image.url" :alt="image.name || `笔记图片 ${index + 1}`" loading="lazy">
+            </a>
+            <div class="image-uploader__meta">
+              <span :title="image.name">{{ image.name || `图片 ${index + 1}` }}</span>
+              <small>{{ formatImageSize(image.size) }}</small>
+            </div>
+            <button
+              type="button"
+              class="image-uploader__remove"
+              :aria-label="`从笔记移除 ${image.name || `图片 ${index + 1}`}`"
+              :disabled="saving || uploadingImage"
+              @click="removeImage(index)"
+            >
+              <Icon name="trash" :size="14" />
+            </button>
+          </article>
+        </div>
+
+        <p
+          v-if="imageMessage"
+          class="image-uploader__message"
+          :class="`is-${imageMessageType}`"
+          aria-live="polite"
+        >
+          {{ imageMessage }}
+        </p>
+        <p v-else-if="formData.encrypted" class="image-uploader__message is-error">
+          加密笔记暂不开放图片上传，防止公开链接泄露图片内容。
+        </p>
+      </section>
+
       <NoteAiPanel
         :type="formData.type"
         :title="formData.title"
@@ -421,7 +589,12 @@ function close() {
       <!-- 加密选项 -->
       <div class="form-group">
         <label class="checkbox-label">
-          <input type="checkbox" v-model="formData.encrypted" :disabled="saving">
+          <input
+            v-model="formData.encrypted"
+            type="checkbox"
+            :disabled="saving || uploadingImage"
+            @change="handleEncryptionToggle"
+          >
           <span class="checkbox-custom"></span>
           <span class="checkbox-label__text"><Icon name="lock" :size="16" /> 加密内容</span>
         </label>
@@ -660,6 +833,146 @@ function close() {
   text-align: right;
 }
 
+.image-uploader {
+  padding: 16px 18px;
+  background: color-mix(in srgb, var(--bg-secondary) 76%, transparent);
+  border: 1px solid var(--border-light);
+  border-radius: var(--radius-md);
+}
+
+.image-uploader__header {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 16px;
+}
+
+.image-uploader__header h4 {
+  margin: 0 0 4px;
+  color: var(--text-primary);
+  font-size: 14px;
+  font-weight: 600;
+}
+
+.image-uploader__header p {
+  margin: 0;
+  color: var(--text-muted);
+  font-size: 11px;
+  line-height: 1.5;
+}
+
+.image-uploader__button {
+  flex: 0 0 auto;
+  padding: 9px 13px;
+}
+
+.image-uploader__button:disabled,
+.image-uploader__remove:disabled {
+  cursor: not-allowed;
+  opacity: 0.55;
+}
+
+.image-uploader__input {
+  position: absolute;
+  width: 1px;
+  height: 1px;
+  overflow: hidden;
+  clip: rect(0 0 0 0);
+  white-space: nowrap;
+  clip-path: inset(50%);
+}
+
+.image-uploader__grid {
+  display: grid;
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+  gap: 10px;
+  margin-top: 14px;
+}
+
+.image-uploader__item {
+  position: relative;
+  min-width: 0;
+  overflow: hidden;
+  background: var(--bg-card);
+  border: 1px solid var(--border-light);
+  border-radius: 14px;
+}
+
+.image-uploader__item a {
+  display: block;
+  aspect-ratio: 4 / 3;
+  overflow: hidden;
+  background: var(--bg-secondary);
+}
+
+.image-uploader__item img {
+  width: 100%;
+  height: 100%;
+  display: block;
+  object-fit: cover;
+  transition: transform var(--transition-normal) var(--ease-smooth);
+}
+
+.image-uploader__item:hover img {
+  transform: scale(1.03);
+}
+
+.image-uploader__meta {
+  min-width: 0;
+  display: flex;
+  flex-direction: column;
+  padding: 8px 34px 8px 9px;
+}
+
+.image-uploader__meta span {
+  overflow: hidden;
+  color: var(--text-secondary);
+  font-size: 11px;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.image-uploader__meta small {
+  margin-top: 2px;
+  color: var(--text-muted);
+  font-size: 10px;
+}
+
+.image-uploader__remove {
+  position: absolute;
+  right: 7px;
+  bottom: 8px;
+  width: 26px;
+  height: 26px;
+  display: grid;
+  place-items: center;
+  color: var(--text-muted);
+  background: var(--bg-secondary);
+  border: 0;
+  border-radius: 9px;
+  cursor: pointer;
+}
+
+.image-uploader__remove:hover {
+  color: #fff;
+  background: var(--error-color);
+}
+
+.image-uploader__message {
+  margin: 10px 0 0;
+  color: var(--text-muted);
+  font-size: 11px;
+  line-height: 1.5;
+}
+
+.image-uploader__message.is-success {
+  color: var(--success-color);
+}
+
+.image-uploader__message.is-error {
+  color: var(--error-color);
+}
+
 /* 标签输入 */
 .tags-input {
   display: flex;
@@ -854,6 +1167,28 @@ function close() {
 
   .checkbox-label--status {
     align-self: stretch;
+  }
+
+  .image-uploader__header {
+    flex-direction: column;
+  }
+
+  .image-uploader__button {
+    width: 100%;
+  }
+
+  .image-uploader__grid {
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .image-uploader__item img {
+    transition: none;
+  }
+
+  .image-uploader__item:hover img {
+    transform: none;
   }
 }
 </style>

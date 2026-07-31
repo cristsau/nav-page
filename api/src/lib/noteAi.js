@@ -1,9 +1,7 @@
 import { createHash } from 'node:crypto'
 import {
-  DEFAULT_OPENAI_MODEL,
   buildChatRequest,
-  extractAiText,
-  normalizeAiModelId
+  extractAiText
 } from './aiResponses.js'
 import {
   normalizeExistingNoteTags,
@@ -42,7 +40,6 @@ const REQUEST_TIMEOUT_MS = 45_000
 const NOTE_AI_RESULT_LIMIT = 20_000
 const NOTE_AI_MAX_OUTPUT_TOKENS = 2_000
 const NOTE_AI_TAG_OUTPUT_TOKENS = 300
-const DEFAULT_OPENCLAW_MODEL = 'gpt-4.1-mini'
 
 function normalizeText(value, fallback = '') {
   return String(value ?? fallback).trim()
@@ -61,16 +58,6 @@ function validateEndpoint(endpoint) {
   return parseOutboundEndpoint(endpoint).toString()
 }
 
-function resolveOpenClawEndpoint(provider) {
-  const endpoint = normalizeText(provider?.endpoint)
-  if (endpoint) return endpoint
-
-  const baseUrl = normalizeText(provider?.baseUrl)
-  return baseUrl
-    ? `${baseUrl.replace(/\/$/, '')}/v1/chat/completions`
-    : ''
-}
-
 function canUseChatGptProvider(provider) {
   if (!provider?.enabled) return false
 
@@ -81,24 +68,12 @@ function canUseChatGptProvider(provider) {
   return hasApiKey || isProxy
 }
 
-function canUseOpenClawProvider(provider) {
-  return Boolean(provider?.enabled && resolveOpenClawEndpoint(provider))
-}
-
 export function selectNoteAiProvider(providers = {}) {
   if (canUseChatGptProvider(providers.chatgpt)) {
     return {
       id: 'chatgpt',
       label: 'ChatGPT / OpenAI',
       config: providers.chatgpt
-    }
-  }
-
-  if (canUseOpenClawProvider(providers.openclaw)) {
-    return {
-      id: 'openclaw',
-      label: 'OpenClaw',
-      config: providers.openclaw
     }
   }
 
@@ -163,29 +138,6 @@ export function buildNoteAiRequest(providerRecord, input, userId = '') {
   const safetyIdentifier = userId
     ? createHash('sha256').update(`domo-nav-note:${userId}`).digest('hex')
     : ''
-
-  if (providerRecord.id === 'openclaw') {
-    const endpoint = validateEndpoint(resolveOpenClawEndpoint(provider))
-    const model = normalizeAiModelId(provider.model, DEFAULT_OPENCLAW_MODEL)
-
-    return {
-      endpoint,
-      apiMode: 'chat-completions',
-      model,
-      apiKey,
-      prompts,
-      body: {
-        model,
-        temperature: 0.3,
-        max_tokens: maxOutputTokens,
-        stream: false,
-        messages: [
-          { role: 'system', content: prompts.systemPrompt },
-          { role: 'user', content: prompts.userPrompt }
-        ]
-      }
-    }
-  }
 
   const chatRequest = buildChatRequest(
     { ...provider, webSearchEnabled: false },
