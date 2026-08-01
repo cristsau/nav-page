@@ -6,6 +6,7 @@ import {
   createMediaUserPrefix,
   encodeUpstreamPath,
   mediaUrlFromUpstreamId,
+  normalizeMediaDeletionOutcome,
   normalizeUpstreamId
 } from './mediaAssets.js'
 import { getImgBedOrigin, isAllowedImageMime } from './noteAttachments.js'
@@ -177,6 +178,36 @@ export async function deleteImgBedUserImage(upstreamId, userId, dependencies = {
   const scopedId = assertMediaBelongsToUser(userId, { upstreamId })
   const encodedPath = encodeUpstreamPath(scopedId)
   const url = new URL(`/api/manage/delete/${encodedPath}`, getLibraryOrigin())
-  await libraryFetch(url, { method: 'DELETE' }, dependencies)
-  return { ok: true }
+  const response = await libraryFetch(url, { method: 'DELETE' }, dependencies)
+  let payload
+  try {
+    payload = await response.json()
+  } catch {
+    throw createLibraryError(
+      'Image library returned invalid deletion data',
+      'library_invalid_delete_response'
+    )
+  }
+
+  if (
+    !payload
+    || typeof payload !== 'object'
+    || Array.isArray(payload)
+    || payload.success !== true
+    || payload.fileId !== scopedId
+  ) {
+    throw createLibraryError(
+      'Image library returned invalid deletion data',
+      'library_invalid_delete_response'
+    )
+  }
+
+  try {
+    return normalizeMediaDeletionOutcome(payload)
+  } catch {
+    throw createLibraryError(
+      'Image library returned invalid deletion data',
+      'library_invalid_delete_response'
+    )
+  }
 }

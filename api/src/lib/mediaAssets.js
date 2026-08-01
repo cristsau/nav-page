@@ -12,12 +12,122 @@ const MEDIA_STATES = new Set([
   'missing',
   'deleted'
 ])
+const MEDIA_DELETE_DISPOSITIONS = new Set([
+  'source_deleted',
+  'detached',
+  'legacy_detached',
+  'already_missing'
+])
+const MEDIA_DELETE_BOOLEAN_FIELDS = [
+  'sourceDeleted',
+  'detached',
+  'legacy',
+  'alreadyMissing',
+  'cacheInvalidated',
+  'cachePurgeConfigured',
+  'cachePurgeAttempted',
+  'cachePurgeSucceeded',
+  'localCacheInvalidated'
+]
 
 function createHttpError(message, statusCode, code = '') {
   const error = new Error(message)
   error.statusCode = statusCode
   if (code) error.code = code
   return error
+}
+
+function invalidMediaDeletionOutcome() {
+  return createHttpError(
+    'Image provider returned an invalid deletion outcome',
+    502,
+    'invalid_media_delete_outcome'
+  )
+}
+
+export function normalizeMediaDeletionOutcome(value) {
+  if (!value || typeof value !== 'object' || Array.isArray(value)) {
+    throw invalidMediaDeletionOutcome()
+  }
+  if (MEDIA_DELETE_BOOLEAN_FIELDS.some((field) => typeof value[field] !== 'boolean')) {
+    throw invalidMediaDeletionOutcome()
+  }
+
+  const inferredDisposition = value.sourceDeleted
+    ? 'source_deleted'
+    : value.detached
+      ? value.legacy ? 'legacy_detached' : 'detached'
+      : value.alreadyMissing
+        ? 'already_missing'
+        : ''
+  const disposition = String(value.disposition || inferredDisposition).trim().toLowerCase()
+  const dispositionMatches = (
+    (disposition === 'source_deleted'
+      && value.sourceDeleted
+      && !value.detached
+      && !value.legacy
+      && !value.alreadyMissing)
+    || (disposition === 'detached'
+      && !value.sourceDeleted
+      && value.detached
+      && !value.legacy
+      && !value.alreadyMissing)
+    || (disposition === 'legacy_detached'
+      && !value.sourceDeleted
+      && value.detached
+      && value.legacy
+      && !value.alreadyMissing)
+    || (disposition === 'already_missing'
+      && !value.sourceDeleted
+      && !value.detached
+      && !value.legacy
+      && value.alreadyMissing)
+  )
+  const cacheMatches = (
+    (!value.cachePurgeAttempted || value.cachePurgeConfigured)
+    && (!value.cachePurgeSucceeded || (
+      value.cachePurgeConfigured
+      && value.cachePurgeAttempted
+      && value.cacheInvalidated
+    ))
+    && (!value.localCacheInvalidated || value.cacheInvalidated)
+  )
+  if (!MEDIA_DELETE_DISPOSITIONS.has(disposition) || !dispositionMatches || !cacheMatches) {
+    throw invalidMediaDeletionOutcome()
+  }
+
+  return {
+    disposition,
+    sourceDeleted: value.sourceDeleted,
+    detached: value.detached,
+    legacy: value.legacy,
+    alreadyMissing: value.alreadyMissing,
+    cacheInvalidated: value.cacheInvalidated,
+    cachePurgeConfigured: value.cachePurgeConfigured,
+    cachePurgeAttempted: value.cachePurgeAttempted,
+    cachePurgeSucceeded: value.cachePurgeSucceeded,
+    localCacheInvalidated: value.localCacheInvalidated
+  }
+}
+
+function mediaDeletionOutcomeFromRecord(record) {
+  if (!record?.deletion_disposition) return null
+  try {
+    return normalizeMediaDeletionOutcome({
+      disposition: record.deletion_disposition,
+      sourceDeleted: record.deletion_source_deleted,
+      detached: record.deletion_detached,
+      legacy: record.deletion_legacy,
+      alreadyMissing: record.deletion_already_missing,
+      cacheInvalidated: record.deletion_cache_invalidated,
+      cachePurgeConfigured: record.deletion_cache_purge_configured,
+      cachePurgeAttempted: record.deletion_cache_purge_attempted,
+      cachePurgeSucceeded: record.deletion_cache_purge_succeeded,
+      localCacheInvalidated: record.deletion_local_cache_invalidated
+    })
+  } catch {
+    return null
+  }
 }
 
 export function normalizeMediaSource(value, fallback = 'reconciled') {
@@ -285,6 +395,16 @@ export async function activateReferencedMediaAssets(client, userId, attachments,
       SET state = 'active',
           delete_requested_at = NULL,
           last_delete_error = '',
+          deletion_disposition = NULL,
+          deletion_source_deleted = NULL,
+          deletion_detached = NULL,
+          deletion_legacy = NULL,
+          deletion_already_missing = NULL,
+          deletion_cache_invalidated = NULL,
+          deletion_cache_purge_configured = NULL,
+          deletion_cache_purge_attempted = NULL,
+          deletion_cache_purge_succeeded = NULL,
+          deletion_local_cache_invalidated = NULL,
           deleted_at = NULL,
           updated_at = NOW()
       WHERE user_id = $1
@@ -330,6 +450,16 @@ export async function markUnreferencedAutoAssetsForDeletion(client, userId, atta
         SET state = 'delete_pending',
             delete_requested_at = COALESCE(delete_requested_at, NOW()),
             last_delete_error = '',
+            deletion_disposition = NULL,
+            deletion_source_deleted = NULL,
+            deletion_detached = NULL,
+            deletion_legacy = NULL,
+            deletion_already_missing = NULL,
+            deletion_cache_invalidated = NULL,
+            deletion_cache_purge_configured = NULL,
+            deletion_cache_purge_attempted = NULL,
+            deletion_cache_purge_succeeded = NULL,
+            deletion_local_cache_invalidated = NULL,
             updated_at = NOW()
         WHERE id = $1
           AND user_id = $2
@@ -412,7 +542,13 @@ export async function attemptMediaAssetDeletion(
     }
 
     const asset = result.rows[0]
-    if (asset.state === 'deleted') return { state: 'deleted', asset }
+    if (asset.state === 'deleted') {
+      return {
+        state: 'deleted',
+        asset,
+        deletion: mediaDeletionOutcomeFromRecord(asset)
+      }
+    }
     if (
       (requireAuto && asset.retention !== 'auto')
       || (
@@ -431,6 +567,16 @@ export async function attemptMediaAssetDeletion(
           SET state = 'active',
               delete_requested_at = NULL,
               last_delete_error = '',
+              deletion_disposition = NULL,
+              deletion_source_deleted = NULL,
+              deletion_detached = NULL,
+              deletion_legacy = NULL,
+              deletion_already_missing = NULL,
+              deletion_cache_invalidated = NULL,
+              deletion_cache_purge_configured = NULL,
+              deletion_cache_purge_attempted = NULL,
+              deletion_cache_purge_succeeded = NULL,
+              deletion_local_cache_invalidated = NULL,
               updated_at = NOW()
           WHERE id = $1
         `,
@@ -447,6 +593,16 @@ export async function attemptMediaAssetDeletion(
             delete_attempts = delete_attempts + 1,
             last_delete_attempt_at = NOW(),
             last_delete_error = '',
+            deletion_disposition = NULL,
+            deletion_source_deleted = NULL,
+            deletion_detached = NULL,
+            deletion_legacy = NULL,
+            deletion_already_missing = NULL,
+            deletion_cache_invalidated = NULL,
+            deletion_cache_purge_configured = NULL,
+            deletion_cache_purge_attempted = NULL,
+            deletion_cache_purge_succeeded = NULL,
+            deletion_local_cache_invalidated = NULL,
             updated_at = NOW()
         WHERE id = $1
       `,
@@ -454,20 +610,49 @@ export async function attemptMediaAssetDeletion(
     )
 
     try {
-      await deleteUpstream(asset.upstream_id, userId)
+      const deletion = normalizeMediaDeletionOutcome(
+        await deleteUpstream(asset.upstream_id, userId)
+      )
       const deleted = await client.query(
         `
           UPDATE media_assets
           SET state = 'deleted',
               deleted_at = NOW(),
               last_delete_error = '',
+              deletion_disposition = $2,
+              deletion_source_deleted = $3,
+              deletion_detached = $4,
+              deletion_legacy = $5,
+              deletion_already_missing = $6,
+              deletion_cache_invalidated = $7,
+              deletion_cache_purge_configured = $8,
+              deletion_cache_purge_attempted = $9,
+              deletion_cache_purge_succeeded = $10,
+              deletion_local_cache_invalidated = $11,
               updated_at = NOW()
           WHERE id = $1
           RETURNING *
         `,
-        [asset.id]
+        [
+          asset.id,
+          deletion.disposition,
+          deletion.sourceDeleted,
+          deletion.detached,
+          deletion.legacy,
+          deletion.alreadyMissing,
+          deletion.cacheInvalidated,
+          deletion.cachePurgeConfigured,
+          deletion.cachePurgeAttempted,
+          deletion.cachePurgeSucceeded,
+          deletion.localCacheInvalidated
+        ]
       )
-      return { state: 'deleted', asset: deleted.rows[0], referenceCount: 0 }
+      return {
+        state: 'deleted',
+        asset: deleted.rows[0],
+        referenceCount: 0,
+        deletion
+      }
     } catch (error) {
       const safeError = String(error?.code || error?.name || 'upstream_delete_failed')
         .replace(/[^a-z0-9_.:-]/gi, '')
@@ -504,6 +689,7 @@ export function mapMediaAsset(record) {
     references,
     deleteAttempts: Number(record.delete_attempts || 0),
     lastDeleteError: record.last_delete_error || '',
+    deletion: mediaDeletionOutcomeFromRecord(record),
     createdAt: record.created_at,
     updatedAt: record.updated_at,
     deletedAt: record.deleted_at || null

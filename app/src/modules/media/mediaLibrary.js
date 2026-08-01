@@ -43,6 +43,48 @@ export function mediaNeedsRetention(image = {}) {
   return String(image.retention || 'auto') !== 'keep'
 }
 
+export function mediaDeletionMessage(value = {}) {
+  const deletion = value?.deletion || value
+  const disposition = String(deletion?.disposition || '').trim().toLowerCase()
+  const base = {
+    source_deleted: '图床源文件已删除',
+    detached: '图床引用已解除，源文件未物理删除',
+    legacy_detached: '旧图床记录已解除引用，源文件无法物理删除',
+    already_missing: '原文件此前已不存在，图床记录已清理'
+  }[disposition]
+  if (!base) return '图片清理已完成，但未收到源文件删除明细'
+
+  return deletion?.cacheInvalidated === true
+    ? `${base}，公开链接已失效`
+    : `${base}；缓存清理不完整，公开链接可能短暂可访问`
+}
+
+export function mediaCleanupMessage(results = []) {
+  const successful = (Array.isArray(results) ? results : [])
+    .filter((result) => result?.state === 'deleted')
+  const failedCount = (Array.isArray(results) ? results : [])
+    .filter((result) => result?.state === 'delete_failed').length
+  if (!successful.length && !failedCount) return ''
+
+  const counts = successful.reduce((summary, result) => {
+    const disposition = String(result?.deletion?.disposition || 'unknown')
+    summary[disposition] = (summary[disposition] || 0) + 1
+    if (result?.deletion?.cacheInvalidated === false) summary.cacheIncomplete += 1
+    return summary
+  }, { cacheIncomplete: 0 })
+  const parts = []
+  if (counts.source_deleted) parts.push(`源文件已删除 ${counts.source_deleted} 张`)
+  if (counts.detached) parts.push(`仅解除图床引用 ${counts.detached} 张`)
+  if (counts.legacy_detached) parts.push(`旧记录仅解除引用 ${counts.legacy_detached} 张`)
+  if (counts.already_missing) parts.push(`原文件已不存在 ${counts.already_missing} 张`)
+  if (counts.unknown) parts.push(`清理结果未明 ${counts.unknown} 张`)
+  if (failedCount) parts.push(`清理失败 ${failedCount} 张，可在图片库重试`)
+  if (counts.cacheIncomplete) {
+    parts.push(`缓存未完全清理 ${counts.cacheIncomplete} 张，链接可能短暂可访问`)
+  }
+  return `图片清理：${parts.join('；')}`
+}
+
 export function formatMediaBytes(bytes) {
   const value = Number(bytes || 0)
   if (!Number.isFinite(value) || value <= 0) return '大小未知'

@@ -78,6 +78,14 @@ function mapMediaForClient(record) {
   }
 }
 
+function mapDeletionResult(outcome) {
+  const image = mapMediaForClient(outcome.asset)
+  return {
+    image,
+    deletion: outcome.deletion || image.deletion || null
+  }
+}
+
 export function buildMediaListQuery({ userId, filter, search, cursor, limit }) {
   const params = [userId]
   const conditions = ["a.state <> 'deleted'"]
@@ -331,6 +339,16 @@ export default async function mediaRoutes(fastify) {
                 ELSE NULL
               END,
               last_delete_error = '',
+              deletion_disposition = NULL,
+              deletion_source_deleted = NULL,
+              deletion_detached = NULL,
+              deletion_legacy = NULL,
+              deletion_already_missing = NULL,
+              deletion_cache_invalidated = NULL,
+              deletion_cache_purge_configured = NULL,
+              deletion_cache_purge_attempted = NULL,
+              deletion_cache_purge_succeeded = NULL,
+              deletion_local_cache_invalidated = NULL,
               updated_at = NOW()
           WHERE id = $1
             AND user_id = $2
@@ -347,15 +365,15 @@ export default async function mediaRoutes(fastify) {
         request.params.assetId,
         { requireAuto: true, requirePending: true }
       )
-      return { image: mapMediaForClient(deleted.asset) }
+      return mapDeletionResult(deleted)
     }
-    return { image: mapMediaForClient(outcome.asset) }
+    return { image: mapMediaForClient(outcome.asset), deletion: null }
   })
 
   fastify.delete('/media/images/:assetId', async (request, reply) => {
     await fastify.requireAuth(request, reply)
     const outcome = await runDelete(request.currentUser.id, request.params.assetId)
-    return { ok: true, image: mapMediaForClient(outcome.asset) }
+    return { ok: true, ...mapDeletionResult(outcome) }
   })
 
   fastify.post('/media/images/:assetId/retry-delete', async (request, reply) => {
@@ -365,7 +383,7 @@ export default async function mediaRoutes(fastify) {
       request.params.assetId,
       { requireAuto: true, requirePending: true }
     )
-    return { ok: true, image: mapMediaForClient(outcome.asset) }
+    return { ok: true, ...mapDeletionResult(outcome) }
   })
 
   fastify.post('/media/reconcile', async (request, reply) => {
@@ -415,6 +433,16 @@ export default async function mediaRoutes(fastify) {
                   ELSE 'orphan'
                 END,
                 missing_observations = 0,
+                deletion_disposition = NULL,
+                deletion_source_deleted = NULL,
+                deletion_detached = NULL,
+                deletion_legacy = NULL,
+                deletion_already_missing = NULL,
+                deletion_cache_invalidated = NULL,
+                deletion_cache_purge_configured = NULL,
+                deletion_cache_purge_attempted = NULL,
+                deletion_cache_purge_succeeded = NULL,
+                deletion_local_cache_invalidated = NULL,
                 deleted_at = NULL,
                 updated_at = NOW()
             WHERE id = $1

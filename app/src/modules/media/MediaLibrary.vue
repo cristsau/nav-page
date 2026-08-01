@@ -15,6 +15,7 @@ import {
   MEDIA_FILTERS,
   mediaCanDelete,
   mediaCanShare,
+  mediaDeletionMessage,
   mediaMarkdown,
   mediaNeedsRetention,
   mediaStatus,
@@ -163,7 +164,7 @@ async function setRetention(image, retention) {
         restoreFocusElement = null
         document.body.style.overflow = ''
       }
-      announce('已切换为自动清理并删除无引用原图，公开链接已失效')
+      announce(`已切换为自动清理；${mediaDeletionMessage(updated)}`)
       return updated
     }
     updateImage(updated || { ...image, retention })
@@ -246,7 +247,7 @@ async function performDelete(image) {
   if (!image?.id || !mediaCanDelete(image) || busyImageId.value) return
   busyImageId.value = image.id
   try {
-    await deleteMediaImage(image.id)
+    const updated = await deleteMediaImage(image.id)
     images.value = images.value.filter((item) => String(item.id) !== String(image.id))
     if (String(selectedImage.value?.id) === String(image.id)) {
       selectedImage.value = null
@@ -255,7 +256,7 @@ async function performDelete(image) {
       restoreFocusElement = null
       document.body.style.overflow = ''
     }
-    announce('图片已从图床删除，原公开链接已失效')
+    announce(mediaDeletionMessage(updated || {}))
   } catch (error) {
     deleteConfirming.value = false
     announce(
@@ -284,7 +285,7 @@ async function retryDelete(image) {
         restoreFocusElement = null
         document.body.style.overflow = ''
       }
-      announce('图片已清理，公开链接已失效')
+      announce(mediaDeletionMessage(updated || {}))
     }
   } catch (error) {
     announce(`重试失败：${error.message || '请稍后再试'}`)

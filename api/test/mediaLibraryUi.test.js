@@ -7,6 +7,8 @@ import {
   formatMediaDimensions,
   mediaCanDelete,
   mediaCanShare,
+  mediaCleanupMessage,
+  mediaDeletionMessage,
   mediaMarkdown,
   mediaNeedsRetention,
   mediaStatus,
@@ -37,6 +39,25 @@ test('media sharing helpers preserve usable metadata', () => {
   assert.equal(formatMediaDimensions({ width: 1280, height: 720 }), '1280 × 720')
 })
 
+test('media deletion messages distinguish provider disposition and cache cleanup', () => {
+  assert.equal(mediaDeletionMessage({ deletion: {
+    disposition: 'source_deleted',
+    cacheInvalidated: true
+  } }), '图床源文件已删除，公开链接已失效')
+  assert.equal(mediaDeletionMessage({ deletion: {
+    disposition: 'legacy_detached',
+    cacheInvalidated: false
+  } }), '旧图床记录已解除引用，源文件无法物理删除；缓存清理不完整，公开链接可能短暂可访问')
+  assert.equal(mediaDeletionMessage({ deletion: {
+    disposition: 'already_missing',
+    cacheInvalidated: true
+  } }), '原文件此前已不存在，图床记录已清理，公开链接已失效')
+  assert.equal(mediaCleanupMessage([
+    { state: 'deleted', deletion: { disposition: 'detached', cacheInvalidated: false } },
+    { state: 'delete_failed', deletion: null }
+  ]), '图片清理：仅解除图床引用 1 张；清理失败 1 张，可在图片库重试；缓存未完全清理 1 张，链接可能短暂可访问')
+})
+
 test('media list updates retain order and merge server truth', () => {
   const original = [{ id: 'a', retention: 'auto' }, { id: 'b', retention: 'auto' }]
   assert.deepEqual(upsertMediaImage(original, { id: 'b', retention: 'keep' }), [
@@ -62,6 +83,7 @@ test('media page is responsive, accessible and truthful about destructive action
   assert.match(source, /复制或分享前会自动设为长期保留/)
   assert.match(source, /await ensureKeptForSharing\(image\)/)
   assert.match(source, /updated\.state === 'deleted'/)
+  assert.match(source, /mediaDeletionMessage\(updated/)
   assert.match(source, /\(any-pointer: coarse\)/)
   assert.match(source, /@media \(max-width: 420px\)/)
   assert.match(source, /@media \(prefers-reduced-motion: reduce\)/)
@@ -76,6 +98,7 @@ test('media API contract stays isolated in one frontend service', async () => {
   assert.match(source, /method: 'DELETE'/)
   assert.match(source, /imagePath\(imageId, '\/retry-delete'\)/)
   assert.match(source, /request\('\/media\/reconcile'/)
+  assert.match(source, /deletion: payload\.deletion \|\| image\.deletion \|\| null/)
 })
 
 test('NAV, time and command surfaces expose the media library', async () => {
@@ -90,6 +113,7 @@ test('NAV, time and command surfaces expose the media library', async () => {
   assert.match(router, /path: '\/media'/)
   assert.match(navigation, /aria-label="打开图片库"/)
   assert.match(whisper, /aria-label="打开图片库"/)
+  assert.match(whisper, /mediaCleanupMessage\(mutationResult\?\.mediaCleanup\)/)
   assert.match(commands, /id: 'go-media'/)
   assert.match(editor, /没有其他笔记引用且图片未设为“长期保留”/)
   assert.doesNotMatch(editor, /图床原文件暂不自动删除/)

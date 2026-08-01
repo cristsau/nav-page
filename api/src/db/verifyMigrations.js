@@ -132,6 +132,16 @@ async function verifyMediaLibrarySchema() {
     'delete_requested_at',
     'last_delete_attempt_at',
     'last_delete_error',
+    'deletion_disposition',
+    'deletion_source_deleted',
+    'deletion_detached',
+    'deletion_legacy',
+    'deletion_already_missing',
+    'deletion_cache_invalidated',
+    'deletion_cache_purge_configured',
+    'deletion_cache_purge_attempted',
+    'deletion_cache_purge_succeeded',
+    'deletion_local_cache_invalidated',
     'deleted_at',
     'created_at',
     'updated_at'
@@ -162,6 +172,26 @@ async function verifyMediaLibrarySchema() {
     [expectedIndexes]
   )
   assertExactSet('media asset indexes', indexes.rows.map((row) => row.indexname), expectedIndexes)
+
+  const expectedConstraints = [
+    'media_assets_deletion_disposition_check',
+    'media_assets_deletion_outcome_check',
+    'media_assets_deletion_cache_check'
+  ]
+  const constraints = await query(
+    `
+      SELECT conname
+      FROM pg_constraint
+      WHERE conrelid = 'media_assets'::regclass
+        AND conname = ANY($1::text[])
+    `,
+    [expectedConstraints]
+  )
+  assertExactSet(
+    'media asset deletion constraints',
+    constraints.rows.map((row) => row.conname),
+    expectedConstraints
+  )
 }
 
 async function main() {

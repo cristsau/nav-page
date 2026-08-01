@@ -22,19 +22,22 @@ export async function createBackendNote(note) {
   return payload.note
 }
 
-export async function updateBackendNote(id, updates) {
+export async function updateBackendNote(id, updates, { includeCleanup = false } = {}) {
   const payload = await request(`/notes/${encodeURIComponent(id)}`, {
     method: 'PUT',
     body: JSON.stringify(updates)
   })
 
-  return payload.note
+  return includeCleanup
+    ? { note: payload.note, mediaCleanup: payload.mediaCleanup || [] }
+    : payload.note
 }
 
-export async function deleteBackendNote(id) {
-  await request(`/notes/${encodeURIComponent(id)}`, {
+export async function deleteBackendNote(id, { includeCleanup = false } = {}) {
+  const payload = await request(`/notes/${encodeURIComponent(id)}`, {
     method: 'DELETE'
   })
+  return includeCleanup ? { mediaCleanup: payload.mediaCleanup || [] } : undefined
 }
 
 export async function uploadBackendNoteImage(file) {
