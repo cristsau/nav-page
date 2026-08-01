@@ -9,8 +9,9 @@
 - 前端发布目录：`/home/web/html/nav`
 - 后端：`nav-api`
 - 数据库：`nav-postgres`
-- 当前提交：`ff561376642b91030fe7318a6ff7a537f3664d9c`
-- 发布证据：`/opt/nav-releases/20260731-172559-ff561376642b91030fe7318a6ff7a537f3664d9c`
+- 当前提交：`5de3d75d91f840d3bb809be3fc8cd17d5dd219fb`
+- API 镜像：`nav-api:5de3d75d91f840d3bb809be3fc8cd17d5dd219fb`
+- 发布证据：`/opt/nav-releases/20260801-094005-5de3d75d91f840d3bb809be3fc8cd17d5dd219fb`
 
 ## 当前定位
 
@@ -19,8 +20,9 @@
 - 可上线测试版
 - 可用于日常自用、演示和小范围内测
 
-还不是最终商业交付版。备份/恢复脚本、限流和账号恢复已进入下一阶段候选，
-但异地备份凭据、告警、Passkey、多环境部署和客户自部署文档仍未收口。
+还不是最终商业交付版。限流、会话撤销、账号恢复、动态 AI 模型目录、数据导出、
+命令面板和本地备份/恢复工具已经上线；异地备份凭据、告警、Passkey、多环境部署和
+客户自部署文档仍未收口。
 
 ## 开发到线上发布流程
 
@@ -29,7 +31,8 @@
 1. 本地只做源码修改和静态差异检查
 2. 提交到 GitHub 分支
 3. 由 GitHub Actions 在云端执行 API 测试与前端构建
-4. 云端检查通过后再由服务器拉取并部署
+4. 云端检查通过后锁定 merge SHA，生成干净 LF 源码包，在服务器独立 release 目录构建
+5. 完成备份、隔离恢复、受控迁移、固定镜像切换、双域验收和发布后恢复演练
 
 仓库地址：
 
@@ -37,10 +40,10 @@
 
 项目不要求在个人电脑运行 npm 测试；`.github/workflows/ci.yml` 是默认验收入口。
 
-## 下一阶段服务端 AI 配置
+## 当前服务端 AI 配置
 
-`codex/nav-ai-vite-security` 候选支持从 CLI Proxy `/v1/models` 动态发现最多
-6 个可用模型，并默认选择最新稳定通用模型。生产部署候选时配置：
+生产 API 从 CLI Proxy `/v1/models` 动态发现最多 6 个可用模型，并默认选择最新稳定
+通用模型。2026-08-01 生产实测目录来源为 live，默认模型为 `gpt-5.6-sol`。配置：
 
 ```dotenv
 NAV_AI_CLI_PROXY_BASE_URL=https://ap.example.com
@@ -55,35 +58,39 @@ volumes:
 ```
 
 密钥文件必须是绝对路径、普通文件、非符号链接，权限只能是 `0400` 或 `0600`。
-不要把 key 写入 GitHub、镜像、Compose 或前端设置。当前生产 CLI Proxy 可正常列出模型；
-独立 NAV client key 仍需 Management Center 写权限或另行授权重启后创建。
+不要把 key 写入 GitHub、镜像、Compose 或前端设置。当前生产继续使用已有有效 client key；
+独立 NAV client key 仍需在 Management Center 中追加后再轮换，切勿先删除旧 key。
 
 ## 可信代理与限流
 
-候选 API 只信任 loopback 和 `TRUSTED_PROXY_ADDRESSES` 中的精确 IP。发布前必须现场
-复核 Docker bridge gateway 和外层代理，不得填写宽网段。2026-07-31 的只读观测值：
+API 只信任 loopback 和 `TRUSTED_PROXY_ADDRESSES` 中的精确 IP。每次发布前必须现场
+复核 Docker bridge gateway 和外层代理，不得填写宽网段。2026-08-01 的生产核验值：
 
 ```dotenv
 TRUSTED_PROXY_ADDRESSES=172.19.0.1,45.143.234.47
 ```
 
-这只是本次快照；Compose 网络重建后网关可能变化，发布时必须重查。验收时应从两个不同
+这仍然只是本次快照；Compose 网络重建后网关可能变化，发布时必须重查。验收时应从两个不同
 外网客户端经两个域名登录，确认会话页显示的客户端 IP 不同，且限流不会把全部用户视作
 同一地址。
 
 ## 备份与恢复
 
-候选运行手册：
+当前运行手册与稳定入口：
 
 - `docs/NAV_BACKUP_RUNBOOK.md`
 - `scripts/nav-backup.sh`
 - `scripts/nav-restore-rehearsal.sh`
 - `scripts/nav-backup.env.example`
+- `/usr/local/sbin/nav-backup`
+- `/usr/local/sbin/nav-restore-rehearsal`
+- `/etc/nav/nav-backup.env`
 
 脚本支持同一 PostgreSQL 导出快照、完整表集合/行数/迁移记录、严格树清单、校验和、
 隔离恢复、restic 加密上传双闸门和失败报警。没有 bucket-scoped R2 凭据、独立 restic
 密码文件和专用 Telegram 凭据前，只能算本地备份与恢复能力，不能声称异地备份和报警
-已经启用。
+已经启用。2026-08-01 发布前与发布后 PostgreSQL 备份均完成无网络隔离恢复演练；
+当前没有启用计划任务、云上传、远端删除或失败报警。
 
 ## 笔记图片与个人图床
 
@@ -100,17 +107,23 @@ NAV_IMGBED_MAX_IMAGE_BYTES=10485760
 Token 只应授予上传权限，不要提交到 GitHub。当前第一版从笔记移除图片只解除引用，不会调用图床删除接口。
 加密笔记禁止上传公开图床图片，防止图片绕过正文加密。
 
-## 一键部署脚本
+## 发布脚本边界
 
-本地可用：
+下列历史脚本不覆盖完整生产备份、固定 API 镜像、受控迁移和完整回滚，不能直接作为
+当前生产“一键发布”入口：
 
 - `D:/DomoCodex/projects/NAV/scripts/deploy-oracle-jp.ps1`
 - `D:/DomoCodex/projects/NAV/scripts/rollback-oracle-jp.ps1`
 
-服务器可用：
+历史服务器脚本：
 
 - `D:/DomoCodex/projects/NAV/scripts/deploy.sh`
 - `D:/DomoCodex/projects/NAV/scripts/rollback.sh`
+
+当前生产使用锁定 merge SHA 的独立 release 目录：先在 release 内完成 CI 等价检查和
+固定镜像构建，再做生产备份/隔离恢复、受控迁移、API 切换、前端 `index.html` 最后替换、
+双域验收和发布后恢复演练。严禁对含生产专属文件的 `/opt/nav` 执行 `git reset`、清空目录
+或覆盖式拉取。
 
 ## 反向代理说明
 
@@ -209,10 +222,13 @@ location ^~ /share/ {
 
 ## 回滚
 
-如果需要回滚到指定提交：
+当前发布的回滚入口：
 
 ```bash
-git checkout <commit>
+sudo /opt/nav-releases/20260801-094005-5de3d75d91f840d3bb809be3fc8cd17d5dd219fb/rollback.sh
 ```
 
-或使用项目里的回滚脚本。
+它恢复发布前 API 环境、前端并切回固定旧镜像
+`nav-api:ff561376642b91030fe7318a6ff7a537f3664d9c`。正常应用回滚保留加法迁移
+`011_account_recovery.sql`，不得恢复整库覆盖发布后的用户写入。只有明确的数据损坏事故才
+评估在新数据库/新 volume 中恢复并验收后切换。

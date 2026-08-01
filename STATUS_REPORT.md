@@ -4,92 +4,90 @@
 
 ## 生产基线
 
-- GitHub：`cristsau/nav-page`
-- 已合并 PR：`#5 codex/nav-share-ui-convergence`
-- 生产提交：`ff561376642b91030fe7318a6ff7a537f3664d9c`
+- GitHub：`cristsau/nav-page`（Private）
+- 已合并 PR：[#6 codex/nav-ai-vite-security](https://github.com/cristsau/nav-page/pull/6)
+- 生产提交：`5de3d75d91f840d3bb809be3fc8cd17d5dd219fb`
+- API 镜像：`nav-api:5de3d75d91f840d3bb809be3fc8cd17d5dd219fb`
 - 生产域名：
   - `https://nav.skrskr.net`
   - `https://nav.cristsau.cn`
-- API 镜像：`nav-api:ff561376642b91030fe7318a6ff7a537f3664d9c`
-- CLI Proxy API：`eceasy/cli-proxy-api:v7.2.111`
-- 发布证据目录：
-  - `/opt/nav-releases/20260731-172559-ff561376642b91030fe7318a6ff7a537f3664d9c`
-
-本次生产发布前已备份前端、Compose、API 环境文件、Nginx 配置和 PostgreSQL。
-校验和、`pg_restore -l`、独立 PostgreSQL 恢复演练均通过，回滚脚本已保留。
-两个域名的首页、设置页、API 健康检查、CORS 和公开分享错误页均已验收。
+- 发布证据：
+  - `/opt/nav-releases/20260801-094005-5de3d75d91f840d3bb809be3fc8cd17d5dd219fb`
+- 回滚基线：`ff561376642b91030fe7318a6ff7a537f3664d9c`
 
 ## 当前生产已完成
 
-- 公开分享页采用独立文章模板，不显示内部“备忘录”类型和浏览计数。
-- 首页与笔记页统一暖色设计 token。
-- 兜底图标、两行标题、首页层级、常用入口已重做。
-- 手机端书签操作菜单和单一创建入口已完成。
-- 图片附件、个人图床、iPhone/PWA 图标、双域 CORS、OpenClaw 退役已完成。
-- 导航、笔记、日记、分享、AI 操作、快速复制、结构化字段复制和浏览器扩展继续可用。
+- 公开分享独立文章模板、统一暖色设计 token、设计化兜底图标、两行标题、
+  首页层级、常用入口、手机操作菜单和单一创建入口。
+- 图片附件、个人图床、iPhone/PWA 图标、双域 CORS、浏览器扩展和快速添加。
+- 笔记/备忘录 AI、导航 AI 分析和标签、完整内容快速复制、结构化字段悬停复制。
+- CLI Proxy 服务端托管配置；从 `/v1/models` 动态发现最多 6 个模型，自动选择
+  最新稳定通用模型。2026-08-01 生产实测默认 `gpt-5.6-sol`，目录来源为 live。
+- 会话列表和单个/其他/全部撤销、一次性恢复码、密码恢复、恢复后撤销全部会话。
+- 登录、注册、恢复和已认证写操作限流；可信代理仅允许现场核对的精确地址。
+- 不含 API Key、Telegram Token、密码验证器和未知设置的云端 JSON 数据导出。
+- 全站 `Cmd/Ctrl+K` 命令面板、触屏入口、焦点循环和 reduced-motion 支持。
+- Vite `6.4.3`、Node 24 CI、API Docker `npm ci`、Docker 构建上下文秘密排除。
+- `011_account_recovery.sql` 已受控执行并核对列、表、约束和索引定义。
 
-## 下一阶段候选
+## 发布与验收证据
 
-分支：`codex/nav-ai-vite-security`
+- PR 最终分支提交：`fc3340e54d8091bfc6fc324c831b01cff78cc971`。
+- Push 与 PR 两次 GitHub Actions 均通过。
+- OracleJP 干净 release 目录复验：
+  - 前端依赖审计：0 vulnerabilities；
+  - API 依赖审计：0 vulnerabilities；
+  - API 测试：163 / 163；
+  - Vite 6.4.3 生产构建：通过；
+  - 固定 SHA API 镜像构建：通过。
+- 两个域名的首页、设置、API 健康和当前 JS 资源均返回 200。
+- 两个方向的 CORS Origin、Credentials 和 `Vary: Origin` 均通过。
+- 会话、模型目录和导出接口在未登录状态均返回 401。
+- 无效分享返回 404，并带 `private, no-store` 和 `noindex`。
+- API 真实数据库 `SELECT 1`、迁移记录和恢复表存在性通过。
+- API 切换后重启计数 0、5xx 计数 0、致命错误计数 0；Nginx 配置未改、未 reload。
+- 所有 npm 操作均在 GitHub Actions 或 OracleJP 独立 release 目录执行，未在个人电脑运行。
 
-状态：候选核心实现为 `030e2019ca1eac9f865a1dd5ac5ebff1880fed0d`，
-已提交 [PR #6](https://github.com/cristsau/nav-page/pull/6)；Push 与 PR 两次
-GitHub Actions 均通过，尚未合并或发布生产。
+## 备份与恢复
 
-候选包含：
+- 发布前备份：`/var/backups/nav/nav-20260801T014240Z-05e4dca822a0`。
+- 发布前恢复报告：
+  `/var/backups/nav-rehearsal-reports/nav-20260801T014240Z-05e4dca822a0-20260801T014316Z.tsv`。
+- 发布后备份：`/var/backups/nav/nav-20260801T015027Z-05e4dca822a0`。
+- 发布后恢复报告：
+  `/var/backups/nav-rehearsal-reports/nav-20260801T015027Z-05e4dca822a0-20260801T015029Z.tsv`。
+- 两次均通过精确树、校验和、`pg_restore` 目录、无网络隔离恢复、完整表集合、
+  全表行数和迁移记录比对；临时容器已清理，生产容器和 volume 未被恢复演练触碰。
+- 稳定入口已安装：
+  - `/usr/local/sbin/nav-backup`
+  - `/usr/local/sbin/nav-restore-rehearsal`
+  - `/etc/nav/nav-backup.env`
+- 当前没有启用计划任务、云上传、远端删除或失败报警。
 
-- Vite 固定到 `6.4.3`，esbuild 升到修复版本，开发服务器仅监听
-  `127.0.0.1`，Telegram 开发代理默认关闭。
-- GitHub Actions 使用 Node 24，并对前后端执行 `npm audit --audit-level=moderate`。
-- CLI Proxy 模型目录动态发现，默认“自动最新”，最多显示 6 个模型。
-  自动选择会排除 mini/nano、preview/beta、日期快照、Codex、音频、图像等非通用模型。
-- CLI Proxy API Key 只从只读 owner-only 文件读取，拒绝符号链接和打开过程换文件。
-- 会话列表和单个/其他/全部会话撤销。
-- 一次性恢复码、密码恢复、恢复后撤销全部会话。
-- 登录与密码恢复通过用户行锁串行，避免旧密码并发登录留下新会话。
-- 登录、注册、恢复和已认证写操作限流；用户名和限流键有固定长度边界。
-- 云端数据 JSON 导出，不导出 API Key、Telegram Token、密码验证器和未知设置；
-  图床二进制对象不包含在 NAV 导出中。
-- `Cmd/Ctrl+K` 命令面板、触屏入口和可访问焦点循环。
-- 一致性 PostgreSQL 快照备份、严格树/校验和验证、隔离恢复演练、
-  restic 加密异地上传双闸门和失败报警运行手册。
+## 仍需用户登录验收
 
-## 候选验收证据
+这些操作需要用户密码、恢复码或两个真实外网客户端，自动化发布没有代替用户执行：
 
-所有 npm 操作均在 OracleJP 的隔离 `/tmp` 目录执行，未在个人电脑运行 npm。
-
-- 前端依赖审计：0 vulnerabilities
-- API 依赖审计：0 vulnerabilities
-- API 测试：163 / 163
-- 前端生产构建：Vite 6.4.3，通过
-- 备份脚本 Linux 实测：通过
-- 隔离 PostgreSQL 恢复：
-  - public 表集合：11 / 11
-  - 全部表行数：一致
-  - `schema_migrations`：完全一致
-- 临时源码、依赖、数据库副本和恢复容器：已删除
-
-## 下一次生产发布门槛
-
-发布候选前必须重新取得明确授权，并完成：
-
-1. 生产发布前重新备份，并保留现有回滚版本。
-2. 配置服务端 CLI Proxy Base URL 和 API Key 文件挂载。
-3. 现场复核 Docker 网关和外层代理 IP。当前观测值是 Docker 网关
-   `172.19.0.1`、外层 NPM `45.143.234.47`；发布时必须重新确认后再精确写入
-   `TRUSTED_PROXY_ADDRESSES`。
-4. 执行迁移 `011_account_recovery.sql`，发布 API 和前端。
-5. 用两个真实外网客户端分别经两个域名验收会话 IP、限流、登录、恢复码、
-   AI 模型发现和数据导出。
+1. 电脑和手机分别经两个域名登录，确认“账户安全”中的会话 IP 不相同。
+2. 生成恢复码并离线保存；用可丢弃账号验证一枚恢复码只能使用一次。
+3. 打开 AI 模型下拉框，确认“自动最新”为 `gpt-5.6-sol`，再执行一次低成本 AI 操作。
+4. 下载一次完整 JSON 导出，确认页面提示包含分享链接/密文但不包含图片二进制。
+5. 验收 `Cmd/Ctrl+K`、触屏命令入口、会话撤销和手机菜单。
 
 ## 仍未完成
 
-- R2/restic 真正异地上传：缺少 bucket-scoped R2 凭据和独立 restic 密码文件。
-- Telegram 失败报警和外部 dead-man：缺少专用 Bot 凭据与监控端点。
-- CLI Proxy 独立 NAV client key：当前准备好的文件使用现有有效 client key；
-  创建独立 key 需要 Management Center 写权限或一次另行授权的短重启。
-- Passkey/WebAuthn：需先确定 `nav.skrskr.net` 为唯一 RP ID，或统一双域登录入口。
+- 真正的 R2/restic 异地上传：缺 bucket-scoped R2 凭据和独立 restic 密码文件。
+- Telegram 失败报警和外部 dead-man：缺专用 Bot 凭据与监控端点。
+- CLI Proxy 独立 NAV client key：生产当前使用已有有效 client key。
+- Passkey/WebAuthn：需确定唯一 RP ID，推荐 `nav.skrskr.net`。
 - 到期提醒、失效链接检查、书签拖拽和批量操作。
 - PostgreSQL 中文检索、BM25/模糊检索、向量语义搜索和带来源统一 AI 助理。
-- Notion 式编辑器大重构，继续保持最后评估。
-- 图床 R2 对象本身、外层 Nginx Proxy Manager 配置的独立备份与恢复演练。
+- 图床 R2 对象和外层 Nginx Proxy Manager 配置的独立备份与恢复演练。
+- Notion 式编辑器大重构继续保持最后评估。
+
+## 发布经验
+
+- `/opt/nav` 是含生产专属文件的长期工作树，禁止用 `git reset`、`git pull` 或清空目录发布。
+- 旧一键部署脚本不覆盖完整备份、API 固定镜像、迁移和回滚，不作为当前生产发布入口。
+- Windows `core.autocrlf=true` 会使本地归档出现 CRLF；发布包必须固定 LF，并在服务器按字节复核。
+- 正常应用回滚切回旧固定镜像、旧环境和旧前端，但保留加法迁移 011；不得恢复整库覆盖发布后的新写入。
