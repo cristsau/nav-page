@@ -57,6 +57,10 @@ GET /api/admin/security-events?eventType=auth.login&outcome=failure
 
 The endpoint requires `requireAdmin`, caps pages at 200 events and exposes only 16-character correlation fingerprints rather than full digests.
 
+This first version does not automatically delete `security_events`. Monitor table
+growth and define an explicit retention period before a larger or public rollout;
+do not add silent pruning without preserving the agreed audit and incident window.
+
 ## Release checks
 
 Before a production switch:
@@ -67,6 +71,9 @@ Before a production switch:
 4. Confirm unauthenticated `/api/admin/security-events` returns `401`.
 5. Confirm an administrator can page the endpoint without seeing raw IP/User-Agent values.
 6. Exercise a disposable failed login and a successful login; confirm both events appear.
-7. Confirm an exhausted test bucket returns `429` plus `Retry-After`, while a deliberately unavailable database returns `503` rather than silently using local memory.
+7. In CI or an isolated release environment, confirm an exhausted test bucket returns
+   `429` plus `Retry-After`, and a deliberately unavailable test database returns
+   `503` rather than silently using local memory. Do not interrupt the production
+   database to perform this check.
 
 Do not test production limits by locking out the primary administrator account. Use a disposable approved account and restore normal rate-limit settings after acceptance.
