@@ -484,7 +484,7 @@ onBeforeUnmount(() => {
                 <section class="retention-card" aria-labelledby="retention-title">
                   <div>
                     <h3 id="retention-title">保留策略</h3>
-                    <p v-if="mediaNeedsRetention(selectedImage)">自动清理：最后一处笔记引用移除后，原图才会删除。</p>
+                    <p v-if="mediaNeedsRetention(selectedImage)">自动清理：最后一处笔记引用移除后会尝试删除源文件；受存储渠道限制时可能仅解除图床引用。</p>
                     <p v-else>长期保留：即使没有笔记引用，公开链接也会继续有效。</p>
                   </div>
                   <div class="retention-switch" role="group" aria-label="图片保留策略">

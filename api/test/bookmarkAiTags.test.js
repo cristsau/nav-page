@@ -170,9 +170,7 @@ test('bookmark AI tag endpoint reads owned server data and never trusts client m
   assert.match(routeSource, /requireOwnedBookmark/)
   assert.match(routeSource, /buildBookmarkAiTagInput\(bookmark\)/)
   assert.match(routeSource, /selectNoteAiProvider/)
-  assert.match(routeSource, /consumeAiRateLimit/)
-  assert.match(routeSource, /reply\.code\(429\)/)
-  assert.match(routeSource, /reply\.code\(503\)/)
+  assert.match(routeSource, /await enforceAiRateLimit\(request, reply\)/)
   assert.doesNotMatch(routeSource, /request\.body/)
 })
 
