@@ -4,6 +4,7 @@ import { config } from '../config.js'
 const DEFAULT_CLEANUP_EVERY = 256
 const DEFAULT_CLEANUP_BATCH_SIZE = 200
 const MAX_COUNTER_VALUE = 2_147_483_647
+const MAX_SUPPORTED_LIMIT = MAX_COUNTER_VALUE - 2
 
 let consumeOperations = 0
 let cleanupPromise = null
@@ -30,10 +31,10 @@ function normalizeCounterLimit(value) {
   if (
     !Number.isSafeInteger(parsed)
     || parsed <= 0
-    || parsed >= MAX_COUNTER_VALUE
+    || parsed > MAX_SUPPORTED_LIMIT
   ) {
     throw new RateLimitUnavailableError(
-      `Rate-limit limit must be an integer between 1 and ${MAX_COUNTER_VALUE - 1}`
+      `Rate-limit limit must be an integer between 1 and ${MAX_SUPPORTED_LIMIT}`
     )
   }
 
@@ -230,10 +231,7 @@ export async function consumePersistentRateLimit(rawKey, {
 
   return {
     allowed: count <= boundedLimit,
-    firstDenied: (
-      boundedLimit < MAX_COUNTER_VALUE
-      && count === boundedLimit + 1
-    ),
+    firstDenied: count === boundedLimit + 1,
     remaining: Math.max(0, boundedLimit - count),
     retryAfterSeconds: count <= boundedLimit ? 0 : retryAfterSeconds,
     resetAt: row.window_expires_at

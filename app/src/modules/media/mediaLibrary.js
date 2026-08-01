@@ -94,6 +94,11 @@ export function mediaCleanupMessage(results = []) {
   return `图片清理：${parts.join('；')}`
 }
 
+export function mediaCleanupHasFailures(results = []) {
+  return (Array.isArray(results) ? results : [])
+    .some((result) => result?.state === 'delete_failed')
+}
+
 export function formatMediaBytes(bytes) {
   const value = Number(bytes || 0)
   if (!Number.isFinite(value) || value <= 0) return '大小未知'

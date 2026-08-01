@@ -31,7 +31,8 @@
 - `015_media_delete_outcomes.sql`：严格校验并持久化源文件删除、仅解除引用、旧记录、
   原文件已不存在和缓存清理结果；图片库与笔记按真实结果给出差异化提示。
 - `016_security_controls.sql`：公开认证、已认证写操作和 AI 使用 PostgreSQL 原子共享限流；
-  IP、用户名、用户 ID 与 User-Agent 只以带密钥 HMAC 摘要进入限流或审计表。
+  限流桶只保存 IP、用户名或用户 ID 等键的带密钥 HMAC 摘要。审计表保存 IP/User-Agent
+  摘要及必要的用户/资源 UUID，不写原始用户名、IP 或 User-Agent。
 - 管理员安全审计面板：支持事件/结果筛选、分页、刷新与最小化 ID/短指纹展示。
 - 生产切换新增硬门槛：所有 API 副本必须配置同一份至少 32 字符的
   `NAV_RATE_LIMIT_KEY_SECRET`；缺失时 API 会拒绝启动，不会回退到进程内限流。

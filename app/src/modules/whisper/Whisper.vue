@@ -12,7 +12,10 @@ import NoteEditor from './components/NoteEditor.vue'
 import NotePreview from './components/NotePreview.vue'
 import ReminderCenter from './components/ReminderCenter.vue'
 import ShareManager from './components/ShareManager.vue'
-import { mediaCleanupMessage } from '@/modules/media/mediaLibrary'
+import {
+  mediaCleanupHasFailures,
+  mediaCleanupMessage
+} from '@/modules/media/mediaLibrary'
 import { buildFullNoteText } from './utils/noteCopyText'
 
 const router = useRouter()
@@ -364,8 +367,12 @@ async function handleSaveNote(data) {
     editingNote.value = null
     await loadNotes()
     await refreshReminders()
-    const cleanupMessage = mediaCleanupMessage(mutationResult?.mediaCleanup)
-    setStatus(cleanupMessage ? `笔记已保存；${cleanupMessage}` : '笔记已保存')
+    const mediaCleanup = mutationResult?.mediaCleanup
+    const cleanupMessage = mediaCleanupMessage(mediaCleanup)
+    setStatus(
+      cleanupMessage ? `笔记已保存；${cleanupMessage}` : '笔记已保存',
+      mediaCleanupHasFailures(mediaCleanup) ? 'error' : 'success'
+    )
   } catch (e) {
     console.error('Failed to save note:', e)
     alert(`保存失败：${e.message || '请稍后重试'}`)
@@ -382,10 +389,14 @@ async function handleDeleteNote(note) {
     const mutationResult = await deleteNote(note.id)
     await loadNotes()
     await refreshReminders()
-    const cleanupMessage = mediaCleanupMessage(mutationResult?.mediaCleanup)
-    setStatus(cleanupMessage
-      ? `「${note.title}」已删除；${cleanupMessage}`
-      : `「${note.title}」已删除`)
+    const mediaCleanup = mutationResult?.mediaCleanup
+    const cleanupMessage = mediaCleanupMessage(mediaCleanup)
+    setStatus(
+      cleanupMessage
+        ? `「${note.title}」已删除；${cleanupMessage}`
+        : `「${note.title}」已删除`,
+      mediaCleanupHasFailures(mediaCleanup) ? 'error' : 'success'
+    )
   } catch (error) {
     setStatus(`删除失败：${error.message || '请稍后重试'}`, 'error')
   }

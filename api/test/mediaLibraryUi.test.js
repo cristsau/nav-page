@@ -7,6 +7,7 @@ import {
   formatMediaDimensions,
   mediaCanDelete,
   mediaCanShare,
+  mediaCleanupHasFailures,
   mediaCleanupMessage,
   mediaDeletionMessage,
   mediaMarkdown,
@@ -75,6 +76,11 @@ test('media deletion messages distinguish provider disposition and cache cleanup
       localCacheInvalidated: true
     }
   }]), '图片清理：源文件已删除 1 张；仅当前节点缓存已清理 1 张，其他节点可能短暂可访问')
+  assert.equal(mediaCleanupHasFailures([
+    { state: 'deleted' },
+    { state: 'delete_failed' }
+  ]), true)
+  assert.equal(mediaCleanupHasFailures([{ state: 'deleted' }]), false)
 })
 
 test('media list updates retain order and merge server truth', () => {
@@ -96,13 +102,14 @@ test('media page is responsive, accessible and truthful about destructive action
   assert.match(source, /!focusable\.includes\(document\.activeElement\)/)
   assert.match(source, /result\.complete === false/)
   assert.match(source, /改为“自动”后会进入清理范围/)
-  assert.match(source, /图片仍被笔记引用，不能删除原图/)
+  assert.match(source, /图片仍被笔记引用，不能清理图床记录/)
   assert.match(source, /error\.status === 409/)
   assert.match(source, /复制或分享前会自动设为长期保留/)
   assert.match(source, /await ensureKeptForSharing\(image\)/)
   assert.match(source, /updated\.state === 'deleted'/)
   assert.match(source, /mediaDeletionMessage\(updated/)
-  assert.match(source, /删除后图床记录无法恢复；缓存可能在部分节点短暂保留/)
+  assert.match(source, /能否物理删除取决于来源/)
+  assert.doesNotMatch(source, /永久删除|删除原图|安全清理原图/)
   assert.doesNotMatch(source, /删除后公开链接立即失效/)
   assert.match(source, /\(any-pointer: coarse\)/)
   assert.match(source, /@media \(max-width: 420px\)/)
@@ -133,7 +140,8 @@ test('NAV, time and command surfaces expose the media library', async () => {
   assert.match(router, /path: '\/media'/)
   assert.match(navigation, /aria-label="打开图片库"/)
   assert.match(whisper, /aria-label="打开图片库"/)
-  assert.match(whisper, /mediaCleanupMessage\(mutationResult\?\.mediaCleanup\)/)
+  assert.match(whisper, /mediaCleanupMessage\(mediaCleanup\)/)
+  assert.match(whisper, /mediaCleanupHasFailures\(mediaCleanup\) \? 'error' : 'success'/)
   assert.match(commands, /id: 'go-media'/)
   assert.match(editor, /没有其他笔记引用且图片未设为“长期保留”/)
   assert.doesNotMatch(editor, /图床原文件暂不自动删除/)

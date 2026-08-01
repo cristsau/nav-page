@@ -144,17 +144,56 @@ test('persistent limiter marks only the first request beyond the threshold', asy
 })
 
 test('persistent limiter rejects limits that cannot represent the first denial', async () => {
-  await assert.rejects(
-    consumePersistentRateLimit('login:198.51.100.27', {
+  for (const limit of [2_147_483_646, 2_147_483_647]) {
+    await assert.rejects(
+      consumePersistentRateLimit('login:198.51.100.27', {
+        scope: 'auth_login',
+        limit,
+        windowMs: 60_000,
+        secret: TEST_RATE_LIMIT_SECRET,
+        queryFn: async () => {
+          throw new Error('query must not run for an invalid limit')
+        }
+      }),
+      (error) => error instanceof RateLimitUnavailableError
+    )
+  }
+})
+
+test('persistent limiter preserves one first-denial transition at its supported upper bound', async () => {
+  const counts = [
+    2_147_483_645,
+    2_147_483_646,
+    2_147_483_647,
+    2_147_483_647
+  ]
+  const outcomes = []
+
+  for (const requestCount of counts) {
+    outcomes.push(await consumePersistentRateLimit('login:198.51.100.27', {
       scope: 'auth_login',
-      limit: 2_147_483_647,
+      limit: 2_147_483_645,
       windowMs: 60_000,
       secret: TEST_RATE_LIMIT_SECRET,
-      queryFn: async () => {
-        throw new Error('query must not run for an invalid limit')
-      }
-    }),
-    (error) => error instanceof RateLimitUnavailableError
+      queryFn: async () => ({
+        rows: [{
+          request_count: requestCount,
+          retry_after_seconds: 60,
+          window_expires_at: '2026-08-01T00:01:00.000Z'
+        }]
+      }),
+      cleanupEvery: Number.MAX_SAFE_INTEGER
+    }))
+  }
+
+  assert.deepEqual(
+    outcomes.map(({ allowed, firstDenied }) => ({ allowed, firstDenied })),
+    [
+      { allowed: true, firstDenied: false },
+      { allowed: false, firstDenied: true },
+      { allowed: false, firstDenied: false },
+      { allowed: false, firstDenied: false }
+    ]
   )
 })
 

@@ -509,7 +509,7 @@ onBeforeUnmount(() => {
                       <Icon name="external-link" :size="14" />
                     </button>
                   </div>
-                  <p v-else>当前没有笔记引用。若保留策略为“自动”，可安全清理原图。</p>
+                  <p v-else>当前没有笔记引用。若保留策略为“自动”，可发起图片清理；能否物理删除取决于图片来源。</p>
                 </section>
 
                 <div class="media-preview__actions">
@@ -527,16 +527,16 @@ onBeforeUnmount(() => {
 
                 <div class="danger-zone">
                   <template v-if="!mediaCanDelete(selectedImage)">
-                    <p><strong>图片仍被笔记引用，不能删除原图。</strong>先从上方列出的所有笔记移除图片，再返回清理。</p>
+                    <p><strong>图片仍被笔记引用，不能清理图床记录。</strong>先从上方列出的所有笔记移除图片，再返回清理。</p>
                   </template>
                   <template v-else-if="deleteConfirming">
-                    <p><strong>确定删除原图？</strong>删除后图床记录无法恢复；缓存可能在部分节点短暂保留。</p>
+                    <p><strong>确定清理这张图片？</strong>NAV 会请求图床删除源文件或解除记录；能否物理删除取决于来源，缓存也可能在部分节点短暂保留。</p>
                     <div>
                       <button type="button" :disabled="Boolean(busyImageId)" @click="deleteConfirming = false">取消</button>
-                      <button class="is-danger" type="button" :disabled="Boolean(busyImageId)" @click="performDelete(selectedImage)"><Icon name="trash" :size="16" />永久删除</button>
+                      <button class="is-danger" type="button" :disabled="Boolean(busyImageId)" @click="performDelete(selectedImage)"><Icon name="trash" :size="16" />确认清理</button>
                     </div>
                   </template>
-                  <button v-else class="danger-zone__trigger" type="button" :disabled="Boolean(busyImageId)" @click="deleteConfirming = true"><Icon name="trash" :size="16" />删除原图</button>
+                  <button v-else class="danger-zone__trigger" type="button" :disabled="Boolean(busyImageId)" @click="deleteConfirming = true"><Icon name="trash" :size="16" />清理图片</button>
                 </div>
               </aside>
             </div>

@@ -27,7 +27,7 @@ Expired buckets are deleted opportunistically in bounded batches with `FOR UPDAT
 
 ### Failure policy
 
-NAV does not fall back to an in-process counter. A missing/short digest secret prevents the API process from starting regardless of `NODE_ENV`; the API image and Compose service also set `NODE_ENV=production` explicitly. Limits must be integers from 1 through `2147483646`, so the PostgreSQL integer counter can always represent the first denied request. If a request reaches the limiter and its PostgreSQL query is unavailable or returns an invalid result:
+NAV does not fall back to an in-process counter. A missing/short digest secret prevents the API process from starting regardless of `NODE_ENV`; the API image and Compose service also set `NODE_ENV=production` explicitly. Limits must be integers from 1 through `2147483645`, leaving separate integer values for the first denied request and the saturated counter. If a request reaches the limiter and its PostgreSQL query is unavailable or returns an invalid result:
 
 - public authentication returns `503`;
 - authenticated writes return `503`;
