@@ -28,6 +28,12 @@ const routes = [
     meta: { title: '时光' }
   },
   {
+    path: '/media',
+    name: 'MediaLibrary',
+    component: () => import('@/modules/media/MediaLibrary.vue'),
+    meta: { title: '图片库' }
+  },
+  {
     path: '/share/:code',
     name: 'ShareView',
     component: () => import('@/modules/whisper/ShareView.vue'),

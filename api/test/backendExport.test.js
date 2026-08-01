@@ -15,6 +15,7 @@ const DIARY_ID = 'eeeeeeee-eeee-4eee-8eee-eeeeeeeeeeee'
 const SHARE_ID = 'ffffffff-ffff-4fff-8fff-ffffffffffff'
 const ENGINE_ID = '99999999-9999-4999-8999-999999999999'
 const ATTACHMENT_ID = '11111111-1111-4111-8111-111111111111'
+const MEDIA_ASSET_ID = '22222222-2222-4222-8222-222222222222'
 
 function createFixtureClient() {
   const queries = []
@@ -152,7 +153,22 @@ function createFixtureClient() {
         key: 'apiToken',
         value: 'top-level-api-token'
       }
-    ]
+    ],
+    mediaAssets: [{
+      id: MEDIA_ASSET_ID,
+      upstream_id: 'nav-notes/example.webp',
+      url: 'https://pic.skrskr.net/file/nav-notes/example.webp',
+      name: 'example.webp',
+      mime: 'image/webp',
+      size: '2048',
+      source: 'note',
+      retention: 'auto',
+      state: 'active',
+      delete_attempts: 0,
+      created_at: '2026-07-31T06:00:00.000Z',
+      updated_at: '2026-07-31T06:00:00.000Z',
+      deleted_at: null
+    }]
   }
 
   return {
@@ -166,6 +182,7 @@ function createFixtureClient() {
       if (/FROM notes/.test(sql)) return { rows: rows.notes }
       if (/FROM custom_search_engines/.test(sql)) return { rows: rows.engines }
       if (/FROM user_settings/.test(sql)) return { rows: rows.settings }
+      if (/FROM media_assets/.test(sql)) return { rows: rows.mediaAssets }
 
       throw new Error(`Unexpected query: ${sql}`)
     }
@@ -190,6 +207,7 @@ test('backend export is import-compatible and preserves cloud data metadata', as
     'bookmarks',
     'notes',
     'customEngines',
+    'mediaAssets',
     'shares',
     'settings'
   ]
@@ -232,14 +250,36 @@ test('backend export is import-compatible and preserves cloud data metadata', as
     customEngines: 1,
     shares: 1,
     settings: 2,
+    mediaAssets: 1,
     attachments: 1,
-    totalRecords: 8
+    totalRecords: 9
   })
   assert.deepEqual(backup.manifest.attachments, {
     count: 1,
     binaryIncluded: false,
     content: 'external-url-metadata'
   })
+  assert.deepEqual(backup.manifest.mediaLibrary, {
+    count: 1,
+    binaryIncluded: false,
+    content: 'external-object-catalog-metadata',
+    credentialsIncluded: false
+  })
+  assert.deepEqual(backup.data.mediaAssets, [{
+    id: MEDIA_ASSET_ID,
+    upstreamId: 'nav-notes/example.webp',
+    url: 'https://pic.skrskr.net/file/nav-notes/example.webp',
+    name: 'example.webp',
+    mime: 'image/webp',
+    size: 2048,
+    source: 'note',
+    retention: 'auto',
+    state: 'active',
+    deleteAttempts: 0,
+    createdAt: '2026-07-31T06:00:00.000Z',
+    updatedAt: '2026-07-31T06:00:00.000Z',
+    deletedAt: null
+  }])
   assert.deepEqual(backup.manifest.security.encryptedNotes, {
     count: 1,
     ciphertextIncluded: true,
@@ -262,7 +302,7 @@ test('backend export isolates users and never serializes API or Telegram secrets
     exportedAt: '2026-07-31T09:08:07.000Z'
   })
 
-  assert.equal(client.queries.length, 6)
+  assert.equal(client.queries.length, 7)
   for (const query of client.queries) {
     assert.deepEqual(query.params, [USER_ID])
     assert.match(query.sql, /\$1/)
@@ -276,6 +316,7 @@ test('backend export isolates users and never serializes API or Telegram secrets
     'nav_groups',
     'nav_bookmarks',
     'notes',
+    'media_assets',
     'custom_search_engines',
     'user_settings'
   ]) {

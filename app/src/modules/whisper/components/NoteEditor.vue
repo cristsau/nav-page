@@ -314,7 +314,7 @@ async function handleImageUpload(event) {
 
 function removeImage(index) {
   formData.value.attachments.splice(index, 1)
-  imageMessage.value = '已从笔记移除图片引用；图床原文件暂不自动删除。'
+  imageMessage.value = '已从编辑器移除图片。保存后，若没有其他笔记引用且图片未设为“长期保留”，NAV 才会删除图床原图。'
   imageMessageType.value = ''
 }
 
@@ -476,7 +476,7 @@ function close() {
         <div class="image-uploader__header">
           <div>
             <h4 id="note-images-title">图片附件</h4>
-            <p>上传到 pic.skrskr.net，NAV 只保存图片链接，不占用 NAV 服务器磁盘。</p>
+            <p>上传到 pic.skrskr.net；移除后需保存笔记，NAV 会在确认无其他引用且非长期保留时清理原图。</p>
           </div>
           <button
             type="button"

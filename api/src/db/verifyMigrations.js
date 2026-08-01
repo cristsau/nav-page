@@ -115,10 +115,60 @@ async function verifyReminderSchema() {
   assertExactSet('note reminder indexes', indexes.rows.map((row) => row.indexname), expectedIndexes)
 }
 
+async function verifyMediaLibrarySchema() {
+  const expectedColumns = [
+    'id',
+    'user_id',
+    'upstream_id',
+    'url',
+    'name',
+    'mime',
+    'size',
+    'source',
+    'retention',
+    'state',
+    'missing_observations',
+    'delete_attempts',
+    'delete_requested_at',
+    'last_delete_attempt_at',
+    'last_delete_error',
+    'deleted_at',
+    'created_at',
+    'updated_at'
+  ]
+  const columns = await query(
+    `
+      SELECT column_name
+      FROM information_schema.columns
+      WHERE table_schema = current_schema()
+        AND table_name = 'media_assets'
+    `
+  )
+  assertExactSet('media asset columns', columns.rows.map((row) => row.column_name), expectedColumns)
+
+  const expectedIndexes = [
+    'idx_media_assets_user_created',
+    'idx_media_assets_user_retention',
+    'idx_media_assets_user_state'
+  ]
+  const indexes = await query(
+    `
+      SELECT indexname
+      FROM pg_indexes
+      WHERE schemaname = current_schema()
+        AND tablename = 'media_assets'
+        AND indexname = ANY($1::text[])
+    `,
+    [expectedIndexes]
+  )
+  assertExactSet('media asset indexes', indexes.rows.map((row) => row.indexname), expectedIndexes)
+}
+
 async function main() {
   await verifyMigrationLedger()
   await verifyNavigationMaintenanceSchema()
   await verifyReminderSchema()
+  await verifyMediaLibrarySchema()
   console.log('migration schema verification complete')
 }
 

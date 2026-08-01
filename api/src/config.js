@@ -79,6 +79,9 @@ export const config = {
   adminPassword: process.env.ADMIN_PASSWORD || '',
   imgBedBaseUrl: String(process.env.NAV_IMGBED_BASE_URL || '').trim(),
   imgBedUploadToken: String(process.env.NAV_IMGBED_UPLOAD_TOKEN || '').trim(),
+  imgBedLibraryTokenFile: String(
+    process.env.NAV_IMGBED_LIBRARY_TOKEN_FILE || ''
+  ).trim(),
   imgBedUploadFolder: String(process.env.NAV_IMGBED_UPLOAD_FOLDER || 'nav-notes').trim(),
   imgBedMaxImageBytes: normalizePositiveInteger(
     process.env.NAV_IMGBED_MAX_IMAGE_BYTES,
