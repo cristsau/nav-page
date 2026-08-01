@@ -83,7 +83,7 @@ test('Fastify serves credentialed CORS for both production domains and blocks at
   try {
     for (const origin of parseAllowedOrigins(productionOrigins)) {
       const preflightCases = [
-        { method: 'POST', url: '/api/notes/images', headers: 'content-type,x-file-name' },
+        { method: 'POST', url: '/api/note-images', headers: 'content-type,x-file-name' },
         { method: 'PUT', url: '/api/notes/test-note', headers: 'content-type' },
         { method: 'PATCH', url: '/api/media/images/test-image', headers: 'content-type' },
         { method: 'DELETE', url: '/api/media/images/test-image', headers: 'authorization' }
