@@ -90,7 +90,9 @@ export function normalizeMediaDeletionOutcome(value) {
       && value.cachePurgeAttempted
       && value.cacheInvalidated
     ))
-    && (!value.localCacheInvalidated || value.cacheInvalidated)
+    && value.cacheInvalidated === (
+      value.cachePurgeSucceeded || value.localCacheInvalidated
+    )
   )
   if (!MEDIA_DELETE_DISPOSITIONS.has(disposition) || !dispositionMatches || !cacheMatches) {
     throw invalidMediaDeletionOutcome()

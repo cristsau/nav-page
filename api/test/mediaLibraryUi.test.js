@@ -42,20 +42,39 @@ test('media sharing helpers preserve usable metadata', () => {
 test('media deletion messages distinguish provider disposition and cache cleanup', () => {
   assert.equal(mediaDeletionMessage({ deletion: {
     disposition: 'source_deleted',
-    cacheInvalidated: true
-  } }), '图床源文件已删除，公开链接已失效')
+    cacheInvalidated: true,
+    cachePurgeSucceeded: true,
+    localCacheInvalidated: false
+  } }), '图床源文件已删除，全局缓存已清理，公开链接已失效')
+  assert.equal(mediaDeletionMessage({ deletion: {
+    disposition: 'source_deleted',
+    cacheInvalidated: true,
+    cachePurgeSucceeded: false,
+    localCacheInvalidated: true
+  } }), '图床源文件已删除；当前节点缓存已清理，其他节点可能短暂可访问')
   assert.equal(mediaDeletionMessage({ deletion: {
     disposition: 'legacy_detached',
     cacheInvalidated: false
   } }), '旧图床记录已解除引用，源文件无法物理删除；缓存清理不完整，公开链接可能短暂可访问')
   assert.equal(mediaDeletionMessage({ deletion: {
     disposition: 'already_missing',
-    cacheInvalidated: true
-  } }), '原文件此前已不存在，图床记录已清理，公开链接已失效')
+    cacheInvalidated: true,
+    cachePurgeSucceeded: true,
+    localCacheInvalidated: false
+  } }), '原文件此前已不存在，图床记录已清理，全局缓存已清理，公开链接已失效')
   assert.equal(mediaCleanupMessage([
     { state: 'deleted', deletion: { disposition: 'detached', cacheInvalidated: false } },
     { state: 'delete_failed', deletion: null }
   ]), '图片清理：仅解除图床引用 1 张；清理失败 1 张，可在图片库重试；缓存未完全清理 1 张，链接可能短暂可访问')
+  assert.equal(mediaCleanupMessage([{
+    state: 'deleted',
+    deletion: {
+      disposition: 'source_deleted',
+      cacheInvalidated: true,
+      cachePurgeSucceeded: false,
+      localCacheInvalidated: true
+    }
+  }]), '图片清理：源文件已删除 1 张；仅当前节点缓存已清理 1 张，其他节点可能短暂可访问')
 })
 
 test('media list updates retain order and merge server truth', () => {
@@ -76,7 +95,6 @@ test('media page is responsive, accessible and truthful about destructive action
   assert.match(source, /handlePreviewKeydown/)
   assert.match(source, /!focusable\.includes\(document\.activeElement\)/)
   assert.match(source, /result\.complete === false/)
-  assert.match(source, /删除后公开链接立即失效且无法恢复/)
   assert.match(source, /改为“自动”后会进入清理范围/)
   assert.match(source, /图片仍被笔记引用，不能删除原图/)
   assert.match(source, /error\.status === 409/)
@@ -84,6 +102,8 @@ test('media page is responsive, accessible and truthful about destructive action
   assert.match(source, /await ensureKeptForSharing\(image\)/)
   assert.match(source, /updated\.state === 'deleted'/)
   assert.match(source, /mediaDeletionMessage\(updated/)
+  assert.match(source, /删除后图床记录无法恢复；缓存可能在部分节点短暂保留/)
+  assert.doesNotMatch(source, /删除后公开链接立即失效/)
   assert.match(source, /\(any-pointer: coarse\)/)
   assert.match(source, /@media \(max-width: 420px\)/)
   assert.match(source, /@media \(prefers-reduced-motion: reduce\)/)

@@ -447,6 +447,7 @@ export default async function mediaRoutes(fastify) {
                 updated_at = NOW()
             WHERE id = $1
               AND user_id = $2
+              AND state <> 'deleted'
           `,
           [asset.id, request.currentUser.id, file.name, file.mime, file.size, referenceCount]
         )

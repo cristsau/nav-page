@@ -530,7 +530,7 @@ onBeforeUnmount(() => {
                     <p><strong>图片仍被笔记引用，不能删除原图。</strong>先从上方列出的所有笔记移除图片，再返回清理。</p>
                   </template>
                   <template v-else-if="deleteConfirming">
-                    <p><strong>确定删除原图？</strong>删除后公开链接立即失效且无法恢复。</p>
+                    <p><strong>确定删除原图？</strong>删除后图床记录无法恢复；缓存可能在部分节点短暂保留。</p>
                     <div>
                       <button type="button" :disabled="Boolean(busyImageId)" @click="deleteConfirming = false">取消</button>
                       <button class="is-danger" type="button" :disabled="Boolean(busyImageId)" @click="performDelete(selectedImage)"><Icon name="trash" :size="16" />永久删除</button>

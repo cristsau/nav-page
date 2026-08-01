@@ -54,8 +54,11 @@ export function mediaDeletionMessage(value = {}) {
   }[disposition]
   if (!base) return '图片清理已完成，但未收到源文件删除明细'
 
-  return deletion?.cacheInvalidated === true
-    ? `${base}，公开链接已失效`
+  if (deletion?.cachePurgeSucceeded === true) {
+    return `${base}，全局缓存已清理，公开链接已失效`
+  }
+  return deletion?.localCacheInvalidated === true
+    ? `${base}；当前节点缓存已清理，其他节点可能短暂可访问`
     : `${base}；缓存清理不完整，公开链接可能短暂可访问`
 }
 
@@ -69,9 +72,12 @@ export function mediaCleanupMessage(results = []) {
   const counts = successful.reduce((summary, result) => {
     const disposition = String(result?.deletion?.disposition || 'unknown')
     summary[disposition] = (summary[disposition] || 0) + 1
-    if (result?.deletion?.cacheInvalidated === false) summary.cacheIncomplete += 1
+    if (result?.deletion?.cachePurgeSucceeded !== true) {
+      if (result?.deletion?.localCacheInvalidated === true) summary.localCacheOnly += 1
+      else summary.cacheIncomplete += 1
+    }
     return summary
-  }, { cacheIncomplete: 0 })
+  }, { cacheIncomplete: 0, localCacheOnly: 0 })
   const parts = []
   if (counts.source_deleted) parts.push(`源文件已删除 ${counts.source_deleted} 张`)
   if (counts.detached) parts.push(`仅解除图床引用 ${counts.detached} 张`)
@@ -79,6 +85,9 @@ export function mediaCleanupMessage(results = []) {
   if (counts.already_missing) parts.push(`原文件已不存在 ${counts.already_missing} 张`)
   if (counts.unknown) parts.push(`清理结果未明 ${counts.unknown} 张`)
   if (failedCount) parts.push(`清理失败 ${failedCount} 张，可在图片库重试`)
+  if (counts.localCacheOnly) {
+    parts.push(`仅当前节点缓存已清理 ${counts.localCacheOnly} 张，其他节点可能短暂可访问`)
+  }
   if (counts.cacheIncomplete) {
     parts.push(`缓存未完全清理 ${counts.cacheIncomplete} 张，链接可能短暂可访问`)
   }

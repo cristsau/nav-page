@@ -219,6 +219,16 @@ test('deletion outcomes require one explicit disposition and consistent cache fa
     })),
     (error) => error.code === 'invalid_media_delete_outcome'
   )
+  assert.throws(
+    () => normalizeMediaDeletionOutcome(makeDeletionOutcome({
+      cacheInvalidated: true,
+      cachePurgeConfigured: false,
+      cachePurgeAttempted: false,
+      cachePurgeSucceeded: false,
+      localCacheInvalidated: false
+    })),
+    (error) => error.code === 'invalid_media_delete_outcome'
+  )
 })
 
 test('cross-user deletion returns 404 before any upstream request', async () => {
@@ -319,6 +329,8 @@ test('serialized concurrent deletes make only one upstream deletion request', as
 
   assert.equal(first.state, 'deleted')
   assert.equal(second.state, 'deleted')
+  assert.deepEqual(second.deletion, first.deletion)
+  assert.equal(second.deletion.disposition, 'source_deleted')
   assert.equal(upstreamCalls, 1)
 })
 
@@ -362,6 +374,7 @@ test('media migration, route contract, note lifecycle and secret-file boundary a
   assert.match(migration, /'delete_pending'[\s\S]*'delete_failed'[\s\S]*'missing'[\s\S]*'deleted'/)
   assert.match(deletionMigration, /ADD COLUMN deletion_disposition TEXT/)
   assert.match(deletionMigration, /media_assets_deletion_outcome_check/)
+  assert.match(deletionMigration, /deletion_cache_invalidated = \([\s\S]*deletion_cache_purge_succeeded OR deletion_local_cache_invalidated/)
   assert.match(deletionMigration, /'source_deleted'[\s\S]*'detached'[\s\S]*'legacy_detached'[\s\S]*'already_missing'/)
   assert.match(verifier, /'deletion_cache_purge_succeeded'/)
   assert.match(route, /fastify\.get\('\/media\/images'/)
@@ -382,6 +395,17 @@ test('media migration, route contract, note lifecycle and secret-file boundary a
   assert.match(route, /upstreamResult\.complete/)
   assert.match(notes, /deletion: outcome\.deletion \|\| null/)
   assert.match(route, /WHEN state IN \('delete_pending', 'delete_failed'\) THEN state/)
+})
+
+test('an immediate stale reconciliation cannot revive an already deleted media row', async () => {
+  const route = await fs.readFile(new URL('../src/routes/media.js', import.meta.url), 'utf8')
+  const reconcileUpdate = route.match(
+    /UPDATE media_assets\s+SET name = \$3[\s\S]*?WHERE id = \$1[\s\S]*?`/
+  )?.[0] || ''
+
+  assert.match(reconcileUpdate, /AND user_id = \$2\s+AND state <> 'deleted'/)
+  assert.match(reconcileUpdate, /deletion_disposition = NULL/)
+  assert.match(reconcileUpdate, /deleted_at = NULL/)
 })
 
 test('image-bed deletion validates the provider JSON contract before reporting success', async () => {

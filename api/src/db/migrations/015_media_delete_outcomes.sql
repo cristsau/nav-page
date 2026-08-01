@@ -92,5 +92,8 @@ ALTER TABLE media_assets
         deletion_local_cache_invalidated = FALSE
         OR deletion_cache_invalidated = TRUE
       )
+      AND deletion_cache_invalidated = (
+        deletion_cache_purge_succeeded OR deletion_local_cache_invalidated
+      )
     )
   );
