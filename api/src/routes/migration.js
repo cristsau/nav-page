@@ -7,6 +7,10 @@ import {
   normalizeNoteAttachments
 } from '../lib/noteAttachments.js'
 import {
+  activateReferencedMediaAssets,
+  registerMediaAsset
+} from '../lib/mediaAssets.js'
+import {
   isValidSearchUrl,
   normalizeEngineMonogram
 } from '../lib/searchEngines.js'
@@ -315,6 +319,24 @@ function mapBackendExportEngine(record) {
   }
 }
 
+function mapBackendExportMediaAsset(record) {
+  return {
+    id: record.id,
+    upstreamId: record.upstream_id,
+    url: record.url,
+    name: record.name,
+    mime: record.mime,
+    size: Number(record.size || 0),
+    source: record.source,
+    retention: record.retention,
+    state: record.state,
+    deleteAttempts: Number(record.delete_attempts || 0),
+    createdAt: toTimestamp(record.created_at),
+    updatedAt: toTimestamp(record.updated_at),
+    deletedAt: toTimestamp(record.deleted_at)
+  }
+}
+
 function createBackendExportFileName(exportedAt) {
   const timestamp = exportedAt
     .replace(/\.\d{3}Z$/, 'Z')
@@ -385,12 +407,22 @@ export async function buildBackendExport(client, userId, {
     `,
     params
   )
+  const mediaAssetsResult = await client.query(
+    `
+      SELECT *
+      FROM media_assets
+      WHERE user_id = $1
+      ORDER BY created_at DESC, id DESC
+    `,
+    params
+  )
 
   const groups = groupsResult.rows.map(mapBackendExportGroup)
   const bookmarks = bookmarksResult.rows.map(mapBackendExportBookmark)
   const notes = notesResult.rows.map(mapBackendExportNote)
   const shares = sharesResult.rows.map(mapBackendExportShare)
   const customEngines = enginesResult.rows.map(mapBackendExportEngine)
+  const mediaAssets = mediaAssetsResult.rows.map(mapBackendExportMediaAsset)
   const settings = []
   const excludedSettings = []
   const redactedPaths = []
@@ -409,6 +441,7 @@ export async function buildBackendExport(client, userId, {
     customEngines: customEngines.length,
     shares: shares.length,
     settings: settings.length,
+    mediaAssets: mediaAssets.length,
     attachments: notes.reduce(
       (total, note) => total + note.attachments.length,
       0
@@ -434,12 +467,19 @@ export async function buildBackendExport(client, userId, {
           + counts.customEngines
           + counts.shares
           + counts.settings
+          + counts.mediaAssets
         )
       },
       attachments: {
         count: counts.attachments,
         binaryIncluded: false,
         content: 'external-url-metadata'
+      },
+      mediaLibrary: {
+        count: counts.mediaAssets,
+        binaryIncluded: false,
+        content: 'external-object-catalog-metadata',
+        credentialsIncluded: false
       },
       security: {
         credentialSecretsIncluded: false,
@@ -463,6 +503,7 @@ export async function buildBackendExport(client, userId, {
       bookmarks,
       notes,
       customEngines,
+      mediaAssets,
       shares,
       settings
     }
@@ -502,6 +543,7 @@ export default async function migrationRoutes(fastify) {
     const customEngines = Array.isArray(data.customEngines) ? data.customEngines : []
     const shares = Array.isArray(data.shares) ? data.shares : []
     const settings = Array.isArray(data.settings) ? data.settings : []
+    const mediaAssets = Array.isArray(data.mediaAssets) ? data.mediaAssets : []
     const importedGroupIds = new Set(
       groups.map((group) => String(group?.id || ''))
     )
@@ -626,6 +668,7 @@ export default async function migrationRoutes(fastify) {
       await client.query('DELETE FROM nav_groups WHERE user_id = $1', [request.currentUser.id])
       await client.query('DELETE FROM note_shares WHERE user_id = $1', [request.currentUser.id])
       await client.query('DELETE FROM notes WHERE user_id = $1', [request.currentUser.id])
+      await client.query('DELETE FROM media_assets WHERE user_id = $1', [request.currentUser.id])
       await client.query('DELETE FROM custom_search_engines WHERE user_id = $1', [request.currentUser.id])
       await client.query(
         `
@@ -718,7 +761,29 @@ export default async function migrationRoutes(fastify) {
         }
       }
 
+      for (const mediaAsset of mediaAssets) {
+        await registerMediaAsset(client, request.currentUser.id, {
+          id: mediaAsset.id,
+          url: mediaAsset.url,
+          name: mediaAsset.name,
+          mime: mediaAsset.mime,
+          size: Number(mediaAsset.size),
+          createdAt: mediaAsset.createdAt
+        }, {
+          source: mediaAsset.source,
+          retention: mediaAsset.retention,
+          state: mediaAsset.state
+        })
+      }
+
       for (const note of notes) {
+        const noteAttachments = importedAttachmentsByNoteId.get(String(note.id || '')) || []
+        await activateReferencedMediaAssets(
+          client,
+          request.currentUser.id,
+          noteAttachments,
+          { source: 'reconciled', retention: 'auto', allowMissing: true }
+        )
         await client.query(
           `
             INSERT INTO notes (
@@ -770,7 +835,7 @@ export default async function migrationRoutes(fastify) {
             String(note.password || ''),
             Boolean(note.pinned),
             toJsonArray(note.tags),
-            JSON.stringify(importedAttachmentsByNoteId.get(String(note.id || '')) || []),
+            JSON.stringify(noteAttachments),
             note.type === 'diary' ? toDateOnly(note.entryDate) : null,
             note.type === 'diary' ? String(note.mood || '').slice(0, 40) : '',
             note.type === 'memo' ? toTimestamp(note.dueAt) : null,
@@ -890,7 +955,8 @@ export default async function migrationRoutes(fastify) {
         notes: notes.length,
         customEngines: customEngines.length,
         shares: shares.length,
-        settings: settings.length
+        settings: settings.length,
+        mediaAssets: mediaAssets.length
       }
     }
   })

@@ -436,6 +436,10 @@ function goBack() {
   router.push('/')
 }
 
+function goToMedia() {
+  router.push('/media')
+}
+
 async function openReminderCenter() {
   showReminderCenter.value = true
   await refreshReminders()
@@ -574,6 +578,9 @@ onBeforeUnmount(() => {
         </div>
       </div>
       <div class="header__actions">
+        <button class="header__btn" type="button" aria-label="打开图片库" title="图片库" @click="goToMedia">
+          <Icon name="image" :size="18" />
+        </button>
         <button
           ref="reminderButtonRef"
           class="header__btn reminder-button"

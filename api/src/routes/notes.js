@@ -6,6 +6,13 @@ import {
   getImgBedOrigin,
   normalizeNoteAttachments
 } from '../lib/noteAttachments.js'
+import { deleteImgBedUserImage } from '../lib/imgBedLibraryClient.js'
+import {
+  activateReferencedMediaAssets,
+  attemptMediaAssetDeletion,
+  markUnreferencedAutoAssetsForDeletion,
+  syncNoteMediaReferences
+} from '../lib/mediaAssets.js'
 import {
   mapNote,
   mapPublicNote,
@@ -142,6 +149,29 @@ function timestampsMatch(left, right) {
   const leftTime = new Date(left).getTime()
   const rightTime = new Date(right).getTime()
   return Number.isFinite(leftTime) && Number.isFinite(rightTime) && leftTime === rightTime
+}
+
+async function cleanupMediaAfterNoteMutation(request, assetIds) {
+  const results = []
+  for (const assetId of [...new Set(assetIds || [])]) {
+    try {
+      const outcome = await attemptMediaAssetDeletion(
+        request.currentUser.id,
+        assetId,
+        deleteImgBedUserImage,
+        null,
+        { requireAuto: true, requirePending: true }
+      )
+      results.push({ assetId, state: outcome.state })
+    } catch (error) {
+      request.log.warn({
+        assetId,
+        error: error?.code || error?.name || 'MediaCleanupError'
+      }, 'note media cleanup could not be completed')
+      results.push({ assetId, state: 'delete_failed' })
+    }
+  }
+  return results
 }
 
 function createShareCode(length = 8) {
@@ -370,41 +400,49 @@ export default async function notesRoutes(fastify) {
 
     assertAttachmentsAllowedForEncryption(encrypted, attachments)
 
-    const { rows } = await query(
-      `
-        INSERT INTO notes (
-          user_id,
+    const { rows } = await withTransaction(async (client) => {
+      await activateReferencedMediaAssets(
+        client,
+        request.currentUser.id,
+        attachments,
+        { source: 'reconciled', retention: 'auto' }
+      )
+      return client.query(
+        `
+          INSERT INTO notes (
+            user_id,
+            type,
+            title,
+            content,
+            encrypted,
+            password_hash,
+            pinned,
+            tags,
+            attachments,
+            entry_date,
+            mood,
+            due_at,
+            completed
+          ) VALUES ($1, $2, $3, $4, $5, $6, $7, $8::jsonb, $9::jsonb, $10, $11, $12, $13)
+          RETURNING *
+        `,
+        [
+          request.currentUser.id,
           type,
           title,
           content,
           encrypted,
-          password_hash,
+          passwordHash,
           pinned,
-          tags,
-          attachments,
-          entry_date,
+          JSON.stringify(tags),
+          JSON.stringify(attachments),
+          entryDate,
           mood,
-          due_at,
+          dueAt,
           completed
-        ) VALUES ($1, $2, $3, $4, $5, $6, $7, $8::jsonb, $9::jsonb, $10, $11, $12, $13)
-        RETURNING *
-      `,
-      [
-        request.currentUser.id,
-        type,
-        title,
-        content,
-        encrypted,
-        passwordHash,
-        pinned,
-        JSON.stringify(tags),
-        JSON.stringify(attachments),
-        entryDate,
-        mood,
-        dueAt,
-        completed
-      ]
-    )
+        ]
+      )
+    })
 
     reply.code(201)
     return { note: mapNote(rows[0]) }
@@ -461,96 +499,174 @@ export default async function notesRoutes(fastify) {
 
     assertAttachmentsAllowedForEncryption(encrypted, attachments)
 
-    const outcome = await withTransaction(async (client) => {
-      const result = await client.query(
-        `
-          UPDATE notes
-          SET type = $3,
-              title = $4,
-              content = $5,
-              encrypted = $6,
-              password_hash = $7,
-              pinned = $8,
-              tags = $9::jsonb,
-              attachments = $10::jsonb,
-              entry_date = $11,
-              mood = $12,
-              due_at = $13,
-              completed = $14,
-              updated_at = NOW()
-          WHERE id = $1
-            AND user_id = $2
-            AND updated_at = $15::timestamptz
-          RETURNING *
-        `,
-        [
-          request.params.noteId,
-          request.currentUser.id,
-          type,
-          title,
-          content,
-          encrypted,
-          passwordHash,
-          pinned,
-          JSON.stringify(tags),
-          JSON.stringify(attachments),
-          entryDate,
-          mood,
-          dueAt,
-          completed,
-          existing.updated_at_version
-        ]
-      )
-
-      if (!result.rows.length) {
-        return { conflict: true, note: null }
-      }
-
-      const scheduleChanged = (
-        type !== 'memo'
-        || completed
-        || !timestampsMatch(existing.due_at, dueAt)
-      )
-
-      if (scheduleChanged) {
-        await client.query(
+    let outcome
+    try {
+      outcome = await withTransaction(async (client) => {
+        const lockedNote = await client.query(
           `
-            DELETE FROM note_reminders
-            WHERE note_id = $1
+            SELECT updated_at::text AS updated_at_version
+            FROM notes
+            WHERE id = $1
               AND user_id = $2
+            FOR UPDATE
           `,
           [request.params.noteId, request.currentUser.id]
         )
-      }
+        if (
+          !lockedNote.rows.length
+          || lockedNote.rows[0].updated_at_version !== existing.updated_at_version
+        ) {
+          const error = new Error('Note changed in another session; reload and retry')
+          error.code = 'stale_note'
+          error.statusCode = 409
+          throw error
+        }
 
-      return { conflict: false, note: result.rows[0] }
-    })
+        const mediaSync = await syncNoteMediaReferences(
+          client,
+          request.currentUser.id,
+          normalizeNoteAttachments(existing.attachments, {
+            maxBytes: Number.MAX_SAFE_INTEGER
+          }),
+          attachments
+        )
+        const result = await client.query(
+          `
+            UPDATE notes
+            SET type = $3,
+                title = $4,
+                content = $5,
+                encrypted = $6,
+                password_hash = $7,
+                pinned = $8,
+                tags = $9::jsonb,
+                attachments = $10::jsonb,
+                entry_date = $11,
+                mood = $12,
+                due_at = $13,
+                completed = $14,
+                updated_at = NOW()
+            WHERE id = $1
+              AND user_id = $2
+              AND updated_at = $15::timestamptz
+            RETURNING *
+          `,
+          [
+            request.params.noteId,
+            request.currentUser.id,
+            type,
+            title,
+            content,
+            encrypted,
+            passwordHash,
+            pinned,
+            JSON.stringify(tags),
+            JSON.stringify(attachments),
+            entryDate,
+            mood,
+            dueAt,
+            completed,
+            existing.updated_at_version
+          ]
+        )
 
-    if (outcome.conflict) {
-      reply.code(409)
-      return {
-        error: 'Note changed in another session; reload and retry',
-        code: 'stale_note'
+        if (!result.rows.length) {
+          const error = new Error('Note changed in another session; reload and retry')
+          error.code = 'stale_note'
+          error.statusCode = 409
+          throw error
+        }
+
+        const scheduleChanged = (
+          type !== 'memo'
+          || completed
+          || !timestampsMatch(existing.due_at, dueAt)
+        )
+
+        if (scheduleChanged) {
+          await client.query(
+            `
+              DELETE FROM note_reminders
+              WHERE note_id = $1
+                AND user_id = $2
+            `,
+            [request.params.noteId, request.currentUser.id]
+          )
+        }
+
+        const cleanupIds = await markUnreferencedAutoAssetsForDeletion(
+          client,
+          request.currentUser.id,
+          mediaSync.removed
+        )
+        return { note: result.rows[0], cleanupIds }
+      })
+    } catch (error) {
+      if (error?.code === 'stale_note') {
+        reply.code(409)
+        return {
+          error: error.message,
+          code: error.code
+        }
       }
+      throw error
     }
 
-    return { note: mapNote(outcome.note) }
+    const mediaCleanup = await cleanupMediaAfterNoteMutation(
+      request,
+      outcome.cleanupIds
+    )
+    return { note: mapNote(outcome.note), mediaCleanup }
   })
 
   fastify.delete('/notes/:noteId', async (request, reply) => {
     await fastify.requireAuth(request, reply)
 
-    const existing = await requireOwnedNote(request.currentUser.id, request.params.noteId, reply)
-    if (!existing) {
+    const outcome = await withTransaction(async (client) => {
+      const result = await client.query(
+        `
+          SELECT *
+          FROM notes
+          WHERE id = $1
+            AND user_id = $2
+          FOR UPDATE
+        `,
+        [request.params.noteId, request.currentUser.id]
+      )
+      if (!result.rows.length) return null
+
+      const existingAttachments = normalizeNoteAttachments(
+        result.rows[0].attachments,
+        { maxBytes: Number.MAX_SAFE_INTEGER }
+      )
+      const mediaSync = await syncNoteMediaReferences(
+        client,
+        request.currentUser.id,
+        existingAttachments,
+        []
+      )
+      await client.query(
+        'DELETE FROM notes WHERE id = $1 AND user_id = $2',
+        [request.params.noteId, request.currentUser.id]
+      )
+      const cleanupIds = await markUnreferencedAutoAssetsForDeletion(
+        client,
+        request.currentUser.id,
+        mediaSync.removed
+      )
+      return { cleanupIds }
+    })
+
+    if (!outcome) {
+      reply.code(404)
       return { error: 'Note not found' }
     }
 
-    await query('DELETE FROM notes WHERE id = $1 AND user_id = $2', [
-      request.params.noteId,
-      request.currentUser.id
-    ])
-
-    return { ok: true }
+    const mediaCleanup = await cleanupMediaAfterNoteMutation(
+      request,
+      outcome.cleanupIds
+    )
+    return { ok: true, mediaCleanup }
   })
 
   fastify.post('/notes/:noteId/pin-toggle', async (request, reply) => {

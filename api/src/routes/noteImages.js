@@ -1,5 +1,7 @@
 import { createHash, randomUUID } from 'node:crypto'
 import { config } from '../config.js'
+import { withTransaction } from '../db/index.js'
+import { registerMediaAsset } from '../lib/mediaAssets.js'
 import {
   getImgBedOrigin,
   isAllowedImageMime,
@@ -148,99 +150,134 @@ async function parseImgBedResponse(response, expectedOrigin) {
   return uploadedUrl
 }
 
-export default async function noteImagesRoutes(fastify) {
+export function registerImageContentTypes(fastify) {
   fastify.addContentTypeParser(
     IMAGE_CONTENT_TYPES,
     { parseAs: 'buffer' },
     (_request, body, done) => done(null, body)
   )
+}
+
+export async function uploadImageRequest(request, reply, {
+  source = 'note',
+  retention = 'auto'
+} = {}) {
+  const uploadedAt = new Date()
+  const uploadUrl = createImgBedUploadUrl(request.currentUser.id, uploadedAt)
+  if (!uploadUrl) {
+    reply.code(503)
+    return { error: '图片上传服务尚未配置' }
+  }
+
+  const mime = String(request.headers['content-type'] || '')
+    .split(';', 1)[0]
+    .trim()
+    .toLowerCase()
+  const image = request.body
+
+  if (!isAllowedImageMime(mime) || !Buffer.isBuffer(image) || !image.length) {
+    reply.code(400)
+    return { error: '请选择 JPEG、PNG、WebP 或 GIF 图片' }
+  }
+
+  if (image.length > config.imgBedMaxImageBytes) {
+    reply.code(413)
+    return { error: `图片不能超过 ${Math.ceil(config.imgBedMaxImageBytes / 1024 / 1024)} MiB` }
+  }
+
+  if (!matchesImageSignature(image, mime)) {
+    reply.code(400)
+    return { error: '图片内容与文件类型不匹配' }
+  }
+
+  const name = normalizeFileName(request.headers['x-file-name'], mime)
+  const storedName = `${randomUUID()}.${extensionForMime(mime)}`
+  const form = new FormData()
+  form.append('file', new Blob([image], { type: mime }), storedName)
+
+  let upstreamResponse
+  try {
+    upstreamResponse = await fetch(uploadUrl, {
+      method: 'POST',
+      headers: {
+        Authorization: `Bearer ${config.imgBedUploadToken}`
+      },
+      body: form,
+      redirect: 'error',
+      signal: AbortSignal.timeout(30_000)
+    })
+  } catch (error) {
+    request.log.warn({
+      error: error?.name || 'UploadError'
+    }, 'note image upload request failed')
+    reply.code(502)
+    return { error: '暂时无法连接图片上传服务，请稍后重试' }
+  }
+
+  if (!upstreamResponse.ok) {
+    request.log.warn({
+      upstreamStatus: upstreamResponse.status
+    }, 'note image upload rejected by image bed')
+    reply.code(502)
+    return { error: `图床上传失败（HTTP ${upstreamResponse.status}）` }
+  }
+
+  let url
+  try {
+    url = await parseImgBedResponse(upstreamResponse, uploadUrl.origin)
+  } catch (error) {
+    reply.code(502)
+    return { error: error.message }
+  }
+
+  const attachment = normalizeNoteAttachments([{
+    id: randomUUID(),
+    url,
+    name,
+    mime,
+    size: image.length,
+    createdAt: uploadedAt.toISOString()
+  }], {
+    allowedOrigin: uploadUrl.origin,
+    maxBytes: config.imgBedMaxImageBytes,
+    strict: true
+  })[0]
+
+  try {
+    const asset = await withTransaction((client) => registerMediaAsset(
+      client,
+      request.currentUser.id,
+      attachment,
+      {
+        source,
+        retention,
+        state: source === 'note' ? 'orphan' : 'active'
+      }
+    ))
+    reply.code(201)
+    return { attachment, assetId: asset.id }
+  } catch (error) {
+    request.log.error({
+      error: error?.code || error?.name || 'MediaRegistrationError'
+    }, 'uploaded image could not be registered in media library')
+    reply.code(500)
+    return {
+      error: '图片已上传但未能登记到图片库，请运行图片库对账',
+      code: 'media_registration_failed'
+    }
+  }
+}
+
+export default async function noteImagesRoutes(fastify) {
+  registerImageContentTypes(fastify)
 
   fastify.post('/note-images', {
     bodyLimit: config.imgBedMaxImageBytes
   }, async (request, reply) => {
     await fastify.requireAuth(request, reply)
-
-    const uploadedAt = new Date()
-    const uploadUrl = createImgBedUploadUrl(request.currentUser.id, uploadedAt)
-    if (!uploadUrl) {
-      reply.code(503)
-      return { error: '图片上传服务尚未配置' }
-    }
-
-    const mime = String(request.headers['content-type'] || '')
-      .split(';', 1)[0]
-      .trim()
-      .toLowerCase()
-    const image = request.body
-
-    if (!isAllowedImageMime(mime) || !Buffer.isBuffer(image) || !image.length) {
-      reply.code(400)
-      return { error: '请选择 JPEG、PNG、WebP 或 GIF 图片' }
-    }
-
-    if (image.length > config.imgBedMaxImageBytes) {
-      reply.code(413)
-      return { error: `图片不能超过 ${Math.ceil(config.imgBedMaxImageBytes / 1024 / 1024)} MiB` }
-    }
-
-    if (!matchesImageSignature(image, mime)) {
-      reply.code(400)
-      return { error: '图片内容与文件类型不匹配' }
-    }
-
-    const name = normalizeFileName(request.headers['x-file-name'], mime)
-    const storedName = `${randomUUID()}.${extensionForMime(mime)}`
-    const form = new FormData()
-    form.append('file', new Blob([image], { type: mime }), storedName)
-
-    let upstreamResponse
-    try {
-      upstreamResponse = await fetch(uploadUrl, {
-        method: 'POST',
-        headers: {
-          Authorization: `Bearer ${config.imgBedUploadToken}`
-        },
-        body: form,
-        signal: AbortSignal.timeout(30_000)
-      })
-    } catch (error) {
-      request.log.warn({
-        error: error?.name || 'UploadError'
-      }, 'note image upload request failed')
-      reply.code(502)
-      return { error: '暂时无法连接图片上传服务，请稍后重试' }
-    }
-
-    if (!upstreamResponse.ok) {
-      request.log.warn({
-        upstreamStatus: upstreamResponse.status
-      }, 'note image upload rejected by image bed')
-      reply.code(502)
-      return { error: `图床上传失败（HTTP ${upstreamResponse.status}）` }
-    }
-
-    let url
-    try {
-      url = await parseImgBedResponse(upstreamResponse, uploadUrl.origin)
-    } catch (error) {
-      reply.code(502)
-      return { error: error.message }
-    }
-
-    const attachment = normalizeNoteAttachments([{
-      id: randomUUID(),
-      url,
-      name,
-      mime,
-      size: image.length,
-      createdAt: uploadedAt.toISOString()
-    }], {
-      allowedOrigin: uploadUrl.origin,
-      maxBytes: config.imgBedMaxImageBytes,
-      strict: true
-    })[0]
-
-    reply.code(201)
-    return { attachment }
+    return uploadImageRequest(request, reply, {
+      source: 'note',
+      retention: 'auto'
+    })
   })
 }

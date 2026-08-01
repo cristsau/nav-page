@@ -38,6 +38,15 @@ const commands = [
     path: '/whisper'
   },
   {
+    id: 'go-media',
+    group: '页面',
+    label: '打开图片库',
+    description: '管理笔记图片、引用和分享链接',
+    keywords: '图片 图床 媒体 分享 清理 image media gallery',
+    icon: 'image',
+    path: '/media'
+  },
+  {
     id: 'go-settings',
     group: '页面',
     label: '打开设置',

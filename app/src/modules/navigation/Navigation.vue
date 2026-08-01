@@ -542,6 +542,10 @@ function goToWhisper() {
   router.push('/whisper')
 }
 
+function goToMedia() {
+  router.push('/media')
+}
+
 function runNavigationCommand(action) {
   if (action === 'create-bookmark') {
     handleAddBookmark()
@@ -610,6 +614,15 @@ onBeforeUnmount(() => {
         <span class="header__logo-text">{{ getSiteName() }}</span>
       </div>
       <div class="header__actions">
+        <button
+          class="header__btn"
+          type="button"
+          aria-label="打开图片库"
+          title="图片库"
+          @click="goToMedia"
+        >
+          <Icon name="image" :size="19" />
+        </button>
         <button
           v-if="isModuleEnabled('whisper')"
           class="header__btn"
