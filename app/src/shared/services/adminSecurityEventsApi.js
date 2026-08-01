@@ -27,5 +27,7 @@ export function buildAdminSecurityEventsPath({
 }
 
 export function fetchAdminSecurityEvents(options = {}) {
-  return apiRequest(buildAdminSecurityEventsPath(options))
+  return apiRequest(buildAdminSecurityEventsPath(options), {
+    cache: 'no-store'
+  })
 }

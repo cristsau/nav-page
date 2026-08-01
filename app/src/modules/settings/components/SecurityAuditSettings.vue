@@ -4,8 +4,8 @@ import Icon from '@/shared/components/Icon.vue'
 import { useAuth } from '@/shared/composables/useAuth'
 import { fetchAdminSecurityEvents } from '@/shared/services/adminSecurityEventsApi'
 import {
-  compactSecurityFingerprint,
   compactSecurityIdentifier,
+  displaySecurityFingerprint,
   securityEventTypeLabel,
   securityOutcomeLabel,
   securityResourceTypeLabel
@@ -180,7 +180,7 @@ onBeforeUnmount(() => {
       <div>
         <h3 id="security-audit-title" class="section-heading__title">安全审计</h3>
         <p class="section-heading__desc">
-          查看登录、账号恢复和管理员操作。隐私字段仅保留不可逆短指纹，不展示原始 IP 或浏览器信息。
+          查看登录、账号恢复和管理员操作。仅展示截断的带密钥关联指纹，不展示原始值。
         </p>
       </div>
       <button
@@ -292,18 +292,46 @@ onBeforeUnmount(() => {
         </div>
 
         <div
-          v-if="event.clientFingerprint || event.userAgentFingerprint"
+          v-if="displaySecurityFingerprint(event.clientFingerprint) || displaySecurityFingerprint(event.userAgentFingerprint)"
           class="fingerprints"
           aria-label="隐私保护指纹"
         >
-          <span v-if="event.clientFingerprint">
-            客户端指纹
-            <code>{{ compactSecurityFingerprint(event.clientFingerprint) }}</code>
-          </span>
-          <span v-if="event.userAgentFingerprint">
-            浏览器指纹
-            <code>{{ compactSecurityFingerprint(event.userAgentFingerprint) }}</code>
-          </span>
+          <button
+            v-if="displaySecurityFingerprint(event.clientFingerprint)"
+            class="fingerprint"
+            type="button"
+            :aria-label="`复制客户端关联指纹 ${displaySecurityFingerprint(event.clientFingerprint)}`"
+            title="复制客户端关联指纹"
+            @click="copyIdentifier(displaySecurityFingerprint(event.clientFingerprint), `${event.id}:client-fingerprint`)"
+          >
+            <span>客户端关联指纹</span>
+            <code>{{ displaySecurityFingerprint(event.clientFingerprint) }}</code>
+            <span
+              v-if="copiedKey === `${event.id}:client-fingerprint`"
+              class="identifier__status"
+            >
+              已复制
+            </span>
+            <Icon v-else name="copy" :size="14" />
+          </button>
+          <button
+            v-if="displaySecurityFingerprint(event.userAgentFingerprint)"
+            class="fingerprint"
+            type="button"
+            :aria-label="`复制浏览器关联指纹 ${displaySecurityFingerprint(event.userAgentFingerprint)}`"
+            title="复制浏览器关联指纹"
+            @click="copyIdentifier(displaySecurityFingerprint(event.userAgentFingerprint), `${event.id}:browser-fingerprint`)"
+          >
+            <span>浏览器关联指纹</span>
+            <code>{{ displaySecurityFingerprint(event.userAgentFingerprint) }}</code>
+            <span
+              v-if="copiedKey === `${event.id}:browser-fingerprint`"
+              class="identifier__status"
+            >
+              已复制
+            </span>
+            <Icon v-else name="copy" :size="14" />
+          </button>
         </div>
 
         <button
@@ -517,7 +545,7 @@ onBeforeUnmount(() => {
 
 .identifier,
 .detail-chip,
-.fingerprints span {
+.fingerprint {
   min-height: 32px;
   display: inline-flex;
   align-items: center;
@@ -535,8 +563,15 @@ onBeforeUnmount(() => {
   cursor: copy;
 }
 
+.fingerprint {
+  font: inherit;
+  cursor: copy;
+}
+
 .identifier:hover,
 .identifier:focus-visible,
+.fingerprint:hover,
+.fingerprint:focus-visible,
 .event-id:hover,
 .event-id:focus-visible {
   border-color: color-mix(in srgb, var(--accent-color) 44%, var(--border-light));
@@ -548,7 +583,7 @@ onBeforeUnmount(() => {
 }
 
 .identifier code,
-.fingerprints code,
+.fingerprint code,
 .event-id code {
   color: var(--text-primary);
   font-family: ui-monospace, SFMono-Regular, Consolas, monospace;
@@ -556,6 +591,7 @@ onBeforeUnmount(() => {
 }
 
 .identifier .app-icon,
+.fingerprint .app-icon,
 .event-id .app-icon {
   opacity: 0.45;
 }
@@ -565,7 +601,8 @@ onBeforeUnmount(() => {
   font-weight: 600;
 }
 
-.fingerprints {
+.fingerprints,
+.fingerprint {
   color: var(--text-muted);
 }
 
@@ -628,13 +665,16 @@ onBeforeUnmount(() => {
   .identifier,
   .detail-chip,
   .fingerprints,
-  .fingerprints span {
+  .fingerprint {
     width: 100%;
   }
 
   .identifier,
   .detail-chip,
-  .fingerprints span {
+  .fingerprint,
+  .event-id,
+  .section-heading > .button,
+  .pagination .button {
     min-height: 44px;
   }
 

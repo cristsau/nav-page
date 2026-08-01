@@ -47,9 +47,7 @@ export function compactSecurityIdentifier(value) {
   return `${normalized.slice(0, 8)}…${normalized.slice(-5)}`
 }
 
-export function compactSecurityFingerprint(value) {
-  const normalized = String(value || '').trim()
-  if (!normalized) return ''
-  if (normalized.length <= 12) return normalized
-  return `${normalized.slice(0, 8)}…${normalized.slice(-4)}`
+export function displaySecurityFingerprint(value) {
+  const normalized = String(value || '').trim().toLowerCase()
+  return /^[0-9a-f]{16}$/.test(normalized) ? normalized : ''
 }
