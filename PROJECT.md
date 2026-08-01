@@ -2,120 +2,117 @@
 
 ## 项目定位
 
-DOMO NAV 是一个可私有化部署的导航工作台，目标不是只做静态导航页，而是逐步形成：
+DOMO NAV 是面向个人与小团队的私有化导航工作台。产品主线是“每天找东西、记东西”，
+围绕导航、搜索、笔记、图片和 AI 形成一个入口；安全、可恢复和长期可维护优先于继续堆叠功能。
 
-- 可登录的个人导航中心
-- 可记录便签 / 日记的个人工作台
-- 可审批注册的轻量团队入口
-- 可接入 AI 搜索与内容整理能力的私有化产品
-
-## 当前技术栈
+## 当前架构
 
 ### 前端
 
 - Vue 3
 - Vite 6
 - Vue Router 4
-- CSS Variables
+- CSS Variables 统一主题 token
 
 ### 后端
 
 - Fastify
 - PostgreSQL
+- 服务端代理 CLI Proxy、Brave Search 与个人图床
 
-### 本地缓存 / 迁移来源
+### 本地缓存与迁移来源
 
 - Dexie.js
 - IndexedDB
 
-说明：
-
-- 当前项目已经不是纯前端 Dexie 版本
-- 认证、设置、导航、便签、搜索引擎、Telegram、AI 搜索代理都已逐步迁到后端
-- Dexie 现在主要承担本地缓存和旧数据迁移来源的角色
+认证、设置、导航、笔记、搜索引擎、图片元数据和 AI 代理已经以后端为主；Dexie 主要用于
+本地模式、缓存和旧数据迁移，不再是生产数据的唯一来源。
 
 ## 当前功能范围
 
-### 导航
+### 导航与搜索
 
-- 分组管理
-- 书签管理
-- 搜索
-- 快速添加
+- 分组和书签增删改、拖拽排序、批量移动与批量删除
+- 常用入口、设计化兜底图标、两行标题和触屏操作菜单
+- 书签手动失效检查与最近状态
+- 书签、未加密笔记和 Web 的统一搜索
+- 自定义搜索引擎增删改与浏览器快速添加
+- 导航 AI 分析和 AI 标签
 
-### 时光
+### 时光、分享与图片
 
-- 备忘录
-- 日记
-- 预览
-- 分享
-- 个人图床图片附件
+- 备忘录、日记、预览、搜索、筛选、数字 ID 和结构化字段复制
+- 截止时间、完成状态和打开 NAV 时同步的到期提醒中心
+- 笔记 AI 摘要、润色、续写与编辑辅助
+- 独立公开分享文章模板和动态预览元数据
+- 图片附件经 NAV 后端上传到个人图床；加密笔记禁止上传公开图床图片
+- `/media` 图片库：瀑布流、搜索、分页、引用关系、保留策略、分享、删除和对账
 
-### 设置
+### 设置与 AI
 
-- 主题模式
-- 配色方案
-- 自定义主题
-- 网站名称 / 图标 / favicon
-- 搜索引擎管理
-- 数据导入导出
-- 浏览器集成入口
+- 主题模式、配色方案、自定义主题、站点名称、Logo 与 favicon
+- 搜索引擎后台、数据导入导出和浏览器集成入口
+- CLI Proxy Responses API、动态模型目录、“自动最新”和推理强度
+- Brave Search API 联网结果与来源
 
-### 用户系统
+### 用户与安全
 
-- 登录
-- 注册
-- 审批
-- 管理员用户管理
-- 会话撤销、恢复码、限流（下一阶段候选，尚未发布）
+- 登录、注册、管理员审批与用户管理
+- Telegram 注册通知与管理员审批同步
+- 会话列表及单个/其他/全部撤销
+- 一次性恢复码、密码恢复和恢复后撤销全部会话
+- 登录、注册、恢复和已认证写操作的实例内限流
+- 排除密钥与未知设置的安全 JSON 导出
 
-### Telegram
+### 浏览器与移动端
 
-- 管理员自定义 Telegram Bot Token / Chat ID
-- 注册申请通知
-- Telegram 审批同步
+- 扩展弹窗快速添加当前页、分组选择/创建、右键菜单和快捷键
+- `/quick-add` 共用快速添加页
+- iPhone 快捷指令接入入口
+- iPhone/PWA 主屏幕图标与中文名称
 
-### AI 搜索
+## 能力边界
 
-- ChatGPT / OpenAI-compatible
-- Brave Search API
-- CLI Proxy 动态模型目录与“自动最新”（下一阶段候选，尚未发布）
+| 状态 | 能力 |
+| --- | --- |
+| 已验证生产 | 分享 UI、Responses API、动态模型、导航拖拽/批量、到期提醒中心、手动链接检查、图片库与图片生命周期、双域 CORS |
+| 部分完成 | 打开页面时提醒、实例内限流、手动链接检查、安装型 PWA、JSON 数据迁移、图床删除结果可见性 |
+| 未完成 | 自动异地备份/报警、安全审计、共享限流、Passkey、RAG/语义检索、AI 成本面板、编辑器版本历史与块编辑器 |
 
-### 浏览器扩展
+精确生产 SHA、验收证据和剩余门槛以 [STATUS_REPORT.md](./STATUS_REPORT.md) 为准。
 
-- 扩展弹窗快速添加当前页
-- 快速选择分组
-- 快速创建分组
-- 右键菜单添加
-- 共享 `/quick-add` 快速添加页
+## 当前生产
 
-## 当前部署
+- 主域名：[https://nav.skrskr.net](https://nav.skrskr.net)
+- 反代域名：[https://nav.cristsau.cn](https://nav.cristsau.cn)
+- 当前已验证提交：`1ee05335977112093586185a3132559394edd472`
 
-- 线上地址：[https://nav.skrskr.net](https://nav.skrskr.net)
-- 线上服务器：`oracle-JP`
+生产发布、回滚和外部配置边界见 [DEPLOYMENT.md](./DEPLOYMENT.md)。
 
-## 开发原则
+## 开发与发布原则
 
-- 本地开发
-- npm 测试和前端生产构建默认交给 GitHub Actions
-- GitHub 作为代码主线
-- 服务器负责部署，不作为长期主开发机
-- 每个阶段收口前先更新 `STATUS_REPORT.md`
+- GitHub `master` 是代码主线，生产只发布通过 CI 的精确合并 SHA。
+- 个人电脑默认只做源码修改、静态检查和差异审阅；npm 测试与构建交给 GitHub Actions
+  或服务器独立 release 目录。
+- 服务器不是长期主开发机；发布不在含生产专属文件的长期工作树原地构建。
+- 每次生产发布先备份并做隔离恢复，再迁移、切换、双域验收，最后做发布后恢复演练。
+- 密钥仅由服务器 owner-only Secret 或环境文件提供，不进入 GitHub、前端或镜像。
+- 每个阶段收口后更新 [STATUS_REPORT.md](./STATUS_REPORT.md)，明确“已完成 / 部分完成 / 未完成”。
 
-## 换电脑继续开发
+## 后续优先级
 
-推荐流程：
+1. 图片删除结果可见性、安全审计与数据库共享限流。
+2. 自动备份、异地恢复和失败报警；再渐进增加 Passkey。
+3. 提前/离线提醒、定时失效链接检查和命令面板补全。
+4. 中文检索与带来源的个人数据助理。
+5. 最后评估块编辑器、自动保存和版本历史的大重构。
 
-1. 先拉取仓库最新代码
-2. 先阅读：
-   - `D:/DomoCodex/projects/NAV/PROJECT.md`
-   - `D:/DomoCodex/projects/NAV/STATUS_REPORT.md`
-   - `D:/DomoCodex/projects/NAV/DEPLOYMENT.md`
-   - `D:/DomoCodex/projects/NAV/BACKEND_PLAN.md`
-3. 再查看当前工作区改动和线上环境
+## 接力阅读顺序
 
-给新的 Codex 直接复制这句就够了：
+1. [STATUS_REPORT.md](./STATUS_REPORT.md)
+2. [PROJECT.md](./PROJECT.md)
+3. [DEPLOYMENT.md](./DEPLOYMENT.md)
+4. [BACKEND_PLAN.md](./BACKEND_PLAN.md)
 
-```text
-先 git pull origin master，然后阅读 PROJECT.md、STATUS_REPORT.md、DEPLOYMENT.md、BACKEND_PLAN.md，再查看当前代码和线上环境，按 STATUS_REPORT.md 里的下一步继续实施。
-```
+继续开发前应重新核对 GitHub、当前工作区和实时生产状态，不能把本文的历史快照直接当作
+下一次发布授权。

@@ -9,9 +9,10 @@
 - 前端发布目录：`/home/web/html/nav`
 - 后端：`nav-api`
 - 数据库：`nav-postgres`
-- 当前提交：`cc1da6f72675108d9df243cab6affa116b32b4ff`
-- API 镜像：`nav-api:cc1da6f72675108d9df243cab6affa116b32b4ff`
-- 发布证据：`/opt/nav-releases/20260801-103458-cc1da6f72675108d9df243cab6affa116b32b4ff`
+- 当前提交：`1ee05335977112093586185a3132559394edd472`
+- API 镜像：`nav-api:1ee05335977112093586185a3132559394edd472`
+- 发布证据：
+  `/opt/nav-releases/20260801-162532-1ee05335977112093586185a3132559394edd472/ACCEPTANCE.txt`
 
 ## 当前定位
 
@@ -20,9 +21,9 @@
 - 可上线测试版
 - 可用于日常自用、演示和小范围内测
 
-还不是最终商业交付版。限流、会话撤销、账号恢复、动态 AI 模型目录、数据导出、
-命令面板和本地备份/恢复工具已经上线；异地备份凭据、告警、Passkey、多环境部署和
-客户自部署文档仍未收口。
+还不是最终商业交付版。会话撤销、账号恢复、动态 AI 模型目录、Responses API、数据导出、
+命令面板、导航维护、到期提醒、图片库和本地备份/恢复工具已经上线；数据库共享限流、
+统一审计、异地备份、告警、Passkey、多环境部署和客户自部署文档仍未收口。
 
 ## 开发到线上发布流程
 
@@ -51,8 +52,9 @@ NAV_AI_CLI_PROXY_API_MODE=responses
 NAV_AI_CLI_PROXY_API_KEY_FILE=/run/secrets/nav/cli-proxy-api-key
 ```
 
-`responses` 会启用 `reasoning.effort` 和内置 `web_search`；旧网关可显式改回
-`chat-completions`。不要仅依靠 Base URL 猜测协议。
+生产使用 `responses`，从而启用 `reasoning.effort` 和内置 `web_search`；旧网关可显式改回
+`chat-completions`。不要仅依靠 Base URL 猜测协议。模型目录是动态结果，文档中的模型名
+只是 2026-08-01 的验收快照，不应硬编码为永久默认值。
 
 Compose 只读挂载 owner-only 文件：
 
@@ -67,14 +69,9 @@ volumes:
 
 ## 可信代理与限流
 
-API 只信任 loopback 和 `TRUSTED_PROXY_ADDRESSES` 中的精确 IP。每次发布前必须现场
-复核 Docker bridge gateway 和外层代理，不得填写宽网段。2026-08-01 的生产核验值：
-
-```dotenv
-TRUSTED_PROXY_ADDRESSES=172.19.0.1,45.143.234.47
-```
-
-这仍然只是本次快照；Compose 网络重建后网关可能变化，发布时必须重查。验收时应从两个不同
+API 只信任 loopback 和 `TRUSTED_PROXY_ADDRESSES` 中的精确地址。每次发布前必须现场
+复核 Docker bridge gateway 和外层代理，不得填写宽网段，也不要把实时基础设施地址提交
+到仓库。Compose 网络重建后网关可能变化，发布时必须重查。验收时应从两个不同
 外网客户端经两个域名登录，确认会话页显示的客户端 IP 不同，且限流不会把全部用户视作
 同一地址。
 
@@ -92,23 +89,36 @@ TRUSTED_PROXY_ADDRESSES=172.19.0.1,45.143.234.47
 
 脚本支持同一 PostgreSQL 导出快照、完整表集合/行数/迁移记录、严格树清单、校验和、
 隔离恢复、restic 加密上传双闸门和失败报警。没有 bucket-scoped R2 凭据、独立 restic
-密码文件和专用 Telegram 凭据前，只能算本地备份与恢复能力，不能声称异地备份和报警
-已经启用。2026-08-01 发布前与发布后 PostgreSQL 备份均完成无网络隔离恢复演练；
-当前没有启用计划任务、云上传、远端删除或失败报警。
+密码文件和专用报警端点前，只能算本地备份与恢复能力，不能声称异地备份和报警已经启用。
+
+2026-08-01 的 `1ee0533` 发布前与发布后备份均完成无网络隔离恢复演练，14 张表和 13 条
+迁移完全一致；精确证据见当前 release 的 `ACCEPTANCE.txt`。当前没有启用计划任务、
+云上传、远端删除或失败报警。
 
 ## 笔记图片与个人图床
 
-笔记和备忘录的图片通过 NAV 后端代理上传到 CloudFlare-ImgBed，浏览器不会接触图床 Token，NAV
-也不会把图片写入本机磁盘。生产环境在 `api/.env` 配置：
+笔记和备忘录的图片通过 NAV 后端代理上传到 CloudFlare-ImgBed，浏览器不会接触图床 Token，
+NAV 也不会把图片写入本机磁盘。上传与库管理必须使用两个 Token，并限制到同一个 NAV
+用户目录：
 
 ```dotenv
 NAV_IMGBED_BASE_URL=https://pic.example.com
 NAV_IMGBED_UPLOAD_TOKEN=<仅 upload 权限的 Token>
+NAV_IMGBED_LIBRARY_TOKEN_FILE=/run/secrets/nav/imgbed-library-token
 NAV_IMGBED_UPLOAD_FOLDER=nav-notes
 NAV_IMGBED_MAX_IMAGE_BYTES=10485760
 ```
 
-Token 只应授予上传权限，不要提交到 GitHub。当前第一版从笔记移除图片只解除引用，不会调用图床删除接口。
+上传 Token 只允许 `upload`；库管理 Token 只允许 `list + delete`，禁止上传、越界目录和文件夹
+批量删除。库管理 Token 使用绝对路径、普通文件、非符号链接和 owner-only 权限；所有 Token
+都不得提交到 GitHub、镜像、前端或文档。部署 Compose/override 时必须把该文件只读挂载到
+容器中的同一路径。
+
+当前 `/media` 支持图片列表、引用、保留、分享、对账和删除。移除最后一个引用后，只有保留
+策略为 `auto` 的图片才进入清理；上游失败时保留可重试状态。Telegram 来源受平台删除时限
+约束，旧记录可能只能解除关联并撤销公开访问，不能把所有 2xx 响应都描述成物理删除来源。
+当前 NAV 也还没有向用户展示图床返回的来源删除/legacy/缓存撤销细分结果。
+
 加密笔记禁止上传公开图床图片，防止图片绕过正文加密。
 
 ## 发布脚本边界
@@ -176,11 +186,11 @@ location ^~ /share/ {
 ### 当前源站
 
 - 源站域名：`nav.skrskr.net`
-- 源站服务器：`150.230.212.137`
+- 源站地址与外层代理地址属于实时基础设施配置，发布前现场核对，不写入仓库。
 
 ### 用 Nginx Proxy Manager 做外部反代
 
-如果你要在 `45.143.234.47` 上给 `nav.cristsau.cn` 做外部反代，推荐这样配：
+如果要给 `nav.cristsau.cn` 配置外部反代，推荐这样配：
 
 - Domain Names: `nav.cristsau.cn`
 - Scheme: `https`
@@ -191,7 +201,7 @@ location ^~ /share/ {
 
 - 打开 `Websockets Support`
 - 打开 `Block Common Exploits`
-- 上游优先用域名，不要直接用 `https://150.230.212.137:443`
+- 上游优先用域名，不要直接使用 HTTPS 裸 IP
 
 原因：
 
@@ -226,13 +236,13 @@ location ^~ /share/ {
 
 ## 回滚
 
-当前发布的回滚入口：
+当前发布的应用回滚入口：
 
 ```bash
-sudo /opt/nav-releases/20260801-103458-cc1da6f72675108d9df243cab6affa116b32b4ff/rollback.sh
+sudo /opt/nav-releases/20260801-162532-1ee05335977112093586185a3132559394edd472/rollback.sh
 ```
 
 它恢复发布前 API 环境、前端并切回固定旧镜像
-`nav-api:5de3d75d91f840d3bb809be3fc8cd17d5dd219fb`。正常应用回滚保留加法迁移
-`011_account_recovery.sql`，不得恢复整库覆盖发布后的用户写入。只有明确的数据损坏事故才
-评估在新数据库/新 volume 中恢复并验收后切换。
+`nav-api:5b4d03744fcf6916142be71dd963aa9339807619`。正常应用回滚保留已经应用的加法迁移，
+不得恢复旧整库覆盖发布后的用户写入。只有明确的数据损坏事故才评估在新数据库/新 volume
+中恢复并验收后切换。
