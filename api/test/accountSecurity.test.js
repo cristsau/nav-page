@@ -16,7 +16,6 @@ import {
 import {
   applyRateLimitReply,
   createPublicAuthRateLimitKey,
-  createRequestRateLimiter,
   getTrustedClientIp,
   isLoopbackProxyAddress,
   isTrustedProxyAddress
@@ -85,19 +84,12 @@ test('recovery codes are unique, high entropy, normalizable, and stored only as 
   }
 })
 
-test('fixed-window limiter returns Retry-After, resets, and keeps bounded state', () => {
-  let now = 1000
-  const limiter = createRequestRateLimiter({
-    now: () => now,
-    maxKeys: 2
-  })
-
-  assert.equal(limiter.consume('ip:one', { limit: 2, windowMs: 10_000 }).allowed, true)
-  assert.equal(limiter.consume('ip:one', { limit: 2, windowMs: 10_000 }).allowed, true)
-  const denied = limiter.consume('ip:one', { limit: 2, windowMs: 10_000 })
-  assert.equal(denied.allowed, false)
-  assert.equal(denied.retryAfterSeconds, 10)
-
+test('rate-limit responses preserve status and Retry-After metadata', () => {
+  const denied = {
+    allowed: false,
+    remaining: 0,
+    retryAfterSeconds: 10
+  }
   const replyState = {
     statusCode: 200,
     headers: {}
@@ -116,16 +108,9 @@ test('fixed-window limiter returns Retry-After, resets, and keeps bounded state'
   assert.equal(replyState.statusCode, 429)
   assert.equal(replyState.headers['Retry-After'], '10')
 
-  limiter.consume('ip:two', { limit: 1, windowMs: 10_000 })
-  limiter.consume('ip:three', { limit: 1, windowMs: 10_000 })
-  assert.ok(limiter.size <= 2)
-
-  now += 10_001
-  assert.equal(limiter.consume('ip:one', { limit: 2, windowMs: 10_000 }).allowed, true)
 })
 
 test('login and recovery limits isolate usernames behind the same trusted client IP', () => {
-  const limiter = createRequestRateLimiter()
   const request = { ip: '198.51.100.27' }
   const aliceLoginKey = createPublicAuthRateLimitKey(
     'login',
@@ -145,19 +130,6 @@ test('login and recovery limits isolate usernames behind the same trusted client
 
   assert.equal(aliceLoginKey, aliceLoginKeyAgain)
   assert.notEqual(aliceLoginKey, bobLoginKey)
-  assert.equal(
-    limiter.consume(aliceLoginKey, { limit: 1, windowMs: 60_000 }).allowed,
-    true
-  )
-  assert.equal(
-    limiter.consume(aliceLoginKeyAgain, { limit: 1, windowMs: 60_000 }).allowed,
-    false
-  )
-  assert.equal(
-    limiter.consume(bobLoginKey, { limit: 1, windowMs: 60_000 }).allowed,
-    true
-  )
-
   assert.notEqual(
     createPublicAuthRateLimitKey('recovery', request, 'alice'),
     createPublicAuthRateLimitKey('recovery', request, 'bob')

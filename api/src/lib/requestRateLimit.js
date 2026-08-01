@@ -1,8 +1,12 @@
 import { createHash } from 'node:crypto'
 import net from 'node:net'
 import { config } from '../config.js'
+import { query } from '../db/index.js'
+import {
+  consumePersistentRateLimit,
+  isRateLimitUnavailableError
+} from './persistentRateLimit.js'
 
-const DEFAULT_MAX_KEYS = 10_000
 const WRITE_METHODS = new Set(['POST', 'PUT', 'PATCH', 'DELETE'])
 const PUBLIC_AUTH_LIMITS = Object.freeze({
   login: () => ({
@@ -97,118 +101,37 @@ export function isAuthenticatedWriteRequest(request) {
   )
 }
 
-export function createRequestRateLimiter({
-  now = () => Date.now(),
-  maxKeys = DEFAULT_MAX_KEYS
-} = {}) {
-  const entries = new Map()
-  let operations = 0
-
-  function pruneExpired(currentTime) {
-    for (const [key, entry] of entries) {
-      if (entry.resetAt <= currentTime) {
-        entries.delete(key)
-      }
-    }
-  }
-
-  function enforceBound() {
-    const boundedMaxKeys = positiveInteger(maxKeys, DEFAULT_MAX_KEYS)
-    while (entries.size > boundedMaxKeys) {
-      const oldestKey = entries.keys().next().value
-      if (oldestKey === undefined) break
-      entries.delete(oldestKey)
-    }
-  }
-
-  function consume(key, {
-    limit,
-    windowMs
-  }) {
-    const normalizedKey = normalizeKey(key) || 'unknown'
-    const boundedLimit = positiveInteger(limit, 1)
-    const boundedWindowMs = positiveInteger(windowMs, 60_000)
-    const currentTime = now()
-    const existing = entries.get(normalizedKey)
-
-    operations += 1
-    if (operations % 64 === 0) {
-      pruneExpired(currentTime)
-    }
-
-    if (!existing || existing.resetAt <= currentTime) {
-      const entry = {
-        count: 1,
-        resetAt: currentTime + boundedWindowMs
-      }
-      entries.delete(normalizedKey)
-      entries.set(normalizedKey, entry)
-      enforceBound()
-
-      return {
-        allowed: true,
-        remaining: Math.max(0, boundedLimit - 1),
-        retryAfterSeconds: 0,
-        resetAt: entry.resetAt
-      }
-    }
-
-    entries.delete(normalizedKey)
-    entries.set(normalizedKey, existing)
-
-    if (existing.count >= boundedLimit) {
-      return {
-        allowed: false,
-        remaining: 0,
-        retryAfterSeconds: Math.max(
-          1,
-          Math.ceil((existing.resetAt - currentTime) / 1000)
-        ),
-        resetAt: existing.resetAt
-      }
-    }
-
-    existing.count += 1
-    return {
-      allowed: true,
-      remaining: Math.max(0, boundedLimit - existing.count),
-      retryAfterSeconds: 0,
-      resetAt: existing.resetAt
-    }
-  }
-
-  return {
-    consume,
-    clear() {
-      entries.clear()
-    },
-    get size() {
-      return entries.size
-    }
-  }
+function logCleanupError(request, error) {
+  request?.log?.error?.(error, 'failed to clean expired rate-limit buckets')
 }
 
-const publicAuthLimiter = createRequestRateLimiter()
-const authenticatedWriteLimiter = createRequestRateLimiter()
-
-export function consumePublicAuthRateLimit(kind, request, identity = '') {
+export async function consumePublicAuthRateLimit(kind, request, identity = '') {
   const resolveLimit = PUBLIC_AUTH_LIMITS[kind]
   if (!resolveLimit) {
     throw new Error('Unsupported authentication rate limit')
   }
 
-  return publicAuthLimiter.consume(
+  const limit = resolveLimit()
+  return consumePersistentRateLimit(
     createPublicAuthRateLimitKey(kind, request, identity),
-    resolveLimit()
+    {
+      scope: `auth_${kind}`,
+      ...limit,
+      queryFn: query,
+      onCleanupError: (error) => logCleanupError(request, error)
+    }
   )
 }
 
-export function consumeAuthenticatedWriteRateLimit(request) {
-  return authenticatedWriteLimiter.consume(
+export async function consumeAuthenticatedWriteRateLimit(request) {
+  return consumePersistentRateLimit(
     `user:${normalizeKey(request?.currentUser?.id)}`,
     {
+      scope: 'authenticated_write',
       limit: config.authenticatedWriteRateLimitMax,
-      windowMs: config.authenticatedWriteRateLimitWindowSeconds * 1000
+      windowMs: config.authenticatedWriteRateLimitWindowSeconds * 1000,
+      queryFn: query,
+      onCleanupError: (error) => logCleanupError(request, error)
     }
   )
 }
@@ -224,7 +147,9 @@ export function applyRateLimitReply(reply, result) {
   return true
 }
 
-export function resetRequestRateLimitersForTests() {
-  publicAuthLimiter.clear()
-  authenticatedWriteLimiter.clear()
+export function applyRateLimitUnavailableReply(reply, error) {
+  if (!isRateLimitUnavailableError(error)) return false
+
+  reply.code(503)
+  return true
 }

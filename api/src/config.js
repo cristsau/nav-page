@@ -64,6 +64,9 @@ export const config = {
     process.env.AUTHENTICATED_WRITE_RATE_LIMIT_WINDOW_SECONDS,
     60
   ),
+  rateLimitKeySecret: String(
+    process.env.NAV_RATE_LIMIT_KEY_SECRET || ''
+  ).trim(),
   trustedProxyAddresses: normalizeTrustedProxyAddresses(
     process.env.TRUSTED_PROXY_ADDRESSES
   ),

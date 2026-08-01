@@ -15,15 +15,31 @@ import {
 } from '../lib/auth.js'
 import {
   applyRateLimitReply,
+  applyRateLimitUnavailableReply,
   consumePublicAuthRateLimit
 } from '../lib/requestRateLimit.js'
+import {
+  recordSecurityEvent,
+  recordSecurityEventBestEffort
+} from '../lib/securityEvents.js'
 import { sendDecisionNotificationToAdmins, sendRegistrationNotificationToAdmins } from '../lib/telegram.js'
 import { mapRegistrationRequest, sanitizeUser } from '../lib/users.js'
 
 const UUID_PATTERN = /^[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i
 
-function enforcePublicAuthRateLimit(kind, request, reply, identity = '') {
-  const rateLimit = consumePublicAuthRateLimit(kind, request, identity)
+async function enforcePublicAuthRateLimit(kind, request, reply, identity = '') {
+  let rateLimit
+  try {
+    rateLimit = await consumePublicAuthRateLimit(kind, request, identity)
+  } catch (error) {
+    if (!applyRateLimitUnavailableReply(reply, error)) throw error
+
+    request.log.error(error, 'persistent public-auth rate limiter unavailable')
+    return {
+      error: 'Security rate limiting is temporarily unavailable'
+    }
+  }
+
   if (!applyRateLimitReply(reply, rateLimit)) return null
 
   return {
@@ -49,7 +65,7 @@ export default async function authRoutes(fastify) {
   }))
 
   fastify.post('/auth/register', async (request, reply) => {
-    const rateLimited = enforcePublicAuthRateLimit('register', request, reply)
+    const rateLimited = await enforcePublicAuthRateLimit('register', request, reply)
     if (rateLimited) return rateLimited
 
     const username = normalizeUsername(request.body?.username)
@@ -112,13 +128,22 @@ export default async function authRoutes(fastify) {
       reply.code(401)
       return { error: 'Invalid username or password' }
     }
-    const rateLimited = enforcePublicAuthRateLimit(
+    const rateLimited = await enforcePublicAuthRateLimit(
       'login',
       request,
       reply,
       username
     )
-    if (rateLimited) return rateLimited
+    if (rateLimited) {
+      if (reply.statusCode === 429) {
+        await recordSecurityEventBestEffort({
+          request,
+          eventType: 'auth.login',
+          outcome: 'denied'
+        }, request.log)
+      }
+      return rateLimited
+    }
 
     const login = await withTransaction(async (client) => {
       const { rows } = await client.query(
@@ -137,11 +162,17 @@ export default async function authRoutes(fastify) {
         : false
 
       if (!valid) {
-        return { status: 'invalid' }
+        return {
+          status: 'invalid',
+          subjectUserId: user?.id || null
+        }
       }
 
       if (user.status !== 'approved') {
-        return { status: 'unapproved' }
+        return {
+          status: 'unapproved',
+          subjectUserId: user.id
+        }
       }
 
       const updatedUser = await client.query(
@@ -157,7 +188,7 @@ export default async function authRoutes(fastify) {
       const token = createSessionToken()
       const tokenHash = hashSessionToken(token)
 
-      await client.query(
+      const createdSession = await client.query(
         `
           INSERT INTO sessions (
             user_id,
@@ -166,6 +197,7 @@ export default async function authRoutes(fastify) {
             user_agent,
             expires_at
           ) VALUES ($1, $2, $3, $4, NOW() + ($5 || ' days')::interval)
+          RETURNING id
         `,
         [
           user.id,
@@ -176,6 +208,18 @@ export default async function authRoutes(fastify) {
         ]
       )
 
+      await recordSecurityEvent({
+        client,
+        request,
+        eventType: 'auth.login',
+        outcome: 'success',
+        actorUserId: user.id,
+        subjectUserId: user.id,
+        resourceType: 'session',
+        resourceId: createdSession.rows[0].id,
+        affectedCount: 1
+      })
+
       return {
         status: 'authenticated',
         token,
@@ -184,11 +228,23 @@ export default async function authRoutes(fastify) {
     })
 
     if (login.status === 'invalid') {
+      await recordSecurityEventBestEffort({
+        request,
+        eventType: 'auth.login',
+        outcome: 'failure',
+        subjectUserId: login.subjectUserId
+      }, request.log)
       reply.code(401)
       return { error: 'Invalid username or password' }
     }
 
     if (login.status === 'unapproved') {
+      await recordSecurityEventBestEffort({
+        request,
+        eventType: 'auth.login',
+        outcome: 'denied',
+        subjectUserId: login.subjectUserId
+      }, request.log)
       reply.code(403)
       return { error: 'This account is not approved yet' }
     }
@@ -204,6 +260,19 @@ export default async function authRoutes(fastify) {
     const token = request.cookies[config.sessionCookieName]
     if (token) {
       await query('DELETE FROM sessions WHERE token_hash = $1', [hashSessionToken(token)])
+    }
+
+    if (request.currentUser?.id) {
+      await recordSecurityEventBestEffort({
+        request,
+        eventType: 'auth.logout',
+        outcome: 'success',
+        actorUserId: request.currentUser.id,
+        subjectUserId: request.currentUser.id,
+        resourceType: 'session',
+        resourceId: request.session?.id || null,
+        affectedCount: token ? 1 : 0
+      }, request.log)
     }
 
     await fastify.clearSessionCookie(reply)
@@ -247,17 +316,34 @@ export default async function authRoutes(fastify) {
       return { error: 'Session not found' }
     }
 
-    const { rows } = await query(
-      `
-        DELETE FROM sessions
-        WHERE id = $1
-          AND user_id = $2
-        RETURNING id
-      `,
-      [sessionId, request.currentUser.id]
-    )
+    const revoked = await withTransaction(async (client) => {
+      const { rows } = await client.query(
+        `
+          DELETE FROM sessions
+          WHERE id = $1
+            AND user_id = $2
+          RETURNING id
+        `,
+        [sessionId, request.currentUser.id]
+      )
 
-    if (!rows.length) {
+      if (!rows.length) return false
+
+      await recordSecurityEvent({
+        client,
+        request,
+        eventType: 'auth.session.revoke',
+        outcome: 'success',
+        actorUserId: request.currentUser.id,
+        subjectUserId: request.currentUser.id,
+        resourceType: 'session',
+        resourceId: sessionId,
+        affectedCount: 1
+      })
+      return true
+    })
+
+    if (!revoked) {
       reply.code(404)
       return { error: 'Session not found' }
     }
@@ -283,18 +369,33 @@ export default async function authRoutes(fastify) {
       return { error: 'Authentication required' }
     }
 
-    const result = await query(
-      `
-        DELETE FROM sessions
-        WHERE user_id = $1
-          AND id <> $2
-      `,
-      [request.currentUser.id, currentSessionId]
-    )
+    const revokedCount = await withTransaction(async (client) => {
+      const result = await client.query(
+        `
+          DELETE FROM sessions
+          WHERE user_id = $1
+            AND id <> $2
+        `,
+        [request.currentUser.id, currentSessionId]
+      )
+      const count = result.rowCount || 0
+
+      await recordSecurityEvent({
+        client,
+        request,
+        eventType: 'auth.session.revoke',
+        outcome: 'success',
+        actorUserId: request.currentUser.id,
+        subjectUserId: request.currentUser.id,
+        resourceType: 'session',
+        affectedCount: count
+      })
+      return count
+    })
 
     return {
       ok: true,
-      revokedCount: result.rowCount || 0,
+      revokedCount,
       currentSessionRevoked: false
     }
   })
@@ -302,15 +403,30 @@ export default async function authRoutes(fastify) {
   fastify.post('/auth/sessions/revoke-all', async (request, reply) => {
     await fastify.requireAuth(request, reply)
 
-    const result = await query(
-      'DELETE FROM sessions WHERE user_id = $1',
-      [request.currentUser.id]
-    )
+    const revokedCount = await withTransaction(async (client) => {
+      const result = await client.query(
+        'DELETE FROM sessions WHERE user_id = $1',
+        [request.currentUser.id]
+      )
+      const count = result.rowCount || 0
+
+      await recordSecurityEvent({
+        client,
+        request,
+        eventType: 'auth.session.revoke',
+        outcome: 'success',
+        actorUserId: request.currentUser.id,
+        subjectUserId: request.currentUser.id,
+        resourceType: 'session',
+        affectedCount: count
+      })
+      return count
+    })
 
     await fastify.clearSessionCookie(reply)
     return {
       ok: true,
-      revokedCount: result.rowCount || 0,
+      revokedCount,
       currentSessionRevoked: true
     }
   })
@@ -388,11 +504,30 @@ export default async function authRoutes(fastify) {
         [request.currentUser.id, recoveryCodeHashes]
       )
 
+      await recordSecurityEvent({
+        client,
+        request,
+        eventType: 'auth.recovery_codes.rotate',
+        outcome: 'success',
+        actorUserId: request.currentUser.id,
+        subjectUserId: request.currentUser.id,
+        resourceType: 'recovery_codes',
+        affectedCount: recoveryCodeHashes.length
+      })
+
       const generatedAt = await client.query('SELECT NOW() AS generated_at')
       return generatedAt.rows[0]?.generated_at || new Date().toISOString()
     })
 
     if (!rotation) {
+      await recordSecurityEventBestEffort({
+        request,
+        eventType: 'auth.recovery_codes.rotate',
+        outcome: 'failure',
+        actorUserId: request.currentUser.id,
+        subjectUserId: request.currentUser.id,
+        resourceType: 'recovery_codes'
+      }, request.log)
       reply.code(400)
       return { error: 'Current password is incorrect' }
     }
@@ -408,25 +543,43 @@ export default async function authRoutes(fastify) {
     const username = normalizeUsername(request.body?.username)
     const rawRecoveryCode = String(request.body?.recoveryCode || '').slice(0, 256)
     const newPassword = String(request.body?.newPassword || '')
-    const ipRateLimited = enforcePublicAuthRateLimit(
+    const ipRateLimited = await enforcePublicAuthRateLimit(
       'recovery',
       request,
       reply
     )
-    if (ipRateLimited) return ipRateLimited
+    if (ipRateLimited) {
+      if (reply.statusCode === 429) {
+        await recordSecurityEventBestEffort({
+          request,
+          eventType: 'auth.recovery',
+          outcome: 'denied'
+        }, request.log)
+      }
+      return ipRateLimited
+    }
 
     if (!isValidUsername(username)) {
       reply.code(401)
       return { error: PUBLIC_ACCOUNT_RECOVERY_ERROR }
     }
 
-    const identityRateLimited = enforcePublicAuthRateLimit(
+    const identityRateLimited = await enforcePublicAuthRateLimit(
       'recovery',
       request,
       reply,
       username
     )
-    if (identityRateLimited) return identityRateLimited
+    if (identityRateLimited) {
+      if (reply.statusCode === 429) {
+        await recordSecurityEventBestEffort({
+          request,
+          eventType: 'auth.recovery',
+          outcome: 'denied'
+        }, request.log)
+      }
+      return identityRateLimited
+    }
 
     const passwordValidation = validateNewPassword(newPassword)
 
@@ -488,10 +641,21 @@ export default async function authRoutes(fastify) {
         [match.user_id, match.recovery_code_id]
       )
 
-      await client.query(
+      const revokedSessions = await client.query(
         'DELETE FROM sessions WHERE user_id = $1',
         [match.user_id]
       )
+
+      await recordSecurityEvent({
+        client,
+        request,
+        eventType: 'auth.recovery',
+        outcome: 'success',
+        subjectUserId: match.user_id,
+        resourceType: 'account',
+        resourceId: match.user_id,
+        affectedCount: revokedSessions.rowCount || 0
+      })
 
       return {
         userId: match.user_id
@@ -499,6 +663,11 @@ export default async function authRoutes(fastify) {
     })
 
     if (!recovered) {
+      await recordSecurityEventBestEffort({
+        request,
+        eventType: 'auth.recovery',
+        outcome: 'failure'
+      }, request.log)
       reply.code(401)
       return { error: PUBLIC_ACCOUNT_RECOVERY_ERROR }
     }
@@ -556,7 +725,7 @@ export default async function authRoutes(fastify) {
 
     const result = await withTransaction(async (client) => {
       const requestResult = await client.query(
-        'SELECT * FROM registration_requests WHERE id = $1 LIMIT 1',
+        'SELECT * FROM registration_requests WHERE id = $1 LIMIT 1 FOR UPDATE',
         [requestId]
       )
 
@@ -571,8 +740,9 @@ export default async function authRoutes(fastify) {
       }
 
       const existingUser = await client.query('SELECT id FROM users WHERE username = $1 LIMIT 1', [registration.username])
+      let subjectUserId = existingUser.rows[0]?.id || null
       if (existingUser.rowCount === 0) {
-        await client.query(
+        const createdUser = await client.query(
           `
             INSERT INTO users (
               username,
@@ -581,9 +751,11 @@ export default async function authRoutes(fastify) {
               status,
               approved_at
             ) VALUES ($1, $2, 'user', 'approved', NOW())
+            RETURNING id
           `,
           [registration.username, registration.password_hash]
         )
+        subjectUserId = createdUser.rows[0].id
       }
 
       const approved = await client.query(
@@ -598,6 +770,18 @@ export default async function authRoutes(fastify) {
         `,
         [requestId, request.currentUser.id]
       )
+
+      await recordSecurityEvent({
+        client,
+        request,
+        eventType: 'admin.registration.approve',
+        outcome: 'success',
+        actorUserId: request.currentUser.id,
+        subjectUserId,
+        resourceType: 'registration_request',
+        resourceId: requestId,
+        affectedCount: 1
+      })
 
       return mapRegistrationRequest(approved.rows[0])
     })
@@ -617,29 +801,44 @@ export default async function authRoutes(fastify) {
     await fastify.requireAdmin(request, reply)
     const requestId = request.params.requestId
 
-    const requestResult = await query(
-      `
-        UPDATE registration_requests
-        SET status = 'rejected',
-            updated_at = NOW(),
-            decided_at = NOW(),
-            decided_by = $2
-        WHERE id = $1
-          AND status = 'pending'
-        RETURNING id, username, status, created_at, updated_at, decided_at, decided_by
-      `,
-      [requestId, request.currentUser.id]
-    )
+    const rejected = await withTransaction(async (client) => {
+      const requestResult = await client.query(
+        `
+          UPDATE registration_requests
+          SET status = 'rejected',
+              updated_at = NOW(),
+              decided_at = NOW(),
+              decided_by = $2
+          WHERE id = $1
+            AND status = 'pending'
+          RETURNING id, username, status, created_at, updated_at, decided_at, decided_by
+        `,
+        [requestId, request.currentUser.id]
+      )
+      if (!requestResult.rows.length) return null
 
-    if (!requestResult.rows.length) {
+      await recordSecurityEvent({
+        client,
+        request,
+        eventType: 'admin.registration.reject',
+        outcome: 'success',
+        actorUserId: request.currentUser.id,
+        resourceType: 'registration_request',
+        resourceId: requestId,
+        affectedCount: 1
+      })
+      return requestResult.rows[0]
+    })
+
+    if (!rejected) {
       reply.code(404)
       return { error: 'Pending registration request not found' }
     }
 
-    await sendDecisionNotificationToAdmins(requestResult.rows[0], '拒绝').catch((error) => {
+    await sendDecisionNotificationToAdmins(rejected, '拒绝').catch((error) => {
       fastify.log.error(error, 'failed to send rejection notification')
     })
 
-    return { request: mapRegistrationRequest(requestResult.rows[0]) }
+    return { request: mapRegistrationRequest(rejected) }
   })
 }

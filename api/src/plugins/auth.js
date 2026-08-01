@@ -4,6 +4,7 @@ import { query } from '../db/index.js'
 import { hashSessionToken, shouldTouchSession } from '../lib/auth.js'
 import {
   applyRateLimitReply,
+  applyRateLimitUnavailableReply,
   consumeAuthenticatedWriteRateLimit,
   isAuthenticatedWriteRequest
 } from '../lib/requestRateLimit.js'
@@ -142,7 +143,18 @@ async function authPlugin(fastify) {
   fastify.addHook('preHandler', async (request, reply) => {
     if (!isAuthenticatedWriteRequest(request)) return
 
-    const rateLimit = consumeAuthenticatedWriteRateLimit(request)
+    let rateLimit
+    try {
+      rateLimit = await consumeAuthenticatedWriteRateLimit(request)
+    } catch (error) {
+      if (!applyRateLimitUnavailableReply(reply, error)) throw error
+
+      request.log.error(error, 'persistent authenticated-write rate limiter unavailable')
+      return reply.send({
+        error: 'Security rate limiting is temporarily unavailable'
+      })
+    }
+
     if (applyRateLimitReply(reply, rateLimit)) {
       return reply.send({
         error: 'Too many authenticated write requests, please try again later'

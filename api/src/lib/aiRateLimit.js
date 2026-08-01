@@ -1,9 +1,16 @@
+import { query } from '../db/index.js'
+import {
+  consumePersistentRateLimit,
+  isRateLimitUnavailableError
+} from './persistentRateLimit.js'
+
 export const AI_RATE_LIMIT_WINDOW_MS = 60_000
 export const AI_RATE_LIMIT_MAX_REQUESTS = 10
 
-const requestWindows = new Map()
-
-export function consumeAiRateLimit(userId, now = Date.now()) {
+export async function consumeAiRateLimit(userId, {
+  queryFn = query,
+  onCleanupError
+} = {}) {
   const key = String(userId || '').trim()
   if (!key) {
     return {
@@ -12,23 +19,41 @@ export function consumeAiRateLimit(userId, now = Date.now()) {
     }
   }
 
-  const existing = requestWindows.get(key)
-  const windowRecord = !existing || now - existing.startedAt >= AI_RATE_LIMIT_WINDOW_MS
-    ? { startedAt: now, count: 0 }
-    : existing
-
-  windowRecord.count += 1
-  requestWindows.set(key, windowRecord)
-
-  return {
-    allowed: windowRecord.count <= AI_RATE_LIMIT_MAX_REQUESTS,
-    retryAfterSeconds: Math.max(
-      1,
-      Math.ceil((windowRecord.startedAt + AI_RATE_LIMIT_WINDOW_MS - now) / 1000)
-    )
-  }
+  return consumePersistentRateLimit(`user:${key}`, {
+    scope: 'ai_requests',
+    limit: AI_RATE_LIMIT_MAX_REQUESTS,
+    windowMs: AI_RATE_LIMIT_WINDOW_MS,
+    queryFn,
+    onCleanupError
+  })
 }
 
-export function resetAiRateLimitForTests() {
-  requestWindows.clear()
+export async function enforceAiRateLimit(request, reply, {
+  deniedError = 'AI 请求过于频繁，请稍后再试',
+  queryFn = query,
+  onCleanupError
+} = {}) {
+  let rateLimit
+  try {
+    rateLimit = await consumeAiRateLimit(request?.currentUser?.id, {
+      queryFn,
+      onCleanupError: onCleanupError || ((error) => {
+        request?.log?.error?.(error, 'failed to clean expired AI rate-limit buckets')
+      })
+    })
+  } catch (error) {
+    if (!isRateLimitUnavailableError(error)) throw error
+
+    request?.log?.error?.(error, 'persistent AI rate limiter unavailable')
+    reply.code(503)
+    return {
+      error: 'AI rate limiting is temporarily unavailable'
+    }
+  }
+
+  if (rateLimit.allowed) return null
+
+  reply.header('Retry-After', String(rateLimit.retryAfterSeconds))
+  reply.code(429)
+  return { error: deniedError }
 }

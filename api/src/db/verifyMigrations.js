@@ -194,11 +194,110 @@ async function verifyMediaLibrarySchema() {
   )
 }
 
+async function verifySecurityControlsSchema() {
+  const rateLimitColumns = [
+    'scope',
+    'key_digest',
+    'window_started_at',
+    'window_expires_at',
+    'request_count',
+    'updated_at'
+  ]
+  const rateLimitColumnResult = await query(
+    `
+      SELECT column_name
+      FROM information_schema.columns
+      WHERE table_schema = current_schema()
+        AND table_name = 'rate_limit_buckets'
+    `
+  )
+  assertExactSet(
+    'rate limit bucket columns',
+    rateLimitColumnResult.rows.map((row) => row.column_name),
+    rateLimitColumns
+  )
+
+  const securityEventColumns = [
+    'id',
+    'event_type',
+    'outcome',
+    'actor_user_id',
+    'subject_user_id',
+    'resource_type',
+    'resource_id',
+    'affected_count',
+    'client_ip_digest',
+    'user_agent_digest',
+    'created_at'
+  ]
+  const securityEventColumnResult = await query(
+    `
+      SELECT column_name
+      FROM information_schema.columns
+      WHERE table_schema = current_schema()
+        AND table_name = 'security_events'
+    `
+  )
+  assertExactSet(
+    'security event columns',
+    securityEventColumnResult.rows.map((row) => row.column_name),
+    securityEventColumns
+  )
+
+  const expectedIndexes = [
+    'idx_rate_limit_buckets_expires',
+    'idx_security_events_created',
+    'idx_security_events_type_created',
+    'idx_security_events_actor_created'
+  ]
+  const indexResult = await query(
+    `
+      SELECT indexname
+      FROM pg_indexes
+      WHERE schemaname = current_schema()
+        AND indexname = ANY($1::text[])
+    `,
+    [expectedIndexes]
+  )
+  assertExactSet(
+    'security control indexes',
+    indexResult.rows.map((row) => row.indexname),
+    expectedIndexes
+  )
+
+  const expectedConstraints = [
+    'rate_limit_buckets_scope_check',
+    'rate_limit_buckets_key_digest_check',
+    'rate_limit_buckets_window_check',
+    'rate_limit_buckets_request_count_check',
+    'security_events_type_check',
+    'security_events_outcome_check',
+    'security_events_resource_type_check',
+    'security_events_affected_count_check',
+    'security_events_client_ip_digest_check',
+    'security_events_user_agent_digest_check'
+  ]
+  const constraintResult = await query(
+    `
+      SELECT conname
+      FROM pg_constraint
+      WHERE conname = ANY($1::text[])
+    `,
+    [expectedConstraints]
+  )
+  assertExactSet(
+    'security control constraints',
+    constraintResult.rows.map((row) => row.conname),
+    expectedConstraints
+  )
+}
+
 async function main() {
   await verifyMigrationLedger()
   await verifyNavigationMaintenanceSchema()
   await verifyReminderSchema()
   await verifyMediaLibrarySchema()
+  await verifySecurityControlsSchema()
   console.log('migration schema verification complete')
 }
 

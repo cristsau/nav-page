@@ -1,5 +1,5 @@
 import { getUserSettingValue } from '../lib/userSettings.js'
-import { consumeAiRateLimit } from '../lib/aiRateLimit.js'
+import { enforceAiRateLimit } from '../lib/aiRateLimit.js'
 import {
   NOTE_AI_ACTIONS,
   runNoteAi,
@@ -19,12 +19,10 @@ export default async function noteAiRoutes(fastify) {
   fastify.post('/notes/ai', async (request, reply) => {
     await fastify.requireAuth(request, reply)
 
-    const rateLimit = consumeAiRateLimit(request.currentUser.id)
-    if (!rateLimit.allowed) {
-      reply.header('Retry-After', String(rateLimit.retryAfterSeconds))
-      reply.code(429)
-      return { error: 'AI 编辑请求过于频繁，请稍后再试' }
-    }
+    const rateLimited = await enforceAiRateLimit(request, reply, {
+      deniedError: 'AI 编辑请求过于频繁，请稍后再试'
+    })
+    if (rateLimited) return rateLimited
 
     const action = normalizeText(request.body?.action).toLowerCase()
     const type = normalizeText(request.body?.type, 'memo').toLowerCase() === 'diary'

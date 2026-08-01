@@ -1,5 +1,5 @@
 import { createHash } from 'node:crypto'
-import { consumeAiRateLimit } from '../lib/aiRateLimit.js'
+import { enforceAiRateLimit } from '../lib/aiRateLimit.js'
 import {
   buildChatRequest,
   extractAiText,
@@ -228,12 +228,8 @@ export default async function aiSearchRoutes(fastify) {
   fastify.post('/ai-search/providers/test', async (request, reply) => {
     await fastify.requireAuth(request, reply)
 
-    const rateLimit = consumeAiRateLimit(request.currentUser.id)
-    if (!rateLimit.allowed) {
-      reply.header('Retry-After', String(rateLimit.retryAfterSeconds))
-      reply.code(429)
-      return { error: 'AI 请求过于频繁，请稍后再试' }
-    }
+    const rateLimited = await enforceAiRateLimit(request, reply)
+    if (rateLimited) return rateLimited
 
     const provider = normalizeText(request.body?.provider).toLowerCase()
     const inputConfig = request.body?.config || {}
@@ -280,12 +276,8 @@ export default async function aiSearchRoutes(fastify) {
   fastify.post('/ai-search', async (request, reply) => {
     await fastify.requireAuth(request, reply)
 
-    const rateLimit = consumeAiRateLimit(request.currentUser.id)
-    if (!rateLimit.allowed) {
-      reply.header('Retry-After', String(rateLimit.retryAfterSeconds))
-      reply.code(429)
-      return { error: 'AI 请求过于频繁，请稍后再试' }
-    }
+    const rateLimited = await enforceAiRateLimit(request, reply)
+    if (rateLimited) return rateLimited
 
     const engineId = normalizeText(request.body?.engineId).toLowerCase()
     const queryText = normalizeText(request.body?.query)
