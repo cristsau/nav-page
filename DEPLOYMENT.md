@@ -47,8 +47,12 @@
 
 ```dotenv
 NAV_AI_CLI_PROXY_BASE_URL=https://ap.example.com
+NAV_AI_CLI_PROXY_API_MODE=responses
 NAV_AI_CLI_PROXY_API_KEY_FILE=/run/secrets/nav/cli-proxy-api-key
 ```
+
+`responses` 会启用 `reasoning.effort` 和内置 `web_search`；旧网关可显式改回
+`chat-completions`。不要仅依靠 Base URL 猜测协议。
 
 Compose 只读挂载 owner-only 文件：
 

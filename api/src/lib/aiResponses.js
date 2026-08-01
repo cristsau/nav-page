@@ -2,7 +2,16 @@ export const DEFAULT_OPENAI_ENDPOINT = 'https://api.openai.com/v1/responses'
 export const DEFAULT_OPENAI_MODEL = 'gpt-5.6-terra'
 
 const RESPONSE_API_MODES = new Set(['responses', 'chat-completions'])
-const REASONING_EFFORTS = new Set(['none', 'minimal', 'low', 'medium', 'high', 'xhigh'])
+const REASONING_EFFORTS = new Set([
+  'none',
+  'minimal',
+  'low',
+  'medium',
+  'high',
+  'xhigh',
+  'max',
+  'ultra'
+])
 const MODEL_ID_CONTROL_PATTERN = /[\p{Cc}\p{Cf}]/u
 const MAX_MODEL_ID_LENGTH = 256
 
@@ -170,6 +179,7 @@ export function buildChatRequest(provider, queryText, systemPrompt, safetyIdenti
     instructions: systemPrompt,
     input: `用户搜索词：${queryText}`,
     store: false,
+    stream: false,
     text: {
       verbosity: 'low'
     }

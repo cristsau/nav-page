@@ -182,5 +182,8 @@ test('settings renders the chat model as a bounded select and explains inactive 
   assert.match(source, /最多显示 6 个/)
   assert.match(source, /推理强度和内置联网搜索参数不会发送/)
   assert.match(source, /:value="chatApiMode"/)
+  assert.match(source, /chatModelCatalog\.value\.apiMode/)
+  assert.match(source, /<option value="max">最大<\/option>/)
+  assert.match(source, /<option value="ultra">超强（CLI Proxy）<\/option>/)
   assert.doesNotMatch(source, /apiMode \|\| \(config\.search/)
 })

@@ -455,6 +455,7 @@ export async function resolveChatProviderModel(
         ...buildFallbackCatalog(resolvedProvider),
         resolvedModelId,
         configuredMode,
+        apiMode: resolvedProvider.apiMode,
         serverManaged: Boolean(resolvedProvider.serverManaged)
       }
     }
@@ -477,6 +478,7 @@ export async function resolveChatProviderModel(
       ...discovered,
       resolvedModelId,
       configuredMode,
+      apiMode: resolvedProvider.apiMode,
       serverManaged: Boolean(resolvedProvider.serverManaged)
     }
   }
@@ -497,6 +499,9 @@ export function toPublicModelCatalogResponse(catalog = {}) {
     configuredMode: catalog.configuredMode === AI_MODEL_MODES.PINNED
       ? AI_MODEL_MODES.PINNED
       : AI_MODEL_MODES.LATEST,
+    apiMode: catalog.apiMode === 'responses'
+      ? 'responses'
+      : 'chat-completions',
     source: ['live', 'cache', 'stale', 'fallback'].includes(catalog.source)
       ? catalog.source
       : 'fallback',
