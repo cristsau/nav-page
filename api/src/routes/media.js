@@ -78,6 +78,85 @@ function mapMediaForClient(record) {
   }
 }
 
+export function buildMediaListQuery({ userId, filter, search, cursor, limit }) {
+  const params = [userId]
+  const conditions = ["a.state <> 'deleted'"]
+
+  if (search) {
+    params.push(`%${search}%`)
+    const searchParam = `$${params.length}`
+    conditions.push(`(
+      a.name ILIKE ${searchParam}
+      OR a.upstream_id ILIKE ${searchParam}
+      OR EXISTS (
+        SELECT 1
+        FROM notes search_note
+        WHERE search_note.user_id = a.user_id
+          AND search_note.encrypted = FALSE
+          AND search_note.title ILIKE ${searchParam}
+          AND EXISTS (
+            SELECT 1
+            FROM jsonb_array_elements(search_note.attachments) attachment
+            WHERE attachment->>'url' = a.url
+          )
+      )
+    )`)
+  }
+  if (cursor) {
+    params.push(cursor.createdAt)
+    const cursorCreatedAtParam = `$${params.length}`
+    params.push(cursor.id)
+    const cursorIdParam = `$${params.length}`
+    conditions.push(`(a.created_at, a.id) < (${cursorCreatedAtParam}::timestamptz, ${cursorIdParam}::uuid)`)
+  }
+  if (filter === 'referenced') conditions.push('refs.reference_count > 0')
+  if (filter === 'unreferenced') conditions.push('refs.reference_count = 0')
+  if (filter === 'keep') conditions.push("a.retention = 'keep'")
+  if (filter === 'pending') conditions.push("a.state IN ('delete_pending', 'delete_failed')")
+  if (filter === 'failed') conditions.push("a.state = 'delete_failed'")
+  if (filter === 'missing') conditions.push("a.state = 'missing'")
+
+  params.push(limit + 1)
+  const limitParam = `$${params.length}`
+
+  return {
+    sql: `
+      SELECT
+        a.*,
+        refs.reference_count,
+        refs.references
+      FROM media_assets a
+      CROSS JOIN LATERAL (
+        SELECT
+          COUNT(*)::integer AS reference_count,
+          COALESCE(
+            jsonb_agg(
+              jsonb_build_object(
+                'noteId', n.id,
+                'numberId', n.number_id,
+                'title', CASE WHEN n.encrypted THEN '加密笔记' ELSE n.title END
+              )
+              ORDER BY n.updated_at DESC
+            ) FILTER (WHERE n.id IS NOT NULL),
+            '[]'::jsonb
+          ) AS references
+        FROM notes n
+        WHERE n.user_id = a.user_id
+          AND EXISTS (
+            SELECT 1
+            FROM jsonb_array_elements(n.attachments) attachment
+            WHERE attachment->>'url' = a.url
+          )
+      ) refs
+      WHERE a.user_id = $1
+        AND ${conditions.join('\n        AND ')}
+      ORDER BY a.created_at DESC, a.id DESC
+      LIMIT ${limitParam}
+    `,
+    params
+  }
+}
+
 async function requireOwnedAsset(userId, assetId, { lock = false, client = null } = {}) {
   const runner = client || { query }
   const result = await runner.query(
@@ -127,74 +206,14 @@ export default async function mediaRoutes(fastify) {
     const search = String(request.query?.q || '').trim().slice(0, 100)
     const cursor = decodeCursor(request.query?.cursor)
     const limit = parseLimit(request.query?.limit)
-    const params = [request.currentUser.id, search ? `%${search}%` : '', limit + 1]
-    const conditions = ["a.state <> 'deleted'"]
-
-    if (search) {
-      conditions.push(`(
-        a.name ILIKE $2
-        OR a.upstream_id ILIKE $2
-        OR EXISTS (
-          SELECT 1
-          FROM notes search_note
-          WHERE search_note.user_id = a.user_id
-            AND search_note.encrypted = FALSE
-            AND search_note.title ILIKE $2
-            AND EXISTS (
-              SELECT 1
-              FROM jsonb_array_elements(search_note.attachments) attachment
-              WHERE attachment->>'url' = a.url
-            )
-        )
-      )`)
-    }
-    if (cursor) {
-      params.push(cursor.createdAt, cursor.id)
-      conditions.push(`(a.created_at, a.id) < ($${params.length - 1}::timestamptz, $${params.length}::uuid)`)
-    }
-    if (filter === 'referenced') conditions.push('refs.reference_count > 0')
-    if (filter === 'unreferenced') conditions.push('refs.reference_count = 0')
-    if (filter === 'keep') conditions.push("a.retention = 'keep'")
-    if (filter === 'pending') conditions.push("a.state IN ('delete_pending', 'delete_failed')")
-    if (filter === 'failed') conditions.push("a.state = 'delete_failed'")
-    if (filter === 'missing') conditions.push("a.state = 'missing'")
-
-    const result = await query(
-      `
-        SELECT
-          a.*,
-          refs.reference_count,
-          refs.references
-        FROM media_assets a
-        CROSS JOIN LATERAL (
-          SELECT
-            COUNT(*)::integer AS reference_count,
-            COALESCE(
-              jsonb_agg(
-                jsonb_build_object(
-                  'noteId', n.id,
-                  'numberId', n.number_id,
-                  'title', CASE WHEN n.encrypted THEN '加密笔记' ELSE n.title END
-                )
-                ORDER BY n.updated_at DESC
-              ) FILTER (WHERE n.id IS NOT NULL),
-              '[]'::jsonb
-            ) AS references
-          FROM notes n
-          WHERE n.user_id = a.user_id
-            AND EXISTS (
-              SELECT 1
-              FROM jsonb_array_elements(n.attachments) attachment
-              WHERE attachment->>'url' = a.url
-            )
-        ) refs
-        WHERE a.user_id = $1
-          AND ${conditions.join('\n          AND ')}
-        ORDER BY a.created_at DESC, a.id DESC
-        LIMIT $3
-      `,
-      params
-    )
+    const mediaListQuery = buildMediaListQuery({
+      userId: request.currentUser.id,
+      filter,
+      search,
+      cursor,
+      limit
+    })
+    const result = await query(mediaListQuery.sql, mediaListQuery.params)
     const hasMore = result.rows.length > limit
     const page = result.rows.slice(0, limit)
 

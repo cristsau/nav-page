@@ -4,6 +4,7 @@ import fs from 'node:fs/promises'
 import path from 'node:path'
 import { config } from '../src/config.js'
 import { listImgBedUserImages } from '../src/lib/imgBedLibraryClient.js'
+import { buildMediaListQuery } from '../src/routes/media.js'
 import {
   assertMediaBelongsToUser,
   attemptMediaAssetDeletion,
@@ -15,6 +16,7 @@ import {
 const USER_ID = 'aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa'
 const OTHER_USER_ID = 'bbbbbbbb-bbbb-4bbb-8bbb-bbbbbbbbbbbb'
 const ASSET_ID = 'cccccccc-cccc-4ccc-8ccc-cccccccccccc'
+const CURSOR_ID = 'dddddddd-dddd-4ddd-8ddd-dddddddddddd'
 
 function makeAsset(userId = USER_ID, state = 'delete_pending') {
   const upstreamId = `${createMediaUserPrefix(userId)}2026-08/example.webp`
@@ -83,6 +85,64 @@ function createDeletionClient({
 function transactionWith(client) {
   return async (callback) => callback(client)
 }
+
+test('media list query omits the search parameter when q is empty', () => {
+  const built = buildMediaListQuery({
+    userId: USER_ID,
+    filter: 'all',
+    search: '',
+    cursor: null,
+    limit: 60
+  })
+
+  assert.deepEqual(built.params, [USER_ID, 61])
+  assert.match(built.sql, /WHERE a\.user_id = \$1/)
+  assert.match(built.sql, /LIMIT \$2/)
+  assert.doesNotMatch(built.sql, /ILIKE/)
+  assert.doesNotMatch(built.sql, /\$3/)
+})
+
+test('media list query assigns the search and limit placeholders contiguously', () => {
+  const built = buildMediaListQuery({
+    userId: USER_ID,
+    filter: 'all',
+    search: 'deploy',
+    cursor: null,
+    limit: 30
+  })
+
+  assert.deepEqual(built.params, [USER_ID, '%deploy%', 31])
+  assert.match(built.sql, /a\.name ILIKE \$2/)
+  assert.match(built.sql, /search_note\.title ILIKE \$2/)
+  assert.match(built.sql, /LIMIT \$3/)
+  assert.doesNotMatch(built.sql, /\$4/)
+})
+
+test('media list query assigns cursor and limit placeholders when q is empty', () => {
+  const cursor = {
+    createdAt: '2026-08-01T00:00:00.000Z',
+    id: CURSOR_ID
+  }
+  const built = buildMediaListQuery({
+    userId: USER_ID,
+    filter: 'pending',
+    search: '',
+    cursor,
+    limit: 20
+  })
+
+  assert.deepEqual(built.params, [
+    USER_ID,
+    cursor.createdAt,
+    CURSOR_ID,
+    21
+  ])
+  assert.doesNotMatch(built.sql, /ILIKE/)
+  assert.match(built.sql, /\(a\.created_at, a\.id\) < \(\$2::timestamptz, \$3::uuid\)/)
+  assert.match(built.sql, /a\.state IN \('delete_pending', 'delete_failed'\)/)
+  assert.match(built.sql, /LIMIT \$4/)
+  assert.doesNotMatch(built.sql, /\$5/)
+})
 
 test('media paths are deterministically scoped to one user partition', () => {
   const prefix = createMediaUserPrefix(USER_ID)
