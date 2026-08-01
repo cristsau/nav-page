@@ -2,12 +2,17 @@
 import { computed, onMounted, ref } from 'vue'
 import { clearAllData, exportData, getLocalDataSummary, importData } from '@/shared/db/database'
 import { useConfig } from '@/shared/composables/useConfig'
-import { importLocalDataToBackend, shouldUseBackendMigration } from '@/shared/services/migrationApi'
+import {
+  exportBackendData,
+  importLocalDataToBackend,
+  shouldUseBackendMigration
+} from '@/shared/services/migrationApi'
 
 const { resetConfig } = useConfig()
 
 const importing = ref(false)
 const exporting = ref(false)
+const cloudExporting = ref(false)
 const migrating = ref(false)
 const storageInfo = ref({
   used: 0,
@@ -26,6 +31,7 @@ const localDataSummary = ref({
 const shouldShowCloudMigration = computed(() =>
   shouldUseBackendMigration() && localDataSummary.value.total > 0
 )
+const shouldShowCloudExport = computed(() => shouldUseBackendMigration())
 
 async function refreshLocalDataSummary() {
   localDataSummary.value = await getLocalDataSummary()
@@ -48,24 +54,72 @@ async function refreshLocalState() {
   ])
 }
 
+function downloadJson(data, fileName) {
+  const blob = new Blob([JSON.stringify(data, null, 2)], {
+    type: 'application/json'
+  })
+  const url = URL.createObjectURL(blob)
+  const anchor = document.createElement('a')
+  anchor.href = url
+  anchor.download = fileName
+  document.body.appendChild(anchor)
+  anchor.click()
+  anchor.remove()
+  window.setTimeout(() => URL.revokeObjectURL(url), 0)
+}
+
 async function handleExport() {
   if (exporting.value) return
 
   exporting.value = true
   try {
     const data = await exportData()
-    const blob = new Blob([JSON.stringify(data, null, 2)], { type: 'application/json' })
-    const url = URL.createObjectURL(blob)
-    const anchor = document.createElement('a')
-    anchor.href = url
-    anchor.download = `nav-backup-${new Date().toISOString().slice(0, 10)}.json`
-    anchor.click()
-    URL.revokeObjectURL(url)
+    downloadJson(data, `nav-backup-${new Date().toISOString().slice(0, 10)}.json`)
     alert('导出成功。')
   } catch (error) {
     alert(`导出失败：${error.message}`)
   } finally {
     exporting.value = false
+  }
+}
+
+async function handleCloudExport() {
+  if (!shouldShowCloudExport.value || cloudExporting.value) return
+
+  if (!confirm(
+    '导出文件包含笔记密文和仍然有效的公开分享链接。\n\n'
+    + '它不包含 API Key、Telegram Token、加密笔记密码校验值或图床图片二进制。'
+    + '请把文件视为敏感数据并妥善保存。是否继续？'
+  )) {
+    return
+  }
+
+  cloudExporting.value = true
+  try {
+    const backup = await exportBackendData()
+    if (
+      backup?.schema !== 'domo-nav-backup'
+      || backup?.version !== 1
+      || !backup?.manifest
+      || !backup?.data
+    ) {
+      throw new Error('服务器返回的备份格式无效')
+    }
+
+    const fallbackFileName = (
+      `domo-nav-cloud-backup-${new Date().toISOString().slice(0, 10)}.json`
+    )
+    downloadJson(backup, backup.fileName || fallbackFileName)
+
+    const counts = backup.manifest.counts || {}
+    alert(
+      `NAV 云端数据已导出：书签 ${counts.bookmarks || 0} 条，`
+      + `笔记 ${counts.notes || 0} 条，分享 ${counts.shares || 0} 条。`
+    )
+  } catch (error) {
+    alert(`云端备份导出失败：${error.message}`)
+  } finally {
+    cloudExporting.value = false
   }
 }
 
@@ -169,6 +223,23 @@ onMounted(refreshLocalState)
             {{ formatSize(storageInfo.used) }} / {{ formatSize(storageInfo.quota) }}
           </div>
         </div>
+      </div>
+    </div>
+
+    <div v-if="shouldShowCloudExport" class="settings-item">
+      <div class="settings-item__info">
+        <div class="settings-item__label">导出 NAV 云端数据</div>
+        <div class="settings-item__desc">
+          下载当前账号在 PostgreSQL 中的分组、书签、笔记、分享、搜索引擎和普通设置。
+          加密笔记只保留密文，不导出快速密码校验值；API Key、Telegram Token 等密钥不会写入文件。
+          图片只导出图床 URL 与文件元数据，不包含图片二进制、外层反代配置或服务器 Secret。
+          公开分享码仍可直接访问，请把导出文件视为敏感数据。
+        </div>
+      </div>
+      <div class="settings-item__control">
+        <button class="btn btn--secondary" :disabled="cloudExporting" @click="handleCloudExport">
+          {{ cloudExporting ? '导出中...' : '下载 NAV 数据' }}
+        </button>
       </div>
     </div>
 

@@ -1,9 +1,10 @@
 <script setup>
-import { computed, nextTick, onMounted, ref } from 'vue'
+import { computed, nextTick, onBeforeUnmount, onMounted, ref } from 'vue'
 import { useRouter } from 'vue-router'
 import { useGroups, useBookmarks } from '@/shared/composables/useDB'
 import { useTheme } from '@/shared/composables/useTheme'
 import { useConfig } from '@/shared/composables/useConfig'
+import { COMMAND_ACTION_EVENT } from '@/shared/composables/useCommandPalette'
 import SearchBox from '@/shared/components/SearchBox.vue'
 import Icon from '@/shared/components/Icon.vue'
 import { runBackendAiSearch, shouldUseBackendAiSearch } from '@/shared/services/aiSearchApi'
@@ -45,11 +46,14 @@ const aiTagLoading = ref(false)
 const aiTagSaving = ref(false)
 const aiTagError = ref('')
 const aiTagMessage = ref('')
+const searchBoxHost = ref(null)
 let statusTimer = null
 let aiRequestId = 0
 let aiTagRequestId = 0
 let aiTagSaveRequestId = 0
 let aiTriggerElement = null
+let navigationReady = false
+let pendingNavigationCommand = ''
 
 const canGenerateBookmarkTags = computed(() => (
   shouldUseBackendAiSearch()
@@ -315,11 +319,53 @@ function goToWhisper() {
   router.push('/whisper')
 }
 
-onMounted(async () => {
-  await loadData()
-  if (groups.value.length > 0) {
-    activeGroupId.value = groups.value[0].id
+function runNavigationCommand(action) {
+  if (action === 'create-bookmark') {
+    handleAddBookmark()
+    return
   }
+
+  if (action === 'focus-site-search') {
+    nextTick(() => {
+      searchBoxHost.value?.querySelector('input[type="search"]')?.focus()
+    })
+  }
+}
+
+function handleCommandAction(event) {
+  const action = event.detail?.action
+  if (!['create-bookmark', 'focus-site-search'].includes(action)) return
+
+  if (action === 'create-bookmark' && !navigationReady) {
+    pendingNavigationCommand = action
+    return
+  }
+
+  runNavigationCommand(action)
+}
+
+onMounted(async () => {
+  window.addEventListener(COMMAND_ACTION_EVENT, handleCommandAction)
+
+  try {
+    await loadData()
+    if (groups.value.length > 0) {
+      activeGroupId.value = groups.value[0].id
+    }
+  } finally {
+    navigationReady = true
+    if (pendingNavigationCommand) {
+      const action = pendingNavigationCommand
+      pendingNavigationCommand = ''
+      runNavigationCommand(action)
+    }
+  }
+})
+
+onBeforeUnmount(() => {
+  window.removeEventListener(COMMAND_ACTION_EVENT, handleCommandAction)
+  navigationReady = false
+  pendingNavigationCommand = ''
 })
 </script>
 
@@ -361,7 +407,9 @@ onMounted(async () => {
     <main class="main">
       <section class="search-section animate-fade-in">
         <h1 class="search-section__title">搜索你想找的内容</h1>
-        <SearchBox />
+        <div ref="searchBoxHost">
+          <SearchBox />
+        </div>
       </section>
 
       <section class="content-section">
@@ -523,6 +571,10 @@ onMounted(async () => {
   text-align: center;
 }
 
+.search-section :deep(.search-box__shortcut) {
+  display: none;
+}
+
 .search-section__title {
   font-size: 28px;
   font-weight: 600;
@@ -537,7 +589,7 @@ onMounted(async () => {
 .page-status {
   position: fixed;
   right: 24px;
-  bottom: 24px;
+  bottom: max(80px, calc(env(safe-area-inset-bottom) + 64px));
   z-index: 500;
   display: flex;
   align-items: center;
@@ -607,7 +659,7 @@ onMounted(async () => {
 
   .page-status {
     right: 16px;
-    bottom: 16px;
+    bottom: max(76px, calc(env(safe-area-inset-bottom) + 62px));
   }
 }
 </style>

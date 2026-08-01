@@ -1,11 +1,26 @@
 <script setup>
-import { computed, onBeforeUnmount, watch } from 'vue'
-import { useRoute } from 'vue-router'
+import { computed, nextTick, onBeforeUnmount, onMounted, watch } from 'vue'
+import { useRoute, useRouter } from 'vue-router'
 import { useTheme } from '@/shared/composables/useTheme'
 import { applyStyleConfig, useConfig } from '@/shared/composables/useConfig'
+import {
+  dispatchCommandAction,
+  useCommandPalette
+} from '@/shared/composables/useCommandPalette'
+import CommandPalette from '@/shared/components/CommandPalette.vue'
+import Icon from '@/shared/components/Icon.vue'
 
 const route = useRoute()
+const router = useRouter()
 const publicShell = computed(() => Boolean(route.meta.publicShell))
+const commandPaletteEnabled = computed(() => !route.meta.public)
+
+const {
+  isOpen: commandPaletteOpen,
+  openCommandPalette,
+  closeCommandPalette,
+  handleCommandPaletteShortcut
+} = useCommandPalette()
 
 const { isDark } = useTheme({ defer: publicShell })
 const { config } = useConfig({ defer: publicShell })
@@ -100,7 +115,38 @@ watch(
   { immediate: true }
 )
 
+watch(commandPaletteEnabled, (enabled) => {
+  if (!enabled && commandPaletteOpen.value) {
+    closeCommandPalette({ restoreFocus: false })
+  }
+})
+
+function handleGlobalCommandPaletteKeydown(event) {
+  if (!commandPaletteEnabled.value) return
+  handleCommandPaletteShortcut(event)
+}
+
+async function handleCommandExecute(command) {
+  if (!command?.path) return
+
+  await closeCommandPalette({ restoreFocus: false })
+  await router.push(command.path)
+
+  if (!command.action || route.path !== command.path) return
+
+  await nextTick()
+  window.requestAnimationFrame(() => {
+    dispatchCommandAction(command.action)
+  })
+}
+
+onMounted(() => {
+  window.addEventListener('keydown', handleGlobalCommandPaletteKeydown, true)
+})
+
 onBeforeUnmount(() => {
+  window.removeEventListener('keydown', handleGlobalCommandPaletteKeydown, true)
+  closeCommandPalette({ restoreFocus: false })
   leavePublicShell({ reapply: false })
 })
 
@@ -125,6 +171,25 @@ const bgStyle = computed(() => {
 <template>
   <div class="app" :class="{ 'app--public-shell': publicShell }" :style="bgStyle">
     <router-view />
+
+    <button
+      v-if="commandPaletteEnabled"
+      class="command-launcher"
+      type="button"
+      aria-label="打开命令面板"
+      title="打开命令面板（Ctrl 或 Cmd + K）"
+      @click="openCommandPalette($event.currentTarget)"
+    >
+      <span class="command-launcher__icon"><Icon name="command" :size="17" /></span>
+      <span>命令</span>
+      <kbd>Ctrl K</kbd>
+    </button>
+
+    <CommandPalette
+      :show="commandPaletteEnabled && commandPaletteOpen"
+      @close="closeCommandPalette()"
+      @execute="handleCommandExecute"
+    />
   </div>
 </template>
 
@@ -140,5 +205,97 @@ const bgStyle = computed(() => {
   background-color: #f7f3ee !important;
   background-image: none !important;
   color: #332d29;
+}
+
+.command-launcher {
+  position: fixed;
+  right: max(18px, env(safe-area-inset-right));
+  bottom: max(18px, env(safe-area-inset-bottom));
+  z-index: 680;
+  display: inline-flex;
+  min-height: 44px;
+  padding: 6px 8px 6px 7px;
+  align-items: center;
+  gap: 8px;
+  color: var(--text-primary);
+  font: inherit;
+  font-size: 0.78rem;
+  font-weight: 680;
+  background: color-mix(in srgb, var(--bg-card) 92%, transparent);
+  border: 1px solid color-mix(in srgb, var(--border-color) 84%, var(--accent-color));
+  border-radius: 15px;
+  box-shadow:
+    0 14px 34px rgba(34, 24, 17, 0.14),
+    0 2px 8px rgba(34, 24, 17, 0.08);
+  -webkit-backdrop-filter: blur(16px);
+  backdrop-filter: blur(16px);
+  cursor: pointer;
+  transition: transform 0.18s ease, border-color 0.18s ease, box-shadow 0.18s ease;
+}
+
+.command-launcher:hover,
+.command-launcher:focus-visible {
+  border-color: color-mix(in srgb, var(--accent-color) 58%, var(--border-color));
+  box-shadow:
+    0 18px 42px rgba(34, 24, 17, 0.17),
+    0 0 0 4px color-mix(in srgb, var(--accent-color) 10%, transparent);
+  transform: translateY(-2px);
+}
+
+.command-launcher:focus-visible {
+  outline: none;
+}
+
+.command-launcher__icon {
+  display: grid;
+  width: 31px;
+  height: 31px;
+  place-items: center;
+  color: var(--accent-color);
+  background: var(--accent-bg);
+  border-radius: 10px;
+}
+
+.command-launcher kbd {
+  display: inline-flex;
+  height: 25px;
+  padding: 0 7px;
+  align-items: center;
+  color: var(--text-muted);
+  font-family: inherit;
+  font-size: 0.64rem;
+  font-weight: 600;
+  background: var(--bg-secondary);
+  border: 1px solid var(--border-light);
+  border-radius: 7px;
+}
+
+@media (max-width: 640px), (pointer: coarse) {
+  .command-launcher {
+    right: max(12px, env(safe-area-inset-right));
+    bottom: max(12px, env(safe-area-inset-bottom));
+    min-width: 48px;
+    min-height: 48px;
+    padding: 7px;
+    justify-content: center;
+    border-radius: 16px;
+  }
+
+  .command-launcher > span:not(.command-launcher__icon),
+  .command-launcher kbd {
+    display: none;
+  }
+
+  .command-launcher__icon {
+    width: 33px;
+    height: 33px;
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .app,
+  .command-launcher {
+    transition-duration: 0.01ms !important;
+  }
 }
 </style>

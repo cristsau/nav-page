@@ -20,11 +20,11 @@ import { validateAppConfigModelIds } from '../src/lib/aiModelSettings.js'
 test('chat model catalog exposes six unique verified proxy models', () => {
   assert.equal(CHAT_MODEL_CATALOG.length, 6)
   assert.equal(new Set(CHAT_MODEL_CATALOG.map(({ id }) => id)).size, 6)
-  assert.equal(CHAT_MODEL_CATALOG[0].id, DEFAULT_CHAT_MODEL_ID)
+  assert.equal(CHAT_MODEL_CATALOG[0].id, 'gpt-5.6-sol')
   assert.equal(DEFAULT_CHAT_MODEL_ID, DEFAULT_OPENAI_MODEL)
-  assert.deepEqual(
-    new Set(CHAT_MODEL_CATALOG.map(({ description }) => description)),
-    new Set(['生产已验证', '代理已配置'])
+  assert.equal(
+    CHAT_MODEL_CATALOG.every(({ description }) => description.includes('代理已验证')),
+    true
   )
 })
 

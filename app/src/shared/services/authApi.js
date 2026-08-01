@@ -18,7 +18,10 @@ export function isBackendAuthEnabled() {
 }
 
 export async function fetchBackendSession() {
-  const payload = await request('/auth/session', { method: 'GET' })
+  const payload = await request('/auth/session', {
+    method: 'GET',
+    cache: 'no-store'
+  })
   const user = payload.user || null
   setCurrentUserId(user?.id || null)
   return user
@@ -37,6 +40,76 @@ export async function loginWithBackend(username, password) {
 export async function logoutWithBackend() {
   await request('/auth/logout', { method: 'POST', body: JSON.stringify({}) })
   setCurrentUserId(null)
+}
+
+export async function fetchBackendSessions() {
+  const result = await request('/auth/sessions', {
+    method: 'GET',
+    cache: 'no-store'
+  })
+  return Array.isArray(result.sessions) ? result.sessions : []
+}
+
+export async function revokeBackendSession(sessionId) {
+  const result = await request(
+    `/auth/sessions/${encodeURIComponent(sessionId)}`,
+    { method: 'DELETE' }
+  )
+
+  if (result.currentSessionRevoked) {
+    setCurrentUserId(null)
+  }
+
+  return result
+}
+
+export async function revokeOtherBackendSessions() {
+  return request('/auth/sessions/revoke-others', {
+    method: 'POST'
+  })
+}
+
+export async function revokeAllBackendSessions() {
+  const result = await request('/auth/sessions/revoke-all', {
+    method: 'POST'
+  })
+  setCurrentUserId(null)
+  return result
+}
+
+export async function fetchBackendRecoveryCodeStatus() {
+  const result = await request('/auth/recovery-codes/status', {
+    method: 'GET',
+    cache: 'no-store'
+  })
+
+  return {
+    configured: Boolean(result.configured),
+    activeCodeCount: Number(result.activeCodeCount || 0),
+    generatedAt: result.generatedAt || null
+  }
+}
+
+export async function rotateBackendRecoveryCodes(currentPassword) {
+  const result = await request('/auth/recovery-codes', {
+    method: 'POST',
+    body: JSON.stringify({ currentPassword })
+  })
+
+  return {
+    codes: Array.isArray(result.codes) ? result.codes : [],
+    generatedAt: result.generatedAt || null,
+    warning: result.warning || ''
+  }
+}
+
+export async function recoverBackendAccount(payload) {
+  const result = await request('/auth/recover', {
+    method: 'POST',
+    body: JSON.stringify(payload)
+  })
+  setCurrentUserId(null)
+  return result
 }
 
 export async function registerWithBackend(payload) {

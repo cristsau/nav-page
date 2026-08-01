@@ -21,6 +21,13 @@ import {
   fetchBackendSession,
   loginWithBackend,
   logoutWithBackend,
+  fetchBackendSessions,
+  revokeBackendSession,
+  revokeOtherBackendSessions,
+  revokeAllBackendSessions,
+  fetchBackendRecoveryCodeStatus,
+  rotateBackendRecoveryCodes,
+  recoverBackendAccount,
   registerWithBackend,
   fetchBackendApprovedUsers,
   fetchBackendRegistrationRequests,
@@ -34,6 +41,13 @@ const pendingRequests = ref([])
 const approvedUsers = ref([])
 const registrationHistory = ref([])
 const initialized = ref(false)
+
+function clearCurrentAuthState() {
+  currentUser.value = null
+  pendingRequests.value = []
+  approvedUsers.value = []
+  registrationHistory.value = []
+}
 
 async function refreshCurrentUser() {
   currentUser.value = isBackendAuthEnabled()
@@ -99,10 +113,69 @@ export function useAuth() {
       logoutUser()
     }
 
-    currentUser.value = null
-    pendingRequests.value = []
-    approvedUsers.value = []
-    registrationHistory.value = []
+    clearCurrentAuthState()
+  }
+
+  async function getSessions() {
+    if (!isBackendAuthEnabled()) return []
+    return fetchBackendSessions()
+  }
+
+  async function revokeSession(sessionId) {
+    if (!isBackendAuthEnabled()) {
+      throw new Error('当前认证模式不支持会话管理。')
+    }
+
+    const result = await revokeBackendSession(sessionId)
+    if (result.currentSessionRevoked) {
+      clearCurrentAuthState()
+    }
+    return result
+  }
+
+  async function revokeOtherSessions() {
+    if (!isBackendAuthEnabled()) {
+      throw new Error('当前认证模式不支持会话管理。')
+    }
+    return revokeOtherBackendSessions()
+  }
+
+  async function revokeAllSessions() {
+    if (!isBackendAuthEnabled()) {
+      throw new Error('当前认证模式不支持会话管理。')
+    }
+
+    const result = await revokeAllBackendSessions()
+    clearCurrentAuthState()
+    return result
+  }
+
+  async function getRecoveryCodeStatus() {
+    if (!isBackendAuthEnabled()) {
+      return {
+        configured: false,
+        activeCodeCount: 0,
+        generatedAt: null
+      }
+    }
+    return fetchBackendRecoveryCodeStatus()
+  }
+
+  async function rotateRecoveryCodes(currentPassword) {
+    if (!isBackendAuthEnabled()) {
+      throw new Error('当前认证模式不支持恢复码。')
+    }
+    return rotateBackendRecoveryCodes(currentPassword)
+  }
+
+  async function recoverAccount(payload) {
+    if (!isBackendAuthEnabled()) {
+      throw new Error('当前认证模式不支持恢复码。')
+    }
+
+    const result = await recoverBackendAccount(payload)
+    clearCurrentAuthState()
+    return result
   }
 
   async function register(payload) {
@@ -180,10 +253,18 @@ export function useAuth() {
     registrationHistory,
     isAuthenticated: computed(() => Boolean(currentUser.value)),
     isAdmin: computed(() => currentUser.value?.role === 'admin'),
+    backendAuthEnabled: computed(() => isBackendAuthEnabled()),
     initAuth,
     refreshAll,
     login,
     logout,
+    getSessions,
+    revokeSession,
+    revokeOtherSessions,
+    revokeAllSessions,
+    getRecoveryCodeStatus,
+    rotateRecoveryCodes,
+    recoverAccount,
     register,
     approve,
     reject,

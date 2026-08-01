@@ -3,11 +3,14 @@
 ## 当前线上部署
 
 - 域名：[https://nav.skrskr.net](https://nav.skrskr.net)
+- 反代域名：[https://nav.cristsau.cn](https://nav.cristsau.cn)
 - 服务器：`oracle-JP`
 - 对外端口：`80 / 443`
 - 前端发布目录：`/home/web/html/nav`
 - 后端：`nav-api`
 - 数据库：`nav-postgres`
+- 当前提交：`ff561376642b91030fe7318a6ff7a537f3664d9c`
+- 发布证据：`/opt/nav-releases/20260731-172559-ff561376642b91030fe7318a6ff7a537f3664d9c`
 
 ## 当前定位
 
@@ -16,13 +19,8 @@
 - 可上线测试版
 - 可用于日常自用、演示和小范围内测
 
-还不是最终商业交付版，因为后续还要继续补：
-
-- 备份
-- 审计日志
-- 限流
-- 多环境部署
-- 客户自部署文档
+还不是最终商业交付版。备份/恢复脚本、限流和账号恢复已进入下一阶段候选，
+但异地备份凭据、告警、Passkey、多环境部署和客户自部署文档仍未收口。
 
 ## 开发到线上发布流程
 
@@ -38,6 +36,54 @@
 - [https://github.com/cristsau/nav-page.git](https://github.com/cristsau/nav-page.git)
 
 项目不要求在个人电脑运行 npm 测试；`.github/workflows/ci.yml` 是默认验收入口。
+
+## 下一阶段服务端 AI 配置
+
+`codex/nav-ai-vite-security` 候选支持从 CLI Proxy `/v1/models` 动态发现最多
+6 个可用模型，并默认选择最新稳定通用模型。生产部署候选时配置：
+
+```dotenv
+NAV_AI_CLI_PROXY_BASE_URL=https://ap.example.com
+NAV_AI_CLI_PROXY_API_KEY_FILE=/run/secrets/nav/cli-proxy-api-key
+```
+
+Compose 只读挂载 owner-only 文件：
+
+```yaml
+volumes:
+  - /opt/nav/secrets/nav-ai-cli-proxy-api-key:/run/secrets/nav/cli-proxy-api-key:ro
+```
+
+密钥文件必须是绝对路径、普通文件、非符号链接，权限只能是 `0400` 或 `0600`。
+不要把 key 写入 GitHub、镜像、Compose 或前端设置。当前生产 CLI Proxy 可正常列出模型；
+独立 NAV client key 仍需 Management Center 写权限或另行授权重启后创建。
+
+## 可信代理与限流
+
+候选 API 只信任 loopback 和 `TRUSTED_PROXY_ADDRESSES` 中的精确 IP。发布前必须现场
+复核 Docker bridge gateway 和外层代理，不得填写宽网段。2026-07-31 的只读观测值：
+
+```dotenv
+TRUSTED_PROXY_ADDRESSES=172.19.0.1,45.143.234.47
+```
+
+这只是本次快照；Compose 网络重建后网关可能变化，发布时必须重查。验收时应从两个不同
+外网客户端经两个域名登录，确认会话页显示的客户端 IP 不同，且限流不会把全部用户视作
+同一地址。
+
+## 备份与恢复
+
+候选运行手册：
+
+- `docs/NAV_BACKUP_RUNBOOK.md`
+- `scripts/nav-backup.sh`
+- `scripts/nav-restore-rehearsal.sh`
+- `scripts/nav-backup.env.example`
+
+脚本支持同一 PostgreSQL 导出快照、完整表集合/行数/迁移记录、严格树清单、校验和、
+隔离恢复、restic 加密上传双闸门和失败报警。没有 bucket-scoped R2 凭据、独立 restic
+密码文件和专用 Telegram 凭据前，只能算本地备份与恢复能力，不能声称异地备份和报警
+已经启用。
 
 ## 笔记图片与个人图床
 

@@ -14,7 +14,7 @@ DOMO NAV 是一个可私有化部署的导航工作台，目标不是只做静�
 ### 前端
 
 - Vue 3
-- Vite 5
+- Vite 6
 - Vue Router 4
 - CSS Variables
 
@@ -67,6 +67,7 @@ DOMO NAV 是一个可私有化部署的导航工作台，目标不是只做静�
 - 注册
 - 审批
 - 管理员用户管理
+- 会话撤销、恢复码、限流（下一阶段候选，尚未发布）
 
 ### Telegram
 
@@ -78,6 +79,7 @@ DOMO NAV 是一个可私有化部署的导航工作台，目标不是只做静�
 
 - ChatGPT / OpenAI-compatible
 - Brave Search API
+- CLI Proxy 动态模型目录与“自动最新”（下一阶段候选，尚未发布）
 
 ### 浏览器扩展
 

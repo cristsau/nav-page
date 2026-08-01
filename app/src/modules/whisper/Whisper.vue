@@ -4,6 +4,7 @@ import { useRoute, useRouter } from 'vue-router'
 import { getCurrentUserId, getNotes as getLocalNotes, addNote as addLocalNote, updateNote as updateLocalNote, deleteNote as deleteLocalNote, toggleNotePin as toggleLocalNotePin, getSetting as getLocalSetting, setSetting as setLocalSetting } from '@/shared/db/database'
 import { fetchBackendSetting, saveBackendSetting, shouldUseBackendSettings } from '@/shared/services/settingsApi'
 import { createBackendNote, deleteBackendNote, fetchBackendNotes, shouldUseBackendNotes, toggleBackendNotePin, updateBackendNote } from '@/shared/services/notesApi'
+import { COMMAND_ACTION_EVENT } from '@/shared/composables/useCommandPalette'
 import Icon from '@/shared/components/Icon.vue'
 import NoteCard from './components/NoteCard.vue'
 import NoteEditor from './components/NoteEditor.vue'
@@ -412,8 +413,17 @@ function goBack() {
   router.push('/')
 }
 
+function handleCommandAction(event) {
+  const action = event.detail?.action
+  if (!['create-memo', 'create-diary'].includes(action)) return
+
+  createMenuOpen.value = false
+  handleCreateNote(action === 'create-diary' ? 'diary' : 'memo')
+}
+
 // 初始化
 onMounted(async () => {
+  window.addEventListener(COMMAND_ACTION_EVENT, handleCommandAction)
   document.addEventListener('pointerdown', handleCreateMenuPointerDown)
   window.addEventListener('keydown', handleCreateMenuKeydown)
 
@@ -445,6 +455,7 @@ onMounted(async () => {
 })
 
 onBeforeUnmount(() => {
+  window.removeEventListener(COMMAND_ACTION_EVENT, handleCommandAction)
   document.removeEventListener('pointerdown', handleCreateMenuPointerDown)
   window.removeEventListener('keydown', handleCreateMenuKeydown)
 })

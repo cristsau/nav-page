@@ -6,6 +6,7 @@ import {
   createCorsOriginValidator,
   isUnsafeRequestOriginTrusted
 } from './lib/requestSecurity.js'
+import { isTrustedProxyAddress } from './lib/requestRateLimit.js'
 import authPlugin from './plugins/auth.js'
 import adminTelegramRoutes from './routes/adminTelegram.js'
 import aiSearchRoutes from './routes/aiSearch.js'
@@ -45,7 +46,8 @@ function stripBodylessDeleteJsonContentType(request) {
 
 export function createApp() {
   const app = Fastify({
-    logger: true
+    logger: true,
+    trustProxy: (address) => isTrustedProxyAddress(address)
   })
 
   app.register(cookie)

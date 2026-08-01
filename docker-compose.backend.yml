@@ -31,6 +31,7 @@ services:
       - "127.0.0.1:3001:3001"
     volumes:
       - /home/web/html/nav:/var/www/nav:ro
+      - /opt/nav/secrets/nav-ai-cli-proxy-api-key:/run/secrets/nav/cli-proxy-api-key:ro
 
 volumes:
   nav-postgres-data:

@@ -11,3 +11,10 @@ export async function importLocalDataToBackend(data) {
     body: JSON.stringify({ data })
   })
 }
+
+export async function exportBackendData() {
+  return request('/migration/export-cloud', {
+    method: 'GET',
+    cache: 'no-store'
+  })
+}

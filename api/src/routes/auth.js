@@ -1,8 +1,47 @@
 import { config } from '../config.js'
 import { query, withTransaction } from '../db/index.js'
-import { createSessionToken, hashPassword, hashSessionToken, normalizeUsername, verifyPassword } from '../lib/auth.js'
+import {
+  PUBLIC_ACCOUNT_RECOVERY_ERROR,
+  createRecoveryCodes,
+  createSessionToken,
+  hashPassword,
+  hashRecoveryCode,
+  hashSessionToken,
+  isValidRecoveryCode,
+  isValidUsername,
+  normalizeUsername,
+  validateNewPassword,
+  verifyPassword
+} from '../lib/auth.js'
+import {
+  applyRateLimitReply,
+  consumePublicAuthRateLimit
+} from '../lib/requestRateLimit.js'
 import { sendDecisionNotificationToAdmins, sendRegistrationNotificationToAdmins } from '../lib/telegram.js'
 import { mapRegistrationRequest, sanitizeUser } from '../lib/users.js'
+
+const UUID_PATTERN = /^[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i
+
+function enforcePublicAuthRateLimit(kind, request, reply, identity = '') {
+  const rateLimit = consumePublicAuthRateLimit(kind, request, identity)
+  if (!applyRateLimitReply(reply, rateLimit)) return null
+
+  return {
+    error: 'Too many authentication attempts, please try again later'
+  }
+}
+
+function mapSession(session, currentSessionId = '') {
+  return {
+    id: session.id,
+    current: session.id === currentSessionId,
+    ipAddress: session.ip_address || '',
+    userAgent: session.user_agent || '',
+    createdAt: session.created_at,
+    lastSeenAt: session.last_seen_at,
+    expiresAt: session.expires_at
+  }
+}
 
 export default async function authRoutes(fastify) {
   fastify.get('/auth/session', async (request) => ({
@@ -10,12 +49,21 @@ export default async function authRoutes(fastify) {
   }))
 
   fastify.post('/auth/register', async (request, reply) => {
+    const rateLimited = enforcePublicAuthRateLimit('register', request, reply)
+    if (rateLimited) return rateLimited
+
     const username = normalizeUsername(request.body?.username)
     const password = String(request.body?.password || '')
 
-    if (!username || !password) {
+    if (!isValidUsername(username) || !password) {
       reply.code(400)
-      return { error: 'Username and password are required' }
+      return { error: 'A username of 1 to 128 characters and a password are required' }
+    }
+
+    const passwordValidation = validateNewPassword(password)
+    if (!passwordValidation.valid) {
+      reply.code(400)
+      return { error: passwordValidation.error }
     }
 
     const existingUser = await query('SELECT id FROM users WHERE username = $1 LIMIT 1', [username])
@@ -60,52 +108,95 @@ export default async function authRoutes(fastify) {
   fastify.post('/auth/login', async (request, reply) => {
     const username = normalizeUsername(request.body?.username)
     const password = String(request.body?.password || '')
+    if (!isValidUsername(username)) {
+      reply.code(401)
+      return { error: 'Invalid username or password' }
+    }
+    const rateLimited = enforcePublicAuthRateLimit(
+      'login',
+      request,
+      reply,
+      username
+    )
+    if (rateLimited) return rateLimited
 
-    const { rows } = await query('SELECT * FROM users WHERE username = $1 LIMIT 1', [username])
-    const user = rows[0]
+    const login = await withTransaction(async (client) => {
+      const { rows } = await client.query(
+        `
+          SELECT *
+          FROM users
+          WHERE username = $1
+          LIMIT 1
+          FOR UPDATE
+        `,
+        [username]
+      )
+      const user = rows[0]
+      const valid = user
+        ? await verifyPassword(password, user.password_hash)
+        : false
 
-    if (!user) {
+      if (!valid) {
+        return { status: 'invalid' }
+      }
+
+      if (user.status !== 'approved') {
+        return { status: 'unapproved' }
+      }
+
+      const updatedUser = await client.query(
+        `
+          UPDATE users
+          SET last_login_at = NOW(),
+              updated_at = NOW()
+          WHERE id = $1
+          RETURNING *
+        `,
+        [user.id]
+      )
+      const token = createSessionToken()
+      const tokenHash = hashSessionToken(token)
+
+      await client.query(
+        `
+          INSERT INTO sessions (
+            user_id,
+            token_hash,
+            ip_address,
+            user_agent,
+            expires_at
+          ) VALUES ($1, $2, $3, $4, NOW() + ($5 || ' days')::interval)
+        `,
+        [
+          user.id,
+          tokenHash,
+          request.ip,
+          request.headers['user-agent'] || '',
+          String(config.sessionTtlDays)
+        ]
+      )
+
+      return {
+        status: 'authenticated',
+        token,
+        user: updatedUser.rows[0]
+      }
+    })
+
+    if (login.status === 'invalid') {
       reply.code(401)
       return { error: 'Invalid username or password' }
     }
 
-    if (user.status !== 'approved') {
+    if (login.status === 'unapproved') {
       reply.code(403)
       return { error: 'This account is not approved yet' }
     }
 
-    const valid = await verifyPassword(password, user.password_hash)
-    if (!valid) {
-      reply.code(401)
-      return { error: 'Invalid username or password' }
-    }
-
-    await query('UPDATE users SET last_login_at = NOW(), updated_at = NOW() WHERE id = $1', [user.id])
-
-    const token = createSessionToken()
-    const tokenHash = hashSessionToken(token)
-
-    await query(
-      `
-        INSERT INTO sessions (
-          user_id,
-          token_hash,
-          ip_address,
-          user_agent,
-          expires_at
-        ) VALUES ($1, $2, $3, $4, NOW() + ($5 || ' days')::interval)
-      `,
-      [user.id, tokenHash, request.ip, request.headers['user-agent'] || '', String(config.sessionTtlDays)]
-    )
-
-    await fastify.setSessionCookie(reply, token)
+    await fastify.setSessionCookie(reply, login.token)
 
     return {
-      user: sanitizeUser({
-        ...user,
-        last_login_at: new Date().toISOString(),
-        updated_at: new Date().toISOString()
-      })
+      user: sanitizeUser(login.user)
     }
   })
 
@@ -117,6 +208,309 @@ export default async function authRoutes(fastify) {
 
     await fastify.clearSessionCookie(reply)
     return { ok: true }
+  })
+
+  fastify.get('/auth/sessions', async (request, reply) => {
+    await fastify.requireAuth(request, reply)
+
+    const { rows } = await query(
+      `
+        SELECT
+          id,
+          ip_address,
+          user_agent,
+          created_at,
+          last_seen_at,
+          expires_at
+        FROM sessions
+        WHERE user_id = $1
+          AND expires_at > NOW()
+        ORDER BY last_seen_at DESC, created_at DESC
+      `,
+      [request.currentUser.id]
+    )
+
+    return {
+      sessions: rows.map((session) => mapSession(
+        session,
+        request.session?.id || ''
+      ))
+    }
+  })
+
+  fastify.delete('/auth/sessions/:sessionId', async (request, reply) => {
+    await fastify.requireAuth(request, reply)
+
+    const sessionId = String(request.params?.sessionId || '').trim()
+    if (!UUID_PATTERN.test(sessionId)) {
+      reply.code(404)
+      return { error: 'Session not found' }
+    }
+
+    const { rows } = await query(
+      `
+        DELETE FROM sessions
+        WHERE id = $1
+          AND user_id = $2
+        RETURNING id
+      `,
+      [sessionId, request.currentUser.id]
+    )
+
+    if (!rows.length) {
+      reply.code(404)
+      return { error: 'Session not found' }
+    }
+
+    const revokedCurrentSession = sessionId === request.session?.id
+    if (revokedCurrentSession) {
+      await fastify.clearSessionCookie(reply)
+    }
+
+    return {
+      ok: true,
+      revokedSessionId: sessionId,
+      currentSessionRevoked: revokedCurrentSession
+    }
+  })
+
+  fastify.post('/auth/sessions/revoke-others', async (request, reply) => {
+    await fastify.requireAuth(request, reply)
+
+    const currentSessionId = request.session?.id
+    if (!currentSessionId) {
+      reply.code(401)
+      return { error: 'Authentication required' }
+    }
+
+    const result = await query(
+      `
+        DELETE FROM sessions
+        WHERE user_id = $1
+          AND id <> $2
+      `,
+      [request.currentUser.id, currentSessionId]
+    )
+
+    return {
+      ok: true,
+      revokedCount: result.rowCount || 0,
+      currentSessionRevoked: false
+    }
+  })
+
+  fastify.post('/auth/sessions/revoke-all', async (request, reply) => {
+    await fastify.requireAuth(request, reply)
+
+    const result = await query(
+      'DELETE FROM sessions WHERE user_id = $1',
+      [request.currentUser.id]
+    )
+
+    await fastify.clearSessionCookie(reply)
+    return {
+      ok: true,
+      revokedCount: result.rowCount || 0,
+      currentSessionRevoked: true
+    }
+  })
+
+  fastify.get('/auth/recovery-codes/status', async (request, reply) => {
+    await fastify.requireAuth(request, reply)
+
+    const { rows } = await query(
+      `
+        SELECT
+          COUNT(*) FILTER (
+            WHERE used_at IS NULL
+              AND revoked_at IS NULL
+          )::integer AS active_code_count,
+          MAX(created_at) FILTER (
+            WHERE used_at IS NULL
+              AND revoked_at IS NULL
+          ) AS generated_at
+        FROM account_recovery_codes
+        WHERE user_id = $1
+      `,
+      [request.currentUser.id]
+    )
+    const activeCodeCount = Number(rows[0]?.active_code_count || 0)
+
+    return {
+      configured: activeCodeCount > 0,
+      activeCodeCount,
+      generatedAt: rows[0]?.generated_at || null
+    }
+  })
+
+  fastify.post('/auth/recovery-codes', async (request, reply) => {
+    await fastify.requireAuth(request, reply)
+
+    const currentPassword = String(request.body?.currentPassword || '')
+    if (!currentPassword) {
+      reply.code(400)
+      return { error: 'Current password is required' }
+    }
+
+    const recoveryCodes = createRecoveryCodes()
+    const recoveryCodeHashes = recoveryCodes.map(hashRecoveryCode)
+    const rotation = await withTransaction(async (client) => {
+      const userResult = await client.query(
+        `
+          SELECT password_hash
+          FROM users
+          WHERE id = $1
+          FOR UPDATE
+        `,
+        [request.currentUser.id]
+      )
+      const user = userResult.rows[0]
+
+      if (!user || !await verifyPassword(currentPassword, user.password_hash)) {
+        return null
+      }
+
+      await client.query(
+        `
+          UPDATE account_recovery_codes
+          SET revoked_at = COALESCE(revoked_at, NOW())
+          WHERE user_id = $1
+        `,
+        [request.currentUser.id]
+      )
+
+      await client.query(
+        `
+          INSERT INTO account_recovery_codes (user_id, code_hash)
+          SELECT $1, generated.code_hash
+          FROM UNNEST($2::text[]) AS generated(code_hash)
+        `,
+        [request.currentUser.id, recoveryCodeHashes]
+      )
+
+      const generatedAt = await client.query('SELECT NOW() AS generated_at')
+      return generatedAt.rows[0]?.generated_at || new Date().toISOString()
+    })
+
+    if (!rotation) {
+      reply.code(400)
+      return { error: 'Current password is incorrect' }
+    }
+
+    return {
+      codes: recoveryCodes,
+      generatedAt: rotation,
+      warning: 'These recovery codes are shown only once. Store them securely.'
+    }
+  })
+
+  fastify.post('/auth/recover', async (request, reply) => {
+    const username = normalizeUsername(request.body?.username)
+    const rawRecoveryCode = String(request.body?.recoveryCode || '').slice(0, 256)
+    const newPassword = String(request.body?.newPassword || '')
+    const ipRateLimited = enforcePublicAuthRateLimit(
+      'recovery',
+      request,
+      reply
+    )
+    if (ipRateLimited) return ipRateLimited
+
+    if (!isValidUsername(username)) {
+      reply.code(401)
+      return { error: PUBLIC_ACCOUNT_RECOVERY_ERROR }
+    }
+
+    const identityRateLimited = enforcePublicAuthRateLimit(
+      'recovery',
+      request,
+      reply,
+      username
+    )
+    if (identityRateLimited) return identityRateLimited
+
+    const passwordValidation = validateNewPassword(newPassword)
+
+    if (!passwordValidation.valid) {
+      reply.code(400)
+      return { error: passwordValidation.error }
+    }
+
+    const recoveryCodeValid = isValidRecoveryCode(rawRecoveryCode)
+    const recoveryCodeHash = hashRecoveryCode(rawRecoveryCode)
+    const recovered = await withTransaction(async (client) => {
+      const recoveryResult = await client.query(
+        `
+          SELECT
+            u.id AS user_id,
+            recovery.id AS recovery_code_id
+          FROM users u
+          JOIN account_recovery_codes recovery
+            ON recovery.user_id = u.id
+          WHERE u.username = $1
+            AND u.status = 'approved'
+            AND recovery.code_hash = $2
+            AND recovery.used_at IS NULL
+            AND recovery.revoked_at IS NULL
+          LIMIT 1
+          FOR UPDATE OF u, recovery
+        `,
+        [
+          recoveryCodeValid ? username : '',
+          recoveryCodeHash
+        ]
+      )
+      const match = recoveryResult.rows[0]
+      if (!match) return null
+      const newPasswordHash = await hashPassword(newPassword)
+
+      await client.query(
+        `
+          UPDATE users
+          SET password_hash = $2,
+              password_changed_at = NOW(),
+              updated_at = NOW()
+          WHERE id = $1
+        `,
+        [match.user_id, newPasswordHash]
+      )
+
+      await client.query(
+        `
+          UPDATE account_recovery_codes
+          SET used_at = CASE
+                WHEN id = $2 THEN NOW()
+                ELSE used_at
+              END,
+              revoked_at = COALESCE(revoked_at, NOW())
+          WHERE user_id = $1
+            AND revoked_at IS NULL
+        `,
+        [match.user_id, match.recovery_code_id]
+      )
+
+      await client.query(
+        'DELETE FROM sessions WHERE user_id = $1',
+        [match.user_id]
+      )
+
+      return {
+        userId: match.user_id
+      }
+    })
+
+    if (!recovered) {
+      reply.code(401)
+      return { error: PUBLIC_ACCOUNT_RECOVERY_ERROR }
+    }
+
+    if (request.currentUser?.id === recovered.userId) {
+      await fastify.clearSessionCookie(reply)
+    }
+
+    return {
+      ok: true,
+      message: 'Password updated. Sign in again with the new password.'
+    }
   })
 
   fastify.get('/admin/users', async (request, reply) => {

@@ -5,6 +5,7 @@ import {
   runNoteAi,
   selectNoteAiProvider
 } from '../lib/noteAi.js'
+import { resolveChatProviderModel } from '../lib/aiModelCatalog.js'
 import { normalizeExistingNoteTags } from '../lib/noteTags.js'
 
 const MAX_TITLE_LENGTH = 300
@@ -54,14 +55,20 @@ export default async function noteAiRoutes(fastify) {
     }
 
     const appConfig = await getUserSettingValue(request.currentUser.id, 'appConfig', {})
-    const provider = selectNoteAiProvider(appConfig?.search?.providers || {})
-
-    if (!provider) {
-      reply.code(503)
-      return { error: '请先在设置中启用 ChatGPT / OpenAI' }
-    }
 
     try {
+      const resolution = await resolveChatProviderModel(
+        appConfig?.search?.providers?.chatgpt || {}
+      )
+      const provider = selectNoteAiProvider({
+        chatgpt: resolution.provider
+      })
+
+      if (!provider) {
+        reply.code(503)
+        return { error: '请先在设置中启用 ChatGPT / OpenAI' }
+      }
+
       return {
         result: await runNoteAi(provider, {
           action,

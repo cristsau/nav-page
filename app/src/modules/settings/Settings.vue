@@ -7,6 +7,7 @@ import SearchSettings from './components/SearchSettings.vue'
 import BrowserIntegrationSettings from './components/BrowserIntegrationSettings.vue'
 import DataSettings from './components/DataSettings.vue'
 import UserManagementSettings from './components/UserManagementSettings.vue'
+import AccountSecuritySettings from './components/AccountSecuritySettings.vue'
 import Icon from '@/shared/components/Icon.vue'
 import { useConfig } from '@/shared/composables/useConfig'
 import { useAuth } from '@/shared/composables/useAuth'
@@ -17,7 +18,12 @@ const saving = ref(false)
 const saveMessage = ref('')
 
 const { persistConfigNow } = useConfig()
-const { currentUser, logout, initAuth } = useAuth()
+const {
+  currentUser,
+  backendAuthEnabled,
+  logout,
+  initAuth
+} = useAuth()
 
 async function focusRequestedSection() {
   const section = String(route.query.section || '').trim()
@@ -98,6 +104,11 @@ async function handleExit() {
         <SearchSettings id="settings-search" tabindex="-1" />
         <BrowserIntegrationSettings />
         <UserManagementSettings />
+        <AccountSecuritySettings
+          v-if="backendAuthEnabled"
+          id="settings-security"
+          tabindex="-1"
+        />
         <DataSettings />
 
         <div class="about-section">
