@@ -1,6 +1,6 @@
 # DOMO NAV Status Report
 
-最后更新：2026-07-31
+最后更新：2026-08-01
 
 ## 生产基线
 
@@ -32,8 +32,9 @@
 
 分支：`codex/nav-ai-vite-security`
 
-状态：仅本地候选，核心实现已提交为
-`030e2019ca1eac9f865a1dd5ac5ebff1880fed0d`；尚未推送、创建 PR 或发布生产。
+状态：候选核心实现为 `030e2019ca1eac9f865a1dd5ac5ebff1880fed0d`，
+已提交 [PR #6](https://github.com/cristsau/nav-page/pull/6)；Push 与 PR 两次
+GitHub Actions 均通过，尚未合并或发布生产。
 
 候选包含：
 
@@ -72,14 +73,13 @@
 
 发布候选前必须重新取得明确授权，并完成：
 
-1. 提交、推送候选分支，创建 PR，由 GitHub Actions 再跑一次相同检查。
-2. 生产发布前重新备份，并保留现有回滚版本。
-3. 配置服务端 CLI Proxy Base URL 和 API Key 文件挂载。
-4. 现场复核 Docker 网关和外层代理 IP。当前观测值是 Docker 网关
+1. 生产发布前重新备份，并保留现有回滚版本。
+2. 配置服务端 CLI Proxy Base URL 和 API Key 文件挂载。
+3. 现场复核 Docker 网关和外层代理 IP。当前观测值是 Docker 网关
    `172.19.0.1`、外层 NPM `45.143.234.47`；发布时必须重新确认后再精确写入
    `TRUSTED_PROXY_ADDRESSES`。
-5. 执行迁移 `011_account_recovery.sql`，发布 API 和前端。
-6. 用两个真实外网客户端分别经两个域名验收会话 IP、限流、登录、恢复码、
+4. 执行迁移 `011_account_recovery.sql`，发布 API 和前端。
+5. 用两个真实外网客户端分别经两个域名验收会话 IP、限流、登录、恢复码、
    AI 模型发现和数据导出。
 
 ## 仍未完成
