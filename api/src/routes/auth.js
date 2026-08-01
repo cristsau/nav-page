@@ -36,15 +36,31 @@ async function enforcePublicAuthRateLimit(kind, request, reply, identity = '') {
 
     request.log.error(error, 'persistent public-auth rate limiter unavailable')
     return {
-      error: 'Security rate limiting is temporarily unavailable'
+      response: {
+        error: 'Security rate limiting is temporarily unavailable'
+      },
+      firstDenied: false
     }
   }
 
   if (!applyRateLimitReply(reply, rateLimit)) return null
 
   return {
-    error: 'Too many authentication attempts, please try again later'
+    response: {
+      error: 'Too many authentication attempts, please try again later'
+    },
+    firstDenied: rateLimit.firstDenied === true
   }
+}
+
+async function auditFirstRateLimitDenial(rateLimited, request, eventType) {
+  if (!rateLimited?.firstDenied) return false
+
+  return recordSecurityEventBestEffort({
+    request,
+    eventType,
+    outcome: 'denied'
+  }, request.log)
 }
 
 function mapSession(session, currentSessionId = '') {
@@ -66,7 +82,7 @@ export default async function authRoutes(fastify) {
 
   fastify.post('/auth/register', async (request, reply) => {
     const rateLimited = await enforcePublicAuthRateLimit('register', request, reply)
-    if (rateLimited) return rateLimited
+    if (rateLimited) return rateLimited.response
 
     const username = normalizeUsername(request.body?.username)
     const password = String(request.body?.password || '')
@@ -122,27 +138,39 @@ export default async function authRoutes(fastify) {
   })
 
   fastify.post('/auth/login', async (request, reply) => {
-    const username = normalizeUsername(request.body?.username)
     const password = String(request.body?.password || '')
+    const ipRateLimited = await enforcePublicAuthRateLimit(
+      'login',
+      request,
+      reply
+    )
+    if (ipRateLimited) {
+      await auditFirstRateLimitDenial(
+        ipRateLimited,
+        request,
+        'auth.login'
+      )
+      return ipRateLimited.response
+    }
+
+    const username = normalizeUsername(request.body?.username)
     if (!isValidUsername(username)) {
       reply.code(401)
       return { error: 'Invalid username or password' }
     }
-    const rateLimited = await enforcePublicAuthRateLimit(
+    const identityRateLimited = await enforcePublicAuthRateLimit(
       'login',
       request,
       reply,
       username
     )
-    if (rateLimited) {
-      if (reply.statusCode === 429) {
-        await recordSecurityEventBestEffort({
-          request,
-          eventType: 'auth.login',
-          outcome: 'denied'
-        }, request.log)
-      }
-      return rateLimited
+    if (identityRateLimited) {
+      await auditFirstRateLimitDenial(
+        identityRateLimited,
+        request,
+        'auth.login'
+      )
+      return identityRateLimited.response
     }
 
     const login = await withTransaction(async (client) => {
@@ -258,21 +286,29 @@ export default async function authRoutes(fastify) {
 
   fastify.post('/auth/logout', async (request, reply) => {
     const token = request.cookies[config.sessionCookieName]
-    if (token) {
-      await query('DELETE FROM sessions WHERE token_hash = $1', [hashSessionToken(token)])
-    }
+    if (token || request.currentUser?.id) {
+      await withTransaction(async (client) => {
+        const deletedSession = token
+          ? await client.query(
+              'DELETE FROM sessions WHERE token_hash = $1 RETURNING id',
+              [hashSessionToken(token)]
+            )
+          : { rowCount: 0, rows: [] }
 
-    if (request.currentUser?.id) {
-      await recordSecurityEventBestEffort({
-        request,
-        eventType: 'auth.logout',
-        outcome: 'success',
-        actorUserId: request.currentUser.id,
-        subjectUserId: request.currentUser.id,
-        resourceType: 'session',
-        resourceId: request.session?.id || null,
-        affectedCount: token ? 1 : 0
-      }, request.log)
+        if (request.currentUser?.id) {
+          await recordSecurityEvent({
+            client,
+            request,
+            eventType: 'auth.logout',
+            outcome: 'success',
+            actorUserId: request.currentUser.id,
+            subjectUserId: request.currentUser.id,
+            resourceType: 'session',
+            resourceId: deletedSession.rows[0]?.id || request.session?.id || null,
+            affectedCount: deletedSession.rowCount || 0
+          })
+        }
+      })
     }
 
     await fastify.clearSessionCookie(reply)
@@ -549,14 +585,12 @@ export default async function authRoutes(fastify) {
       reply
     )
     if (ipRateLimited) {
-      if (reply.statusCode === 429) {
-        await recordSecurityEventBestEffort({
-          request,
-          eventType: 'auth.recovery',
-          outcome: 'denied'
-        }, request.log)
-      }
-      return ipRateLimited
+      await auditFirstRateLimitDenial(
+        ipRateLimited,
+        request,
+        'auth.recovery'
+      )
+      return ipRateLimited.response
     }
 
     if (!isValidUsername(username)) {
@@ -571,14 +605,12 @@ export default async function authRoutes(fastify) {
       username
     )
     if (identityRateLimited) {
-      if (reply.statusCode === 429) {
-        await recordSecurityEventBestEffort({
-          request,
-          eventType: 'auth.recovery',
-          outcome: 'denied'
-        }, request.log)
-      }
-      return identityRateLimited
+      await auditFirstRateLimitDenial(
+        identityRateLimited,
+        request,
+        'auth.recovery'
+      )
+      return identityRateLimited.response
     }
 
     const passwordValidation = validateNewPassword(newPassword)

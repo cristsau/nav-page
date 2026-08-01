@@ -13,19 +13,21 @@ The migration does not modify or delete existing user data. An older API can con
 
 Public login, registration, account recovery, authenticated writes and AI requests use an atomic PostgreSQL `INSERT ... ON CONFLICT DO UPDATE`. The database clock defines the window and the primary key serializes concurrent increments for the same scope and identity.
 
-Only an HMAC-SHA-256 digest is written to `rate_limit_buckets`. The raw client IP, username and user ID used to derive a bucket are never included in the SQL parameters. In production, configure a stable random secret of at least 32 characters:
+Only an HMAC-SHA-256 digest is written to `rate_limit_buckets`. The raw client IP, username and user ID used to derive a bucket are never included in the SQL parameters. Every actual API service process must configure a stable random secret of at least 32 characters:
 
 ```dotenv
 NAV_RATE_LIMIT_KEY_SECRET=<owner-only random secret>
 ```
 
-Generate and store this value on the server; never commit it to GitHub. All replicas must use the same value. Rotating it intentionally starts new logical buckets and changes future audit fingerprints.
+Generate and store this value on the server; never commit it to GitHub. All replicas must use the same value. There is no development fallback in the server path; pure unit tests inject an explicit test-only secret. Rotating it intentionally starts new logical buckets and changes future audit fingerprints.
+
+Login first consumes a client-IP bucket and only then, after bounded username validation, consumes the client-IP plus username bucket. This prevents cycling usernames from bypassing the aggregate client limit or creating unbounded identity buckets. A denied bucket reports `firstDenied` only on the first request that crosses its threshold; login/recovery writes one rate-limit audit event for that transition and does not append an event for every subsequent `429`.
 
 Expired buckets are deleted opportunistically in bounded batches with `FOR UPDATE SKIP LOCKED`. Cleanup failure does not undo a counter that was already consumed, but it is logged for operations review.
 
 ### Failure policy
 
-NAV does not fall back to an in-process counter. A missing/short production digest secret prevents the API process from starting. If PostgreSQL is unavailable or the atomic result is invalid while the API is running:
+NAV does not fall back to an in-process counter. A missing/short digest secret prevents the API process from starting regardless of `NODE_ENV`; the API image and Compose service also set `NODE_ENV=production` explicitly. Limits must be integers from 1 through `2147483646`, so the PostgreSQL integer counter can always represent the first denied request. If a request reaches the limiter and its PostgreSQL query is unavailable or returns an invalid result:
 
 - public authentication returns `503`;
 - authenticated writes return `503`;
@@ -33,6 +35,8 @@ NAV does not fall back to an in-process counter. A missing/short production dige
 - a successfully consumed limit still returns `429` with `Retry-After` when exhausted.
 
 This fail-closed policy prevents restarts or multiple API replicas from bypassing security and AI usage limits. Read-only authenticated endpoints do not consume the write bucket.
+
+A complete database outage can fail earlier during session/authentication lookup and return the API's generic database error response. The `503` contract above applies to limiter-query failures; it is not a promise that every PostgreSQL outage reaches the limiter first.
 
 The bookmark health checker keeps its separate process-local limiter because that control bounds outbound probe concurrency inside one API process; it is not used as an authentication, account-write or AI usage security boundary.
 
@@ -55,7 +59,15 @@ GET /api/admin/security-events?page=1&pageSize=50
 GET /api/admin/security-events?eventType=auth.login&outcome=failure
 ```
 
-The endpoint requires `requireAdmin`, caps pages at 200 events and exposes only 16-character correlation fingerprints rather than full digests.
+The endpoint requires `requireAdmin`, caps pages at 200 events, sends `Cache-Control: private, no-store` and exposes only 16-character correlation fingerprints rather than full digests. The administrator UI request also uses browser `cache: no-store`.
+
+Migration 016 does not install an automatic audit-retention delete. Retention duration and any archive/export requirement remain an explicit operations decision; do not add default deletion until that policy is approved.
+
+## Migration concurrency and rollback
+
+`runMigrations` holds one PostgreSQL session advisory lock while it checks and applies the migration ledger. Multiple API replicas can start together without racing to execute the same migration.
+
+Application rollback normally keeps migration 016, its two additive tables and its ledger row. An older release's exact-set `verify:migrations` command expects only the migration files bundled with that older release, so it will report a ledger mismatch after 016 exists. That expected mismatch is not proof that the older API is incompatible. Do not delete the 016 ledger row or drop its tables merely to satisfy the old verifier; use the current release verifier plus targeted compatibility checks. No destructive down migration is provided.
 
 This first version does not automatically delete `security_events`. Monitor table
 growth and define an explicit retention period before a larger or public rollout;

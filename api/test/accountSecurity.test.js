@@ -130,6 +130,10 @@ test('login and recovery limits isolate usernames behind the same trusted client
 
   assert.equal(aliceLoginKey, aliceLoginKeyAgain)
   assert.notEqual(aliceLoginKey, bobLoginKey)
+  assert.equal(
+    createPublicAuthRateLimitKey('login', request),
+    'login:198.51.100.27'
+  )
   assert.notEqual(
     createPublicAuthRateLimitKey('recovery', request, 'alice'),
     createPublicAuthRateLimitKey('recovery', request, 'bob')
@@ -140,7 +144,7 @@ test('login and recovery limits isolate usernames behind the same trusted client
   )
 })
 
-test('authentication routes apply IP and identity recovery limits before password hashing', async () => {
+test('authentication routes apply IP then identity limits before expensive authentication work', async () => {
   const source = await readSource('../src/routes/auth.js')
 
   assert.match(
@@ -151,10 +155,17 @@ test('authentication routes apply IP and identity recovery limits before passwor
     source.indexOf("fastify.post('/auth/login'"),
     source.indexOf("fastify.post('/auth/logout'")
   )
-  assert.ok(
-    loginRoute.indexOf('if (!isValidUsername(username))')
-    < loginRoute.indexOf("enforcePublicAuthRateLimit(\n      'login'")
+  const loginIpLimitIndex = loginRoute.indexOf(
+    "enforcePublicAuthRateLimit(\n      'login',\n      request,\n      reply\n    )"
   )
+  const loginUsernameValidationIndex = loginRoute.indexOf('if (!isValidUsername(username))')
+  const loginIdentityLimitIndex = loginRoute.indexOf(
+    "enforcePublicAuthRateLimit(\n      'login',\n      request,\n      reply,\n      username\n    )"
+  )
+  assert.ok(loginIpLimitIndex >= 0)
+  assert.ok(loginUsernameValidationIndex > loginIpLimitIndex)
+  assert.ok(loginIdentityLimitIndex > loginUsernameValidationIndex)
+  assert.match(loginRoute, /error: 'Invalid username or password'/)
   assert.match(
     source,
     /enforcePublicAuthRateLimit\(\s*'recovery',\s*request,\s*reply,\s*username\s*\)/

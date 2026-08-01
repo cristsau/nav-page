@@ -119,6 +119,7 @@ test('bookmark tag save guard rejects closed, stale or switched panels', () => {
 })
 
 test('note and bookmark AI share one persistent per-user rate-limit budget', async () => {
+  const secret = 'test-only-AI-rate-limit-secret-with-32-characters'
   const counts = new Map()
   const queryFn = async (_text, params) => {
     const keyDigest = params[1]
@@ -134,13 +135,13 @@ test('note and bookmark AI share one persistent per-user rate-limit budget', asy
   }
 
   for (let index = 0; index < AI_RATE_LIMIT_MAX_REQUESTS; index += 1) {
-    assert.equal((await consumeAiRateLimit('user-1', { queryFn })).allowed, true)
+    assert.equal((await consumeAiRateLimit('user-1', { queryFn, secret })).allowed, true)
   }
 
-  const blocked = await consumeAiRateLimit('user-1', { queryFn })
+  const blocked = await consumeAiRateLimit('user-1', { queryFn, secret })
   assert.equal(blocked.allowed, false)
   assert.equal(
-    (await consumeAiRateLimit('user-2', { queryFn })).allowed,
+    (await consumeAiRateLimit('user-2', { queryFn, secret })).allowed,
     true
   )
 })

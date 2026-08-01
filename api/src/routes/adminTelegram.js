@@ -8,8 +8,7 @@ import {
   sendDecisionNotificationToAdmins
 } from '../lib/telegram.js'
 import {
-  recordSecurityEvent,
-  recordSecurityEventBestEffort
+  recordSecurityEvent
 } from '../lib/securityEvents.js'
 import { mapRegistrationRequest } from '../lib/users.js'
 
@@ -130,16 +129,24 @@ export default async function adminTelegramRoutes(fastify) {
 
   fastify.put('/admin/telegram-config', async (request, reply) => {
     await fastify.requireAdmin(request, reply)
-    const saved = await saveAdminTelegramConfig(request.currentUser.id, request.body || {})
-    await recordSecurityEventBestEffort({
-      request,
-      eventType: 'admin.telegram_config.update',
-      outcome: 'success',
-      actorUserId: request.currentUser.id,
-      subjectUserId: request.currentUser.id,
-      resourceType: 'telegram_config',
-      affectedCount: 1
-    }, request.log)
+    const saved = await withTransaction(async (client) => {
+      const config = await saveAdminTelegramConfig(
+        request.currentUser.id,
+        request.body || {},
+        { client }
+      )
+      await recordSecurityEvent({
+        client,
+        request,
+        eventType: 'admin.telegram_config.update',
+        outcome: 'success',
+        actorUserId: request.currentUser.id,
+        subjectUserId: request.currentUser.id,
+        resourceType: 'telegram_config',
+        affectedCount: 1
+      })
+      return config
+    })
     return saved
   })
 

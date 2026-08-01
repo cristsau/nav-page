@@ -27,6 +27,8 @@ services:
         condition: service_healthy
     env_file:
       - ./api/.env
+    environment:
+      NODE_ENV: production
     ports:
       - "127.0.0.1:3001:3001"
     volumes:

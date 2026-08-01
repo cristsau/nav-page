@@ -76,6 +76,7 @@ export default async function securityEventRoutes(fastify, options = {}) {
     : query
 
   fastify.get('/admin/security-events', async (request, reply) => {
+    reply.header('Cache-Control', 'private, no-store')
     await fastify.requireAdmin(request, reply)
 
     const filters = validateSecurityEventQuery(request.query)

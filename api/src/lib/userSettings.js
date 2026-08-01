@@ -20,8 +20,11 @@ export async function getUserSettingValue(userId, key, fallback = null) {
   return record ? record.value : fallback
 }
 
-export async function setUserSettingValue(userId, key, value) {
-  const { rows } = await query(
+export async function setUserSettingValue(userId, key, value, { client } = {}) {
+  const queryFn = client?.query
+    ? client.query.bind(client)
+    : query
+  const { rows } = await queryFn(
     `
       INSERT INTO user_settings (user_id, key, value, updated_at)
       VALUES ($1, $2, $3::jsonb, NOW())

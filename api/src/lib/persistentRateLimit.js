@@ -1,7 +1,6 @@
 import { createHmac } from 'node:crypto'
 import { config } from '../config.js'
 
-const DEFAULT_DEVELOPMENT_SECRET = 'nav-development-only-rate-limit-key-v1'
 const DEFAULT_CLEANUP_EVERY = 256
 const DEFAULT_CLEANUP_BATCH_SIZE = 200
 const MAX_COUNTER_VALUE = 2_147_483_647
@@ -26,9 +25,23 @@ function positiveInteger(value, fallback) {
   return Number.isSafeInteger(parsed) && parsed > 0 ? parsed : fallback
 }
 
+function normalizeCounterLimit(value) {
+  const parsed = Number(value)
+  if (
+    !Number.isSafeInteger(parsed)
+    || parsed <= 0
+    || parsed >= MAX_COUNTER_VALUE
+  ) {
+    throw new RateLimitUnavailableError(
+      `Rate-limit limit must be an integer between 1 and ${MAX_COUNTER_VALUE - 1}`
+    )
+  }
+
+  return parsed
+}
+
 function resolveDigestSecret({
-  secret = config.rateLimitKeySecret,
-  nodeEnv = config.nodeEnv
+  secret = config.rateLimitKeySecret
 } = {}) {
   const normalized = normalizeText(secret)
 
@@ -36,13 +49,9 @@ function resolveDigestSecret({
     return normalized
   }
 
-  if (String(nodeEnv || '').toLowerCase() === 'production') {
-    throw new RateLimitUnavailableError(
-      'NAV_RATE_LIMIT_KEY_SECRET must contain at least 32 characters in production'
-    )
-  }
-
-  return DEFAULT_DEVELOPMENT_SECRET
+  throw new RateLimitUnavailableError(
+    'NAV_RATE_LIMIT_KEY_SECRET must contain at least 32 characters'
+  )
 }
 
 export function validatePersistentRateLimitConfiguration(options = {}) {
@@ -167,7 +176,6 @@ export async function consumePersistentRateLimit(rawKey, {
   windowMs,
   queryFn,
   secret,
-  nodeEnv,
   cleanupEvery,
   cleanupBatchSize,
   onCleanupError
@@ -182,7 +190,7 @@ export async function consumePersistentRateLimit(rawKey, {
   }
 
   const normalizedKey = normalizeText(rawKey).toLowerCase() || 'unknown'
-  const boundedLimit = positiveInteger(limit, 1)
+  const boundedLimit = normalizeCounterLimit(limit)
   const boundedWindowMs = positiveInteger(windowMs, 60_000)
   let keyDigest
 
@@ -190,7 +198,7 @@ export async function consumePersistentRateLimit(rawKey, {
     keyDigest = digestSensitiveValue(
       `rate-limit:${normalizedScope}`,
       normalizedKey,
-      { secret, nodeEnv }
+      { secret }
     )
   } catch (error) {
     if (error instanceof RateLimitUnavailableError) throw error
@@ -222,6 +230,10 @@ export async function consumePersistentRateLimit(rawKey, {
 
   return {
     allowed: count <= boundedLimit,
+    firstDenied: (
+      boundedLimit < MAX_COUNTER_VALUE
+      && count === boundedLimit + 1
+    ),
     remaining: Math.max(0, boundedLimit - count),
     retryAfterSeconds: count <= boundedLimit ? 0 : retryAfterSeconds,
     resetAt: row.window_expires_at

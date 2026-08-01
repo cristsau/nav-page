@@ -48,9 +48,14 @@ export async function getAdminTelegramConfig(userId) {
   return normalizeTelegramConfig(value)
 }
 
-export async function saveAdminTelegramConfig(userId, config) {
+export async function saveAdminTelegramConfig(userId, config, options = {}) {
   const normalized = normalizeTelegramConfig(config)
-  const record = await setUserSettingValue(userId, TELEGRAM_CONFIG_KEY, normalized)
+  const record = await setUserSettingValue(
+    userId,
+    TELEGRAM_CONFIG_KEY,
+    normalized,
+    options
+  )
   return {
     key: record.key,
     value: record.value,

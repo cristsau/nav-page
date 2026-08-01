@@ -9,7 +9,8 @@ export const AI_RATE_LIMIT_MAX_REQUESTS = 10
 
 export async function consumeAiRateLimit(userId, {
   queryFn = query,
-  onCleanupError
+  onCleanupError,
+  secret
 } = {}) {
   const key = String(userId || '').trim()
   if (!key) {
@@ -24,19 +25,22 @@ export async function consumeAiRateLimit(userId, {
     limit: AI_RATE_LIMIT_MAX_REQUESTS,
     windowMs: AI_RATE_LIMIT_WINDOW_MS,
     queryFn,
-    onCleanupError
+    onCleanupError,
+    secret
   })
 }
 
 export async function enforceAiRateLimit(request, reply, {
   deniedError = 'AI 请求过于频繁，请稍后再试',
   queryFn = query,
-  onCleanupError
+  onCleanupError,
+  secret
 } = {}) {
   let rateLimit
   try {
     rateLimit = await consumeAiRateLimit(request?.currentUser?.id, {
       queryFn,
+      secret,
       onCleanupError: onCleanupError || ((error) => {
         request?.log?.error?.(error, 'failed to clean expired AI rate-limit buckets')
       })

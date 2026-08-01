@@ -16,6 +16,13 @@ import { enforceAiRateLimit } from '../src/lib/aiRateLimit.js'
 import securityEventRoutes, {
   validateSecurityEventQuery
 } from '../src/routes/securityEvents.js'
+import {
+  MIGRATION_ADVISORY_LOCK_SQL,
+  MIGRATION_ADVISORY_UNLOCK_SQL,
+  runMigrations
+} from '../src/db/index.js'
+
+const TEST_RATE_LIMIT_SECRET = 'test-only-rate-limit-secret-with-32-characters'
 
 async function readSource(relativeUrl) {
   const source = await fs.readFile(new URL(relativeUrl, import.meta.url), 'utf8')
@@ -29,7 +36,7 @@ test('persistent limiter stores only keyed digests and uses one atomic database 
     scope: 'auth_login',
     limit: 3,
     windowMs: 60_000,
-    secret: 'test-only-rate-limit-secret-with-32-characters',
+    secret: TEST_RATE_LIMIT_SECRET,
     queryFn: async (text, params) => {
       calls.push({ text, params })
       return {
@@ -48,6 +55,8 @@ test('persistent limiter stores only keyed digests and uses one atomic database 
   assert.match(calls[0].text, /ON CONFLICT \(scope, key_digest\) DO UPDATE/)
   assert.match(calls[0].text, /CURRENT_TIMESTAMP/)
   assert.match(calls[0].text, /rate_limit_buckets\.request_count::bigint \+ 1/)
+  assert.match(calls[0].text, /\)::integer/)
+  assert.doesNotMatch(calls[0].text, /request_count \+ 1/)
   assert.deepEqual(calls[0].params.slice(0, 1), ['auth_login'])
   assert.match(calls[0].params[1], /^[0-9a-f]{64}$/)
   assert.equal(calls[0].params.includes(rawKey), false)
@@ -57,11 +66,22 @@ test('persistent limiter stores only keyed digests and uses one atomic database 
   assert.equal(CONSUME_RATE_LIMIT_SQL.includes(rawKey), false)
 })
 
-test('persistent limiter fails closed when its production secret or database is unavailable', async () => {
+test('persistent limiter requires an explicit secret in every environment and fails closed on database errors', async () => {
+  assert.equal(
+    validatePersistentRateLimitConfiguration({
+      secret: TEST_RATE_LIMIT_SECRET
+    }),
+    true
+  )
   assert.throws(
     () => validatePersistentRateLimitConfiguration({
-      secret: '',
-      nodeEnv: 'production'
+      secret: ''
+    }),
+    (error) => error instanceof RateLimitUnavailableError
+  )
+  assert.throws(
+    () => validatePersistentRateLimitConfiguration({
+      secret: 'short'
     }),
     (error) => error instanceof RateLimitUnavailableError
   )
@@ -72,7 +92,6 @@ test('persistent limiter fails closed when its production secret or database is 
       limit: 1,
       windowMs: 60_000,
       secret: '',
-      nodeEnv: 'production',
       queryFn: async () => ({ rows: [] })
     }),
     (error) => error instanceof RateLimitUnavailableError
@@ -83,9 +102,56 @@ test('persistent limiter fails closed when its production secret or database is 
       scope: 'ai_requests',
       limit: 1,
       windowMs: 60_000,
-      secret: 'test-only-rate-limit-secret-with-32-characters',
+      secret: TEST_RATE_LIMIT_SECRET,
       queryFn: async () => {
         throw new Error('database offline')
+      }
+    }),
+    (error) => error instanceof RateLimitUnavailableError
+  )
+})
+
+test('persistent limiter marks only the first request beyond the threshold', async () => {
+  let count = 3
+  const consume = () => consumePersistentRateLimit('login:198.51.100.27', {
+    scope: 'auth_login',
+    limit: 3,
+    windowMs: 60_000,
+    secret: TEST_RATE_LIMIT_SECRET,
+    queryFn: async () => ({
+      rows: [{
+        request_count: count,
+        retry_after_seconds: 60,
+        window_expires_at: '2026-08-01T00:01:00.000Z'
+      }]
+    }),
+    cleanupEvery: Number.MAX_SAFE_INTEGER
+  })
+
+  const atLimit = await consume()
+  assert.equal(atLimit.allowed, true)
+  assert.equal(atLimit.firstDenied, false)
+
+  count = 4
+  const firstDenied = await consume()
+  assert.equal(firstDenied.allowed, false)
+  assert.equal(firstDenied.firstDenied, true)
+
+  count = 5
+  const laterDenied = await consume()
+  assert.equal(laterDenied.allowed, false)
+  assert.equal(laterDenied.firstDenied, false)
+})
+
+test('persistent limiter rejects limits that cannot represent the first denial', async () => {
+  await assert.rejects(
+    consumePersistentRateLimit('login:198.51.100.27', {
+      scope: 'auth_login',
+      limit: 2_147_483_647,
+      windowMs: 60_000,
+      secret: TEST_RATE_LIMIT_SECRET,
+      queryFn: async () => {
+        throw new Error('query must not run for an invalid limit')
       }
     }),
     (error) => error instanceof RateLimitUnavailableError
@@ -123,7 +189,8 @@ test('security audit accepts only structured fields and hashes request fingerpri
       }
     },
     eventType: 'auth.login',
-    outcome: 'failure'
+    outcome: 'failure',
+    fingerprintSecret: TEST_RATE_LIMIT_SECRET
   })
 
   assert.match(captured.text, /INSERT INTO security_events/)
@@ -156,6 +223,55 @@ test('security migration creates constrained shared buckets and audit events', a
   assert.doesNotMatch(migration, /username|password|token|request_body|content/i)
 })
 
+test('migration runner serializes replicas with one session advisory lock', async () => {
+  const calls = []
+  let releasedWith
+  const client = {
+    async query(text, params = []) {
+      calls.push({ text, params })
+      if (text === 'SELECT 1 FROM schema_migrations WHERE name = $1') {
+        return { rowCount: 0, rows: [] }
+      }
+      return { rowCount: 1, rows: [] }
+    },
+    release(error) {
+      releasedWith = error
+    }
+  }
+
+  await runMigrations({
+    poolInstance: {
+      async connect() {
+        return client
+      }
+    },
+    fileSystem: {
+      async readdir() {
+        return [{ name: '016_security_controls.sql', isFile: () => true }]
+      },
+      async readFile() {
+        return 'SELECT 16;'
+      }
+    },
+    migrationsDir: '/test/migrations'
+  })
+
+  const statements = calls.map((call) => call.text)
+  assert.equal(statements[0], MIGRATION_ADVISORY_LOCK_SQL)
+  assert.ok(statements.indexOf('BEGIN') > 0)
+  assert.ok(statements.indexOf('SELECT 16;') > statements.indexOf('BEGIN'))
+  assert.ok(
+    statements.indexOf('INSERT INTO schema_migrations (name) VALUES ($1)')
+    > statements.indexOf('SELECT 16;')
+  )
+  assert.ok(
+    statements.indexOf('COMMIT')
+    > statements.indexOf('INSERT INTO schema_migrations (name) VALUES ($1)')
+  )
+  assert.equal(statements.at(-1), MIGRATION_ADVISORY_UNLOCK_SQL)
+  assert.equal(releasedWith, undefined)
+})
+
 test('AI limiter preserves 429 Retry-After and fails closed with 503', async () => {
   const makeReply = () => ({
     statusCode: 200,
@@ -175,6 +291,7 @@ test('AI limiter preserves 429 Retry-After and fails closed with 503', async () 
   }
   const limitedReply = makeReply()
   const limited = await enforceAiRateLimit(request, limitedReply, {
+    secret: TEST_RATE_LIMIT_SECRET,
     queryFn: async () => ({
       rows: [{
         request_count: 11,
@@ -189,6 +306,7 @@ test('AI limiter preserves 429 Retry-After and fails closed with 503', async () 
 
   const unavailableReply = makeReply()
   const unavailable = await enforceAiRateLimit(request, unavailableReply, {
+    secret: TEST_RATE_LIMIT_SECRET,
     queryFn: async () => {
       throw new Error('database unavailable')
     }
@@ -261,6 +379,11 @@ test('admin security-event route parameterizes validated filters and pagination'
 
   const reply = {
     statusCode: 200,
+    headers: {},
+    header(name, value) {
+      this.headers[name] = value
+      return this
+    },
     code(value) {
       this.statusCode = value
       return this
@@ -277,6 +400,7 @@ test('admin security-event route parameterizes validated filters and pagination'
   }, reply)
 
   assert.equal(reply.statusCode, 200)
+  assert.equal(reply.headers['Cache-Control'], 'private, no-store')
   assert.equal(calls.length, 2)
   assert.deepEqual(calls[0].params, ['auth.login', 'failure'])
   assert.deepEqual(calls[1].params, ['auth.login', 'failure', 200, 200])
@@ -296,9 +420,80 @@ test('public auth and authenticated writes await shared limits and expose fail-c
   assert.match(authRoute, /await consumePublicAuthRateLimit\(kind, request, identity\)/)
   assert.match(authRoute, /applyRateLimitUnavailableReply\(reply, error\)/)
   assert.match(authRoute, /Security rate limiting is temporarily unavailable/)
+  assert.match(authRoute, /if \(!rateLimited\?\.firstDenied\) return false/)
+  assert.match(authRoute, /auditFirstRateLimitDenial\([\s\S]*'auth\.login'/)
+  assert.match(authRoute, /auditFirstRateLimitDenial\([\s\S]*'auth\.recovery'/)
   assert.match(authPlugin, /await consumeAuthenticatedWriteRateLimit\(request\)/)
   assert.match(authPlugin, /applyRateLimitUnavailableReply\(reply, error\)/)
   assert.match(authPlugin, /reply\.send\(\{[\s\S]*Security rate limiting is temporarily unavailable/)
+})
+
+test('server and container configuration require explicit production security settings', async () => {
+  const [server, limiter, dockerfile, compose, envExample] = await Promise.all([
+    readSource('../src/server.js'),
+    readSource('../src/lib/persistentRateLimit.js'),
+    readSource('../Dockerfile'),
+    readSource('../../docker-compose.backend.yml'),
+    readSource('../.env.example')
+  ])
+
+  const validationIndex = server.indexOf('validatePersistentRateLimitConfiguration()')
+  const migrationIndex = server.indexOf('await runMigrations()')
+  assert.ok(validationIndex >= 0)
+  assert.ok(migrationIndex > validationIndex)
+  assert.doesNotMatch(limiter, /development-only|DEFAULT_DEVELOPMENT_SECRET|nodeEnv/)
+  assert.match(dockerfile, /^ENV NODE_ENV=production$/m)
+  assert.match(
+    compose,
+    /nav-api:[\s\S]*?environment:\s*\n\s+NODE_ENV: production/
+  )
+  assert.match(envExample, /^NODE_ENV=production$/m)
+  assert.match(envExample, /^NAV_RATE_LIMIT_KEY_SECRET=$/m)
+})
+
+test('migration verification binds 016 constraints to their owning tables', async () => {
+  const verifier = await readSource('../src/db/verifyMigrations.js')
+
+  assert.match(verifier, /conrelid = 'rate_limit_buckets'::regclass/)
+  assert.match(verifier, /contype = 'p'/)
+  assert.match(verifier, /\['scope', 'key_digest'\]/)
+  assert.match(verifier, /conrelid = 'security_events'::regclass/)
+  assert.match(verifier, /confrelid = 'users'::regclass/)
+  assert.match(verifier, /confdeltype !== 'n'/)
+  assert.match(verifier, /security_events_actor_user_id_fkey/)
+  assert.match(verifier, /security_events_subject_user_id_fkey/)
+})
+
+test('sensitive admin audit responses disable shared and browser caches', async () => {
+  const route = await readSource('../src/routes/securityEvents.js')
+  assert.match(route, /Cache-Control', 'private, no-store'/)
+})
+
+test('logout and Telegram configuration commit business changes with their audit events', async () => {
+  const [authRoute, telegramRoute, telegram, userSettings] = await Promise.all([
+    readSource('../src/routes/auth.js'),
+    readSource('../src/routes/adminTelegram.js'),
+    readSource('../src/lib/telegram.js'),
+    readSource('../src/lib/userSettings.js')
+  ])
+  const logoutRoute = authRoute.slice(
+    authRoute.indexOf("fastify.post('/auth/logout'"),
+    authRoute.indexOf("fastify.get('/auth/sessions'")
+  )
+  const telegramConfigRoute = telegramRoute.slice(
+    telegramRoute.indexOf("fastify.put('/admin/telegram-config'"),
+    telegramRoute.indexOf("fastify.post('/admin/telegram-config/test'")
+  )
+
+  assert.match(logoutRoute, /withTransaction\(async \(client\)/)
+  assert.match(logoutRoute, /DELETE FROM sessions[^']+RETURNING id/)
+  assert.match(logoutRoute, /recordSecurityEvent\(\{\s*client,/)
+  assert.match(logoutRoute, /affectedCount: deletedSession\.rowCount \|\| 0/)
+  assert.match(telegramConfigRoute, /withTransaction\(async \(client\)/)
+  assert.match(telegramConfigRoute, /saveAdminTelegramConfig\([\s\S]*\{ client \}/)
+  assert.match(telegramConfigRoute, /recordSecurityEvent\(\{\s*client,/)
+  assert.match(telegram, /saveAdminTelegramConfig\(userId, config, options = \{\}\)/)
+  assert.match(userSettings, /setUserSettingValue\(userId, key, value, \{ client \} = \{\}\)/)
 })
 
 test('admin security-event API is authenticated and admin-only', async () => {
@@ -316,6 +511,7 @@ test('admin security-event API is authenticated and admin-only', async () => {
     })
     assert.equal(response.statusCode, 401)
     assert.equal(response.json().error, 'Authentication required')
+    assert.equal(response.headers['cache-control'], 'private, no-store')
   } finally {
     await app.close()
   }

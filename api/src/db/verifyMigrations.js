@@ -11,6 +11,20 @@ function assertExactSet(label, actualValues, expectedValues) {
   }
 }
 
+function assertExactSequence(label, actualValues, expectedValues) {
+  const actual = Array.isArray(actualValues) ? actualValues : []
+  const expected = Array.isArray(expectedValues) ? expectedValues : []
+
+  if (
+    actual.length !== expected.length
+    || actual.some((value, index) => value !== expected[index])
+  ) {
+    throw new Error(
+      `${label} mismatch: expected ${expected.join(', ')}, received ${actual.join(', ')}`
+    )
+  }
+}
+
 async function migrationFileNames() {
   const entries = await fs.readdir(config.migrationsDir, { withFileTypes: true })
   return entries
@@ -244,32 +258,98 @@ async function verifySecurityControlsSchema() {
     securityEventColumns
   )
 
-  const expectedIndexes = [
+  const rateLimitIndexes = [
     'idx_rate_limit_buckets_expires',
-    'idx_security_events_created',
-    'idx_security_events_type_created',
-    'idx_security_events_actor_created'
   ]
-  const indexResult = await query(
+  const rateLimitIndexResult = await query(
     `
       SELECT indexname
       FROM pg_indexes
       WHERE schemaname = current_schema()
+        AND tablename = 'rate_limit_buckets'
         AND indexname = ANY($1::text[])
     `,
-    [expectedIndexes]
+    [rateLimitIndexes]
   )
   assertExactSet(
-    'security control indexes',
-    indexResult.rows.map((row) => row.indexname),
-    expectedIndexes
+    'rate limit bucket indexes',
+    rateLimitIndexResult.rows.map((row) => row.indexname),
+    rateLimitIndexes
   )
 
-  const expectedConstraints = [
+  const securityEventIndexes = [
+    'idx_security_events_created',
+    'idx_security_events_type_created',
+    'idx_security_events_actor_created'
+  ]
+  const securityEventIndexResult = await query(
+    `
+      SELECT indexname
+      FROM pg_indexes
+      WHERE schemaname = current_schema()
+        AND tablename = 'security_events'
+        AND indexname = ANY($1::text[])
+    `,
+    [securityEventIndexes]
+  )
+  assertExactSet(
+    'security event indexes',
+    securityEventIndexResult.rows.map((row) => row.indexname),
+    securityEventIndexes
+  )
+
+  const rateLimitChecks = [
     'rate_limit_buckets_scope_check',
     'rate_limit_buckets_key_digest_check',
     'rate_limit_buckets_window_check',
-    'rate_limit_buckets_request_count_check',
+    'rate_limit_buckets_request_count_check'
+  ]
+  const rateLimitCheckResult = await query(
+    `
+      SELECT conname
+      FROM pg_constraint
+      WHERE conrelid = 'rate_limit_buckets'::regclass
+        AND contype = 'c'
+        AND conname = ANY($1::text[])
+    `,
+    [rateLimitChecks]
+  )
+  assertExactSet(
+    'rate limit bucket checks',
+    rateLimitCheckResult.rows.map((row) => row.conname),
+    rateLimitChecks
+  )
+
+  const rateLimitPrimaryKeyResult = await query(
+    `
+      SELECT
+        constraint_record.conname,
+        ARRAY(
+          SELECT attribute.attname
+          FROM unnest(constraint_record.conkey)
+            WITH ORDINALITY AS key_column(attnum, position)
+          JOIN pg_attribute AS attribute
+            ON attribute.attrelid = constraint_record.conrelid
+           AND attribute.attnum = key_column.attnum
+          ORDER BY key_column.position
+        ) AS columns
+      FROM pg_constraint AS constraint_record
+      WHERE constraint_record.conrelid = 'rate_limit_buckets'::regclass
+        AND constraint_record.contype = 'p'
+    `
+  )
+  assertExactSet(
+    'rate limit bucket primary key',
+    rateLimitPrimaryKeyResult.rows.map((row) => row.conname),
+    ['rate_limit_buckets_pkey']
+  )
+  assertExactSequence(
+    'rate limit bucket primary key columns',
+    rateLimitPrimaryKeyResult.rows[0]?.columns,
+    ['scope', 'key_digest']
+  )
+
+  const securityEventChecks = [
     'security_events_type_check',
     'security_events_outcome_check',
     'security_events_resource_type_check',
@@ -277,19 +357,65 @@ async function verifySecurityControlsSchema() {
     'security_events_client_ip_digest_check',
     'security_events_user_agent_digest_check'
   ]
-  const constraintResult = await query(
+  const securityEventCheckResult = await query(
     `
       SELECT conname
       FROM pg_constraint
-      WHERE conname = ANY($1::text[])
+      WHERE conrelid = 'security_events'::regclass
+        AND contype = 'c'
+        AND conname = ANY($1::text[])
     `,
-    [expectedConstraints]
+    [securityEventChecks]
   )
   assertExactSet(
-    'security control constraints',
-    constraintResult.rows.map((row) => row.conname),
-    expectedConstraints
+    'security event checks',
+    securityEventCheckResult.rows.map((row) => row.conname),
+    securityEventChecks
   )
+
+  const securityEventForeignKeyResult = await query(
+    `
+      SELECT
+        constraint_record.conname,
+        constraint_record.confdeltype,
+        ARRAY(
+          SELECT attribute.attname
+          FROM unnest(constraint_record.conkey)
+            WITH ORDINALITY AS key_column(attnum, position)
+          JOIN pg_attribute AS attribute
+            ON attribute.attrelid = constraint_record.conrelid
+           AND attribute.attnum = key_column.attnum
+          ORDER BY key_column.position
+        ) AS columns
+      FROM pg_constraint AS constraint_record
+      WHERE constraint_record.conrelid = 'security_events'::regclass
+        AND constraint_record.confrelid = 'users'::regclass
+        AND constraint_record.contype = 'f'
+    `
+  )
+  assertExactSet(
+    'security event foreign keys',
+    securityEventForeignKeyResult.rows.map((row) => row.conname),
+    [
+      'security_events_actor_user_id_fkey',
+      'security_events_subject_user_id_fkey'
+    ]
+  )
+
+  const expectedForeignKeyColumns = new Map([
+    ['security_events_actor_user_id_fkey', ['actor_user_id']],
+    ['security_events_subject_user_id_fkey', ['subject_user_id']]
+  ])
+  for (const foreignKey of securityEventForeignKeyResult.rows) {
+    if (foreignKey.confdeltype !== 'n') {
+      throw new Error(`${foreignKey.conname} must use ON DELETE SET NULL`)
+    }
+    assertExactSequence(
+      `${foreignKey.conname} columns`,
+      foreignKey.columns,
+      expectedForeignKeyColumns.get(foreignKey.conname)
+    )
+  }
 }
 
 async function main() {

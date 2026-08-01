@@ -41,7 +41,7 @@ function normalizeAffectedCount(value) {
   return parsed
 }
 
-function buildRequestFingerprints(request) {
+function buildRequestFingerprints(request, { secret } = {}) {
   const clientIp = normalizeText(
     request?.ip
     || request?.socket?.remoteAddress
@@ -51,10 +51,10 @@ function buildRequestFingerprints(request) {
 
   return {
     clientIpDigest: clientIp
-      ? digestSensitiveValue('security-event:client-ip', clientIp)
+      ? digestSensitiveValue('security-event:client-ip', clientIp, { secret })
       : null,
     userAgentDigest: userAgent
-      ? digestSensitiveValue('security-event:user-agent', userAgent)
+      ? digestSensitiveValue('security-event:user-agent', userAgent, { secret })
       : null
   }
 }
@@ -68,7 +68,8 @@ export async function recordSecurityEvent({
   subjectUserId = null,
   resourceType = null,
   resourceId = null,
-  affectedCount = null
+  affectedCount = null,
+  fingerprintSecret
 }) {
   const normalizedEventType = normalizeText(eventType).toLowerCase()
   const normalizedOutcome = normalizeText(outcome).toLowerCase()
@@ -87,7 +88,9 @@ export async function recordSecurityEvent({
     throw new TypeError('Invalid security event resource type')
   }
 
-  const fingerprints = buildRequestFingerprints(request)
+  const fingerprints = buildRequestFingerprints(request, {
+    secret: fingerprintSecret
+  })
   const queryFn = client?.query
     ? client.query.bind(client)
     : query
