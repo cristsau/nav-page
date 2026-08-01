@@ -18,9 +18,21 @@ test('OpenAI defaults use the Responses API and balanced model', () => {
   assert.equal(request.apiMode, 'responses')
   assert.equal(request.model, DEFAULT_OPENAI_MODEL)
   assert.equal(request.body.store, false)
+  assert.equal(request.body.stream, false)
   assert.deepEqual(request.body.tools, [{ type: 'web_search' }])
   assert.equal(request.body.reasoning.effort, 'low')
   assert.equal(request.body.safety_identifier, 'safe-user')
+})
+
+test('Responses requests preserve CLI Proxy max and ultra reasoning efforts', () => {
+  for (const effort of ['max', 'ultra']) {
+    const request = buildChatRequest(
+      { apiMode: 'responses', reasoningEffort: effort },
+      'query',
+      'system'
+    )
+    assert.equal(request.body.reasoning.effort, effort)
+  }
 })
 
 test('legacy CLI proxy keeps Chat Completions compatibility', () => {

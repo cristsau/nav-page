@@ -10,6 +10,7 @@ import {
 } from '../src/lib/aiModelCatalog.js'
 import {
   AI_MODEL_MODES,
+  normalizeCliProxyApiMode,
   normalizeCliProxyBaseUrl,
   readAiApiKeyFile,
   resolveChatProviderConfig,
@@ -70,6 +71,15 @@ test('CLI Proxy base URL requires HTTPS and strips known OpenAI endpoint suffixe
   ]) {
     assert.throws(() => normalizeCliProxyBaseUrl(value))
   }
+})
+
+test('CLI Proxy API mode is explicit and rejects unknown values', () => {
+  assert.equal(normalizeCliProxyApiMode('responses'), 'responses')
+  assert.equal(normalizeCliProxyApiMode(''), 'chat-completions')
+  assert.throws(
+    () => normalizeCliProxyApiMode('automatic'),
+    /must be responses or chat-completions/
+  )
 })
 
 test('model discovery recommends the newest stable general GPT and bounds output', () => {
@@ -368,6 +378,7 @@ test('server-managed provider reads an owner-only secret file and public catalog
   }, {
     runtimeConfig: {
       aiCliProxyBaseUrl: 'https://proxy.example.test/v1',
+      aiCliProxyApiMode: 'responses',
       aiCliProxyApiKeyFile: '/run/secrets/nav/cli-proxy-api-key'
     },
     readSecretImpl: async () => secret
@@ -376,6 +387,7 @@ test('server-managed provider reads an owner-only secret file and public catalog
   assert.equal(resolved.enabled, true)
   assert.equal(resolved.mode, 'proxy')
   assert.equal(resolved.cliProxyBaseUrl, 'https://proxy.example.test')
+  assert.equal(resolved.apiMode, 'responses')
   assert.equal(resolved.apiKey, secret)
   assert.equal(resolved.serverManaged, true)
 
@@ -384,6 +396,7 @@ test('server-managed provider reads an owner-only secret file and public catalog
     latestModelId: 'gpt-5.7',
     resolvedModelId: 'gpt-5.7',
     configuredMode: 'latest',
+    apiMode: 'responses',
     source: 'live',
     stale: false,
     verifiedAt: new Date(0).toISOString(),
@@ -393,6 +406,7 @@ test('server-managed provider reads an owner-only secret file and public catalog
   })
 
   assert.equal(publicResponse.serverManaged, true)
+  assert.equal(publicResponse.apiMode, 'responses')
   assert.equal(JSON.stringify(publicResponse).includes(secret), false)
   assert.equal('apiKey' in publicResponse, false)
   assert.equal('authorization' in publicResponse, false)

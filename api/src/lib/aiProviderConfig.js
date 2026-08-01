@@ -11,6 +11,7 @@ export const AI_MODEL_MODES = Object.freeze({
 })
 
 const AI_MODEL_MODE_VALUES = new Set(Object.values(AI_MODEL_MODES))
+const CLI_PROXY_API_MODES = new Set(['responses', 'chat-completions'])
 const SECRET_MAX_BYTES = 4096
 const SECRET_CONTROL_PATTERN = /[\u0000-\u0008\u000B\u000C\u000E-\u001F\u007F]/
 const KNOWN_PROXY_SUFFIXES = Object.freeze([
@@ -65,6 +66,14 @@ export function normalizeCliProxyBaseUrl(value) {
   parsed.hash = ''
 
   return parsed.toString().replace(/\/$/, '')
+}
+
+export function normalizeCliProxyApiMode(value, fallback = 'chat-completions') {
+  const normalized = normalizeText(value || fallback).toLowerCase()
+  if (!CLI_PROXY_API_MODES.has(normalized)) {
+    throw new Error('CLI Proxy API mode must be responses or chat-completions')
+  }
+  return normalized
 }
 
 export function resolveConfiguredModelMode(provider = {}) {
@@ -212,6 +221,9 @@ export async function resolveChatProviderConfig(
   const model = normalizeText(resolved.model) || DEFAULT_OPENAI_MODEL
   const modelMode = resolveConfiguredModelMode(resolved)
   const configuredBaseUrl = normalizeText(runtimeConfig.aiCliProxyBaseUrl)
+  const configuredApiMode = normalizeCliProxyApiMode(
+    runtimeConfig.aiCliProxyApiMode
+  )
   const configuredSecretFile = normalizeText(runtimeConfig.aiCliProxyApiKeyFile)
 
   if (!configuredBaseUrl && !configuredSecretFile) {
@@ -233,7 +245,7 @@ export async function resolveChatProviderConfig(
     ...resolved,
     enabled: true,
     mode: 'proxy',
-    apiMode: 'chat-completions',
+    apiMode: configuredApiMode,
     cliProxyBaseUrl: normalizeCliProxyBaseUrl(configuredBaseUrl),
     apiKey,
     model: normalizeAiModelId(model),

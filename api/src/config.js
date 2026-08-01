@@ -71,6 +71,9 @@ export const config = {
   allowPrivateAiEndpoints: process.env.ALLOW_PRIVATE_AI_ENDPOINTS === 'true',
   allowInsecureAiEndpoints: process.env.ALLOW_INSECURE_AI_ENDPOINTS === 'true',
   aiCliProxyBaseUrl: String(process.env.NAV_AI_CLI_PROXY_BASE_URL || '').trim(),
+  aiCliProxyApiMode: String(
+    process.env.NAV_AI_CLI_PROXY_API_MODE || 'chat-completions'
+  ).trim(),
   aiCliProxyApiKeyFile: String(process.env.NAV_AI_CLI_PROXY_API_KEY_FILE || '').trim(),
   adminUsername: process.env.ADMIN_USERNAME || '',
   adminPassword: process.env.ADMIN_PASSWORD || '',

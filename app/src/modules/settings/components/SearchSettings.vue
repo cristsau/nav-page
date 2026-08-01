@@ -76,7 +76,8 @@ const chatModelCatalog = ref({
   cacheLayer: '',
   source: '',
   verifiedAt: '',
-  serverManaged: false
+  serverManaged: false,
+  apiMode: 'chat-completions'
 })
 const chatModelsLoading = ref(false)
 const chatModelsError = ref('')
@@ -89,7 +90,7 @@ const chatProviderServerManaged = computed(() => Boolean(
 ))
 const chatApiMode = computed(() => (
   chatProviderServerManaged.value
-    ? 'chat-completions'
+    ? chatModelCatalog.value.apiMode
     : resolveConfiguredChatApiMode(config.value.search?.providers?.chatgpt)
 ))
 const chatUsesResponsesApi = computed(() => chatApiMode.value === 'responses')
@@ -773,13 +774,14 @@ async function handleProviderTest(provider) {
             :disabled="!chatUsesResponsesApi"
             @change="updateConfig('search.providers.chatgpt.reasoningEffort', $event.target.value)"
           >
-            <option value="none">无</option>
-            <option value="minimal">极低</option>
             <option value="low">低（推荐）</option>
             <option value="medium">中</option>
             <option value="high">高</option>
             <option value="xhigh">极高</option>
+            <option value="max">最大</option>
+            <option value="ultra">超强（CLI Proxy）</option>
           </select>
+          <span class="provider-key__hint">最大和超强档位仅适用于支持它们的模型，默认保持低。</span>
         </label>
         <label
           class="provider-field provider-field--toggle"
