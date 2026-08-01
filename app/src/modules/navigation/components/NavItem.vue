@@ -3,6 +3,7 @@ import { computed, nextTick, ref, watch } from 'vue'
 import { useConfig } from '@/shared/composables/useConfig'
 import Icon from '@/shared/components/Icon.vue'
 import { resolveBookmarkPresentation } from '../navigationUi'
+import { resolveBookmarkHealthPresentation } from '../navigationManagement'
 
 const props = defineProps({
   bookmark: {
@@ -16,10 +17,34 @@ const props = defineProps({
   analyzing: {
     type: Boolean,
     default: false
+  },
+  selectionMode: {
+    type: Boolean,
+    default: false
+  },
+  sortMode: {
+    type: Boolean,
+    default: false
+  },
+  selected: {
+    type: Boolean,
+    default: false
+  },
+  managementBusy: {
+    type: Boolean,
+    default: false
+  },
+  sortIndex: {
+    type: Number,
+    default: 0
+  },
+  sortCount: {
+    type: Number,
+    default: 0
   }
 })
 
-const emit = defineEmits(['ai', 'edit', 'delete'])
+const emit = defineEmits(['ai', 'edit', 'delete', 'toggleSelection', 'sortMove'])
 
 const { config } = useConfig()
 const faviconFailed = ref(false)
@@ -39,6 +64,7 @@ const cardStyle = computed(() => {
 })
 
 const bookmarkPresentation = computed(() => resolveBookmarkPresentation(props.bookmark))
+const healthPresentation = computed(() => resolveBookmarkHealthPresentation(props.bookmark))
 const faviconUrl = computed(() => {
   if (props.bookmark.favicon) {
     return props.bookmark.favicon
@@ -66,12 +92,65 @@ watch(
 )
 
 function openUrl() {
+  if (props.selectionMode) {
+    emit('toggleSelection', props.bookmark)
+    return
+  }
+  if (props.sortMode || props.managementBusy) return
+
   try {
     const url = new URL(props.bookmark.url)
     if (!['http:', 'https:'].includes(url.protocol)) return
     window.open(url.toString(), '_blank', 'noopener')
   } catch {
     // Invalid URLs are rejected when saving; keep this as a final safety guard.
+  }
+}
+
+function toggleSelection(event) {
+  event.stopPropagation()
+  if (props.managementBusy) return
+  emit('toggleSelection', props.bookmark)
+}
+
+function moveBookmark(direction) {
+  if (props.managementBusy) return
+  emit('sortMove', {
+    id: props.bookmark.id,
+    direction
+  })
+}
+
+function startBookmarkDrag(event) {
+  if (!props.sortMode || props.managementBusy || !event.dataTransfer) {
+    event.preventDefault()
+    return
+  }
+  event.dataTransfer.effectAllowed = 'move'
+  event.dataTransfer.setData('text/plain', JSON.stringify({
+    type: 'bookmark',
+    id: props.bookmark.id
+  }))
+}
+
+function allowBookmarkDrop(event) {
+  if (!props.sortMode || props.managementBusy) return
+  event.preventDefault()
+  if (event.dataTransfer) event.dataTransfer.dropEffect = 'move'
+}
+
+function dropBookmark(event) {
+  if (!props.sortMode || props.managementBusy) return
+  try {
+    const source = JSON.parse(event.dataTransfer?.getData('text/plain') || '{}')
+    if (source.type !== 'bookmark' || !source.id) return
+    event.preventDefault()
+    emit('sortMove', {
+      id: source.id,
+      targetId: props.bookmark.id
+    })
+  } catch {
+    // Ignore drag payloads that do not belong to bookmark sorting.
   }
 }
 
@@ -140,16 +219,71 @@ function runMobileAction(action) {
 <template>
   <article
     class="bookmark-card card-float"
-    :class="{ 'is-busy': deleting || analyzing }"
+    :class="{
+      'is-busy': deleting || analyzing || managementBusy,
+      'is-selecting': selectionMode,
+      'is-selected': selected,
+      'is-sorting': sortMode
+    }"
     :style="{ minHeight: cardStyle.minHeight }"
-    :aria-busy="deleting || analyzing"
+    :aria-busy="deleting || analyzing || managementBusy"
+    @dragover="allowBookmarkDrop"
+    @drop.stop="dropBookmark"
   >
+    <button
+      v-if="selectionMode"
+      class="bookmark-card__selection"
+      type="button"
+      role="checkbox"
+      :aria-checked="selected"
+      :aria-label="`${selected ? '取消选择' : '选择'}书签 ${bookmark.title}`"
+      :disabled="managementBusy"
+      @click="toggleSelection"
+    >
+      <Icon name="check" :size="17" />
+    </button>
+
+    <div v-if="sortMode" class="bookmark-card__sort-actions" role="group" :aria-label="`${bookmark.title} 排序操作`">
+      <button
+        class="bookmark-card__drag-handle"
+        type="button"
+        draggable="true"
+        :disabled="managementBusy"
+        :aria-label="`拖动书签 ${bookmark.title}`"
+        title="拖动书签"
+        @dragstart.stop="startBookmarkDrag"
+      >
+        <Icon name="menu" :size="18" />
+      </button>
+      <button
+        type="button"
+        :disabled="managementBusy || sortIndex === 0"
+        :aria-label="`上移书签 ${bookmark.title}`"
+        @click.stop="moveBookmark(-1)"
+      >
+        <Icon class="bookmark-sort-chevron--up" name="chevron-down" :size="18" />
+      </button>
+      <button
+        type="button"
+        :disabled="managementBusy || sortIndex === sortCount - 1"
+        :aria-label="`下移书签 ${bookmark.title}`"
+        @click.stop="moveBookmark(1)"
+      >
+        <Icon name="chevron-down" :size="18" />
+      </button>
+    </div>
+
     <button
       class="bookmark-card__main"
       type="button"
-      :aria-label="`打开 ${bookmark.title}，${bookmarkPresentation.subtitle}`"
+      :aria-label="selectionMode
+        ? `${selected ? '取消选择' : '选择'}书签 ${bookmark.title}`
+        : sortMode
+          ? `书签 ${bookmark.title} 正在排序`
+          : `打开 ${bookmark.title}，${bookmarkPresentation.subtitle}`"
+      :aria-pressed="selectionMode ? selected : undefined"
       :title="`${bookmark.title}\n${bookmarkPresentation.fullSubtitle}`"
-      :disabled="deleting || analyzing"
+      :disabled="deleting || analyzing || managementBusy"
       @click="openUrl"
     >
       <!-- 图标 -->
@@ -171,6 +305,17 @@ function runMobileAction(action) {
       <span class="bookmark-card__title" :title="bookmark.title">{{ bookmark.title }}</span>
       <span class="bookmark-card__subtitle" :title="bookmarkPresentation.fullSubtitle">
         {{ bookmarkPresentation.subtitle }}
+      </span>
+      <span
+        v-if="healthPresentation"
+        class="bookmark-card__health"
+        :class="`is-${healthPresentation.tone}`"
+        :title="healthPresentation.httpStatus
+          ? `${healthPresentation.label} · HTTP ${healthPresentation.httpStatus}`
+          : healthPresentation.label"
+      >
+        {{ healthPresentation.label }}
+        <span v-if="healthPresentation.httpStatus">{{ healthPresentation.httpStatus }}</span>
       </span>
 
       <!-- 描述（可选显示） -->
@@ -195,7 +340,7 @@ function runMobileAction(action) {
     </button>
 
     <!-- 操作按钮：主链接排在前面，键盘用户先打开，再访问 AI / 编辑 / 删除。 -->
-    <div class="bookmark-card__actions" role="group" aria-label="书签操作">
+    <div v-if="!selectionMode && !sortMode" class="bookmark-card__actions" role="group" aria-label="书签操作">
       <button
         class="action-btn action-btn--ai"
         type="button"
@@ -231,6 +376,7 @@ function runMobileAction(action) {
     </div>
 
     <button
+      v-if="!selectionMode && !sortMode"
       ref="mobileMoreButton"
       class="bookmark-card__more"
       type="button"
@@ -317,6 +463,82 @@ function runMobileAction(action) {
 
 .bookmark-card.is-busy {
   opacity: 0.65;
+}
+
+.bookmark-card.is-selected {
+  border-color: color-mix(in srgb, var(--accent-color) 72%, var(--border-color));
+  box-shadow:
+    0 0 0 3px color-mix(in srgb, var(--accent-color) 16%, transparent),
+    var(--shadow-card);
+}
+
+.bookmark-card.is-selecting:hover,
+.bookmark-card.is-sorting:hover {
+  transform: none;
+}
+
+.bookmark-card__selection,
+.bookmark-card__sort-actions button {
+  display: grid;
+  place-items: center;
+  width: 36px;
+  height: 36px;
+  padding: 0;
+  color: var(--text-secondary);
+  background: color-mix(in srgb, var(--bg-card) 90%, var(--accent-color) 10%);
+  border: 1px solid var(--border-color);
+  border-radius: 11px;
+  cursor: pointer;
+}
+
+.bookmark-card__selection {
+  position: absolute;
+  top: 9px;
+  left: 9px;
+  z-index: 4;
+}
+
+.bookmark-card__selection[aria-checked='true'] {
+  color: #fff;
+  background: var(--accent-color);
+  border-color: var(--accent-color);
+}
+
+.bookmark-card__selection:focus-visible,
+.bookmark-card__sort-actions button:focus-visible {
+  outline: 2px solid var(--accent-color);
+  outline-offset: 2px;
+}
+
+.bookmark-card__sort-actions {
+  position: absolute;
+  top: 8px;
+  right: 8px;
+  left: 8px;
+  z-index: 4;
+  display: flex;
+  justify-content: flex-end;
+  gap: 4px;
+}
+
+.bookmark-card__sort-actions button:disabled,
+.bookmark-card__selection:disabled {
+  cursor: not-allowed;
+  opacity: 0.42;
+}
+
+.bookmark-card__drag-handle {
+  margin-right: auto;
+  cursor: grab !important;
+  touch-action: none;
+}
+
+.bookmark-card__drag-handle:active {
+  cursor: grabbing !important;
+}
+
+.bookmark-sort-chevron--up {
+  transform: rotate(180deg);
 }
 
 .bookmark-card__main {
@@ -485,6 +707,41 @@ function runMobileAction(action) {
   direction: ltr;
 }
 
+.bookmark-card__health {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  margin-top: 7px;
+  padding: 3px 7px;
+  color: var(--text-muted);
+  background: var(--bg-secondary);
+  border: 1px solid var(--border-light);
+  border-radius: 999px;
+  font-size: 10px;
+  font-variant-numeric: tabular-nums;
+  line-height: 1.2;
+}
+
+.bookmark-card__health.is-success {
+  color: var(--success-color);
+  border-color: color-mix(in srgb, var(--success-color) 38%, var(--border-light));
+}
+
+.bookmark-card__health.is-warning {
+  color: color-mix(in srgb, #b77828 78%, var(--text-primary));
+  border-color: color-mix(in srgb, #b77828 38%, var(--border-light));
+}
+
+.bookmark-card__health.is-error {
+  color: var(--error-color);
+  border-color: color-mix(in srgb, var(--error-color) 42%, var(--border-light));
+}
+
+.bookmark-card__health.is-info {
+  color: var(--accent-color);
+  border-color: color-mix(in srgb, var(--accent-color) 38%, var(--border-light));
+}
+
 .bookmark-card__desc {
   font-size: 12px;
   color: var(--text-muted);
@@ -650,7 +907,7 @@ function runMobileAction(action) {
   to { transform: rotate(360deg); }
 }
 
-@media (hover: none), (pointer: coarse) {
+@media (hover: none), (pointer: coarse), (any-hover: none), (any-pointer: coarse) {
   .bookmark-card__actions {
     display: none;
   }
@@ -662,12 +919,20 @@ function runMobileAction(action) {
   .bookmark-card__main {
     padding-top: 58px;
   }
+
+  .bookmark-card__selection,
+  .bookmark-card__sort-actions button {
+    width: 44px;
+    height: 44px;
+  }
 }
 
 @media (prefers-reduced-motion: reduce) {
   .bookmark-card,
   .bookmark-card__actions,
   .bookmark-card__main,
+  .bookmark-card__selection,
+  .bookmark-card__sort-actions button,
   .action-btn {
     transition: none;
   }

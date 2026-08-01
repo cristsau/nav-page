@@ -16,6 +16,7 @@ import migrationRoutes from './routes/migration.js'
 import navigationRoutes from './routes/navigation.js'
 import noteAiRoutes from './routes/noteAi.js'
 import noteImagesRoutes from './routes/noteImages.js'
+import noteReminderRoutes from './routes/noteReminders.js'
 import notesRoutes from './routes/notes.js'
 import publicSharePageRoutes from './routes/publicSharePage.js'
 import settingsRoutes from './routes/settings.js'
@@ -88,6 +89,7 @@ export function createApp() {
   app.register(navigationRoutes, { prefix: '/api' })
   app.register(noteAiRoutes, { prefix: '/api' })
   app.register(noteImagesRoutes, { prefix: '/api' })
+  app.register(noteReminderRoutes, { prefix: '/api' })
   app.register(notesRoutes, { prefix: '/api' })
   app.register(settingsRoutes, { prefix: '/api' })
 

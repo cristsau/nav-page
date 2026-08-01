@@ -24,7 +24,8 @@ import {
 import { createApp } from '../src/app.js'
 
 async function readSource(relativeUrl) {
-  return fs.readFile(new URL(relativeUrl, import.meta.url), 'utf8')
+  const source = await fs.readFile(new URL(relativeUrl, import.meta.url), 'utf8')
+  return source.replace(/\r\n?/g, '\n')
 }
 
 test('new passwords require twelve characters while legacy short password hashes still verify', async () => {

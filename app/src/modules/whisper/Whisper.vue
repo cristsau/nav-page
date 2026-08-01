@@ -5,10 +5,12 @@ import { getCurrentUserId, getNotes as getLocalNotes, addNote as addLocalNote, u
 import { fetchBackendSetting, saveBackendSetting, shouldUseBackendSettings } from '@/shared/services/settingsApi'
 import { createBackendNote, deleteBackendNote, fetchBackendNotes, shouldUseBackendNotes, toggleBackendNotePin, updateBackendNote } from '@/shared/services/notesApi'
 import { COMMAND_ACTION_EVENT } from '@/shared/composables/useCommandPalette'
+import { useNoteReminders } from '@/shared/composables/useNoteReminders'
 import Icon from '@/shared/components/Icon.vue'
 import NoteCard from './components/NoteCard.vue'
 import NoteEditor from './components/NoteEditor.vue'
 import NotePreview from './components/NotePreview.vue'
+import ReminderCenter from './components/ReminderCenter.vue'
 import ShareManager from './components/ShareManager.vue'
 import { buildFullNoteText } from './utils/noteCopyText'
 
@@ -20,7 +22,22 @@ const notes = ref([])
 const loading = ref(true)
 const savingNote = ref(false)
 const status = ref({ message: '', type: '' })
+const showReminderCenter = ref(false)
 let statusTimer = null
+
+const {
+  reminders,
+  unreadCount: reminderUnreadCount,
+  loading: remindersLoading,
+  error: remindersError,
+  localOnly: remindersLocalOnly,
+  refresh: refreshReminders,
+  markRead: markReminderRead,
+  markAllRead: markAllRemindersRead
+} = useNoteReminders({
+  notes,
+  onError: (error) => console.error('Failed to refresh note reminders:', error)
+})
 
 // 筛选
 const filterType = ref('all') // all | memo | diary
@@ -35,6 +52,8 @@ const previewingNote = ref(null)
 const createMenuOpen = ref(false)
 const createMenuRef = ref(null)
 const createMenuButtonRef = ref(null)
+const reminderButtonRef = ref(null)
+const previewReturnFocus = ref(null)
 
 // 分享管理
 const showShareManager = ref(false)
@@ -274,7 +293,8 @@ function handleAiNote(note) {
   showEditor.value = true
 }
 
-function handlePreviewNote(note) {
+function handlePreviewNote(note, returnFocus = null) {
+  previewReturnFocus.value = returnFocus
   previewingNote.value = note
   showPreview.value = true
 }
@@ -337,6 +357,7 @@ async function handleSaveNote(data) {
     showEditor.value = false
     editingNote.value = null
     await loadNotes()
+    await refreshReminders()
     setStatus('笔记已保存')
   } catch (e) {
     console.error('Failed to save note:', e)
@@ -353,6 +374,7 @@ async function handleDeleteNote(note) {
   try {
     await deleteNote(note.id)
     await loadNotes()
+    await refreshReminders()
     setStatus(`「${note.title}」已删除`)
   } catch (error) {
     setStatus(`删除失败：${error.message || '请稍后重试'}`, 'error')
@@ -373,6 +395,7 @@ async function handleToggleComplete(note) {
   try {
     await updateNote(note.id, { completed: !note.completed })
     await loadNotes()
+    await refreshReminders()
     setStatus(note.completed ? '已恢复为待办' : '备忘录已完成')
   } catch (error) {
     setStatus(`状态更新失败：${error.message || '请稍后重试'}`, 'error')
@@ -413,8 +436,80 @@ function goBack() {
   router.push('/')
 }
 
+async function openReminderCenter() {
+  showReminderCenter.value = true
+  await refreshReminders()
+}
+
+async function handleReminderRead(reminder) {
+  try {
+    await markReminderRead(reminder)
+  } catch (error) {
+    setStatus(`提醒更新失败：${error.message || '请稍后重试'}`, 'error')
+  }
+}
+
+async function handleAllRemindersRead() {
+  try {
+    await markAllRemindersRead()
+    setStatus('到期提醒已全部标为已读')
+  } catch (error) {
+    setStatus(`提醒更新失败：${error.message || '请稍后重试'}`, 'error')
+  }
+}
+
+async function findReminderNote(reminder) {
+  let note = notes.value.find((item) => String(item.id) === String(reminder.noteId))
+  if (note) return note
+
+  await loadNotes()
+  note = notes.value.find((item) => String(item.id) === String(reminder.noteId))
+  return note || null
+}
+
+async function handleReminderView(reminder) {
+  const note = await findReminderNote(reminder)
+  if (!note) {
+    setStatus('对应备忘录已不存在或无权访问', 'error')
+    await refreshReminders()
+    return
+  }
+
+  try {
+    await markReminderRead(reminder)
+  } catch (error) {
+    console.error('Failed to mark reminder read:', error)
+  }
+
+  showReminderCenter.value = false
+  handlePreviewNote(note, reminderButtonRef.value)
+}
+
+async function handleReminderComplete(reminder) {
+  const note = await findReminderNote(reminder)
+  if (!note) {
+    setStatus('对应备忘录已不存在或无权访问', 'error')
+    await refreshReminders()
+    return
+  }
+
+  try {
+    await updateNote(note.id, { completed: true })
+    await loadNotes()
+    await refreshReminders()
+    setStatus('备忘录已完成')
+  } catch (error) {
+    setStatus(`状态更新失败：${error.message || '请稍后重试'}`, 'error')
+  }
+}
+
 function handleCommandAction(event) {
   const action = event.detail?.action
+  if (action === 'view-due-reminders') {
+    void openReminderCenter()
+    return
+  }
+
   if (!['create-memo', 'create-diary'].includes(action)) return
 
   createMenuOpen.value = false
@@ -428,6 +523,7 @@ onMounted(async () => {
   window.addEventListener('keydown', handleCreateMenuKeydown)
 
   await loadNotes()
+  await refreshReminders()
 
   const requestedSearch = Array.isArray(route.query.search)
     ? route.query.search[0]
@@ -471,10 +567,30 @@ onBeforeUnmount(() => {
         </button>
         <div>
           <div class="header__eyebrow">DOMO NAV</div>
-          <h1 class="header__title">日记与备忘录</h1>
+          <h1 class="header__title" aria-label="日记与备忘录">
+            <span class="header__title-full" aria-hidden="true">日记与备忘录</span>
+            <span class="header__title-compact" aria-hidden="true">时光</span>
+          </h1>
         </div>
       </div>
       <div class="header__actions">
+        <button
+          ref="reminderButtonRef"
+          class="header__btn reminder-button"
+          type="button"
+          :aria-label="reminderUnreadCount ? `打开到期提醒，${reminderUnreadCount} 条未读` : '打开到期提醒'"
+          title="到期提醒"
+          @click="openReminderCenter"
+        >
+          <Icon name="clock" :size="18" />
+          <span
+            v-if="reminderUnreadCount"
+            class="reminder-button__badge"
+            aria-hidden="true"
+          >
+            {{ reminderUnreadCount > 99 ? '99+' : reminderUnreadCount }}
+          </span>
+        </button>
         <button class="header__btn" type="button" aria-label="打开页面设置" title="设置" @click="showSettings = true">
           <Icon name="settings" :size="18" />
         </button>
@@ -483,13 +599,14 @@ onBeforeUnmount(() => {
             ref="createMenuButtonRef"
             class="btn btn--primary"
             type="button"
+            aria-label="新建记录"
             aria-haspopup="menu"
             :aria-expanded="createMenuOpen"
             aria-controls="note-create-menu"
             @click="toggleCreateMenu"
           >
             <Icon name="plus" :size="17" />
-            新建
+            <span class="create-menu__label">新建</span>
             <Icon class="create-menu__chevron" name="chevron-down" :size="14" />
           </button>
           <Transition name="create-menu">
@@ -675,8 +792,9 @@ onBeforeUnmount(() => {
     <NotePreview
       :show="showPreview"
       :note="previewingNote"
-      @close="showPreview = false; previewingNote = null"
-      @edit="showPreview = false; previewingNote = null; handleEditNote($event)"
+      :return-focus="previewReturnFocus"
+      @close="showPreview = false; previewingNote = null; previewReturnFocus = null"
+      @edit="showPreview = false; previewingNote = null; previewReturnFocus = null; handleEditNote($event)"
       @ai="handleAiNote"
       @copy-id="handleCopyNoteId"
       @copy-extract="handleCopyNoteExtract"
@@ -690,6 +808,21 @@ onBeforeUnmount(() => {
       @close="showShareManager = false; sharingNote = null"
       @shared="loadNotes"
       @cancelled="loadNotes"
+    />
+
+    <ReminderCenter
+      :show="showReminderCenter"
+      :reminders="reminders"
+      :unread-count="reminderUnreadCount"
+      :loading="remindersLoading"
+      :error="remindersError"
+      :local-only="remindersLocalOnly"
+      @close="showReminderCenter = false"
+      @refresh="refreshReminders"
+      @read="handleReminderRead"
+      @read-all="handleAllRemindersRead"
+      @view="handleReminderView"
+      @complete="handleReminderComplete"
     />
 
     <!-- 设置弹窗 -->
@@ -792,6 +925,10 @@ onBeforeUnmount(() => {
   color: var(--text-primary);
 }
 
+.header__title-compact {
+  display: none;
+}
+
 .header__eyebrow {
   margin-bottom: 2px;
   color: var(--accent-color);
@@ -810,6 +947,29 @@ onBeforeUnmount(() => {
   width: 36px;
   height: 36px;
   font-size: 16px;
+}
+
+.reminder-button {
+  position: relative;
+}
+
+.reminder-button__badge {
+  position: absolute;
+  top: -5px;
+  right: -5px;
+  min-width: 18px;
+  height: 18px;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  padding: 0 5px;
+  color: #fff;
+  font-size: 10px;
+  font-weight: 700;
+  line-height: 1;
+  background: var(--error-color);
+  border: 2px solid var(--bg-primary);
+  border-radius: 999px;
 }
 
 .create-menu {
@@ -1358,11 +1518,21 @@ onBeforeUnmount(() => {
   .header {
     height: auto;
     min-height: var(--header-height);
-    padding: 0 16px;
+    gap: 8px;
+    padding: 8px 12px;
+  }
+
+  .header__left {
+    min-width: 0;
   }
 
   .header__title {
     font-size: 17px;
+  }
+
+  .header__actions .header__btn {
+    width: 44px;
+    height: 44px;
   }
 
   .header__actions .btn--primary {
@@ -1411,6 +1581,34 @@ onBeforeUnmount(() => {
     flex-direction: column;
   }
 
+}
+
+@media (max-width: 420px) {
+  .header__left {
+    gap: 6px;
+  }
+
+  .header__eyebrow,
+  .header__title-full,
+  .create-menu__label,
+  .create-menu__chevron {
+    display: none;
+  }
+
+  .header__title-compact {
+    display: inline;
+  }
+
+  .header__actions {
+    gap: 6px;
+  }
+
+  .header__actions .btn--primary {
+    width: 44px;
+    min-width: 44px;
+    min-height: 44px;
+    padding: 0;
+  }
 }
 
 @media (prefers-reduced-motion: reduce) {

@@ -52,12 +52,96 @@ function normalizeDateOnly(value, fallback = null) {
   return input
 }
 
-function normalizeOptionalTimestamp(value, fallback = null) {
-  if (value === undefined) return fallback
-  if (!value) return null
+const ISO_TIMESTAMP_PATTERN = /^(\d{4})-(\d{2})-(\d{2})T(\d{2}):(\d{2})(?::(\d{2})(?:\.(\d{1,3}))?)?(Z|([+-])(\d{2}):(\d{2}))$/i
 
-  const date = new Date(value)
-  return Number.isNaN(date.getTime()) ? fallback : date.toISOString()
+function isLeapYear(year) {
+  return year % 4 === 0 && (year % 100 !== 0 || year % 400 === 0)
+}
+
+function daysInMonth(year, month) {
+  const days = [31, isLeapYear(year) ? 29 : 28, 31, 30, 31, 30, 31, 31, 30, 31, 30, 31]
+  return days[month - 1] || 0
+}
+
+export function normalizeOptionalTimestamp(value, fallback = null) {
+  if (value === undefined) {
+    return { valid: true, value: fallback }
+  }
+
+  if (value === null || (typeof value === 'string' && value.trim() === '')) {
+    return { valid: true, value: null }
+  }
+
+  if (typeof value !== 'string') {
+    return { valid: false, value: null }
+  }
+
+  const input = value.trim()
+  const match = input.match(ISO_TIMESTAMP_PATTERN)
+  if (!match) {
+    return { valid: false, value: null }
+  }
+
+  const year = Number(match[1])
+  const month = Number(match[2])
+  const day = Number(match[3])
+  const hour = Number(match[4])
+  const minute = Number(match[5])
+  const second = Number(match[6] || 0)
+  const offsetHour = Number(match[10] || 0)
+  const offsetMinute = Number(match[11] || 0)
+  const validCalendarTime = (
+    year >= 1
+    && month >= 1
+    && month <= 12
+    && day >= 1
+    && day <= daysInMonth(year, month)
+    && hour >= 0
+    && hour <= 23
+    && minute >= 0
+    && minute <= 59
+    && second >= 0
+    && second <= 59
+    && offsetHour >= 0
+    && offsetHour <= 14
+    && offsetMinute >= 0
+    && offsetMinute <= 59
+    && (offsetHour !== 14 || offsetMinute === 0)
+  )
+
+  if (!validCalendarTime) {
+    return { valid: false, value: null }
+  }
+
+  const date = new Date(input)
+  if (Number.isNaN(date.getTime())) {
+    return { valid: false, value: null }
+  }
+
+  return { valid: true, value: date.toISOString() }
+}
+
+export function resolveNoteDueAt(type, value, fallback = null) {
+  return type === 'memo'
+    ? normalizeOptionalTimestamp(value, fallback)
+    : { valid: true, value: null }
+}
+
+function invalidDueAtResponse(reply) {
+  reply.code(400)
+  return {
+    error: 'dueAt must be a valid ISO 8601 timestamp with timezone',
+    code: 'invalid_due_at'
+  }
+}
+
+function timestampsMatch(left, right) {
+  if (!left && !right) return true
+  if (!left || !right) return false
+
+  const leftTime = new Date(left).getTime()
+  const rightTime = new Date(right).getTime()
+  return Number.isFinite(leftTime) && Number.isFinite(rightTime) && leftTime === rightTime
 }
 
 function createShareCode(length = 8) {
@@ -74,7 +158,8 @@ function createShareCode(length = 8) {
 async function requireOwnedNote(userId, noteId, reply) {
   const result = await query(
     `
-      SELECT *
+      SELECT notes.*,
+             updated_at::text AS updated_at_version
       FROM notes
       WHERE id = $1
         AND user_id = $2
@@ -265,12 +350,17 @@ export default async function notesRoutes(fastify) {
       ? normalizeDateOnly(request.body?.entryDate, new Date().toISOString().slice(0, 10))
       : null
     const mood = type === 'diary' ? normalizeText(request.body?.mood).slice(0, 40) : ''
-    const dueAt = type === 'memo' ? normalizeOptionalTimestamp(request.body?.dueAt) : null
+    const dueAtResult = resolveNoteDueAt(type, request.body?.dueAt)
+    const dueAt = dueAtResult.value
     const completed = type === 'memo' && Boolean(request.body?.completed)
 
     if (!title) {
       reply.code(400)
       return { error: 'Title is required' }
+    }
+
+    if (!dueAtResult.valid) {
+      return invalidDueAtResponse(reply)
     }
 
     if (encrypted && !passwordHash) {
@@ -352,12 +442,15 @@ export default async function notesRoutes(fastify) {
     const mood = type === 'diary'
       ? normalizeText(request.body?.mood, existing.mood).slice(0, 40)
       : ''
-    const dueAt = type === 'memo'
-      ? normalizeOptionalTimestamp(request.body?.dueAt, existing.due_at)
-      : null
+    const dueAtResult = resolveNoteDueAt(type, request.body?.dueAt, existing.due_at)
+    const dueAt = dueAtResult.value
     const completed = type === 'memo'
       ? (request.body?.completed === undefined ? existing.completed : Boolean(request.body.completed))
       : false
+
+    if (!dueAtResult.valid) {
+      return invalidDueAtResponse(reply)
+    }
 
     if (!encrypted) {
       passwordHash = ''
@@ -368,45 +461,80 @@ export default async function notesRoutes(fastify) {
 
     assertAttachmentsAllowedForEncryption(encrypted, attachments)
 
-    const { rows } = await query(
-      `
-        UPDATE notes
-        SET type = $3,
-            title = $4,
-            content = $5,
-            encrypted = $6,
-            password_hash = $7,
-            pinned = $8,
-            tags = $9::jsonb,
-            attachments = $10::jsonb,
-            entry_date = $11,
-            mood = $12,
-            due_at = $13,
-            completed = $14,
-            updated_at = NOW()
-        WHERE id = $1
-          AND user_id = $2
-        RETURNING *
-      `,
-      [
-        request.params.noteId,
-        request.currentUser.id,
-        type,
-        title,
-        content,
-        encrypted,
-        passwordHash,
-        pinned,
-        JSON.stringify(tags),
-        JSON.stringify(attachments),
-        entryDate,
-        mood,
-        dueAt,
-        completed
-      ]
-    )
+    const outcome = await withTransaction(async (client) => {
+      const result = await client.query(
+        `
+          UPDATE notes
+          SET type = $3,
+              title = $4,
+              content = $5,
+              encrypted = $6,
+              password_hash = $7,
+              pinned = $8,
+              tags = $9::jsonb,
+              attachments = $10::jsonb,
+              entry_date = $11,
+              mood = $12,
+              due_at = $13,
+              completed = $14,
+              updated_at = NOW()
+          WHERE id = $1
+            AND user_id = $2
+            AND updated_at = $15::timestamptz
+          RETURNING *
+        `,
+        [
+          request.params.noteId,
+          request.currentUser.id,
+          type,
+          title,
+          content,
+          encrypted,
+          passwordHash,
+          pinned,
+          JSON.stringify(tags),
+          JSON.stringify(attachments),
+          entryDate,
+          mood,
+          dueAt,
+          completed,
+          existing.updated_at_version
+        ]
+      )
 
-    return { note: mapNote(rows[0]) }
+      if (!result.rows.length) {
+        return { conflict: true, note: null }
+      }
+
+      const scheduleChanged = (
+        type !== 'memo'
+        || completed
+        || !timestampsMatch(existing.due_at, dueAt)
+      )
+
+      if (scheduleChanged) {
+        await client.query(
+          `
+            DELETE FROM note_reminders
+            WHERE note_id = $1
+              AND user_id = $2
+          `,
+          [request.params.noteId, request.currentUser.id]
+        )
+      }
+
+      return { conflict: false, note: result.rows[0] }
+    })
+
+    if (outcome.conflict) {
+      reply.code(409)
+      return {
+        error: 'Note changed in another session; reload and retry',
+        code: 'stale_note'
+      }
+    }
+
+    return { note: mapNote(outcome.note) }
   })
 
   fastify.delete('/notes/:noteId', async (request, reply) => {

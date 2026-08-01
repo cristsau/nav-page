@@ -1,5 +1,5 @@
 <script setup>
-import { computed, nextTick, onBeforeUnmount, onMounted, ref } from 'vue'
+import { computed, nextTick, onBeforeUnmount, onMounted, ref, watch } from 'vue'
 import { useRouter } from 'vue-router'
 import { useGroups, useBookmarks } from '@/shared/composables/useDB'
 import { useTheme } from '@/shared/composables/useTheme'
@@ -19,10 +19,38 @@ import {
   resolveBookmarkGenerativeAiProvider,
   resolveBookmarkAiProvider
 } from './navigationUi'
+import {
+  buildBookmarkOrderMap,
+  buildNavigationReorderPayload,
+  MAX_MANAGED_BOOKMARKS,
+  moveId,
+  moveIdBefore,
+  orderRecords,
+  selectManagementIds,
+  sameIdOrder,
+  toggleManagementSelection
+} from './navigationManagement'
 
 const router = useRouter()
-const { groups, load: loadGroups, create: createGroup, update: updateGroup, remove: removeGroup } = useGroups()
-const { bookmarks, load: loadBookmarks, create: createBookmark, update: updateBookmark, remove: removeBookmark } = useBookmarks()
+const {
+  groups,
+  load: loadGroups,
+  create: createGroup,
+  update: updateGroup,
+  remove: removeGroup,
+  reorderAll: reorderNavigationItems
+} = useGroups()
+const {
+  bookmarks,
+  load: loadBookmarks,
+  create: createBookmark,
+  update: updateBookmark,
+  remove: removeBookmark,
+  moveMany: moveBookmarks,
+  removeMany: removeBookmarks,
+  checkHealth: checkBookmarkHealth,
+  backendNavigationEnabled
+} = useBookmarks()
 const { isDark, toggleTheme } = useTheme()
 const { config, getSiteName, isModuleEnabled } = useConfig()
 
@@ -47,6 +75,13 @@ const aiTagSaving = ref(false)
 const aiTagError = ref('')
 const aiTagMessage = ref('')
 const searchBoxHost = ref(null)
+const managementMode = ref('')
+const managementBusy = ref(false)
+const selectedBookmarkIds = ref([])
+const moveTargetGroupId = ref('')
+const groupOrderDraft = ref([])
+const bookmarkOrderDrafts = ref({})
+const sortDirty = ref(false)
 let statusTimer = null
 let aiRequestId = 0
 let aiTagRequestId = 0
@@ -59,6 +94,194 @@ const canGenerateBookmarkTags = computed(() => (
   shouldUseBackendAiSearch()
   && Boolean(resolveBookmarkGenerativeAiProvider(config.value))
 ))
+const orderedGroups = computed(() => orderRecords(groups.value, groupOrderDraft.value))
+const orderedBookmarks = computed(() => {
+  const ordered = []
+  const groupedIds = new Set()
+
+  for (const group of orderedGroups.value) {
+    const groupBookmarks = bookmarks.value.filter((bookmark) => bookmark.groupId === group.id)
+    ordered.push(...orderRecords(groupBookmarks, bookmarkOrderDrafts.value[group.id] || []))
+    groupBookmarks.forEach((bookmark) => groupedIds.add(bookmark.id))
+  }
+
+  ordered.push(...bookmarks.value.filter((bookmark) => !groupedIds.has(bookmark.id)))
+  return ordered
+})
+const currentBookmarks = computed(() => (
+  orderedBookmarks.value.filter((bookmark) => bookmark.groupId === activeGroupId.value)
+))
+const currentSelectableBookmarkIds = computed(() => (
+  currentBookmarks.value
+    .slice(0, MAX_MANAGED_BOOKMARKS)
+    .map((bookmark) => bookmark.id)
+))
+const selectedCount = computed(() => selectedBookmarkIds.value.length)
+const allCurrentBookmarksSelected = computed(() => (
+  currentSelectableBookmarkIds.value.length > 0
+  && currentSelectableBookmarkIds.value.every((id) => selectedBookmarkIds.value.includes(id))
+))
+const availableMoveGroups = computed(() => (
+  groups.value.filter((group) => group.id !== activeGroupId.value)
+))
+
+function resetSortDrafts() {
+  groupOrderDraft.value = groups.value.map((group) => group.id)
+  bookmarkOrderDrafts.value = buildBookmarkOrderMap(bookmarks.value, groups.value)
+  sortDirty.value = false
+}
+
+function chooseDefaultMoveTarget() {
+  if (!availableMoveGroups.value.some((group) => group.id === moveTargetGroupId.value)) {
+    moveTargetGroupId.value = availableMoveGroups.value[0]?.id || ''
+  }
+}
+
+function setManagementMode(mode) {
+  if (managementBusy.value) return
+  const nextMode = managementMode.value === mode ? '' : mode
+  managementMode.value = nextMode
+  selectedBookmarkIds.value = []
+
+  if (nextMode === 'sort') {
+    resetSortDrafts()
+  } else {
+    sortDirty.value = false
+  }
+
+  chooseDefaultMoveTarget()
+}
+
+function toggleBookmarkSelection(bookmark) {
+  if (managementMode.value !== 'select' || bookmark.groupId !== activeGroupId.value) return
+  const nextSelection = toggleManagementSelection(selectedBookmarkIds.value, bookmark.id)
+  selectedBookmarkIds.value = nextSelection.ids
+  if (nextSelection.limited) {
+    setStatus(`一次最多选择 ${MAX_MANAGED_BOOKMARKS} 个书签，请先完成当前批次`, 'info')
+  }
+}
+
+function toggleSelectAll() {
+  if (allCurrentBookmarksSelected.value) {
+    selectedBookmarkIds.value = []
+    return
+  }
+
+  const nextSelection = selectManagementIds(currentBookmarks.value.map((bookmark) => bookmark.id))
+  selectedBookmarkIds.value = nextSelection.ids
+  if (nextSelection.limited) {
+    setStatus(`当前组超过 ${MAX_MANAGED_BOOKMARKS} 项，已选择前 ${MAX_MANAGED_BOOKMARKS} 项`, 'info')
+  }
+}
+
+function handleSortMove(payload = {}) {
+  if (managementMode.value !== 'sort' || managementBusy.value) return
+  const type = payload.type === 'bookmark' ? 'bookmark' : 'group'
+  const groupId = String(payload.groupId || activeGroupId.value)
+  const current = type === 'group'
+    ? groupOrderDraft.value
+    : (bookmarkOrderDrafts.value[groupId] || [])
+  const next = payload.targetId
+    ? moveIdBefore(current, payload.id, payload.targetId)
+    : moveId(current, payload.id, payload.direction)
+
+  if (sameIdOrder(current, next)) return
+  if (type === 'group') {
+    groupOrderDraft.value = next
+  } else {
+    bookmarkOrderDrafts.value = {
+      ...bookmarkOrderDrafts.value,
+      [groupId]: next
+    }
+  }
+  sortDirty.value = true
+}
+
+async function handleMoveSelected() {
+  if (!selectedCount.value || !moveTargetGroupId.value || managementBusy.value) return
+  managementBusy.value = true
+  try {
+    const count = selectedCount.value
+    await moveBookmarks(selectedBookmarkIds.value, moveTargetGroupId.value)
+    selectedBookmarkIds.value = []
+    resetSortDrafts()
+    setStatus(`已移动 ${count} 个书签`, 'success')
+  } catch (error) {
+    setStatus(`移动失败，已恢复原列表：${error.message || '请稍后重试'}`, 'error')
+  } finally {
+    managementBusy.value = false
+  }
+}
+
+async function handleDeleteSelected() {
+  if (!selectedCount.value || managementBusy.value) return
+  const count = selectedCount.value
+  if (!confirm(`确定删除选中的 ${count} 个书签吗？此操作无法撤销。`)) return
+
+  managementBusy.value = true
+  try {
+    await removeBookmarks(selectedBookmarkIds.value)
+    selectedBookmarkIds.value = []
+    resetSortDrafts()
+    setStatus(`已删除 ${count} 个书签`, 'success')
+  } catch (error) {
+    setStatus(`批量删除失败：${error.message || '请稍后重试'}`, 'error')
+  } finally {
+    managementBusy.value = false
+  }
+}
+
+async function handleHealthCheckSelected() {
+  if (!selectedCount.value || managementBusy.value || !backendNavigationEnabled) return
+  managementBusy.value = true
+  try {
+    const checked = await checkBookmarkHealth(selectedBookmarkIds.value)
+    setStatus(`已检查 ${checked.length} 个链接；需登录或限流不会标记为失效`, 'success')
+  } catch (error) {
+    await loadData().catch(() => {})
+    const checkedCount = Number(error.checkedCount || 0)
+    setStatus(
+      checkedCount > 0
+        ? `已完成 ${checkedCount} 个链接后检查中断；已保留并同步完成结果：${error.message || '请稍后重试'}`
+        : `链接检查未完成，已重新同步当前状态：${error.message || '请稍后重试'}`,
+      'error'
+    )
+  } finally {
+    managementBusy.value = false
+  }
+}
+
+async function handleSaveSort() {
+  if (!sortDirty.value || managementBusy.value) return
+  managementBusy.value = true
+  const payload = buildNavigationReorderPayload(
+    groupOrderDraft.value,
+    bookmarkOrderDrafts.value
+  )
+
+  try {
+    await reorderNavigationItems(payload.groupIds, payload.bookmarkOrders)
+    await loadData()
+    resetSortDrafts()
+    managementMode.value = ''
+    setStatus('导航顺序已保存', 'success')
+  } catch (error) {
+    await loadData()
+    resetSortDrafts()
+    setStatus(
+      `排序未保存，可能与其他页面更新冲突；已重新加载最新顺序：${error.message || '请稍后重试'}`,
+      'error'
+    )
+  } finally {
+    managementBusy.value = false
+  }
+}
+
+function handleCancelSort() {
+  if (managementBusy.value) return
+  resetSortDrafts()
+  managementMode.value = ''
+}
 
 async function loadData() {
   await Promise.all([loadGroups(), loadBookmarks()])
@@ -344,6 +567,13 @@ function handleCommandAction(event) {
   runNavigationCommand(action)
 }
 
+watch(activeGroupId, () => {
+  if (managementMode.value === 'select') {
+    selectedBookmarkIds.value = []
+  }
+  chooseDefaultMoveTarget()
+})
+
 onMounted(async () => {
   window.addEventListener(COMMAND_ACTION_EVENT, handleCommandAction)
 
@@ -364,6 +594,7 @@ onMounted(async () => {
 
 onBeforeUnmount(() => {
   window.removeEventListener(COMMAND_ACTION_EVENT, handleCommandAction)
+  if (statusTimer) window.clearTimeout(statusTimer)
   navigationReady = false
   pendingNavigationCommand = ''
 })
@@ -404,7 +635,7 @@ onBeforeUnmount(() => {
       </div>
     </header>
 
-    <main class="main">
+    <main class="main" :class="{ 'has-management-bar': managementMode }">
       <section class="search-section animate-fade-in">
         <h1 class="search-section__title">搜索你想找的内容</h1>
         <div ref="searchBoxHost">
@@ -413,13 +644,121 @@ onBeforeUnmount(() => {
       </section>
 
       <section class="content-section">
+        <div class="management-heading">
+          <div>
+            <p class="management-heading__eyebrow">导航管理</p>
+            <p class="management-heading__hint">批量整理书签，或调整分组与当前分组书签的顺序。</p>
+          </div>
+          <div class="management-heading__modes" role="group" aria-label="导航管理模式">
+            <button
+              type="button"
+              :class="{ 'is-active': managementMode === 'select' }"
+              :aria-pressed="managementMode === 'select'"
+              :disabled="managementBusy"
+              @click="setManagementMode('select')"
+            >
+              <Icon name="check" :size="17" />
+              <span>选择</span>
+            </button>
+            <button
+              type="button"
+              :class="{ 'is-active': managementMode === 'sort' }"
+              :aria-pressed="managementMode === 'sort'"
+              :disabled="managementBusy"
+              @click="setManagementMode('sort')"
+            >
+              <Icon name="menu" :size="17" />
+              <span>排序</span>
+            </button>
+          </div>
+        </div>
+
+        <div
+          v-if="managementMode === 'select'"
+          class="management-bar management-bar--selection"
+          :aria-busy="managementBusy"
+        >
+          <button
+            type="button"
+            :aria-pressed="allCurrentBookmarksSelected"
+            :disabled="managementBusy || !currentBookmarks.length"
+            @click="toggleSelectAll"
+          >
+            {{ allCurrentBookmarksSelected ? '取消全选' : '全选当前组' }}
+          </button>
+          <span class="management-bar__count" aria-live="polite">
+            已选 {{ selectedCount }}/{{ MAX_MANAGED_BOOKMARKS }} 项
+            <template v-if="currentBookmarks.length > MAX_MANAGED_BOOKMARKS">
+              · 当前组共 {{ currentBookmarks.length }} 项
+            </template>
+          </span>
+          <label class="management-bar__target">
+            <span>移动到</span>
+            <select v-model="moveTargetGroupId" :disabled="managementBusy || !availableMoveGroups.length">
+              <option value="">选择分组</option>
+              <option v-for="group in availableMoveGroups" :key="group.id" :value="group.id">
+                {{ group.name }}
+              </option>
+            </select>
+          </label>
+          <button
+            type="button"
+            :disabled="managementBusy || !selectedCount || !moveTargetGroupId"
+            @click="handleMoveSelected"
+          >
+            移动
+          </button>
+          <button
+            type="button"
+            :disabled="managementBusy || !selectedCount || !backendNavigationEnabled"
+            :title="backendNavigationEnabled ? '检查所选链接' : '链接健康检查仅服务器账号支持'"
+            @click="handleHealthCheckSelected"
+          >
+            <Icon name="refresh" :size="16" />
+            <span>检查</span>
+          </button>
+          <button
+            class="is-danger"
+            type="button"
+            :disabled="managementBusy || !selectedCount"
+            @click="handleDeleteSelected"
+          >
+            <Icon name="trash" :size="16" />
+            <span>删除</span>
+          </button>
+          <button type="button" :disabled="managementBusy" @click="setManagementMode('select')">
+            完成
+          </button>
+        </div>
+
+        <div
+          v-else-if="managementMode === 'sort'"
+          class="management-bar management-bar--sort"
+          :aria-busy="managementBusy"
+        >
+          <span class="management-bar__count">拖动手柄，或使用上下按钮调整；最后统一保存。</span>
+          <button type="button" :disabled="managementBusy" @click="handleCancelSort">取消</button>
+          <button
+            class="is-primary"
+            type="button"
+            :disabled="managementBusy || !sortDirty"
+            @click="handleSaveSort"
+          >
+            <Icon name="check" :size="16" />
+            <span>{{ managementBusy ? '保存中' : '保存顺序' }}</span>
+          </button>
+        </div>
+
         <NavGroup
-          :groups="groups"
-          :bookmarks="bookmarks"
+          :groups="orderedGroups"
+          :bookmarks="orderedBookmarks"
           :active-group-id="activeGroupId"
           :pending-group-id="pendingGroupId"
           :pending-bookmark-id="pendingBookmarkId"
           :analyzing-bookmark-id="analyzingBookmarkId"
+          :management-mode="managementMode"
+          :management-busy="managementBusy"
+          :selected-bookmark-ids="selectedBookmarkIds"
           @select-group="activeGroupId = $event.id"
           @add-group="handleAddGroup"
           @edit-group="handleEditGroup"
@@ -428,6 +767,8 @@ onBeforeUnmount(() => {
           @ai-bookmark="handleAiBookmark"
           @edit-bookmark="handleEditBookmark"
           @delete-bookmark="handleDeleteBookmark"
+          @toggle-bookmark="toggleBookmarkSelection"
+          @sort-move="handleSortMove"
         />
       </section>
 
@@ -586,6 +927,118 @@ onBeforeUnmount(() => {
   min-height: 300px;
 }
 
+.management-heading {
+  display: flex;
+  align-items: flex-end;
+  justify-content: space-between;
+  gap: 20px;
+  margin-bottom: 12px;
+  padding: 0 4px;
+}
+
+.management-heading__eyebrow,
+.management-heading__hint {
+  margin: 0;
+}
+
+.management-heading__eyebrow {
+  color: var(--text-primary);
+  font-size: 14px;
+  font-weight: 700;
+}
+
+.management-heading__hint {
+  margin-top: 4px;
+  color: var(--text-muted);
+  font-size: 12px;
+}
+
+.management-heading__modes,
+.management-bar {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+
+.management-heading__modes button,
+.management-bar button,
+.management-bar select {
+  min-height: 44px;
+  padding: 0 14px;
+  color: var(--text-secondary);
+  background: var(--bg-card);
+  border: 1px solid var(--border-color);
+  border-radius: 13px;
+  font: inherit;
+}
+
+.management-heading__modes button,
+.management-bar button {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  gap: 7px;
+  cursor: pointer;
+}
+
+.management-heading__modes button.is-active,
+.management-bar button.is-primary {
+  color: #fff;
+  background: var(--accent-color);
+  border-color: var(--accent-color);
+}
+
+.management-heading__modes button:focus-visible,
+.management-bar button:focus-visible,
+.management-bar select:focus-visible {
+  outline: 2px solid var(--accent-color);
+  outline-offset: 2px;
+}
+
+.management-heading__modes button:disabled,
+.management-bar button:disabled,
+.management-bar select:disabled {
+  cursor: not-allowed;
+  opacity: 0.52;
+}
+
+.management-bar {
+  flex-wrap: wrap;
+  margin-bottom: 14px;
+  padding: 10px;
+  background: color-mix(in srgb, var(--bg-card) 94%, var(--accent-color) 6%);
+  border: 1px solid color-mix(in srgb, var(--border-color) 78%, var(--accent-color));
+  border-radius: 16px;
+  box-shadow: var(--shadow-sm);
+}
+
+.management-bar__count {
+  min-width: 86px;
+  color: var(--text-secondary);
+  font-size: 13px;
+}
+
+.management-bar__target {
+  display: flex;
+  align-items: center;
+  gap: 7px;
+  color: var(--text-muted);
+  font-size: 12px;
+}
+
+.management-bar__target select {
+  max-width: 190px;
+}
+
+.management-bar button.is-danger {
+  color: var(--error-color);
+  border-color: color-mix(in srgb, var(--error-color) 42%, var(--border-color));
+}
+
+.management-bar--sort .management-bar__count {
+  flex: 1;
+}
+
 .page-status {
   position: fixed;
   right: 24px;
@@ -641,7 +1094,11 @@ onBeforeUnmount(() => {
   }
 
   .main {
-    padding: 0 16px 32px;
+    padding: 0 16px 48px;
+  }
+
+  .main.has-management-bar {
+    padding-bottom: 180px;
   }
 
   .search-section {
@@ -659,7 +1116,69 @@ onBeforeUnmount(() => {
 
   .page-status {
     right: 16px;
-    bottom: max(76px, calc(env(safe-area-inset-bottom) + 62px));
+    bottom: max(188px, calc(env(safe-area-inset-bottom) + 174px));
+  }
+
+  .main:not(.has-management-bar) .page-status {
+    bottom: max(80px, calc(env(safe-area-inset-bottom) + 64px));
+  }
+
+  .management-heading {
+    align-items: stretch;
+    flex-direction: column;
+  }
+
+  .management-heading__modes {
+    display: grid;
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+  }
+
+  .management-heading__modes button {
+    width: 100%;
+  }
+
+  .management-bar {
+    position: fixed;
+    right: 10px;
+    bottom: max(10px, env(safe-area-inset-bottom));
+    left: 10px;
+    z-index: 420;
+    display: grid;
+    grid-template-columns: repeat(3, minmax(0, 1fr));
+    max-height: min(46vh, 340px);
+    margin: 0;
+    overflow-y: auto;
+    box-shadow: var(--shadow-lg);
+  }
+
+  .management-bar__count,
+  .management-bar__target,
+  .management-bar--sort .management-bar__count {
+    grid-column: 1 / -1;
+    width: 100%;
+  }
+
+  .management-bar__target select {
+    min-width: 0;
+    max-width: none;
+    flex: 1;
+  }
+
+  .management-bar button {
+    min-width: 0;
+    padding: 0 9px;
+  }
+
+  .management-bar--sort {
+    grid-template-columns: minmax(0, 1fr) minmax(0, 1fr);
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .management-heading__modes button,
+  .management-bar button,
+  .management-bar select {
+    transition: none;
   }
 }
 </style>
