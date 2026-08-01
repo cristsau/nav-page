@@ -28,6 +28,18 @@ const props = defineProps({
   analyzingBookmarkId: {
     type: String,
     default: ''
+  },
+  managementMode: {
+    type: String,
+    default: ''
+  },
+  managementBusy: {
+    type: Boolean,
+    default: false
+  },
+  selectedBookmarkIds: {
+    type: Array,
+    default: () => []
   }
 })
 
@@ -39,7 +51,9 @@ const emit = defineEmits([
   'addBookmark',
   'aiBookmark',
   'editBookmark',
-  'deleteBookmark'
+  'deleteBookmark',
+  'toggleBookmark',
+  'sortMove'
 ])
 
 const activeGroupId = ref('')
@@ -136,6 +150,72 @@ function handleDeleteBookmark(bookmark) {
   emit('deleteBookmark', bookmark)
 }
 
+function handleToggleBookmark(bookmark) {
+  emit('toggleBookmark', bookmark)
+}
+
+function isBookmarkSelected(bookmark) {
+  return props.selectedBookmarkIds.includes(bookmark.id)
+}
+
+function moveGroup(group, direction) {
+  emit('sortMove', {
+    type: 'group',
+    id: group.id,
+    direction
+  })
+}
+
+function handleBookmarkSortMove(payload) {
+  if (!activeGroup.value) return
+  emit('sortMove', {
+    ...payload,
+    type: 'bookmark',
+    groupId: activeGroup.value.id
+  })
+}
+
+function writeSortDragData(event, payload) {
+  if (!event.dataTransfer) return
+  const value = JSON.stringify(payload)
+  event.dataTransfer.effectAllowed = 'move'
+  event.dataTransfer.setData('text/plain', value)
+}
+
+function readSortDragData(event) {
+  try {
+    return JSON.parse(event.dataTransfer?.getData('text/plain') || '{}')
+  } catch {
+    return {}
+  }
+}
+
+function startGroupDrag(group, event) {
+  if (props.managementMode !== 'sort' || props.managementBusy) {
+    event.preventDefault()
+    return
+  }
+  writeSortDragData(event, { type: 'group', id: group.id })
+}
+
+function allowGroupDrop(event) {
+  if (props.managementMode !== 'sort' || props.managementBusy) return
+  event.preventDefault()
+  if (event.dataTransfer) event.dataTransfer.dropEffect = 'move'
+}
+
+function dropGroup(group, event) {
+  if (props.managementMode !== 'sort' || props.managementBusy) return
+  const source = readSortDragData(event)
+  if (source.type !== 'group' || !source.id) return
+  event.preventDefault()
+  emit('sortMove', {
+    type: 'group',
+    id: source.id,
+    targetId: group.id
+  })
+}
+
 function openMobileGroupActions(group, event) {
   event.stopPropagation()
   mobileGroupActionTrigger = event.currentTarget
@@ -199,12 +279,17 @@ const mobileGroupMenuId = computed(() => (
     <div class="groups-tabs">
       <div class="groups-tabs__list" role="tablist" aria-label="导航分组">
         <div
-          v-for="group in groups"
+          v-for="(group, groupIndex) in groups"
           :key="group.id"
           class="groups-tabs__tab"
-          :class="{ 'is-active': activeGroup?.id === group.id }"
+          :class="{
+            'is-active': activeGroup?.id === group.id,
+            'is-sorting': managementMode === 'sort'
+          }"
           :style="groupStyle(group)"
           role="presentation"
+          @dragover="allowGroupDrop"
+          @drop.stop="dropGroup(group, $event)"
         >
           <button
             class="groups-tabs__main"
@@ -223,7 +308,46 @@ const mobileGroupMenuId = computed(() => (
               {{ bookmarks.filter((bookmark) => bookmark.groupId === group.id).length }}
             </span>
           </button>
-          <span class="groups-tabs__actions" role="group" :aria-label="`${group.name} 分组操作`">
+          <span
+            v-if="managementMode === 'sort'"
+            class="groups-tabs__sort-actions"
+            role="group"
+            :aria-label="`${group.name} 排序操作`"
+          >
+            <button
+              class="groups-tabs__drag-handle"
+              type="button"
+              draggable="true"
+              :disabled="managementBusy"
+              :aria-label="`拖动分组 ${group.name}`"
+              title="拖动分组"
+              @dragstart.stop="startGroupDrag(group, $event)"
+            >
+              <Icon name="menu" :size="15" />
+            </button>
+            <button
+              type="button"
+              :disabled="managementBusy || groupIndex === 0"
+              :aria-label="`上移分组 ${group.name}`"
+              @click.stop="moveGroup(group, -1)"
+            >
+              <Icon class="sort-chevron sort-chevron--up" name="chevron-down" :size="15" />
+            </button>
+            <button
+              type="button"
+              :disabled="managementBusy || groupIndex === groups.length - 1"
+              :aria-label="`下移分组 ${group.name}`"
+              @click.stop="moveGroup(group, 1)"
+            >
+              <Icon name="chevron-down" :size="15" />
+            </button>
+          </span>
+          <span
+            v-if="!managementMode"
+            class="groups-tabs__actions"
+            role="group"
+            :aria-label="`${group.name} 分组操作`"
+          >
             <button
               class="groups-tabs__action"
               title="编辑分组"
@@ -246,6 +370,7 @@ const mobileGroupMenuId = computed(() => (
             </button>
           </span>
           <button
+            v-if="!managementMode"
             class="groups-tabs__mobile-more"
             type="button"
             aria-haspopup="dialog"
@@ -258,7 +383,14 @@ const mobileGroupMenuId = computed(() => (
           </button>
         </div>
       </div>
-      <button class="groups-tabs__add" type="button" title="添加分组" aria-label="添加分组" @click="handleAddGroup">
+      <button
+        v-if="!managementMode"
+        class="groups-tabs__add"
+        type="button"
+        title="添加分组"
+        aria-label="添加分组"
+        @click="handleAddGroup"
+      >
         <Icon name="plus" :size="18" />
         <span>新分组</span>
       </button>
@@ -267,23 +399,40 @@ const mobileGroupMenuId = computed(() => (
     <!-- 书签网格 -->
     <div class="bookmarks-container">
       <Transition name="tab-slide" mode="out-in">
-        <div :key="activeGroup?.id" class="bookmarks-grid">
+        <div
+          :key="activeGroup?.id"
+          class="bookmarks-grid"
+          :class="{ 'bookmarks-grid--sorting': managementMode === 'sort' }"
+        >
           <!-- 书签列表 -->
           <TransitionGroup name="list">
             <NavItem
-              v-for="bookmark in activeBookmarks"
+              v-for="(bookmark, bookmarkIndex) in activeBookmarks"
               :key="bookmark.id"
               :bookmark="bookmark"
               :deleting="pendingBookmarkId === bookmark.id"
               :analyzing="analyzingBookmarkId === bookmark.id"
+              :selection-mode="managementMode === 'select'"
+              :sort-mode="managementMode === 'sort'"
+              :selected="isBookmarkSelected(bookmark)"
+              :management-busy="managementBusy"
+              :sort-index="bookmarkIndex"
+              :sort-count="activeBookmarks.length"
               @ai="handleAiBookmark"
               @edit="handleEditBookmark"
               @delete="handleDeleteBookmark"
+              @toggle-selection="handleToggleBookmark"
+              @sort-move="handleBookmarkSortMove"
             />
           </TransitionGroup>
 
           <!-- 添加书签卡片：放在真实内容之后，避免低频操作占据首位。 -->
-          <button v-if="activeGroup" class="bookmark-card bookmark-card--add" type="button" @click="handleAddBookmark">
+          <button
+            v-if="activeGroup && !managementMode"
+            class="bookmark-card bookmark-card--add"
+            type="button"
+            @click="handleAddBookmark"
+          >
             <div class="bookmark-card__icon"><Icon name="plus" :size="28" /></div>
             <div class="bookmark-card__title">添加书签</div>
           </button>
@@ -478,6 +627,50 @@ const mobileGroupMenuId = computed(() => (
     width var(--transition-fast),
     opacity var(--transition-fast),
     transform var(--transition-fast);
+}
+
+.groups-tabs__sort-actions {
+  display: flex;
+  align-items: center;
+  gap: 2px;
+  padding-right: 5px;
+}
+
+.groups-tabs__sort-actions button {
+  width: 36px;
+  height: 36px;
+  display: grid;
+  place-items: center;
+  flex: 0 0 auto;
+  padding: 0;
+  color: var(--text-secondary);
+  background: color-mix(in srgb, var(--bg-card) 88%, var(--accent-color) 12%);
+  border: 1px solid var(--border-light);
+  border-radius: 10px;
+  cursor: pointer;
+}
+
+.groups-tabs__sort-actions button:focus-visible {
+  outline: 2px solid var(--accent-color);
+  outline-offset: 1px;
+}
+
+.groups-tabs__sort-actions button:disabled {
+  cursor: not-allowed;
+  opacity: 0.4;
+}
+
+.groups-tabs__drag-handle {
+  cursor: grab !important;
+  touch-action: none;
+}
+
+.groups-tabs__drag-handle:active {
+  cursor: grabbing !important;
+}
+
+.sort-chevron--up {
+  transform: rotate(180deg);
 }
 
 .groups-tabs__tab:hover .groups-tabs__actions,
@@ -841,6 +1034,10 @@ const mobileGroupMenuId = computed(() => (
     gap: 10px;
   }
 
+  .bookmarks-grid--sorting {
+    grid-template-columns: minmax(0, 1fr);
+  }
+
   .groups-tabs__add {
     width: 46px;
     padding: 0;
@@ -855,7 +1052,7 @@ const mobileGroupMenuId = computed(() => (
   }
 }
 
-@media (hover: none), (pointer: coarse) {
+@media (hover: none), (pointer: coarse), (any-hover: none), (any-pointer: coarse) {
   .groups-tabs__actions {
     display: none;
   }
@@ -863,11 +1060,17 @@ const mobileGroupMenuId = computed(() => (
   .groups-tabs__mobile-more {
     display: grid;
   }
+
+  .groups-tabs__sort-actions button {
+    width: 44px;
+    height: 44px;
+  }
 }
 
 @media (prefers-reduced-motion: reduce) {
   .groups-tabs__tab,
   .groups-tabs__actions,
+  .groups-tabs__sort-actions button,
   .groups-tabs__action,
   .groups-tabs__add,
   .bookmark-card--add,

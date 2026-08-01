@@ -25,6 +25,13 @@ export function mapBookmark(record) {
     description: record.description,
     tags: Array.isArray(record.tags) ? record.tags : [],
     order: record.display_order,
+    healthStatus: record.health_status || 'unchecked',
+    healthHttpStatus: Number.isInteger(record.health_http_status)
+      ? record.health_http_status
+      : null,
+    healthCheckedAt: record.health_checked_at || null,
+    healthFailureCount: Number(record.health_failure_count || 0),
+    healthErrorCode: record.health_error_code || null,
     createdAt: record.created_at,
     updatedAt: record.updated_at
   }

@@ -67,6 +67,16 @@ const commands = [
     action: 'create-memo'
   },
   {
+    id: 'view-due-reminders',
+    group: '快速操作',
+    label: '查看到期提醒',
+    description: '查看已到期备忘录和未读提醒',
+    keywords: '提醒 到期 逾期 截止时间 deadline reminder',
+    icon: 'clock',
+    path: '/whisper',
+    action: 'view-due-reminders'
+  },
+  {
     id: 'create-diary',
     group: '快速操作',
     label: '新建日记',

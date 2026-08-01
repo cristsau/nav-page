@@ -15,6 +15,23 @@ jobs:
   test-and-build:
     runs-on: ubuntu-latest
     timeout-minutes: 10
+    env:
+      DATABASE_URL: postgres://nav:nav_password@127.0.0.1:5432/nav
+
+    services:
+      postgres:
+        image: postgres:16-alpine
+        env:
+          POSTGRES_USER: nav
+          POSTGRES_PASSWORD: nav_password
+          POSTGRES_DB: nav
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd "pg_isready -U nav -d nav"
+          --health-interval 5s
+          --health-timeout 5s
+          --health-retries 10
 
     steps:
       - name: Checkout
@@ -39,6 +56,12 @@ jobs:
         run: |
           npm audit --prefix app --audit-level=moderate
           npm audit --prefix api --audit-level=moderate
+
+      - name: Apply and verify PostgreSQL migrations
+        run: |
+          npm run migrate --prefix api
+          npm run migrate --prefix api
+          npm run verify:migrations --prefix api
 
       - name: Run API tests
         run: npm test --prefix api

@@ -12,6 +12,10 @@ const props = defineProps({
   note: {
     type: Object,
     default: null
+  },
+  returnFocus: {
+    type: Object,
+    default: null
   }
 })
 
@@ -84,7 +88,10 @@ watch(
   () => props.show,
   async (show) => {
     if (show) {
-      previouslyFocusedElement = document.activeElement
+      previouslyFocusedElement = props.returnFocus instanceof HTMLElement
+        && props.returnFocus.isConnected
+        ? props.returnFocus
+        : document.activeElement
       await nextTick()
       dialogRef.value?.focus()
       return

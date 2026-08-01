@@ -9,9 +9,9 @@
 - 前端发布目录：`/home/web/html/nav`
 - 后端：`nav-api`
 - 数据库：`nav-postgres`
-- 当前提交：`5de3d75d91f840d3bb809be3fc8cd17d5dd219fb`
-- API 镜像：`nav-api:5de3d75d91f840d3bb809be3fc8cd17d5dd219fb`
-- 发布证据：`/opt/nav-releases/20260801-094005-5de3d75d91f840d3bb809be3fc8cd17d5dd219fb`
+- 当前提交：`cc1da6f72675108d9df243cab6affa116b32b4ff`
+- API 镜像：`nav-api:cc1da6f72675108d9df243cab6affa116b32b4ff`
+- 发布证据：`/opt/nav-releases/20260801-103458-cc1da6f72675108d9df243cab6affa116b32b4ff`
 
 ## 当前定位
 
@@ -229,10 +229,10 @@ location ^~ /share/ {
 当前发布的回滚入口：
 
 ```bash
-sudo /opt/nav-releases/20260801-094005-5de3d75d91f840d3bb809be3fc8cd17d5dd219fb/rollback.sh
+sudo /opt/nav-releases/20260801-103458-cc1da6f72675108d9df243cab6affa116b32b4ff/rollback.sh
 ```
 
 它恢复发布前 API 环境、前端并切回固定旧镜像
-`nav-api:ff561376642b91030fe7318a6ff7a537f3664d9c`。正常应用回滚保留加法迁移
+`nav-api:5de3d75d91f840d3bb809be3fc8cd17d5dd219fb`。正常应用回滚保留加法迁移
 `011_account_recovery.sql`，不得恢复整库覆盖发布后的用户写入。只有明确的数据损坏事故才
 评估在新数据库/新 volume 中恢复并验收后切换。

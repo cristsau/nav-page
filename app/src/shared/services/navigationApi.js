@@ -78,6 +78,40 @@ export async function reorderBackendBookmarks(groupId, ids) {
   })
 }
 
+export async function reorderBackendNavigation(groupIds, bookmarkOrders) {
+  await request('/navigation/reorder', {
+    method: 'POST',
+    body: JSON.stringify({ groupIds, bookmarkOrders })
+  })
+}
+
+export async function moveBackendBookmarks(ids, targetGroupId) {
+  const payload = await request('/bookmarks/bulk/move', {
+    method: 'POST',
+    body: JSON.stringify({ ids, targetGroupId })
+  })
+
+  return payload.bookmarks || []
+}
+
+export async function deleteBackendBookmarks(ids) {
+  const payload = await request('/bookmarks/bulk/delete', {
+    method: 'POST',
+    body: JSON.stringify({ ids })
+  })
+
+  return payload.bookmarks || []
+}
+
+export async function checkBackendBookmarkHealth(ids) {
+  const payload = await request('/bookmarks/health-check', {
+    method: 'POST',
+    body: JSON.stringify({ ids })
+  })
+
+  return payload.bookmarks || []
+}
+
 export async function searchBackendBookmarks(query) {
   const payload = await request(`/bookmarks/search?q=${encodeURIComponent(query)}`, {
     method: 'GET'

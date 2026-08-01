@@ -9,6 +9,17 @@ import {
   resolveGroupIcon,
   sanitizeBookmarkUrl
 } from '../../app/src/modules/navigation/navigationUi.js'
+import {
+  buildBookmarkOrderMap,
+  buildNavigationReorderPayload,
+  MAX_MANAGED_BOOKMARKS,
+  moveId,
+  moveIdBefore,
+  resolveBookmarkHealthPresentation,
+  selectManagementIds,
+  sameIdOrder,
+  toggleManagementSelection
+} from '../../app/src/modules/navigation/navigationManagement.js'
 
 test('legacy group text and emoji are converted to supported Lucide icons', () => {
   assert.equal(resolveGroupIcon('briefcase', '工作'), 'briefcase')
@@ -105,4 +116,160 @@ test('bookmark AI setup action focuses the search settings section', async () =>
   assert.match(settings, /id="settings-search"/)
   assert.match(settings, /focusRequestedSection/)
   assert.match(settings, /scrollIntoView/)
+})
+
+test('navigation management keeps complete deterministic orders for buttons and drag', () => {
+  assert.deepEqual(moveId(['a', 'b', 'c'], 'b', -1), ['b', 'a', 'c'])
+  assert.deepEqual(moveId(['a', 'b', 'c'], 'a', -1), ['a', 'b', 'c'])
+  assert.deepEqual(moveIdBefore(['a', 'b', 'c', 'd'], 'd', 'b'), ['a', 'd', 'b', 'c'])
+  assert.deepEqual(moveIdBefore(['a', 'b', 'c'], 'b', 'b'), ['a', 'b', 'c'])
+  assert.equal(sameIdOrder(['a', 'b'], ['a', 'b']), true)
+  assert.equal(sameIdOrder(['a', 'b'], ['b', 'a']), false)
+
+  assert.deepEqual(
+    buildBookmarkOrderMap(
+      [
+        { id: 'a', groupId: 'one' },
+        { id: 'b', groupId: 'two' },
+        { id: 'c', groupId: 'one' }
+      ],
+      [{ id: 'one' }, { id: 'two' }]
+    ),
+    { one: ['a', 'c'], two: ['b'] }
+  )
+
+  assert.deepEqual(
+    buildNavigationReorderPayload(
+      ['two', 'one'],
+      { one: ['a', 'c'], two: ['b'] }
+    ),
+    {
+      groupIds: ['two', 'one'],
+      bookmarkOrders: [
+        { groupId: 'two', ids: ['b'] },
+        { groupId: 'one', ids: ['a', 'c'] }
+      ]
+    }
+  )
+})
+
+test('navigation management caps one bulk operation at the backend contract of 100', () => {
+  const allIds = Array.from({ length: MAX_MANAGED_BOOKMARKS + 1 }, (_, index) => `id-${index}`)
+  const selected = selectManagementIds(allIds)
+
+  assert.equal(selected.ids.length, MAX_MANAGED_BOOKMARKS)
+  assert.equal(selected.limited, true)
+  assert.deepEqual(selected.ids, allIds.slice(0, MAX_MANAGED_BOOKMARKS))
+
+  const blocked = toggleManagementSelection(selected.ids, allIds.at(-1))
+  assert.equal(blocked.limited, true)
+  assert.deepEqual(blocked.ids, selected.ids)
+
+  const removed = toggleManagementSelection(selected.ids, selected.ids[0])
+  assert.equal(removed.limited, false)
+  assert.equal(removed.ids.length, MAX_MANAGED_BOOKMARKS - 1)
+})
+
+test('bookmark health presentation never labels protected links as broken', () => {
+  assert.deepEqual(
+    resolveBookmarkHealthPresentation({
+      healthStatus: 'protected',
+      healthHttpStatus: 403,
+      healthCheckedAt: '2026-08-01T00:00:00.000Z'
+    }),
+    {
+      label: '需登录',
+      tone: 'info',
+      status: 'protected',
+      httpStatus: 403,
+      checkedAt: '2026-08-01T00:00:00.000Z',
+      errorCode: ''
+    }
+  )
+  assert.equal(resolveBookmarkHealthPresentation({ healthStatus: 'broken' }).tone, 'error')
+  assert.equal(resolveBookmarkHealthPresentation({ healthStatus: 'unchecked' }), null)
+})
+
+test('navigation management calls the exact bulk and health backend contracts', async () => {
+  const source = await fs.readFile(
+    fileURLToPath(new URL('../../app/src/shared/services/navigationApi.js', import.meta.url)),
+    'utf8'
+  )
+
+  assert.match(source, /request\('\/bookmarks\/bulk\/move',[\s\S]*JSON\.stringify\(\{ ids, targetGroupId \}\)/)
+  assert.match(source, /request\('\/bookmarks\/bulk\/delete',[\s\S]*JSON\.stringify\(\{ ids \}\)/)
+  assert.match(source, /request\('\/bookmarks\/health-check',[\s\S]*JSON\.stringify\(\{ ids \}\)/)
+  assert.match(source, /request\('\/navigation\/reorder',[\s\S]*JSON\.stringify\(\{ groupIds, bookmarkOrders \}\)/)
+})
+
+test('navigation management exposes mutually exclusive accessible controls and complete reorder saves', async () => {
+  const [navigation, navGroup, navItem, useDB, database] = await Promise.all([
+    fs.readFile(
+      fileURLToPath(new URL('../../app/src/modules/navigation/Navigation.vue', import.meta.url)),
+      'utf8'
+    ),
+    fs.readFile(
+      fileURLToPath(new URL('../../app/src/modules/navigation/components/NavGroup.vue', import.meta.url)),
+      'utf8'
+    ),
+    fs.readFile(
+      fileURLToPath(new URL('../../app/src/modules/navigation/components/NavItem.vue', import.meta.url)),
+      'utf8'
+    ),
+    fs.readFile(
+      fileURLToPath(new URL('../../app/src/shared/composables/useDB.js', import.meta.url)),
+      'utf8'
+    ),
+    fs.readFile(
+      fileURLToPath(new URL('../../app/src/shared/db/database.js', import.meta.url)),
+      'utf8'
+    )
+  ])
+
+  assert.match(navigation, /managementMode\.value === mode \? '' : mode/)
+  assert.match(navigation, /toggleManagementSelection\(selectedBookmarkIds\.value, bookmark\.id\)/)
+  assert.match(navigation, /已选择前 \$\{MAX_MANAGED_BOOKMARKS\} 项/)
+  assert.match(navigation, /:aria-pressed="managementMode === 'select'"/)
+  assert.match(navigation, /:aria-pressed="managementMode === 'sort'"/)
+  const saveSortSource = navigation.match(
+    /async function handleSaveSort\(\)[\s\S]*?\n}\n\nfunction handleCancelSort/
+  )?.[0] || ''
+  assert.match(saveSortSource, /buildNavigationReorderPayload/)
+  assert.match(saveSortSource, /reorderNavigationItems\(payload\.groupIds, payload\.bookmarkOrders\)/)
+  assert.doesNotMatch(saveSortSource, /reorderGroupItems|reorderBookmarkItems/)
+  assert.match(saveSortSource, /await loadData\(\)/)
+  assert.match(saveSortSource, /可能与其他页面更新冲突；已重新加载最新顺序/)
+  assert.match(navigation, /\.management-bar select \{\s*min-height: 44px/)
+
+  assert.match(navItem, /role="checkbox"/)
+  assert.match(navItem, /:aria-checked="selected"/)
+  assert.match(navItem, /resolveBookmarkHealthPresentation/)
+
+  assert.match(useDB, /selectedIds\.slice\(index, index \+ 20\)/)
+  assert.match(useDB, /MAX_BULK_BOOKMARK_IDS = 100/)
+  assert.match(useDB, /assertBulkLimit\(selectedIds\)/)
+  assert.match(useDB, /链接健康检查仅服务器账号支持/)
+  assert.match(useDB, /reorderBookmarks/)
+  assert.match(useDB, /async function reorderAll\(groupIds, bookmarkOrders\)/)
+  assert.match(useDB, /await reorderBackendNavigation\(groupIds, bookmarkOrders\)/)
+  assert.match(useDB, /await reorderLocalNavigation\(groupIds, bookmarkOrders\)/)
+  assert.match(useDB, /await deleteBookmarks\(selectedIds\)/)
+  assert.match(database, /db\.transaction\('rw', db\.bookmarks,[\s\S]*db\.bookmarks\.bulkDelete\(bookmarkIds\)/)
+  assert.match(database, /bulkDelete\(bookmarkIds\)[\s\S]*db\.bookmarks\.bulkPut\(updates\)/)
+  assert.match(useDB, /await moveLocalBookmarks\(selectedIds, target\)/)
+  assert.match(database, /export async function moveBookmarks[\s\S]*db\.groups\.get\(target\)[\s\S]*db\.bookmarks\.bulkGet\(bookmarkIds\)[\s\S]*db\.bookmarks\.bulkPut\(updates\)/)
+  assert.match(database, /export async function reorderNavigation\(groupIds, bookmarkOrders\)/)
+  assert.match(database, /db\.transaction\('rw', db\.groups, db\.bookmarks/)
+  assert.match(database, /currentGroupIds\.length !== orderedGroupIds\.length/)
+  assert.match(useDB, /error\.checkedCount = checked\.length/)
+  assert.match(navigation, /已保留并同步完成结果/)
+  assert.match(navGroup, /bookmarks-grid--sorting/)
+  assert.match(navGroup, /any-pointer: coarse/)
+  assert.match(navItem, /any-pointer: coarse/)
+  assert.match(database, /currentBookmarkIds\.length !== orderedBookmarkIds\.length/)
+  assert.match(database, /currentBookmarkIdsByGroup/)
+  assert.match(database, /currentIds\.length !== ids\.length/)
+  assert.match(database, /currentIds\.some\(\(id\) => !ids\.includes\(id\)\)/)
+  assert.match(database, /db\.groups\.bulkPut\(updatedGroups\)/)
+  assert.match(database, /db\.bookmarks\.bulkPut\(updatedBookmarks\)/)
 })

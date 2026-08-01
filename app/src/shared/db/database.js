@@ -447,6 +447,104 @@ export async function reorderGroups(groupIds) {
   })
 }
 
+export async function reorderNavigation(groupIds, bookmarkOrders) {
+  const db = requireUserDb()
+  const failConflict = () => {
+    const conflict = new Error('导航数据已变化，请刷新后重试。')
+    conflict.code = 'NAVIGATION_CONFLICT'
+    throw conflict
+  }
+  const normalizeIds = (ids) => [...new Set(
+    (Array.isArray(ids) ? ids : [])
+      .map((id) => String(id || '').trim())
+      .filter(Boolean)
+  )]
+  const rawGroupIds = Array.isArray(groupIds) ? groupIds : []
+  const orderedGroupIds = normalizeIds(rawGroupIds)
+  if (
+    !Array.isArray(groupIds)
+    || orderedGroupIds.length !== rawGroupIds.length
+    || !Array.isArray(bookmarkOrders)
+  ) {
+    failConflict()
+  }
+
+  const normalizedBookmarkOrders = bookmarkOrders.map((entry) => {
+    if (!entry || !Array.isArray(entry.ids)) failConflict()
+    const rawIds = Array.isArray(entry?.ids) ? entry.ids : []
+    const ids = normalizeIds(rawIds)
+    const groupId = String(entry?.groupId || '').trim()
+    if (!groupId || ids.length !== rawIds.length) failConflict()
+    return { groupId, ids }
+  })
+  const orderGroupIds = normalizedBookmarkOrders.map(({ groupId }) => groupId)
+  const uniqueOrderGroupIds = [...new Set(orderGroupIds)]
+  if (
+    normalizedBookmarkOrders.length !== orderedGroupIds.length
+    || uniqueOrderGroupIds.length !== orderGroupIds.length
+    || uniqueOrderGroupIds.some((groupId) => !orderedGroupIds.includes(groupId))
+  ) {
+    failConflict()
+  }
+
+  const orderedBookmarkIds = normalizedBookmarkOrders.flatMap(({ ids }) => ids)
+  if (new Set(orderedBookmarkIds).size !== orderedBookmarkIds.length) failConflict()
+
+  await db.transaction('rw', db.groups, db.bookmarks, async () => {
+    const [currentGroups, currentBookmarks] = await Promise.all([
+      db.groups.toArray(),
+      db.bookmarks.toArray()
+    ])
+    const currentGroupIds = currentGroups.map(({ id }) => String(id))
+    const currentBookmarkIds = currentBookmarks.map(({ id }) => String(id))
+    if (
+      currentGroupIds.length !== orderedGroupIds.length
+      || currentGroupIds.some((id) => !orderedGroupIds.includes(id))
+      || currentBookmarkIds.length !== orderedBookmarkIds.length
+      || currentBookmarkIds.some((id) => !orderedBookmarkIds.includes(id))
+    ) {
+      failConflict()
+    }
+
+    const currentBookmarkIdsByGroup = new Map(
+      orderedGroupIds.map((groupId) => [
+        groupId,
+        currentBookmarks
+          .filter((bookmark) => String(bookmark.groupId) === groupId)
+          .map((bookmark) => String(bookmark.id))
+      ])
+    )
+    for (const { groupId, ids } of normalizedBookmarkOrders) {
+      const currentIds = currentBookmarkIdsByGroup.get(groupId) || []
+      if (
+        currentIds.length !== ids.length
+        || currentIds.some((id) => !ids.includes(id))
+      ) {
+        failConflict()
+      }
+    }
+
+    const groupsById = new Map(currentGroups.map((group) => [String(group.id), group]))
+    const bookmarksById = new Map(
+      currentBookmarks.map((bookmark) => [String(bookmark.id), bookmark])
+    )
+    const updatedGroups = orderedGroupIds.map((id, order) => ({
+      ...groupsById.get(id),
+      order
+    }))
+    const updatedBookmarks = normalizedBookmarkOrders.flatMap(({ groupId, ids }) => (
+      ids.map((id, order) => ({
+        ...bookmarksById.get(id),
+        groupId,
+        order
+      }))
+    ))
+
+    if (updatedGroups.length) await db.groups.bulkPut(updatedGroups)
+    if (updatedBookmarks.length) await db.bookmarks.bulkPut(updatedBookmarks)
+  })
+}
+
 // ========== Bookmarks ==========
 
 export async function getBookmarks(groupId) {
@@ -493,8 +591,86 @@ export async function updateBookmark(id, updates) {
 }
 
 export async function deleteBookmark(id) {
+  await deleteBookmarks([id])
+}
+
+export async function deleteBookmarks(ids) {
   const db = requireUserDb()
-  await db.bookmarks.delete(id)
+  const bookmarkIds = [...new Set(
+    (Array.isArray(ids) ? ids : [])
+      .map((id) => String(id || '').trim())
+      .filter(Boolean)
+  )]
+  if (!bookmarkIds.length) return
+
+  await db.transaction('rw', db.bookmarks, async () => {
+    const selected = (await db.bookmarks.bulkGet(bookmarkIds)).filter(Boolean)
+    if (selected.length !== bookmarkIds.length) {
+      throw new Error('部分书签已不存在，请刷新后重试。')
+    }
+
+    const affectedGroupIds = [...new Set(selected.map((bookmark) => bookmark.groupId))]
+    await db.bookmarks.bulkDelete(bookmarkIds)
+
+    const updates = []
+    for (const groupId of affectedGroupIds) {
+      const remaining = (await db.bookmarks.where('groupId').equals(groupId).toArray())
+        .sort((left, right) => (left.order ?? 0) - (right.order ?? 0))
+      updates.push(...remaining.map((bookmark, order) => ({
+        ...bookmark,
+        order,
+        updatedAt: getTimestamp()
+      })))
+    }
+    if (updates.length) await db.bookmarks.bulkPut(updates)
+  })
+}
+
+export async function moveBookmarks(ids, targetGroupId) {
+  const db = requireUserDb()
+  const bookmarkIds = [...new Set(
+    (Array.isArray(ids) ? ids : [])
+      .map((id) => String(id || '').trim())
+      .filter(Boolean)
+  )]
+  const target = String(targetGroupId || '').trim()
+  if (!bookmarkIds.length || !target) return
+
+  await db.transaction('rw', db.groups, db.bookmarks, async () => {
+    const targetGroup = await db.groups.get(target)
+    if (!targetGroup) {
+      throw new Error('目标分组已不存在，请刷新后重试。')
+    }
+
+    const selected = (await db.bookmarks.bulkGet(bookmarkIds)).filter(Boolean)
+    if (selected.length !== bookmarkIds.length) {
+      throw new Error('部分书签已不存在，请刷新后重试。')
+    }
+
+    const selectedIds = new Set(bookmarkIds)
+    const affectedGroupIds = [...new Set([
+      target,
+      ...selected.map((bookmark) => bookmark.groupId)
+    ])]
+    const selectedById = new Map(selected.map((bookmark) => [bookmark.id, bookmark]))
+    const moving = bookmarkIds.map((id) => selectedById.get(id))
+    const updates = []
+
+    for (const groupId of affectedGroupIds) {
+      const current = (await db.bookmarks.where('groupId').equals(groupId).toArray())
+        .sort((left, right) => (left.order ?? 0) - (right.order ?? 0))
+        .filter((bookmark) => !selectedIds.has(bookmark.id))
+      const ordered = groupId === target ? [...current, ...moving] : current
+
+      updates.push(...ordered.map((bookmark, order) => ({
+        ...bookmark,
+        groupId,
+        order
+      })))
+    }
+
+    await db.bookmarks.bulkPut(updates)
+  })
 }
 
 export async function reorderBookmarks(groupId, bookmarkIds) {

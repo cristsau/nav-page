@@ -1,5 +1,6 @@
 import { config } from '../config.js'
 import { withTransaction } from '../db/index.js'
+import { withNavigationTransaction } from '../lib/navigationTransactions.js'
 import {
   assertAttachmentsAllowedForEncryption,
   getImgBedOrigin,
@@ -581,7 +582,7 @@ export default async function migrationRoutes(fastify) {
       importedAttachmentsByNoteId.set(String(note?.id || ''), attachments)
     }
 
-    await withTransaction(async (client) => {
+    await withNavigationTransaction(request.currentUser.id, async (client) => {
       await client.query('LOCK TABLE notes IN SHARE ROW EXCLUSIVE MODE')
 
       if (importedNumberIds.length) {

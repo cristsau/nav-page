@@ -1,0 +1,132 @@
+import fs from 'node:fs/promises'
+import { config } from '../config.js'
+import { pool, query } from './index.js'
+
+function assertExactSet(label, actualValues, expectedValues) {
+  const actual = [...new Set(actualValues)].sort()
+  const expected = [...new Set(expectedValues)].sort()
+
+  if (actual.length !== expected.length || actual.some((value, index) => value !== expected[index])) {
+    throw new Error(`${label} mismatch: expected ${expected.join(', ')}, received ${actual.join(', ')}`)
+  }
+}
+
+async function migrationFileNames() {
+  const entries = await fs.readdir(config.migrationsDir, { withFileTypes: true })
+  return entries
+    .filter((entry) => entry.isFile() && entry.name.endsWith('.sql'))
+    .map((entry) => entry.name)
+    .sort()
+}
+
+async function verifyMigrationLedger() {
+  const expected = await migrationFileNames()
+  const result = await query(
+    `
+      SELECT name, COUNT(*)::INTEGER AS executions
+      FROM schema_migrations
+      GROUP BY name
+      ORDER BY name ASC
+    `
+  )
+
+  assertExactSet('schema_migrations', result.rows.map((row) => row.name), expected)
+  if (result.rows.some((row) => Number(row.executions) !== 1)) {
+    throw new Error('A migration was recorded more than once')
+  }
+}
+
+async function verifyNavigationMaintenanceSchema() {
+  const expectedColumns = [
+    'health_status',
+    'health_http_status',
+    'health_checked_at',
+    'health_failure_count',
+    'health_error_code'
+  ]
+  const columns = await query(
+    `
+      SELECT column_name
+      FROM information_schema.columns
+      WHERE table_schema = current_schema()
+        AND table_name = 'nav_bookmarks'
+        AND column_name = ANY($1::text[])
+    `,
+    [expectedColumns]
+  )
+  assertExactSet('navigation maintenance columns', columns.rows.map((row) => row.column_name), expectedColumns)
+
+  const expectedConstraints = [
+    'nav_bookmarks_health_status_check',
+    'nav_bookmarks_health_http_status_check',
+    'nav_bookmarks_health_failure_count_check',
+    'nav_bookmarks_health_error_code_check'
+  ]
+  const constraints = await query(
+    `
+      SELECT conname
+      FROM pg_constraint
+      WHERE conrelid = 'nav_bookmarks'::regclass
+        AND conname = ANY($1::text[])
+    `,
+    [expectedConstraints]
+  )
+  assertExactSet(
+    'navigation maintenance constraints',
+    constraints.rows.map((row) => row.conname),
+    expectedConstraints
+  )
+}
+
+async function verifyReminderSchema() {
+  const expectedColumns = [
+    'id',
+    'user_id',
+    'note_id',
+    'due_at_snapshot',
+    'triggered_at',
+    'read_at',
+    'created_at'
+  ]
+  const columns = await query(
+    `
+      SELECT column_name
+      FROM information_schema.columns
+      WHERE table_schema = current_schema()
+        AND table_name = 'note_reminders'
+    `
+  )
+  assertExactSet('note reminder columns', columns.rows.map((row) => row.column_name), expectedColumns)
+
+  const expectedIndexes = [
+    'idx_note_reminders_user_triggered',
+    'idx_note_reminders_user_unread'
+  ]
+  const indexes = await query(
+    `
+      SELECT indexname
+      FROM pg_indexes
+      WHERE schemaname = current_schema()
+        AND tablename = 'note_reminders'
+        AND indexname = ANY($1::text[])
+    `,
+    [expectedIndexes]
+  )
+  assertExactSet('note reminder indexes', indexes.rows.map((row) => row.indexname), expectedIndexes)
+}
+
+async function main() {
+  await verifyMigrationLedger()
+  await verifyNavigationMaintenanceSchema()
+  await verifyReminderSchema()
+  console.log('migration schema verification complete')
+}
+
+main()
+  .catch((error) => {
+    console.error(error)
+    process.exitCode = 1
+  })
+  .finally(async () => {
+    await pool.end()
+  })
