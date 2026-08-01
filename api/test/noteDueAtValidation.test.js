@@ -108,5 +108,5 @@ test('memo create and update reject invalid dueAt while diary requests ignore it
   assert.match(source, /resolveNoteDueAt\(type, request\.body\?\.dueAt, existing\.due_at\)/)
   assert.match(source, /updated_at::text AS updated_at_version/)
   assert.match(source, /AND updated_at = \$15::timestamptz/)
-  assert.match(source, /code: 'stale_note'/)
+  assert.match(source, /error\.code = 'stale_note'/)
 })

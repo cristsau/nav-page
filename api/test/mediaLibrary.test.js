@@ -1,6 +1,7 @@
 import test from 'node:test'
 import assert from 'node:assert/strict'
 import fs from 'node:fs/promises'
+import path from 'node:path'
 import { config } from '../src/config.js'
 import { listImgBedUserImages } from '../src/lib/imgBedLibraryClient.js'
 import {
@@ -246,7 +247,7 @@ test('a capped image-bed listing is explicitly incomplete and cannot drive missi
   const previousBaseUrl = config.imgBedBaseUrl
   const previousTokenFile = config.imgBedLibraryTokenFile
   config.imgBedBaseUrl = 'https://pic.example.test'
-  config.imgBedLibraryTokenFile = 'C:\\test-secrets\\imgbed-library-token'
+  config.imgBedLibraryTokenFile = path.resolve('test-secrets/imgbed-library-token')
   let calls = 0
   try {
     const result = await listImgBedUserImages(USER_ID, {
