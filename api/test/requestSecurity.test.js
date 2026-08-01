@@ -82,18 +82,40 @@ test('Fastify serves credentialed CORS for both production domains and blocks at
 
   try {
     for (const origin of parseAllowedOrigins(productionOrigins)) {
-      const preflight = await app.inject({
-        method: 'OPTIONS',
-        url: '/api/notes/ai',
-        headers: {
-          origin,
-          'access-control-request-method': 'POST',
-          'access-control-request-headers': 'content-type'
+      const preflightCases = [
+        { method: 'POST', url: '/api/note-images', headers: 'content-type,x-file-name' },
+        { method: 'PUT', url: '/api/notes/test-note', headers: 'content-type' },
+        { method: 'PATCH', url: '/api/media/images/test-image', headers: 'content-type' },
+        { method: 'DELETE', url: '/api/media/images/test-image', headers: 'authorization' }
+      ]
+
+      for (const preflightCase of preflightCases) {
+        const preflight = await app.inject({
+          method: 'OPTIONS',
+          url: preflightCase.url,
+          headers: {
+            origin,
+            'access-control-request-method': preflightCase.method,
+            'access-control-request-headers': preflightCase.headers
+          }
+        })
+        assert.equal(preflight.statusCode, 204)
+        assert.equal(preflight.headers['access-control-allow-origin'], origin)
+        assert.equal(preflight.headers['access-control-allow-credentials'], 'true')
+
+        const allowedMethods = String(preflight.headers['access-control-allow-methods'] || '')
+          .split(',')
+          .map((value) => value.trim())
+        assert.equal(allowedMethods.includes(preflightCase.method), true)
+
+        const allowedHeaders = String(preflight.headers['access-control-allow-headers'] || '')
+          .toLowerCase()
+          .split(',')
+          .map((value) => value.trim())
+        for (const requestedHeader of preflightCase.headers.split(',')) {
+          assert.equal(allowedHeaders.includes(requestedHeader), true)
         }
-      })
-      assert.equal(preflight.statusCode, 204)
-      assert.equal(preflight.headers['access-control-allow-origin'], origin)
-      assert.equal(preflight.headers['access-control-allow-credentials'], 'true')
+      }
 
       const post = await app.inject({
         method: 'POST',
