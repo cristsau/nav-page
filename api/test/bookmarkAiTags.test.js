@@ -4,9 +4,7 @@ import fs from 'node:fs/promises'
 import { fileURLToPath } from 'node:url'
 import {
   AI_RATE_LIMIT_MAX_REQUESTS,
-  AI_RATE_LIMIT_WINDOW_MS,
-  consumeAiRateLimit,
-  resetAiRateLimitForTests
+  consumeAiRateLimit
 } from '../src/lib/aiRateLimit.js'
 import {
   buildBookmarkAiTagInput,
@@ -120,22 +118,32 @@ test('bookmark tag save guard rejects closed, stale or switched panels', () => {
   }), false)
 })
 
-test('note and bookmark AI share one per-user rate-limit budget', () => {
-  resetAiRateLimitForTests()
-
-  for (let index = 0; index < AI_RATE_LIMIT_MAX_REQUESTS; index += 1) {
-    assert.equal(consumeAiRateLimit('user-1', 1_000).allowed, true)
+test('note and bookmark AI share one persistent per-user rate-limit budget', async () => {
+  const secret = 'test-only-AI-rate-limit-secret-with-32-characters'
+  const counts = new Map()
+  const queryFn = async (_text, params) => {
+    const keyDigest = params[1]
+    const count = (counts.get(keyDigest) || 0) + 1
+    counts.set(keyDigest, count)
+    return {
+      rows: [{
+        request_count: count,
+        retry_after_seconds: 60,
+        window_expires_at: '2026-08-01T00:01:00.000Z'
+      }]
+    }
   }
 
-  const blocked = consumeAiRateLimit('user-1', 1_000)
+  for (let index = 0; index < AI_RATE_LIMIT_MAX_REQUESTS; index += 1) {
+    assert.equal((await consumeAiRateLimit('user-1', { queryFn, secret })).allowed, true)
+  }
+
+  const blocked = await consumeAiRateLimit('user-1', { queryFn, secret })
   assert.equal(blocked.allowed, false)
-  assert.equal(consumeAiRateLimit('user-2', 1_000).allowed, true)
   assert.equal(
-    consumeAiRateLimit('user-1', 1_000 + AI_RATE_LIMIT_WINDOW_MS).allowed,
+    (await consumeAiRateLimit('user-2', { queryFn, secret })).allowed,
     true
   )
-
-  resetAiRateLimitForTests()
 })
 
 test('search, provider tests, notes and bookmark tags use the shared AI limiter', async () => {
@@ -146,11 +154,11 @@ test('search, provider tests, notes and bookmark tags use the shared AI limiter'
   ].map(async (url) => fs.readFile(fileURLToPath(url), 'utf8')))
 
   assert.equal(
-    (searchSource.match(/consumeAiRateLimit\(request\.currentUser\.id\)/g) || []).length,
+    (searchSource.match(/await enforceAiRateLimit\(request, reply\)/g) || []).length,
     2
   )
-  assert.match(noteSource, /consumeAiRateLimit\(request\.currentUser\.id\)/)
-  assert.match(navigationSource, /consumeAiRateLimit\(request\.currentUser\.id\)/)
+  assert.match(noteSource, /await enforceAiRateLimit\(request, reply/)
+  assert.match(navigationSource, /await enforceAiRateLimit\(request, reply\)/)
 })
 
 test('bookmark AI tag endpoint reads owned server data and never trusts client metadata', async () => {
@@ -163,9 +171,7 @@ test('bookmark AI tag endpoint reads owned server data and never trusts client m
   assert.match(routeSource, /requireOwnedBookmark/)
   assert.match(routeSource, /buildBookmarkAiTagInput\(bookmark\)/)
   assert.match(routeSource, /selectNoteAiProvider/)
-  assert.match(routeSource, /consumeAiRateLimit/)
-  assert.match(routeSource, /reply\.code\(429\)/)
-  assert.match(routeSource, /reply\.code\(503\)/)
+  assert.match(routeSource, /await enforceAiRateLimit\(request, reply\)/)
   assert.doesNotMatch(routeSource, /request\.body/)
 })
 

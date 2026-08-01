@@ -8,6 +8,7 @@ import BrowserIntegrationSettings from './components/BrowserIntegrationSettings.
 import DataSettings from './components/DataSettings.vue'
 import UserManagementSettings from './components/UserManagementSettings.vue'
 import AccountSecuritySettings from './components/AccountSecuritySettings.vue'
+import SecurityAuditSettings from './components/SecurityAuditSettings.vue'
 import Icon from '@/shared/components/Icon.vue'
 import { useConfig } from '@/shared/composables/useConfig'
 import { useAuth } from '@/shared/composables/useAuth'
@@ -107,6 +108,11 @@ async function handleExit() {
         <AccountSecuritySettings
           v-if="backendAuthEnabled"
           id="settings-security"
+          tabindex="-1"
+        />
+        <SecurityAuditSettings
+          v-if="backendAuthEnabled && currentUser?.role === 'admin'"
+          id="settings-security-audit"
           tabindex="-1"
         />
         <DataSettings />

@@ -1,5 +1,5 @@
 import { query } from '../db/index.js'
-import { consumeAiRateLimit } from '../lib/aiRateLimit.js'
+import { enforceAiRateLimit } from '../lib/aiRateLimit.js'
 import { resolveChatProviderModel } from '../lib/aiModelCatalog.js'
 import {
   buildBookmarkHealthState,
@@ -954,12 +954,8 @@ export default async function navigationRoutes(fastify) {
       return { error: 'Bookmark not found' }
     }
 
-    const rateLimit = consumeAiRateLimit(request.currentUser.id)
-    if (!rateLimit.allowed) {
-      reply.header('Retry-After', String(rateLimit.retryAfterSeconds))
-      reply.code(429)
-      return { error: 'AI 请求过于频繁，请稍后再试' }
-    }
+    const rateLimited = await enforceAiRateLimit(request, reply)
+    if (rateLimited) return rateLimited
 
     const appConfig = await getUserSettingValue(
       request.currentUser.id,

@@ -6,6 +6,15 @@ function imagePath(imageId, suffix = '') {
   return `/media/images/${id}${suffix}`
 }
 
+function imageFromMutationPayload(payload = {}) {
+  const image = payload.image || payload.item || null
+  if (!image) return null
+  return {
+    ...image,
+    deletion: payload.deletion || image.deletion || null
+  }
+}
+
 export async function fetchMediaImages({
   filter = 'all',
   query = '',
@@ -31,12 +40,12 @@ export async function updateMediaRetention(imageId, retention) {
     method: 'PATCH',
     body: JSON.stringify({ retention })
   })
-  return payload.image || payload.item
+  return imageFromMutationPayload(payload)
 }
 
 export async function deleteMediaImage(imageId) {
   const payload = await request(imagePath(imageId), { method: 'DELETE' })
-  return payload.image || payload.item || null
+  return imageFromMutationPayload(payload)
 }
 
 export async function retryMediaDelete(imageId) {
@@ -44,7 +53,7 @@ export async function retryMediaDelete(imageId) {
     method: 'POST',
     body: JSON.stringify({})
   })
-  return payload.image || payload.item || null
+  return imageFromMutationPayload(payload)
 }
 
 export async function reconcileMediaLibrary() {

@@ -7,12 +7,15 @@ import {
   testAdminTelegramConfig,
   sendDecisionNotificationToAdmins
 } from '../lib/telegram.js'
+import {
+  recordSecurityEvent
+} from '../lib/securityEvents.js'
 import { mapRegistrationRequest } from '../lib/users.js'
 
-async function approveRegistrationRequest(requestId, decidedBy) {
+async function approveRegistrationRequest(requestId, decidedBy, eventRequest) {
   return withTransaction(async (client) => {
     const requestResult = await client.query(
-      'SELECT * FROM registration_requests WHERE id = $1 LIMIT 1',
+      'SELECT * FROM registration_requests WHERE id = $1 LIMIT 1 FOR UPDATE',
       [requestId]
     )
 
@@ -29,9 +32,10 @@ async function approveRegistrationRequest(requestId, decidedBy) {
       'SELECT id FROM users WHERE username = $1 LIMIT 1',
       [registration.username]
     )
+    let subjectUserId = existingUser.rows[0]?.id || null
 
     if (existingUser.rowCount === 0) {
-      await client.query(
+      const createdUser = await client.query(
         `
           INSERT INTO users (
             username,
@@ -40,9 +44,11 @@ async function approveRegistrationRequest(requestId, decidedBy) {
             status,
             approved_at
           ) VALUES ($1, $2, 'user', 'approved', NOW())
+          RETURNING id
         `,
         [registration.username, registration.password_hash]
       )
+      subjectUserId = createdUser.rows[0].id
     }
 
     const approved = await client.query(
@@ -58,26 +64,52 @@ async function approveRegistrationRequest(requestId, decidedBy) {
       [requestId, decidedBy]
     )
 
+    await recordSecurityEvent({
+      client,
+      request: eventRequest,
+      eventType: 'admin.registration.approve',
+      outcome: 'success',
+      actorUserId: decidedBy,
+      subjectUserId,
+      resourceType: 'registration_request',
+      resourceId: requestId,
+      affectedCount: 1
+    })
+
     return approved.rows[0]
   })
 }
 
-async function rejectRegistrationRequest(requestId, decidedBy) {
-  const result = await query(
-    `
-      UPDATE registration_requests
-      SET status = 'rejected',
-          updated_at = NOW(),
-          decided_at = NOW(),
-          decided_by = $2
-      WHERE id = $1
-        AND status = 'pending'
-      RETURNING *
-    `,
-    [requestId, decidedBy]
-  )
+async function rejectRegistrationRequest(requestId, decidedBy, eventRequest) {
+  return withTransaction(async (client) => {
+    const result = await client.query(
+      `
+        UPDATE registration_requests
+        SET status = 'rejected',
+            updated_at = NOW(),
+            decided_at = NOW(),
+            decided_by = $2
+        WHERE id = $1
+          AND status = 'pending'
+        RETURNING *
+      `,
+      [requestId, decidedBy]
+    )
+    const rejected = result.rows[0]
+    if (!rejected) return null
 
-  return result.rows[0] || null
+    await recordSecurityEvent({
+      client,
+      request: eventRequest,
+      eventType: 'admin.registration.reject',
+      outcome: 'success',
+      actorUserId: decidedBy,
+      resourceType: 'registration_request',
+      resourceId: requestId,
+      affectedCount: 1
+    })
+    return rejected
+  })
 }
 
 async function findRegistrationRequest(requestId) {
@@ -97,7 +129,24 @@ export default async function adminTelegramRoutes(fastify) {
 
   fastify.put('/admin/telegram-config', async (request, reply) => {
     await fastify.requireAdmin(request, reply)
-    const saved = await saveAdminTelegramConfig(request.currentUser.id, request.body || {})
+    const saved = await withTransaction(async (client) => {
+      const config = await saveAdminTelegramConfig(
+        request.currentUser.id,
+        request.body || {},
+        { client }
+      )
+      await recordSecurityEvent({
+        client,
+        request,
+        eventType: 'admin.telegram_config.update',
+        outcome: 'success',
+        actorUserId: request.currentUser.id,
+        subjectUserId: request.currentUser.id,
+        resourceType: 'telegram_config',
+        affectedCount: 1
+      })
+      return config
+    })
     return saved
   })
 
@@ -114,13 +163,21 @@ export default async function adminTelegramRoutes(fastify) {
       adminUserId: request.currentUser.id,
       onFindRequest: findRegistrationRequest,
       onApprove: async (requestId) => {
-        const approved = await approveRegistrationRequest(requestId, request.currentUser.id)
+        const approved = await approveRegistrationRequest(
+          requestId,
+          request.currentUser.id,
+          request
+        )
         if (approved) {
           await sendDecisionNotificationToAdmins(approved, '批准')
         }
       },
       onReject: async (requestId) => {
-        const rejected = await rejectRegistrationRequest(requestId, request.currentUser.id)
+        const rejected = await rejectRegistrationRequest(
+          requestId,
+          request.currentUser.id,
+          request
+        )
         if (rejected) {
           await sendDecisionNotificationToAdmins(rejected, '拒绝')
         }

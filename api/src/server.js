@@ -3,10 +3,12 @@ import { ensureAdminUser } from './bootstrap.js'
 import { config } from './config.js'
 import { pool, runMigrations } from './db/index.js'
 import { configureOutboundNetwork } from './lib/network.js'
+import { validatePersistentRateLimitConfiguration } from './lib/persistentRateLimit.js'
 
 configureOutboundNetwork()
 
 async function main() {
+  validatePersistentRateLimitConfiguration()
   await runMigrations()
   await ensureAdminUser()
 

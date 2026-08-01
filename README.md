@@ -1,32 +1,34 @@
 # DOMO NAV
 
-DOMO NAV 是一个面向个人与小团队的私有化导航工作台。它已经从“纯前端本地版”演进到“前端 + Fastify + PostgreSQL”的测试商用架构，支持用户登录、审批注册、云端书签与便签、Telegram 审批、AI 搜索代理和浏览器扩展快速收藏。
+DOMO NAV 是面向个人与小团队的私有化导航工作台。它把导航、搜索、笔记、日记、图片库、
+账号安全和 AI 整合在一个入口中，后端使用 Fastify + PostgreSQL，前端使用 Vue 3 + Vite。
 
-当前线上测试地址：
+生产入口：
 
-- [https://nav.skrskr.net](https://nav.skrskr.net)
+- [nav.skrskr.net](https://nav.skrskr.net)
+- [nav.cristsau.cn](https://nav.cristsau.cn)
+
+精确生产版本、验收证据和已知缺口见 [STATUS_REPORT.md](./STATUS_REPORT.md)。
 
 ## 当前已实现
 
-- 用户登录、注册、审批
-- 书签分组与书签管理
-- 备忘录 / 日记 / 分享
-  - 日记日期、心情、按月归档
-  - 备忘录截止时间、完成状态、搜索与筛选
-  - 图片附件经 NAV 后端上传到个人 CloudFlare-ImgBed，不写入 NAV 磁盘
-  - 加密笔记禁止公开分享
-- 设置页保存、退出、自定义主题、网站名称、图标、favicon
-- 搜索引擎配置与 AI 搜索代理
-  - ChatGPT / OpenAI-compatible
-  - Brave Search API
-- Telegram Bot 配置与审批同步
-- 浏览器扩展快速添加当前页
-  - 记住上次分组
-  - 右键菜单或 `Ctrl+Shift+Y` 一键收藏
-  - 同分组网址防重复
-- `/quick-add` 快速添加页
-- iPhone 快捷指令接入入口
-- iPhone / PWA 主屏幕图标与中文应用名称
+- 用户登录、注册审批、Telegram 审批同步、会话撤销、恢复码和密码恢复
+- 分组与书签管理、拖拽排序、批量移动/删除和手动失效检查
+- 书签、未加密笔记和 Web 的统一搜索；自定义搜索引擎管理
+- 备忘录、日记、截止时间、到期提醒中心、数字 ID、快速复制和公开分享
+- CLI Proxy Responses API、动态模型目录、推理强度、导航/笔记 AI 和 AI 标签
+- 图片附件经 NAV 后端上传到个人图床，不写入 NAV 磁盘
+- `/media` 图片库：瀑布流、搜索、分页、引用关系、保留策略、分享、删除与对账
+- 上传与库管理双 Token 最小权限分离，图片最后引用移除后的受控清理
+- （待发布候选）图床删除结果严格校验与持久化，区分物理删除、仅解除引用和缓存状态
+- （待发布候选）PostgreSQL 共享限流、最小化安全审计 API 与管理员审计面板
+- 浏览器扩展、`/quick-add`、右键菜单/快捷键和 iPhone 快捷指令入口
+- iPhone/PWA 主屏幕图标、统一主题 token、触屏操作菜单和命令面板
+- 安全 JSON 导入导出、本地备份工具和隔离恢复演练
+
+部分完成和未完成项目包括生产发布验收、审计保留/告警、自动异地备份/报警、Passkey、
+离线/提前提醒、定时链接检查、个人数据 RAG 与编辑器版本历史，详见
+[STATUS_REPORT.md](./STATUS_REPORT.md)。
 
 ## 技术栈
 
@@ -35,58 +37,39 @@ DOMO NAV 是一个面向个人与小团队的私有化导航工作台。它已�
 - Vue 3
 - Vite 6
 - Vue Router 4
+- Dexie.js（本地模式、缓存和旧数据迁移）
 
 ### 后端
 
 - Fastify
-- PostgreSQL
+- PostgreSQL 16
+- CLI Proxy / Brave Search / CloudFlare-ImgBed 服务端代理
 
-### 本地缓存 / 迁移来源
+## 验证方式
 
-- Dexie.js
-- IndexedDB
+项目默认不要求在个人电脑运行 npm。源码修改和静态差异检查可在本地完成，完整安装、依赖审计、
+PostgreSQL 迁移校验、API 测试与 Vite 生产构建由
+[GitHub Actions](./.github/workflows/ci.yml) 执行。生产发布只使用通过 CI 的精确合并 SHA，
+并在服务器独立 release 目录完成等价复验。
 
-## 本地开发
-
-### 前端
-
-```bash
-cd app
-npm install
-npm run dev
-```
-
-默认开发地址：
-
-- [http://localhost:5174](http://localhost:5174)
-
-### 后端
-
-```bash
-cd api
-npm install
-```
-
-## 部署相关
-
-- 线上服务器：`oracle-JP`
-- 当前测试域名：`nav.skrskr.net`
-- 部署文档：`D:/DomoCodex/projects/NAV/DEPLOYMENT.md`
-- 后端规划：`D:/DomoCodex/projects/NAV/BACKEND_PLAN.md`
+如确需隔离开发，前端和 API 的标准脚本分别定义在 `app/package.json` 与 `api/package.json`；
+不要在含生产专属文件的长期服务器工作树中安装依赖或原地构建。
 
 ## 浏览器扩展
 
-网页一键收藏优先推荐浏览器扩展，而不是桌面安装程序：扩展能够直接读取当前标签页的标题、网址和 favicon，权限范围也更小。
+网页一键收藏优先使用浏览器扩展：它可以读取当前标签页的标题、网址和 favicon，权限范围小于
+桌面安装程序。
 
-- 源码：`D:/DomoCodex/projects/NAV/extension`
-- 下载包：`D:/DomoCodex/projects/NAV/app/public/downloads/nav-extension.zip`
-- 使用说明：`D:/DomoCodex/projects/NAV/extension/README.md`
+- [扩展源码](./extension)
+- [扩展说明](./extension/README.md)
+- [当前下载包](./app/public/downloads/nav-extension.zip)
 
-## 推荐阅读顺序
+## 文档导航
 
-如果要继续开发或换电脑接力，优先看：
+1. [生产状态与剩余门槛](./STATUS_REPORT.md)
+2. [产品与架构概览](./PROJECT.md)
+3. [部署、回滚与安全边界](./DEPLOYMENT.md)
+4. [后端演进计划](./BACKEND_PLAN.md)
+5. [备份与恢复运行手册](./docs/NAV_BACKUP_RUNBOOK.md)
 
-- `D:/DomoCodex/projects/NAV/STATUS_REPORT.md`
-- `D:/DomoCodex/projects/NAV/PROJECT.md`
-- `D:/DomoCodex/projects/NAV/DEPLOYMENT.md`
-- `D:/DomoCodex/projects/NAV/BACKEND_PLAN.md`
+继续开发或发布前，应重新核对 GitHub、当前工作区和实时生产状态；仓库文档不是生产写入授权。

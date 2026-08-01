@@ -162,7 +162,11 @@ async function cleanupMediaAfterNoteMutation(request, assetIds) {
         null,
         { requireAuto: true, requirePending: true }
       )
-      results.push({ assetId, state: outcome.state })
+      results.push({
+        assetId,
+        state: outcome.state,
+        deletion: outcome.deletion || null
+      })
     } catch (error) {
       request.log.warn({
         assetId,

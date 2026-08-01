@@ -12,6 +12,10 @@ import NoteEditor from './components/NoteEditor.vue'
 import NotePreview from './components/NotePreview.vue'
 import ReminderCenter from './components/ReminderCenter.vue'
 import ShareManager from './components/ShareManager.vue'
+import {
+  mediaCleanupHasFailures,
+  mediaCleanupMessage
+} from '@/modules/media/mediaLibrary'
 import { buildFullNoteText } from './utils/noteCopyText'
 
 const router = useRouter()
@@ -96,15 +100,19 @@ async function addNote(note) {
 }
 
 async function updateNote(id, updates) {
-  return shouldUseBackendNotes()
-    ? updateBackendNote(id, updates)
-    : updateLocalNote(id, updates)
+  if (shouldUseBackendNotes()) {
+    return updateBackendNote(id, updates, { includeCleanup: true })
+  }
+  await updateLocalNote(id, updates)
+  return { note: null, mediaCleanup: [] }
 }
 
 async function deleteNote(id) {
-  return shouldUseBackendNotes()
-    ? deleteBackendNote(id)
-    : deleteLocalNote(id)
+  if (shouldUseBackendNotes()) {
+    return deleteBackendNote(id, { includeCleanup: true })
+  }
+  await deleteLocalNote(id)
+  return { mediaCleanup: [] }
 }
 
 async function toggleNotePin(id) {
@@ -348,8 +356,9 @@ async function handleCopyValue(payload) {
 async function handleSaveNote(data) {
   savingNote.value = true
   try {
+    let mutationResult = null
     if (editingNote.value?.id) {
-      await updateNote(editingNote.value.id, data)
+      mutationResult = await updateNote(editingNote.value.id, data)
     } else {
       await addNote(data)
     }
@@ -358,7 +367,12 @@ async function handleSaveNote(data) {
     editingNote.value = null
     await loadNotes()
     await refreshReminders()
-    setStatus('笔记已保存')
+    const mediaCleanup = mutationResult?.mediaCleanup
+    const cleanupMessage = mediaCleanupMessage(mediaCleanup)
+    setStatus(
+      cleanupMessage ? `笔记已保存；${cleanupMessage}` : '笔记已保存',
+      mediaCleanupHasFailures(mediaCleanup) ? 'error' : 'success'
+    )
   } catch (e) {
     console.error('Failed to save note:', e)
     alert(`保存失败：${e.message || '请稍后重试'}`)
@@ -372,10 +386,17 @@ async function handleSaveNote(data) {
 async function handleDeleteNote(note) {
   if (!confirm(`确定删除「${note.title}」？`)) return
   try {
-    await deleteNote(note.id)
+    const mutationResult = await deleteNote(note.id)
     await loadNotes()
     await refreshReminders()
-    setStatus(`「${note.title}」已删除`)
+    const mediaCleanup = mutationResult?.mediaCleanup
+    const cleanupMessage = mediaCleanupMessage(mediaCleanup)
+    setStatus(
+      cleanupMessage
+        ? `「${note.title}」已删除；${cleanupMessage}`
+        : `「${note.title}」已删除`,
+      mediaCleanupHasFailures(mediaCleanup) ? 'error' : 'success'
+    )
   } catch (error) {
     setStatus(`删除失败：${error.message || '请稍后重试'}`, 'error')
   }

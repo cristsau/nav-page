@@ -15,6 +15,7 @@ import {
   MEDIA_FILTERS,
   mediaCanDelete,
   mediaCanShare,
+  mediaDeletionMessage,
   mediaMarkdown,
   mediaNeedsRetention,
   mediaStatus,
@@ -163,7 +164,7 @@ async function setRetention(image, retention) {
         restoreFocusElement = null
         document.body.style.overflow = ''
       }
-      announce('已切换为自动清理并删除无引用原图，公开链接已失效')
+      announce(`已切换为自动清理；${mediaDeletionMessage(updated)}`)
       return updated
     }
     updateImage(updated || { ...image, retention })
@@ -246,7 +247,7 @@ async function performDelete(image) {
   if (!image?.id || !mediaCanDelete(image) || busyImageId.value) return
   busyImageId.value = image.id
   try {
-    await deleteMediaImage(image.id)
+    const updated = await deleteMediaImage(image.id)
     images.value = images.value.filter((item) => String(item.id) !== String(image.id))
     if (String(selectedImage.value?.id) === String(image.id)) {
       selectedImage.value = null
@@ -255,7 +256,7 @@ async function performDelete(image) {
       restoreFocusElement = null
       document.body.style.overflow = ''
     }
-    announce('图片已从图床删除，原公开链接已失效')
+    announce(mediaDeletionMessage(updated || {}))
   } catch (error) {
     deleteConfirming.value = false
     announce(
@@ -284,7 +285,7 @@ async function retryDelete(image) {
         restoreFocusElement = null
         document.body.style.overflow = ''
       }
-      announce('图片已清理，公开链接已失效')
+      announce(mediaDeletionMessage(updated || {}))
     }
   } catch (error) {
     announce(`重试失败：${error.message || '请稍后再试'}`)
@@ -483,7 +484,7 @@ onBeforeUnmount(() => {
                 <section class="retention-card" aria-labelledby="retention-title">
                   <div>
                     <h3 id="retention-title">保留策略</h3>
-                    <p v-if="mediaNeedsRetention(selectedImage)">自动清理：最后一处笔记引用移除后，原图才会删除。</p>
+                    <p v-if="mediaNeedsRetention(selectedImage)">自动清理：最后一处笔记引用移除后会尝试删除源文件；受存储渠道限制时可能仅解除图床引用。</p>
                     <p v-else>长期保留：即使没有笔记引用，公开链接也会继续有效。</p>
                   </div>
                   <div class="retention-switch" role="group" aria-label="图片保留策略">
@@ -508,7 +509,7 @@ onBeforeUnmount(() => {
                       <Icon name="external-link" :size="14" />
                     </button>
                   </div>
-                  <p v-else>当前没有笔记引用。若保留策略为“自动”，可安全清理原图。</p>
+                  <p v-else>当前没有笔记引用。若保留策略为“自动”，可发起图片清理；能否物理删除取决于图片来源。</p>
                 </section>
 
                 <div class="media-preview__actions">
@@ -526,16 +527,16 @@ onBeforeUnmount(() => {
 
                 <div class="danger-zone">
                   <template v-if="!mediaCanDelete(selectedImage)">
-                    <p><strong>图片仍被笔记引用，不能删除原图。</strong>先从上方列出的所有笔记移除图片，再返回清理。</p>
+                    <p><strong>图片仍被笔记引用，不能清理图床记录。</strong>先从上方列出的所有笔记移除图片，再返回清理。</p>
                   </template>
                   <template v-else-if="deleteConfirming">
-                    <p><strong>确定删除原图？</strong>删除后公开链接立即失效且无法恢复。</p>
+                    <p><strong>确定清理这张图片？</strong>NAV 会请求图床删除源文件或解除记录；能否物理删除取决于来源，缓存也可能在部分节点短暂保留。</p>
                     <div>
                       <button type="button" :disabled="Boolean(busyImageId)" @click="deleteConfirming = false">取消</button>
-                      <button class="is-danger" type="button" :disabled="Boolean(busyImageId)" @click="performDelete(selectedImage)"><Icon name="trash" :size="16" />永久删除</button>
+                      <button class="is-danger" type="button" :disabled="Boolean(busyImageId)" @click="performDelete(selectedImage)"><Icon name="trash" :size="16" />确认清理</button>
                     </div>
                   </template>
-                  <button v-else class="danger-zone__trigger" type="button" :disabled="Boolean(busyImageId)" @click="deleteConfirming = true"><Icon name="trash" :size="16" />删除原图</button>
+                  <button v-else class="danger-zone__trigger" type="button" :disabled="Boolean(busyImageId)" @click="deleteConfirming = true"><Icon name="trash" :size="16" />清理图片</button>
                 </div>
               </aside>
             </div>

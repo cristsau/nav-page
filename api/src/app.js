@@ -20,6 +20,7 @@ import noteImagesRoutes from './routes/noteImages.js'
 import noteReminderRoutes from './routes/noteReminders.js'
 import notesRoutes from './routes/notes.js'
 import publicSharePageRoutes from './routes/publicSharePage.js'
+import securityEventRoutes from './routes/securityEvents.js'
 import settingsRoutes from './routes/settings.js'
 
 function stripBodylessDeleteJsonContentType(request) {
@@ -84,6 +85,7 @@ export function createApp() {
   }))
 
   app.register(publicSharePageRoutes)
+  app.register(securityEventRoutes, { prefix: '/api' })
   app.register(adminTelegramRoutes, { prefix: '/api' })
   app.register(aiSearchRoutes, { prefix: '/api' })
   app.register(authRoutes, { prefix: '/api' })

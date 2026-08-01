@@ -3,13 +3,17 @@ import assert from 'node:assert/strict'
 import fs from 'node:fs/promises'
 import path from 'node:path'
 import { config } from '../src/config.js'
-import { listImgBedUserImages } from '../src/lib/imgBedLibraryClient.js'
+import {
+  deleteImgBedUserImage,
+  listImgBedUserImages
+} from '../src/lib/imgBedLibraryClient.js'
 import { buildMediaListQuery } from '../src/routes/media.js'
 import {
   assertMediaBelongsToUser,
   attemptMediaAssetDeletion,
   createMediaUserPrefix,
   mediaUrlFromUpstreamId,
+  normalizeMediaDeletionOutcome,
   upstreamIdFromMediaUrl
 } from '../src/lib/mediaAssets.js'
 
@@ -17,6 +21,21 @@ const USER_ID = 'aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa'
 const OTHER_USER_ID = 'bbbbbbbb-bbbb-4bbb-8bbb-bbbbbbbbbbbb'
 const ASSET_ID = 'cccccccc-cccc-4ccc-8ccc-cccccccccccc'
 const CURSOR_ID = 'dddddddd-dddd-4ddd-8ddd-dddddddddddd'
+
+function makeDeletionOutcome(overrides = {}) {
+  return {
+    sourceDeleted: true,
+    detached: false,
+    legacy: false,
+    alreadyMissing: false,
+    cacheInvalidated: true,
+    cachePurgeConfigured: true,
+    cachePurgeAttempted: true,
+    cachePurgeSucceeded: true,
+    localCacheInvalidated: false,
+    ...overrides
+  }
+}
 
 function makeAsset(userId = USER_ID, state = 'delete_pending') {
   const upstreamId = `${createMediaUserPrefix(userId)}2026-08/example.webp`
@@ -70,7 +89,21 @@ function createDeletionClient({
         return { rows: [] }
       }
       if (/SET state = 'deleted'/.test(sql)) {
-        current = { ...current, state: 'deleted', last_delete_error: '' }
+        current = {
+          ...current,
+          state: 'deleted',
+          last_delete_error: '',
+          deletion_disposition: params[1],
+          deletion_source_deleted: params[2],
+          deletion_detached: params[3],
+          deletion_legacy: params[4],
+          deletion_already_missing: params[5],
+          deletion_cache_invalidated: params[6],
+          deletion_cache_purge_configured: params[7],
+          deletion_cache_purge_attempted: params[8],
+          deletion_cache_purge_succeeded: params[9],
+          deletion_local_cache_invalidated: params[10]
+        }
         return { rows: [{ ...current }] }
       }
       if (/SET state = 'delete_failed'/.test(sql)) {
@@ -157,6 +190,47 @@ test('media paths are deterministically scoped to one user partition', () => {
   )
 })
 
+test('deletion outcomes require one explicit disposition and consistent cache facts', () => {
+  assert.deepEqual(normalizeMediaDeletionOutcome(makeDeletionOutcome()), {
+    disposition: 'source_deleted',
+    ...makeDeletionOutcome()
+  })
+  assert.equal(normalizeMediaDeletionOutcome(makeDeletionOutcome({
+    sourceDeleted: false,
+    detached: true,
+    legacy: true
+  })).disposition, 'legacy_detached')
+  assert.equal(normalizeMediaDeletionOutcome(makeDeletionOutcome({
+    sourceDeleted: false,
+    alreadyMissing: true
+  })).disposition, 'already_missing')
+  assert.throws(
+    () => normalizeMediaDeletionOutcome(makeDeletionOutcome({ sourceDeleted: false })),
+    (error) => error.code === 'invalid_media_delete_outcome'
+  )
+  assert.throws(
+    () => normalizeMediaDeletionOutcome(makeDeletionOutcome({ detached: true })),
+    (error) => error.code === 'invalid_media_delete_outcome'
+  )
+  assert.throws(
+    () => normalizeMediaDeletionOutcome(makeDeletionOutcome({
+      cacheInvalidated: false,
+      cachePurgeSucceeded: true
+    })),
+    (error) => error.code === 'invalid_media_delete_outcome'
+  )
+  assert.throws(
+    () => normalizeMediaDeletionOutcome(makeDeletionOutcome({
+      cacheInvalidated: true,
+      cachePurgeConfigured: false,
+      cachePurgeAttempted: false,
+      cachePurgeSucceeded: false,
+      localCacheInvalidated: false
+    })),
+    (error) => error.code === 'invalid_media_delete_outcome'
+  )
+})
+
 test('cross-user deletion returns 404 before any upstream request', async () => {
   const client = createDeletionClient({ asset: null })
   let upstreamCalls = 0
@@ -210,11 +284,20 @@ test('failed physical deletion is visible and a later explicit retry succeeds', 
   const retried = await attemptMediaAssetDeletion(
     USER_ID,
     ASSET_ID,
-    async () => {},
+    async () => makeDeletionOutcome({
+      cacheInvalidated: false,
+      cachePurgeConfigured: false,
+      cachePurgeAttempted: false,
+      cachePurgeSucceeded: false,
+      localCacheInvalidated: false
+    }),
     transactionWith(client)
   )
   assert.equal(retried.state, 'deleted')
+  assert.equal(retried.deletion.disposition, 'source_deleted')
+  assert.equal(retried.deletion.cacheInvalidated, false)
   assert.equal(client.asset.state, 'deleted')
+  assert.equal(client.asset.deletion_disposition, 'source_deleted')
   assert.equal(client.asset.delete_attempts, 2)
 })
 
@@ -236,6 +319,7 @@ test('serialized concurrent deletes make only one upstream deletion request', as
   const deleteUpstream = async () => {
     upstreamCalls += 1
     await new Promise((resolve) => setTimeout(resolve, 5))
+    return makeDeletionOutcome()
   }
 
   const [first, second] = await Promise.all([
@@ -245,6 +329,8 @@ test('serialized concurrent deletes make only one upstream deletion request', as
 
   assert.equal(first.state, 'deleted')
   assert.equal(second.state, 'deleted')
+  assert.deepEqual(second.deletion, first.deletion)
+  assert.equal(second.deletion.disposition, 'source_deleted')
   assert.equal(upstreamCalls, 1)
 })
 
@@ -270,8 +356,10 @@ test('automatic cleanup rechecks retention and pending state under the deletion 
 })
 
 test('media migration, route contract, note lifecycle and secret-file boundary are present', async () => {
-  const [migration, route, notes, noteImages, config, client] = await Promise.all([
+  const [migration, deletionMigration, verifier, route, notes, noteImages, config, client] = await Promise.all([
     fs.readFile(new URL('../src/db/migrations/014_media_library.sql', import.meta.url), 'utf8'),
+    fs.readFile(new URL('../src/db/migrations/015_media_delete_outcomes.sql', import.meta.url), 'utf8'),
+    fs.readFile(new URL('../src/db/verifyMigrations.js', import.meta.url), 'utf8'),
     fs.readFile(new URL('../src/routes/media.js', import.meta.url), 'utf8'),
     fs.readFile(new URL('../src/routes/notes.js', import.meta.url), 'utf8'),
     fs.readFile(new URL('../src/routes/noteImages.js', import.meta.url), 'utf8'),
@@ -284,6 +372,11 @@ test('media migration, route contract, note lifecycle and secret-file boundary a
   assert.match(migration, /url TEXT NOT NULL UNIQUE/)
   assert.match(migration, /missing_observations INTEGER NOT NULL DEFAULT 0/)
   assert.match(migration, /'delete_pending'[\s\S]*'delete_failed'[\s\S]*'missing'[\s\S]*'deleted'/)
+  assert.match(deletionMigration, /ADD COLUMN deletion_disposition TEXT/)
+  assert.match(deletionMigration, /media_assets_deletion_outcome_check/)
+  assert.match(deletionMigration, /deletion_cache_invalidated = \([\s\S]*deletion_cache_purge_succeeded OR deletion_local_cache_invalidated/)
+  assert.match(deletionMigration, /'source_deleted'[\s\S]*'detached'[\s\S]*'legacy_detached'[\s\S]*'already_missing'/)
+  assert.match(verifier, /'deletion_cache_purge_succeeded'/)
   assert.match(route, /fastify\.get\('\/media\/images'/)
   assert.match(route, /fastify\.patch\('\/media\/images\/:assetId\/retention'/)
   assert.match(route, /fastify\.delete\('\/media\/images\/:assetId'/)
@@ -298,9 +391,74 @@ test('media migration, route contract, note lifecycle and secret-file boundary a
   assert.match(route, /missing_observations \+ 1 >= 2/)
   assert.match(route, /!upstreamResult\.complete/)
   assert.match(route, /requireAuto: true, requirePending: true/)
+  assert.match(route, /deletion: outcome\.deletion \|\| image\.deletion \|\| null/)
   assert.match(route, /upstreamResult\.complete/)
-  assert.match(notes, /syncNoteMediaReferences/)
+  assert.match(notes, /deletion: outcome\.deletion \|\| null/)
   assert.match(route, /WHEN state IN \('delete_pending', 'delete_failed'\) THEN state/)
+})
+
+test('an immediate stale reconciliation cannot revive an already deleted media row', async () => {
+  const route = await fs.readFile(new URL('../src/routes/media.js', import.meta.url), 'utf8')
+  const reconcileUpdate = route.match(
+    /UPDATE media_assets\s+SET name = \$3[\s\S]*?WHERE id = \$1[\s\S]*?`/
+  )?.[0] || ''
+
+  assert.match(reconcileUpdate, /AND user_id = \$2\s+AND state <> 'deleted'/)
+  assert.match(reconcileUpdate, /deletion_disposition = NULL/)
+  assert.match(reconcileUpdate, /deleted_at = NULL/)
+})
+
+test('image-bed deletion validates the provider JSON contract before reporting success', async () => {
+  const previousBaseUrl = config.imgBedBaseUrl
+  const previousTokenFile = config.imgBedLibraryTokenFile
+  config.imgBedBaseUrl = 'https://pic.example.test'
+  config.imgBedLibraryTokenFile = path.resolve('test-secrets/imgbed-library-token')
+  const upstreamId = `${createMediaUserPrefix(USER_ID)}2026-08/example.webp`
+  try {
+    const deletion = await deleteImgBedUserImage(upstreamId, USER_ID, {
+      readSecretImpl: async () => 'test-token',
+      fetchImpl: async () => new Response(JSON.stringify({
+        success: true,
+        fileId: upstreamId,
+        ...makeDeletionOutcome({
+          sourceDeleted: false,
+          detached: true,
+          legacy: true,
+          cacheInvalidated: false,
+          cachePurgeConfigured: false,
+          cachePurgeAttempted: false,
+          cachePurgeSucceeded: false,
+          localCacheInvalidated: false
+        })
+      }), {
+        status: 200,
+        headers: { 'Content-Type': 'application/json' }
+      })
+    })
+    assert.equal(deletion.disposition, 'legacy_detached')
+    assert.equal(deletion.sourceDeleted, false)
+    assert.equal(deletion.cacheInvalidated, false)
+
+    for (const payload of [
+      { success: true, fileId: upstreamId },
+      { success: true, fileId: upstreamId, ...makeDeletionOutcome({ sourceDeleted: false }) },
+      { success: true, fileId: `${upstreamId}-wrong`, ...makeDeletionOutcome() }
+    ]) {
+      await assert.rejects(
+        deleteImgBedUserImage(upstreamId, USER_ID, {
+          readSecretImpl: async () => 'test-token',
+          fetchImpl: async () => new Response(JSON.stringify(payload), {
+            status: 200,
+            headers: { 'Content-Type': 'application/json' }
+          })
+        }),
+        (error) => error.code === 'library_invalid_delete_response'
+      )
+    }
+  } finally {
+    config.imgBedBaseUrl = previousBaseUrl
+    config.imgBedLibraryTokenFile = previousTokenFile
+  }
 })
 
 test('a capped image-bed listing is explicitly incomplete and cannot drive missing detection', async () => {
