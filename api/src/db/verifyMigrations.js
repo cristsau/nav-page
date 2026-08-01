@@ -325,7 +325,7 @@ async function verifySecurityControlsSchema() {
       SELECT
         constraint_record.conname,
         ARRAY(
-          SELECT attribute.attname
+          SELECT attribute.attname::text
           FROM unnest(constraint_record.conkey)
             WITH ORDINALITY AS key_column(attnum, position)
           JOIN pg_attribute AS attribute
@@ -379,7 +379,7 @@ async function verifySecurityControlsSchema() {
         constraint_record.conname,
         constraint_record.confdeltype,
         ARRAY(
-          SELECT attribute.attname
+          SELECT attribute.attname::text
           FROM unnest(constraint_record.conkey)
             WITH ORDINALITY AS key_column(attnum, position)
           JOIN pg_attribute AS attribute

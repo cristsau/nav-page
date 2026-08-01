@@ -496,6 +496,10 @@ test('migration verification binds 016 constraints to their owning tables', asyn
   assert.match(verifier, /conrelid = 'rate_limit_buckets'::regclass/)
   assert.match(verifier, /contype = 'p'/)
   assert.match(verifier, /\['scope', 'key_digest'\]/)
+  assert.equal(
+    (verifier.match(/attribute\.attname::text/g) || []).length,
+    2
+  )
   assert.match(verifier, /conrelid = 'security_events'::regclass/)
   assert.match(verifier, /confrelid = 'users'::regclass/)
   assert.match(verifier, /confdeltype !== 'n'/)
