@@ -55,7 +55,9 @@ export function createApp() {
   app.register(cookie)
   app.register(cors, {
     origin: createCorsOriginValidator(config.corsOrigin),
-    credentials: true
+    credentials: true,
+    methods: ['GET', 'HEAD', 'POST', 'PUT', 'PATCH', 'DELETE', 'OPTIONS'],
+    allowedHeaders: ['Accept', 'Authorization', 'Content-Type', 'X-File-Name']
   })
 
   app.register(authPlugin)
