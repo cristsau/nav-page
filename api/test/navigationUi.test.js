@@ -190,6 +190,22 @@ test('bookmark health presentation never labels protected links as broken', () =
   assert.equal(resolveBookmarkHealthPresentation({ healthStatus: 'unchecked' }), null)
 })
 
+test('navigation bookmark grid uses a stable mount without the tab-slide transition', async () => {
+  const source = await fs.readFile(
+    fileURLToPath(new URL('../../app/src/modules/navigation/components/NavGroup.vue', import.meta.url)),
+    'utf8'
+  )
+  const gridSource = source.match(/<!-- 书签网格 -->[\s\S]*?<!-- 空状态 -->/)?.[0] || ''
+
+  assert.match(gridSource, /<div class="bookmarks-container">\s*<div\s+class="bookmarks-grid"/)
+  assert.match(gridSource, /<TransitionGroup name="list">/)
+  assert.match(gridSource, /v-for="\(bookmark, bookmarkIndex\) in activeBookmarks"/)
+  assert.match(gridSource, /class="bookmark-card bookmark-card--add"[\s\S]*添加书签/)
+  assert.doesNotMatch(gridSource, /<Transition\b[^>]*mode="out-in"/)
+  assert.doesNotMatch(gridSource, /:key="activeGroup\?\.id"/)
+  assert.doesNotMatch(source, /tab-slide-(?:enter|leave)/)
+})
+
 test('navigation management calls the exact bulk and health backend contracts', async () => {
   const source = await fs.readFile(
     fileURLToPath(new URL('../../app/src/shared/services/navigationApi.js', import.meta.url)),
