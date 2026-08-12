@@ -9,10 +9,10 @@
 - 前端发布目录：`/home/web/html/nav`
 - 后端：`nav-api`
 - 数据库：`nav-postgres`
-- 当前提交：`0dd11faaa3866924ce2bc52e288ff7934bab1e86`
+- 当前前端提交：`0a11f1f26bd8e87e39888a56a538a0b12bcf3c04`
 - API 镜像：`nav-api:0dd11faaa3866924ce2bc52e288ff7934bab1e86`
 - 发布证据：
-  `/opt/nav-releases/20260802-001439-0dd11faaa3866924ce2bc52e288ff7934bab1e86/ACCEPTANCE.txt`
+  `/opt/nav-releases/20260812-061103-0a11f1f26bd8e87e39888a56a538a0b12bcf3c04/ACCEPTANCE.txt`
 
 ## 当前定位
 
@@ -107,6 +107,11 @@ NAV_RATE_LIMIT_KEY_SECRET=<至少 32 字符的独立随机值>
 提交；证据见当前 release 的 `ACCEPTANCE.txt`。当前没有启用计划任务、云上传、远端删除
 或失败报警。
 
+2026-08-12 的前端热修 `0a11f1f` 发布前创建了
+`/var/backups/nav/nav-20260812T061320Z-0dd11faaa386`，并在无网络临时 PostgreSQL 中完成
+16 张表、15 条迁移及逐表行数的精确恢复演练。该发布没有迁移、重启或替换 API/数据库；
+双域登录和真实浏览器 DOM 验收均确认 3 个分组、19 条书签及 `16/1/2` 分组计数可见。
+
 ## 笔记图片与个人图床
 
 笔记和备忘录的图片通过 NAV 后端代理上传到 CloudFlare-ImgBed，浏览器不会接触图床 Token，
@@ -152,6 +157,11 @@ NAV_IMGBED_MAX_IMAGE_BYTES=10485760
 固定镜像构建，再做生产备份/隔离恢复、受控迁移、API 切换、前端 `index.html` 最后替换、
 双域验收和发布后恢复演练。严禁对含生产专属文件的 `/opt/nav` 执行 `git reset`、清空目录
 或覆盖式拉取。
+
+前端独立 release 使用 `umask 077` 保护源码和证据，但发布到 Nginx live 目录时必须显式
+把目录安装为 `0755`、静态文件安装为 `0644`，不能用 `cp -a` 把构建目录的 `0600` 权限
+带到 live。验收必须同时校验响应类型和构建文件内容；仅看到 HTTP 200 不足以通过，因为
+SPA fallback 可能在资源不可读时返回 `index.html`。
 
 ## 反向代理说明
 
@@ -250,13 +260,15 @@ location ^~ /share/ {
 
 ## 回滚
 
-当前发布的应用回滚入口：
+当前前端热修的回滚入口：
 
 ```bash
-sudo /opt/nav-releases/20260802-001439-0dd11faaa3866924ce2bc52e288ff7934bab1e86/rollback.sh
+sudo /opt/nav-releases/20260812-061103-0a11f1f26bd8e87e39888a56a538a0b12bcf3c04/rollback-frontend.sh
 ```
 
-它恢复发布前 API 环境、前端和备份项目配置，并切回固定旧镜像
-`nav-api:1ee05335977112093586185a3132559394edd472`。正常应用回滚保留已经应用的加法迁移，
-不得恢复旧整库覆盖发布后的用户写入。只有明确的数据损坏事故才评估在新数据库/新 volume
-中恢复并验收后切换。
+它只在当前 live `index.html` 仍与本次热修哈希一致时恢复前端快照，不修改 API 环境、
+数据库、Compose、Nginx 或 Secret。旧 release 下的 `rollback.sh` 是 API/前端联合回滚，
+会切换 API 镜像，不得用于本次纯前端热修的常规回滚。
+
+正常应用回滚保留已经应用的加法迁移，不得恢复旧整库覆盖发布后的用户写入。只有明确的
+数据损坏事故才评估在新数据库/新 volume 中恢复并验收后切换。
