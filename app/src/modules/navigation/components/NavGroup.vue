@@ -402,27 +402,25 @@ const mobileGroupMenuId = computed(() => (
         class="bookmarks-grid"
         :class="{ 'bookmarks-grid--sorting': managementMode === 'sort' }"
       >
-        <!-- 书签列表 -->
-        <TransitionGroup name="list">
-          <NavItem
-            v-for="(bookmark, bookmarkIndex) in activeBookmarks"
-            :key="bookmark.id"
-            :bookmark="bookmark"
-            :deleting="pendingBookmarkId === bookmark.id"
-            :analyzing="analyzingBookmarkId === bookmark.id"
-            :selection-mode="managementMode === 'select'"
-            :sort-mode="managementMode === 'sort'"
-            :selected="isBookmarkSelected(bookmark)"
-            :management-busy="managementBusy"
-            :sort-index="bookmarkIndex"
-            :sort-count="activeBookmarks.length"
-            @ai="handleAiBookmark"
-            @edit="handleEditBookmark"
-            @delete="handleDeleteBookmark"
-            @toggle-selection="handleToggleBookmark"
-            @sort-move="handleBookmarkSortMove"
-          />
-        </TransitionGroup>
+        <!-- 书签列表保持直接挂载，避免过渡状态让整组卡片滞留在不可见状态。 -->
+        <NavItem
+          v-for="(bookmark, bookmarkIndex) in activeBookmarks"
+          :key="bookmark.id"
+          :bookmark="bookmark"
+          :deleting="pendingBookmarkId === bookmark.id"
+          :analyzing="analyzingBookmarkId === bookmark.id"
+          :selection-mode="managementMode === 'select'"
+          :sort-mode="managementMode === 'sort'"
+          :selected="isBookmarkSelected(bookmark)"
+          :management-busy="managementBusy"
+          :sort-index="bookmarkIndex"
+          :sort-count="activeBookmarks.length"
+          @ai="handleAiBookmark"
+          @edit="handleEditBookmark"
+          @delete="handleDeleteBookmark"
+          @toggle-selection="handleToggleBookmark"
+          @sort-move="handleBookmarkSortMove"
+        />
 
         <!-- 添加书签卡片：放在真实内容之后，避免低频操作占据首位。 -->
         <button
@@ -983,22 +981,6 @@ const mobileGroupMenuId = computed(() => (
   cursor: wait;
 }
 
-/* 列表动画 */
-.list-enter-active,
-.list-leave-active {
-  transition: all 0.3s var(--ease-smooth);
-}
-
-.list-enter-from {
-  opacity: 0;
-  transform: translateY(20px);
-}
-
-.list-leave-to {
-  opacity: 0;
-  transform: scale(0.9);
-}
-
 @media (max-width: 640px) {
   .groups-tabs {
     flex-wrap: nowrap;
@@ -1054,9 +1036,7 @@ const mobileGroupMenuId = computed(() => (
   .groups-tabs__sort-actions button,
   .groups-tabs__action,
   .groups-tabs__add,
-  .bookmark-card--add,
-  .list-enter-active,
-  .list-leave-active {
+  .bookmark-card--add {
     transition: none;
   }
 
