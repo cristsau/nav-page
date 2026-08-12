@@ -190,7 +190,7 @@ test('bookmark health presentation never labels protected links as broken', () =
   assert.equal(resolveBookmarkHealthPresentation({ healthStatus: 'unchecked' }), null)
 })
 
-test('navigation bookmark grid uses a stable mount without the tab-slide transition', async () => {
+test('navigation bookmark cards mount directly without transition wrappers', async () => {
   const source = await fs.readFile(
     fileURLToPath(new URL('../../app/src/modules/navigation/components/NavGroup.vue', import.meta.url)),
     'utf8'
@@ -198,12 +198,15 @@ test('navigation bookmark grid uses a stable mount without the tab-slide transit
   const gridSource = source.match(/<!-- 书签网格 -->[\s\S]*?<!-- 空状态 -->/)?.[0] || ''
 
   assert.match(gridSource, /<div class="bookmarks-container">\s*<div\s+class="bookmarks-grid"/)
-  assert.match(gridSource, /<TransitionGroup name="list">/)
-  assert.match(gridSource, /v-for="\(bookmark, bookmarkIndex\) in activeBookmarks"/)
+  assert.match(
+    gridSource,
+    /<NavItem\s+v-for="\(bookmark, bookmarkIndex\) in activeBookmarks"[\s\S]*?:key="bookmark\.id"/
+  )
   assert.match(gridSource, /class="bookmark-card bookmark-card--add"[\s\S]*添加书签/)
+  assert.doesNotMatch(gridSource, /<Transition(?:Group)?\b/)
   assert.doesNotMatch(gridSource, /<Transition\b[^>]*mode="out-in"/)
   assert.doesNotMatch(gridSource, /:key="activeGroup\?\.id"/)
-  assert.doesNotMatch(source, /tab-slide-(?:enter|leave)/)
+  assert.doesNotMatch(source, /(?:tab-slide|list)-(?:enter|leave)/)
 })
 
 test('navigation management calls the exact bulk and health backend contracts', async () => {
