@@ -398,46 +398,43 @@ const mobileGroupMenuId = computed(() => (
 
     <!-- 书签网格 -->
     <div class="bookmarks-container">
-      <Transition name="tab-slide" mode="out-in">
-        <div
-          :key="activeGroup?.id"
-          class="bookmarks-grid"
-          :class="{ 'bookmarks-grid--sorting': managementMode === 'sort' }"
-        >
-          <!-- 书签列表 -->
-          <TransitionGroup name="list">
-            <NavItem
-              v-for="(bookmark, bookmarkIndex) in activeBookmarks"
-              :key="bookmark.id"
-              :bookmark="bookmark"
-              :deleting="pendingBookmarkId === bookmark.id"
-              :analyzing="analyzingBookmarkId === bookmark.id"
-              :selection-mode="managementMode === 'select'"
-              :sort-mode="managementMode === 'sort'"
-              :selected="isBookmarkSelected(bookmark)"
-              :management-busy="managementBusy"
-              :sort-index="bookmarkIndex"
-              :sort-count="activeBookmarks.length"
-              @ai="handleAiBookmark"
-              @edit="handleEditBookmark"
-              @delete="handleDeleteBookmark"
-              @toggle-selection="handleToggleBookmark"
-              @sort-move="handleBookmarkSortMove"
-            />
-          </TransitionGroup>
+      <div
+        class="bookmarks-grid"
+        :class="{ 'bookmarks-grid--sorting': managementMode === 'sort' }"
+      >
+        <!-- 书签列表 -->
+        <TransitionGroup name="list">
+          <NavItem
+            v-for="(bookmark, bookmarkIndex) in activeBookmarks"
+            :key="bookmark.id"
+            :bookmark="bookmark"
+            :deleting="pendingBookmarkId === bookmark.id"
+            :analyzing="analyzingBookmarkId === bookmark.id"
+            :selection-mode="managementMode === 'select'"
+            :sort-mode="managementMode === 'sort'"
+            :selected="isBookmarkSelected(bookmark)"
+            :management-busy="managementBusy"
+            :sort-index="bookmarkIndex"
+            :sort-count="activeBookmarks.length"
+            @ai="handleAiBookmark"
+            @edit="handleEditBookmark"
+            @delete="handleDeleteBookmark"
+            @toggle-selection="handleToggleBookmark"
+            @sort-move="handleBookmarkSortMove"
+          />
+        </TransitionGroup>
 
-          <!-- 添加书签卡片：放在真实内容之后，避免低频操作占据首位。 -->
-          <button
-            v-if="activeGroup && !managementMode"
-            class="bookmark-card bookmark-card--add"
-            type="button"
-            @click="handleAddBookmark"
-          >
-            <div class="bookmark-card__icon"><Icon name="plus" :size="28" /></div>
-            <div class="bookmark-card__title">添加书签</div>
-          </button>
-        </div>
-      </Transition>
+        <!-- 添加书签卡片：放在真实内容之后，避免低频操作占据首位。 -->
+        <button
+          v-if="activeGroup && !managementMode"
+          class="bookmark-card bookmark-card--add"
+          type="button"
+          @click="handleAddBookmark"
+        >
+          <div class="bookmark-card__icon"><Icon name="plus" :size="28" /></div>
+          <div class="bookmark-card__title">添加书签</div>
+        </button>
+      </div>
 
       <!-- 空状态 -->
       <div v-if="activeBookmarks.length === 0 && groups.length === 0" class="empty-state">
@@ -986,22 +983,6 @@ const mobileGroupMenuId = computed(() => (
   cursor: wait;
 }
 
-/* Tab 切换动画 */
-.tab-slide-enter-active,
-.tab-slide-leave-active {
-  transition: all 0.3s var(--ease-smooth);
-}
-
-.tab-slide-enter-from {
-  opacity: 0;
-  transform: translateX(20px);
-}
-
-.tab-slide-leave-to {
-  opacity: 0;
-  transform: translateX(-20px);
-}
-
 /* 列表动画 */
 .list-enter-active,
 .list-leave-active {
@@ -1074,8 +1055,6 @@ const mobileGroupMenuId = computed(() => (
   .groups-tabs__action,
   .groups-tabs__add,
   .bookmark-card--add,
-  .tab-slide-enter-active,
-  .tab-slide-leave-active,
   .list-enter-active,
   .list-leave-active {
     transition: none;
