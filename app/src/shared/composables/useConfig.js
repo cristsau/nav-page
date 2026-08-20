@@ -44,6 +44,7 @@ const defaultConfig = {
     providers: {
       chatgpt: {
         enabled: false,
+        useServerManaged: true,
         mode: 'api',
         apiMode: '',
         endpoint: 'https://api.openai.com/v1/responses',

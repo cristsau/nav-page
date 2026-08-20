@@ -220,7 +220,7 @@ export default async function aiSearchRoutes(fastify) {
     } catch {
       reply.code(503)
       return {
-        error: 'AI 模型目录暂时不可用，请检查服务端 CLI Proxy 配置'
+        error: 'AI 模型目录暂时不可用，请检查配置来源、接口地址和密钥'
       }
     }
   })

@@ -3,7 +3,11 @@ import fs from 'node:fs/promises'
 import path from 'node:path'
 import process from 'node:process'
 import { config } from '../config.js'
-import { DEFAULT_OPENAI_MODEL, normalizeAiModelId } from './aiResponses.js'
+import {
+  DEFAULT_OPENAI_MODEL,
+  normalizeAiModelId,
+  resolveChatEndpoint
+} from './aiResponses.js'
 
 export const AI_MODEL_MODES = Object.freeze({
   LATEST: 'latest',
@@ -225,20 +229,51 @@ export async function resolveChatProviderConfig(
     runtimeConfig.aiCliProxyApiMode
   )
   const configuredSecretFile = normalizeText(runtimeConfig.aiCliProxyApiKeyFile)
+  const useServerManaged = resolved.useServerManaged !== false
+  const serverManagedComplete = Boolean(configuredBaseUrl && configuredSecretFile)
 
   if (!configuredBaseUrl && !configuredSecretFile) {
     return {
       ...resolved,
       model: normalizeAiModelId(model),
       modelMode,
-      serverManaged: false
+      serverManaged: false,
+      serverManagedAvailable: false,
+      managedBaseUrl: '',
+      managedEndpoint: '',
+      managedApiMode: ''
     }
   }
 
-  if (!configuredBaseUrl || !configuredSecretFile) {
+  if (!serverManagedComplete && useServerManaged) {
     throw new Error('Server-managed CLI Proxy configuration is incomplete')
   }
 
+  if (!useServerManaged) {
+    const managedBaseUrl = serverManagedComplete
+      ? normalizeCliProxyBaseUrl(configuredBaseUrl)
+      : ''
+    const managedEndpoint = managedBaseUrl
+      ? resolveChatEndpoint({
+          mode: 'proxy',
+          apiMode: configuredApiMode,
+          cliProxyBaseUrl: managedBaseUrl
+        })
+      : ''
+
+    return {
+      ...resolved,
+      model: normalizeAiModelId(model),
+      modelMode,
+      serverManaged: false,
+      serverManagedAvailable: Boolean(managedEndpoint),
+      managedBaseUrl,
+      managedEndpoint,
+      managedApiMode: managedEndpoint ? configuredApiMode : ''
+    }
+  }
+
+  const managedBaseUrl = normalizeCliProxyBaseUrl(configuredBaseUrl)
   const apiKey = await readSecretImpl(configuredSecretFile)
 
   return {
@@ -246,10 +281,18 @@ export async function resolveChatProviderConfig(
     enabled: true,
     mode: 'proxy',
     apiMode: configuredApiMode,
-    cliProxyBaseUrl: normalizeCliProxyBaseUrl(configuredBaseUrl),
+    cliProxyBaseUrl: managedBaseUrl,
     apiKey,
     model: normalizeAiModelId(model),
     modelMode,
-    serverManaged: true
+    serverManaged: true,
+    serverManagedAvailable: true,
+    managedBaseUrl,
+    managedEndpoint: resolveChatEndpoint({
+      mode: 'proxy',
+      apiMode: configuredApiMode,
+      cliProxyBaseUrl: managedBaseUrl
+    }),
+    managedApiMode: configuredApiMode
   }
 }
