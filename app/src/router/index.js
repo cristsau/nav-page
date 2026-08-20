@@ -22,7 +22,7 @@ const routes = [
     path: '/quick-add',
     name: 'QuickAdd',
     component: () => import('@/modules/navigation/QuickAddView.vue'),
-    meta: { title: '快速添加' }
+    meta: { title: '快速添加', appShell: false }
   },
   {
     path: '/whisper',

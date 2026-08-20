@@ -100,8 +100,8 @@ test('bookmark AI prompt contains actionable structure and only the sanitized UR
   assert.doesNotMatch(prompt, /api_key|secret|#admin/)
 })
 
-test('bookmark AI setup action focuses the search settings section', async () => {
-  const [navigation, settings] = await Promise.all([
+test('bookmark AI setup action selects and focuses the lazy search settings section', async () => {
+  const [navigation, settings, searchCategory] = await Promise.all([
     fs.readFile(
       fileURLToPath(new URL('../../app/src/modules/navigation/Navigation.vue', import.meta.url)),
       'utf8'
@@ -109,12 +109,18 @@ test('bookmark AI setup action focuses the search settings section', async () =>
     fs.readFile(
       fileURLToPath(new URL('../../app/src/modules/settings/Settings.vue', import.meta.url)),
       'utf8'
+    ),
+    fs.readFile(
+      fileURLToPath(new URL('../../app/src/modules/settings/categories/SearchAiCategory.vue', import.meta.url)),
+      'utf8'
     )
   ])
 
   assert.match(navigation, /query:\s*\{\s*section:\s*'search'\s*\}/)
-  assert.match(settings, /id="settings-search"/)
-  assert.match(settings, /focusRequestedSection/)
+  assert.match(settings, /section === 'search'\) return 'search'/)
+  assert.match(searchCategory, /id="settings-search"/)
+  assert.match(settings, /pendingSectionId\.value = section/)
+  assert.match(settings, /<Suspense @resolve="completePendingNavigation\(\{ categoryResolved: true \}\)">/)
   assert.match(settings, /scrollIntoView/)
 })
 

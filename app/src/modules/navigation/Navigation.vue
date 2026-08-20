@@ -2,7 +2,6 @@
 import { computed, nextTick, onBeforeUnmount, onMounted, ref, watch } from 'vue'
 import { useRouter } from 'vue-router'
 import { useGroups, useBookmarks } from '@/shared/composables/useDB'
-import { useTheme } from '@/shared/composables/useTheme'
 import { useConfig } from '@/shared/composables/useConfig'
 import { COMMAND_ACTION_EVENT } from '@/shared/composables/useCommandPalette'
 import SearchBox from '@/shared/components/SearchBox.vue'
@@ -51,8 +50,7 @@ const {
   checkHealth: checkBookmarkHealth,
   backendNavigationEnabled
 } = useBookmarks()
-const { isDark, toggleTheme } = useTheme()
-const { config, getSiteName, isModuleEnabled } = useConfig()
+const { config, getSiteName } = useConfig()
 
 const showModal = ref(false)
 const modalMode = ref('bookmark')
@@ -534,18 +532,6 @@ async function handleModalSubmit({ mode, data }) {
   }
 }
 
-function goToSettings() {
-  router.push('/settings')
-}
-
-function goToWhisper() {
-  router.push('/whisper')
-}
-
-function goToMedia() {
-  router.push('/media')
-}
-
 function runNavigationCommand(action) {
   if (action === 'create-bookmark') {
     handleAddBookmark()
@@ -606,48 +592,6 @@ onBeforeUnmount(() => {
 
 <template>
   <div class="page">
-    <header class="header">
-      <div class="header__logo">
-        <span class="header__logo-icon">
-          <img src="/domo-logo.png" alt="">
-        </span>
-        <span class="header__logo-text">{{ getSiteName() }}</span>
-      </div>
-      <div class="header__actions">
-        <button
-          class="header__btn"
-          type="button"
-          aria-label="打开图片库"
-          title="图片库"
-          @click="goToMedia"
-        >
-          <Icon name="image" :size="19" />
-        </button>
-        <button
-          v-if="isModuleEnabled('whisper')"
-          class="header__btn"
-          type="button"
-          aria-label="打开日记和备忘录"
-          title="日记与备忘录"
-          @click="goToWhisper"
-        >
-          <Icon name="note" :size="19" />
-        </button>
-        <button
-          class="header__btn"
-          type="button"
-          :aria-label="isDark ? '切到亮色模式' : '切到暗色模式'"
-          :title="isDark ? '切到亮色模式' : '切到暗色模式'"
-          @click="toggleTheme"
-        >
-          <Icon :name="isDark ? 'sun' : 'moon'" :size="19" />
-        </button>
-        <button class="header__btn" type="button" aria-label="打开设置" title="设置" @click="goToSettings">
-          <Icon name="settings" :size="19" />
-        </button>
-      </div>
-    </header>
-
     <main class="main" :class="{ 'has-management-bar': groups.length && managementMode }">
       <section class="search-section animate-fade-in">
         <h1 class="search-section__title">搜索你想找的内容</h1>
@@ -839,79 +783,9 @@ onBeforeUnmount(() => {
 
 <style scoped>
 .page {
-  min-height: 100vh;
+  min-height: calc(100vh - var(--app-shell-header-height, 64px));
+  min-height: calc(100dvh - var(--app-shell-header-height, 64px));
   background: var(--bg-primary);
-}
-
-.header {
-  position: sticky;
-  top: 0;
-  z-index: 100;
-  display: flex;
-  align-items: center;
-  justify-content: space-between;
-  height: var(--header-height);
-  padding: 0 24px;
-  background: var(--bg-primary);
-  border-bottom: 1px solid var(--border-light);
-  backdrop-filter: blur(10px);
-}
-
-.header__logo {
-  display: flex;
-  align-items: center;
-  gap: 8px;
-}
-
-.header__logo-icon {
-  width: 36px;
-  height: 36px;
-  display: block;
-  overflow: hidden;
-  background: #fff;
-  border: 1px solid var(--border-light);
-  border-radius: 50%;
-  box-shadow: 0 6px 18px color-mix(in srgb, var(--text-primary) 10%, transparent);
-}
-
-.header__logo-icon img {
-  width: 100%;
-  height: 100%;
-  display: block;
-  object-fit: contain;
-}
-
-.header__logo-text {
-  font-size: 20px;
-  font-weight: 700;
-  color: var(--text-primary);
-  letter-spacing: 1px;
-}
-
-.header__actions {
-  display: flex;
-  gap: 8px;
-}
-
-.header__btn {
-  width: 40px;
-  height: 40px;
-  display: flex;
-  align-items: center;
-  justify-content: center;
-  background: var(--bg-secondary);
-  border: none;
-  border-radius: var(--radius-md);
-  font-size: 18px;
-  cursor: pointer;
-  transition: all var(--transition-fast);
-  color: var(--text-secondary);
-}
-
-.header__btn:hover {
-  background: var(--bg-hover);
-  color: var(--text-primary);
-  transform: translateY(-1px);
 }
 
 .main {
@@ -1102,10 +976,6 @@ onBeforeUnmount(() => {
 }
 
 @media (max-width: 640px) {
-  .header {
-    padding: 0 16px;
-  }
-
   .main {
     padding: 0 16px 48px;
   }
@@ -1153,7 +1023,7 @@ onBeforeUnmount(() => {
   .management-bar {
     position: fixed;
     right: 10px;
-    bottom: max(10px, env(safe-area-inset-bottom));
+    bottom: max(86px, calc(env(safe-area-inset-bottom) + 76px));
     left: 10px;
     z-index: 420;
     display: grid;

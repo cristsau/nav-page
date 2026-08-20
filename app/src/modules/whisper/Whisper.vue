@@ -1,6 +1,6 @@
 <script setup>
 import { ref, computed, nextTick, onBeforeUnmount, onMounted } from 'vue'
-import { useRoute, useRouter } from 'vue-router'
+import { useRoute } from 'vue-router'
 import { getCurrentUserId, getNotes as getLocalNotes, addNote as addLocalNote, updateNote as updateLocalNote, deleteNote as deleteLocalNote, toggleNotePin as toggleLocalNotePin, getSetting as getLocalSetting, setSetting as setLocalSetting } from '@/shared/db/database'
 import { fetchBackendSetting, saveBackendSetting, shouldUseBackendSettings } from '@/shared/services/settingsApi'
 import { createBackendNote, deleteBackendNote, fetchBackendNotes, shouldUseBackendNotes, toggleBackendNotePin, updateBackendNote } from '@/shared/services/notesApi'
@@ -19,7 +19,6 @@ import {
 } from '@/modules/media/mediaLibrary'
 import { buildFullNoteText } from './utils/noteCopyText'
 
-const router = useRouter()
 const route = useRoute()
 
 // 笔记数据
@@ -454,14 +453,6 @@ async function clearBgImage() {
 }
 
 // 返回首页
-function goBack() {
-  router.push('/')
-}
-
-function goToMedia() {
-  router.push('/media')
-}
-
 async function openReminderCenter() {
   showReminderCenter.value = true
   await refreshReminders()
@@ -586,13 +577,10 @@ onBeforeUnmount(() => {
 <template>
   <div class="page" :style="bgStyle">
     <!-- 顶部导航 -->
-    <header class="header">
+    <div class="header">
       <div class="header__left">
-        <button class="header__btn" type="button" aria-label="返回导航页" @click="goBack">
-          <Icon name="arrow-left" :size="20" />
-        </button>
         <div>
-          <div class="header__eyebrow">DOMO NAV</div>
+          <div class="header__eyebrow">记录与整理</div>
           <h1 class="header__title" aria-label="日记与备忘录">
             <span class="header__title-full" aria-hidden="true">日记与备忘录</span>
             <span class="header__title-compact" aria-hidden="true">时光</span>
@@ -600,9 +588,6 @@ onBeforeUnmount(() => {
         </div>
       </div>
       <div class="header__actions">
-        <button class="header__btn" type="button" aria-label="打开图片库" title="图片库" @click="goToMedia">
-          <Icon name="image" :size="18" />
-        </button>
         <button
           ref="reminderButtonRef"
           class="header__btn reminder-button"
@@ -665,7 +650,7 @@ onBeforeUnmount(() => {
           </Transition>
         </div>
       </div>
-    </header>
+    </div>
 
     <!-- 主内容 -->
     <main class="main">
@@ -915,14 +900,15 @@ onBeforeUnmount(() => {
 
 <style scoped>
 .page {
-  min-height: 100vh;
+  min-height: calc(100vh - var(--app-shell-header-height, 64px));
+  min-height: calc(100dvh - var(--app-shell-header-height, 64px));
   background: var(--bg-primary);
 }
 
 /* 顶部导航 */
 .header {
   position: sticky;
-  top: 0;
+  top: var(--app-shell-header-height, 64px);
   z-index: 100;
   display: flex;
   align-items: center;
@@ -1511,6 +1497,12 @@ onBeforeUnmount(() => {
 
 .toast.is-error {
   background: color-mix(in srgb, var(--error-color) 84%, #111);
+}
+
+@media (max-width: 820px), (pointer: coarse) and (max-width: 1024px) {
+  .toast {
+    bottom: calc(92px + env(safe-area-inset-bottom));
+  }
 }
 
 .toast-enter-active,

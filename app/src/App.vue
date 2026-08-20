@@ -8,12 +8,17 @@ import {
   useCommandPalette
 } from '@/shared/composables/useCommandPalette'
 import CommandPalette from '@/shared/components/CommandPalette.vue'
+import AppShell from '@/shared/components/AppShell.vue'
 import Icon from '@/shared/components/Icon.vue'
 
 const route = useRoute()
 const router = useRouter()
 const publicShell = computed(() => Boolean(route.meta.publicShell))
 const commandPaletteEnabled = computed(() => !route.meta.public)
+const appShellEnabled = computed(() => (
+  !route.meta.public
+  && route.meta.appShell !== false
+))
 
 const {
   isOpen: commandPaletteOpen,
@@ -169,11 +174,23 @@ const bgStyle = computed(() => {
 </script>
 
 <template>
-  <div class="app" :class="{ 'app--public-shell': publicShell }" :style="bgStyle">
-    <router-view />
+  <div
+    class="app"
+    :class="{
+      'app--public-shell': publicShell,
+      'app--primary-shell': appShellEnabled
+    }"
+    :style="bgStyle"
+  >
+    <router-view v-slot="{ Component }">
+      <AppShell v-if="appShellEnabled">
+        <component :is="Component" />
+      </AppShell>
+      <component :is="Component" v-else />
+    </router-view>
 
     <button
-      v-if="commandPaletteEnabled"
+      v-if="commandPaletteEnabled && !appShellEnabled"
       class="command-launcher"
       type="button"
       aria-label="打开命令面板"

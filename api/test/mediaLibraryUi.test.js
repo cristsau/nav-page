@@ -128,18 +128,20 @@ test('media API contract stays isolated in one frontend service', async () => {
   assert.match(source, /deletion: payload\.deletion \|\| image\.deletion \|\| null/)
 })
 
-test('NAV, time and command surfaces expose the media library', async () => {
-  const [router, navigation, whisper, commands, editor] = await Promise.all([
+test('shared navigation, time and command surfaces expose the media library', async () => {
+  const [router, primaryNavigation, appNavigation, whisper, commands, editor] = await Promise.all([
     sourceFile('router/index.js'),
-    sourceFile('modules/navigation/Navigation.vue'),
+    sourceFile('shared/components/PrimaryNavigation.vue'),
+    sourceFile('shared/navigation/appNavigation.js'),
     sourceFile('modules/whisper/Whisper.vue'),
     sourceFile('shared/components/CommandPalette.vue'),
     sourceFile('modules/whisper/components/NoteEditor.vue')
   ])
 
   assert.match(router, /path: '\/media'/)
-  assert.match(navigation, /aria-label="打开图片库"/)
-  assert.match(whisper, /aria-label="打开图片库"/)
+  assert.match(primaryNavigation, /aria-label="主要页面"/)
+  assert.match(appNavigation, /label: '图片库'/)
+  assert.match(appNavigation, /path: '\/media'/)
   assert.match(whisper, /mediaCleanupMessage\(mediaCleanup\)/)
   assert.match(whisper, /mediaCleanupHasFailures\(mediaCleanup\) \? 'error' : 'success'/)
   assert.match(commands, /id: 'go-media'/)

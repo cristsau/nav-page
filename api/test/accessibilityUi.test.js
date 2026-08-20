@@ -49,10 +49,11 @@ test('group fields have programmatic labels and touch-first controls keep 44px t
 })
 
 test('new navigation and media empty states only promise implemented actions', async () => {
-  const [navigation, navGroup, settings, media] = await Promise.all([
+  const [navigation, navGroup, browserSettings, dataSettings, media] = await Promise.all([
     sourceFile('modules/navigation/Navigation.vue'),
     sourceFile('modules/navigation/components/NavGroup.vue'),
-    sourceFile('modules/settings/Settings.vue'),
+    sourceFile('modules/settings/categories/BrowserMobileCategory.vue'),
+    sourceFile('modules/settings/categories/DataAboutCategory.vue'),
     sourceFile('modules/media/MediaLibrary.vue')
   ])
 
@@ -61,8 +62,8 @@ test('new navigation and media empty states only promise implemented actions', a
   assert.match(navGroup, /导入 NAV JSON/)
   assert.match(navGroup, /安装快速收藏扩展/)
   assert.doesNotMatch(navGroup, /浏览器原生书签|推荐分组模板/)
-  assert.match(settings, /id="settings-browser"/)
-  assert.match(settings, /id="settings-data"/)
+  assert.match(browserSettings, /id="settings-browser"/)
+  assert.match(dataSettings, /id="settings-data"/)
   assert.match(media, /!images\.length && libraryIsEmpty/)
   assert.match(media, /图片库还是空的/)
   assert.match(media, /没有匹配的图片/)
