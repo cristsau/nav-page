@@ -1,8 +1,11 @@
 <script setup>
-import { computed, onBeforeUnmount, onMounted, ref } from 'vue'
+import { computed, onBeforeUnmount, ref } from 'vue'
 import Icon from '@/shared/components/Icon.vue'
 import { useAuth } from '@/shared/composables/useAuth'
-import { fetchAdminSecurityEvents } from '@/shared/services/adminSecurityEventsApi'
+import {
+  deleteAdminSecurityEvents,
+  fetchAdminSecurityEvents
+} from '@/shared/services/adminSecurityEventsApi'
 import {
   compactSecurityIdentifier,
   displaySecurityFingerprint,
@@ -18,9 +21,12 @@ const FALLBACK_EVENT_TYPES = [
   'auth.recovery',
   'auth.recovery_codes.rotate',
   'auth.session.revoke',
+  'auth.account.username.update',
+  'auth.account.password.update',
   'admin.registration.approve',
   'admin.registration.reject',
-  'admin.telegram_config.update'
+  'admin.telegram_config.update',
+  'admin.security_events.delete'
 ]
 const FALLBACK_OUTCOMES = ['success', 'failure', 'denied']
 
@@ -32,7 +38,14 @@ const eventTypes = ref([...FALLBACK_EVENT_TYPES])
 const outcomes = ref([...FALLBACK_OUTCOMES])
 const selectedEventType = ref('')
 const selectedOutcome = ref('')
+const expanded = ref(false)
+const loaded = ref(false)
 const loading = ref(false)
+const selectionMode = ref(false)
+const selectedEventIds = ref(new Set())
+const deletePassword = ref('')
+const deleting = ref(false)
+const deleteMessage = ref('')
 const errorMessage = ref('')
 const copiedKey = ref('')
 let copyTimer = null
@@ -40,6 +53,11 @@ let requestSequence = 0
 
 const isAdmin = computed(() => currentUser.value?.role === 'admin')
 const totalPages = computed(() => Math.max(1, Math.ceil(total.value / PAGE_SIZE)))
+const selectedCount = computed(() => selectedEventIds.value.size)
+const allPageSelected = computed(() => (
+  events.value.length > 0
+  && events.value.every((event) => selectedEventIds.value.has(String(event.id)))
+))
 const visibleRange = computed(() => {
   if (!total.value) return '0 条'
   const start = (page.value - 1) * PAGE_SIZE + 1
@@ -81,6 +99,7 @@ async function loadEvents(nextPage = page.value) {
   const sequence = ++requestSequence
   loading.value = true
   errorMessage.value = ''
+  deleteMessage.value = ''
 
   try {
     const result = await fetchAdminSecurityEvents({
@@ -102,6 +121,9 @@ async function loadEvents(nextPage = page.value) {
       result?.filters?.outcomes,
       FALLBACK_OUTCOMES
     )
+    loaded.value = true
+    selectedEventIds.value = new Set()
+    deletePassword.value = ''
   } catch (error) {
     if (sequence !== requestSequence) return
     events.value = []
@@ -112,7 +134,97 @@ async function loadEvents(nextPage = page.value) {
   }
 }
 
+function toggleExpanded() {
+  expanded.value = !expanded.value
+  if (!expanded.value) {
+    cancelSelection()
+    return
+  }
+  if (expanded.value && !loaded.value && !loading.value) {
+    loadEvents(1)
+  }
+}
+
+function beginSelection() {
+  selectionMode.value = true
+  selectedEventIds.value = new Set()
+  deletePassword.value = ''
+  deleteMessage.value = ''
+  errorMessage.value = ''
+}
+
+function cancelSelection() {
+  selectionMode.value = false
+  selectedEventIds.value = new Set()
+  deletePassword.value = ''
+  deleteMessage.value = ''
+}
+
+function toggleEventSelection(eventId) {
+  const normalized = String(eventId)
+  const next = new Set(selectedEventIds.value)
+  if (next.has(normalized)) next.delete(normalized)
+  else next.add(normalized)
+  selectedEventIds.value = next
+  deletePassword.value = ''
+  deleteMessage.value = ''
+}
+
+function togglePageSelection() {
+  if (allPageSelected.value) {
+    selectedEventIds.value = new Set()
+  } else {
+    selectedEventIds.value = new Set(events.value.map((event) => String(event.id)))
+  }
+  deletePassword.value = ''
+  deleteMessage.value = ''
+}
+
+async function handleDeleteSelected() {
+  if (!selectedCount.value || deleting.value) return
+  if (!deletePassword.value) {
+    errorMessage.value = '请输入当前密码以确认删除。'
+    return
+  }
+  if (!window.confirm(
+    `确定永久删除所选 ${selectedCount.value} 条安全审计记录吗？删除后无法从在线数据库撤销。`
+  )) {
+    return
+  }
+
+  deleting.value = true
+  errorMessage.value = ''
+  deleteMessage.value = ''
+  try {
+    const result = await deleteAdminSecurityEvents({
+      eventIds: [...selectedEventIds.value],
+      currentPassword: deletePassword.value
+    })
+    const deletedCount = Number(result?.deletedCount || 0)
+    deletePassword.value = ''
+    selectedEventIds.value = new Set()
+    selectionMode.value = false
+    deleteMessage.value = `已删除 ${deletedCount} 条审计记录，并保留一条新的删除操作审计。`
+
+    const nextPage = page.value > 1 && events.value.length <= deletedCount
+      ? page.value - 1
+      : page.value
+    await loadEvents(nextPage)
+    deleteMessage.value = `已删除 ${deletedCount} 条审计记录，并保留一条新的删除操作审计。`
+  } catch (error) {
+    deletePassword.value = ''
+    if (/current password is incorrect/i.test(String(error?.message || ''))) {
+      errorMessage.value = '当前密码不正确。'
+    } else {
+      errorMessage.value = securityAuditError(error)
+    }
+  } finally {
+    deleting.value = false
+  }
+}
+
 function applyFilters() {
+  if (selectionMode.value) cancelSelection()
   page.value = 1
   loadEvents(1)
 }
@@ -162,10 +274,10 @@ async function copyIdentifier(value, key) {
   }
 }
 
-onMounted(() => loadEvents(1))
-
 onBeforeUnmount(() => {
   requestSequence += 1
+  deletePassword.value = ''
+  selectedEventIds.value = new Set()
   if (copyTimer) window.clearTimeout(copyTimer)
 })
 </script>
@@ -183,50 +295,132 @@ onBeforeUnmount(() => {
           查看登录、账号恢复和管理员操作。仅展示截断的带密钥关联指纹，不展示原始值。
         </p>
       </div>
-      <button
-        class="button button--quiet"
-        type="button"
-        :disabled="loading"
-        @click="loadEvents(page)"
-      >
-        <Icon name="refresh" :size="16" />
-        {{ loading ? '刷新中...' : '刷新' }}
-      </button>
+      <div class="section-heading__actions">
+        <template v-if="expanded">
+          <button
+            class="button button--quiet"
+            type="button"
+            :disabled="loading || deleting"
+            @click="loadEvents(page)"
+          >
+            <Icon name="refresh" :size="16" />
+            {{ loading ? '刷新中...' : '刷新' }}
+          </button>
+          <button
+            class="button"
+            :class="selectionMode ? 'button--quiet' : 'button--danger'"
+            type="button"
+            :disabled="loading || deleting || (!selectionMode && !events.length)"
+            @click="selectionMode ? cancelSelection() : beginSelection()"
+          >
+            <Icon :name="selectionMode ? 'close' : 'trash'" :size="16" />
+            {{ selectionMode ? '取消删除' : '选择删除' }}
+          </button>
+        </template>
+        <button
+          class="button button--quiet audit-toggle"
+          type="button"
+          :aria-expanded="expanded"
+          aria-controls="security-audit-content"
+          @click="toggleExpanded"
+        >
+          {{ expanded ? '收起' : '展开' }}
+          <Icon
+            name="chevron-down"
+            :size="16"
+            :class="{ 'audit-toggle__icon--expanded': expanded }"
+          />
+        </button>
+      </div>
     </div>
 
-    <div class="filters" aria-label="安全审计筛选">
-      <label class="filter-field">
-        <span>事件类型</span>
-        <select v-model="selectedEventType" :disabled="loading" @change="applyFilters">
-          <option value="">全部事件</option>
-          <option v-for="eventType in eventTypes" :key="eventType" :value="eventType">
-            {{ securityEventTypeLabel(eventType) }}
-          </option>
-        </select>
-      </label>
-      <label class="filter-field">
-        <span>处理结果</span>
-        <select v-model="selectedOutcome" :disabled="loading" @change="applyFilters">
-          <option value="">全部结果</option>
-          <option v-for="outcome in outcomes" :key="outcome" :value="outcome">
-            {{ securityOutcomeLabel(outcome) }}
-          </option>
-        </select>
-      </label>
-    </div>
+    <div v-if="expanded" id="security-audit-content" class="audit-content">
+      <p v-if="deleteMessage" class="feedback feedback--success" aria-live="polite">
+        {{ deleteMessage }}
+      </p>
 
-    <p v-if="errorMessage" class="feedback feedback--error" role="alert">
+      <div v-if="selectionMode" class="delete-panel">
+        <div class="delete-panel__summary">
+          <strong>已选择 {{ selectedCount }} 条</strong>
+          <span>每次最多删除 100 条；删除后会新建一条操作审计。</span>
+        </div>
+        <button
+          class="button button--quiet"
+          type="button"
+          :disabled="deleting || !events.length"
+          @click="togglePageSelection"
+        >
+          {{ allPageSelected ? '取消全选本页' : '全选本页' }}
+        </button>
+        <label class="delete-panel__password">
+          <span>当前密码</span>
+          <input
+            v-model="deletePassword"
+            type="password"
+            autocomplete="current-password"
+            placeholder="确认管理员身份"
+            :disabled="deleting"
+            @keyup.enter="handleDeleteSelected"
+          >
+        </label>
+        <button
+          class="button button--danger"
+          type="button"
+          :disabled="deleting || !selectedCount || !deletePassword"
+          @click="handleDeleteSelected"
+        >
+          <Icon name="trash" :size="16" />
+          {{ deleting ? '删除中...' : `删除所选 ${selectedCount} 条` }}
+        </button>
+      </div>
+
+      <div class="filters" aria-label="安全审计筛选">
+        <label class="filter-field">
+          <span>事件类型</span>
+          <select v-model="selectedEventType" :disabled="loading" @change="applyFilters">
+            <option value="">全部事件</option>
+            <option v-for="eventType in eventTypes" :key="eventType" :value="eventType">
+              {{ securityEventTypeLabel(eventType) }}
+            </option>
+          </select>
+        </label>
+        <label class="filter-field">
+          <span>处理结果</span>
+          <select v-model="selectedOutcome" :disabled="loading" @change="applyFilters">
+            <option value="">全部结果</option>
+            <option v-for="outcome in outcomes" :key="outcome" :value="outcome">
+              {{ securityOutcomeLabel(outcome) }}
+            </option>
+          </select>
+        </label>
+      </div>
+
+      <p v-if="errorMessage" class="feedback feedback--error" role="alert">
       {{ errorMessage }}
     </p>
-    <p v-else-if="loading" class="empty-state" aria-live="polite">
+      <p v-else-if="loading" class="empty-state" aria-live="polite">
       正在读取安全事件...
     </p>
-    <p v-else-if="!events.length" class="empty-state">
+      <p v-else-if="!events.length" class="empty-state">
       当前筛选条件下没有安全事件。
     </p>
 
-    <div v-else class="event-list">
-      <article v-for="event in events" :key="event.id" class="event-card">
+      <div v-else class="event-list">
+      <article
+        v-for="event in events"
+        :key="event.id"
+        class="event-card"
+        :class="{ 'event-card--selected': selectedEventIds.has(String(event.id)) }"
+      >
+        <label v-if="selectionMode" class="event-card__selection">
+          <input
+            type="checkbox"
+            :checked="selectedEventIds.has(String(event.id))"
+            :aria-label="`选择审计事件 ${event.id}`"
+            @change="toggleEventSelection(event.id)"
+          >
+          <span>选择此记录</span>
+        </label>
         <div class="event-card__header">
           <div>
             <div class="event-card__title">
@@ -349,7 +543,7 @@ onBeforeUnmount(() => {
       </article>
     </div>
 
-    <nav class="pagination" aria-label="安全审计分页">
+      <nav class="pagination" aria-label="安全审计分页">
       <span>{{ visibleRange }}</span>
       <div class="pagination__actions">
         <button
@@ -370,7 +564,8 @@ onBeforeUnmount(() => {
           下一页
         </button>
       </div>
-    </nav>
+      </nav>
+    </div>
   </section>
 </template>
 
@@ -411,6 +606,22 @@ onBeforeUnmount(() => {
   line-height: 1.65;
 }
 
+.section-heading__actions {
+  display: flex;
+  flex: 0 0 auto;
+  flex-wrap: wrap;
+  justify-content: flex-end;
+  gap: 8px;
+}
+
+.audit-toggle .app-icon {
+  transition: transform var(--transition-fast);
+}
+
+.audit-toggle__icon--expanded {
+  transform: rotate(180deg);
+}
+
 .button {
   min-height: 40px;
   display: inline-flex;
@@ -432,6 +643,12 @@ onBeforeUnmount(() => {
   color: var(--text-primary);
 }
 
+.button--danger {
+  background: color-mix(in srgb, var(--error-color) 12%, var(--bg-secondary));
+  border-color: color-mix(in srgb, var(--error-color) 24%, transparent);
+  color: var(--error-color);
+}
+
 .button:disabled {
   opacity: 0.55;
   cursor: not-allowed;
@@ -442,6 +659,56 @@ onBeforeUnmount(() => {
   grid-template-columns: repeat(2, minmax(0, 1fr));
   gap: 12px;
   margin-top: 16px;
+}
+
+.delete-panel {
+  display: grid;
+  grid-template-columns: minmax(160px, 1fr) auto minmax(180px, 0.8fr) auto;
+  align-items: end;
+  gap: 10px;
+  margin-top: 16px;
+  padding: 14px;
+  border: 1px solid color-mix(in srgb, var(--error-color) 26%, var(--border-light));
+  border-radius: var(--radius-md);
+  background: color-mix(in srgb, var(--error-color) 6%, var(--bg-secondary));
+}
+
+.delete-panel__summary {
+  display: grid;
+  gap: 5px;
+}
+
+.delete-panel__summary strong {
+  color: var(--text-primary);
+  font-size: 13px;
+}
+
+.delete-panel__summary span,
+.delete-panel__password > span {
+  color: var(--text-muted);
+  font-size: 11px;
+  line-height: 1.5;
+}
+
+.delete-panel__password {
+  display: grid;
+  gap: 6px;
+}
+
+.delete-panel__password input {
+  min-height: 40px;
+  width: 100%;
+  padding: 9px 11px;
+  border: 1px solid var(--border-color);
+  border-radius: var(--radius-md);
+  outline: none;
+  background: var(--bg-card);
+  color: var(--text-primary);
+}
+
+.delete-panel__password input:focus {
+  border-color: var(--accent-color);
+  box-shadow: 0 0 0 3px color-mix(in srgb, var(--accent-color) 15%, transparent);
 }
 
 .filter-field {
@@ -482,6 +749,11 @@ onBeforeUnmount(() => {
   color: var(--error-color);
 }
 
+.feedback--success {
+  background: color-mix(in srgb, var(--success-color) 12%, var(--bg-secondary));
+  color: var(--success-color);
+}
+
 .empty-state {
   border: 1px dashed var(--border-color);
   color: var(--text-muted);
@@ -499,6 +771,28 @@ onBeforeUnmount(() => {
   border: 1px solid var(--border-light);
   border-radius: var(--radius-md);
   background: var(--bg-secondary);
+}
+
+.event-card--selected {
+  border-color: color-mix(in srgb, var(--error-color) 42%, var(--border-light));
+  background: color-mix(in srgb, var(--error-color) 5%, var(--bg-secondary));
+}
+
+.event-card__selection {
+  min-height: 36px;
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+  margin: -4px 0 10px;
+  color: var(--text-secondary);
+  font-size: 12px;
+  cursor: pointer;
+}
+
+.event-card__selection input {
+  width: 17px;
+  height: 17px;
+  accent-color: var(--error-color);
 }
 
 .event-card__title {
@@ -654,6 +948,31 @@ onBeforeUnmount(() => {
   }
 
   .section-heading > .button {
+    width: 100%;
+  }
+
+  .section-heading__actions,
+  .section-heading__actions .button {
+    width: 100%;
+  }
+
+  .section-heading__actions {
+    display: grid;
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+  }
+
+  .audit-toggle {
+    grid-column: 1 / -1;
+  }
+
+  .delete-panel {
+    grid-template-columns: 1fr;
+    align-items: stretch;
+  }
+
+  .delete-panel .button,
+  .delete-panel__password input {
+    min-height: 44px;
     width: 100%;
   }
 

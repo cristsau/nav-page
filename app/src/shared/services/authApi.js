@@ -42,6 +42,24 @@ export async function logoutWithBackend() {
   setCurrentUserId(null)
 }
 
+export async function updateBackendUsername(payload) {
+  const result = await request('/auth/account/username', {
+    method: 'PUT',
+    body: JSON.stringify(payload)
+  })
+  setCurrentUserId(result.user?.id || null)
+  return result
+}
+
+export async function updateBackendPassword(payload) {
+  const result = await request('/auth/account/password', {
+    method: 'PUT',
+    body: JSON.stringify(payload)
+  })
+  setCurrentUserId(null)
+  return result
+}
+
 export async function fetchBackendSessions() {
   const result = await request('/auth/sessions', {
     method: 'GET',

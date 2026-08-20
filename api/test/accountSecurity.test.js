@@ -271,6 +271,60 @@ test('session APIs scope deletion to the owner and clear only a revoked current 
   )
 })
 
+test('account username and password updates require the current password and preserve security invariants', async () => {
+  const source = await readSource('../src/routes/auth.js')
+  const usernameRoute = source.slice(
+    source.indexOf("fastify.put('/auth/account/username'"),
+    source.indexOf("fastify.put('/auth/account/password'")
+  )
+  const passwordRoute = source.slice(
+    source.indexOf("fastify.put('/auth/account/password'"),
+    source.indexOf("fastify.get('/auth/sessions'")
+  )
+
+  assert.match(usernameRoute, /requireAuth\(request, reply\)/)
+  assert.match(usernameRoute, /verifyPassword\(currentPassword, user\.password_hash\)/)
+  assert.match(usernameRoute, /UPDATE users[\s\S]*SET username = \$2/)
+  assert.match(usernameRoute, /error\?\.code === '23505'/)
+  assert.match(usernameRoute, /auth\.account\.username\.update/)
+
+  assert.match(passwordRoute, /requireAuth\(request, reply\)/)
+  assert.match(passwordRoute, /validateNewPassword\(newPassword\)/)
+  assert.match(passwordRoute, /verifyPassword\(currentPassword, user\.password_hash\)/)
+  assert.match(passwordRoute, /verifyPassword\(newPassword, user\.password_hash\)/)
+  assert.match(passwordRoute, /password_changed_at = NOW\(\)/)
+  assert.match(passwordRoute, /DELETE FROM sessions WHERE user_id = \$1/)
+  assert.match(passwordRoute, /auth\.account\.password\.update/)
+  assert.match(passwordRoute, /clearSessionCookie\(reply\)/)
+  assert.doesNotMatch(
+    `${usernameRoute}\n${passwordRoute}`,
+    /request\.log\.(?:info|warn|error)\([^)]*(?:currentPassword|newPassword|password_hash)/i
+  )
+})
+
+test('settings exposes protected username and password forms with explicit session revocation messaging', async () => {
+  const [component, authService, authComposable] = await Promise.all([
+    readSource('../../app/src/modules/settings/components/AccountSecuritySettings.vue'),
+    readSource('../../app/src/shared/services/authApi.js'),
+    readSource('../../app/src/shared/composables/useAuth.js')
+  ])
+
+  assert.match(component, /修改用户名/)
+  assert.match(component, /修改密码/)
+  assert.match(component, /v-model="usernameCurrentPassword"/)
+  assert.match(component, /v-model="passwordCurrentPassword"/)
+  assert.match(component, /v-model="newPassword"/)
+  assert.match(component, /v-model="confirmPassword"/)
+  assert.match(component, /autocomplete="current-password"/)
+  assert.match(component, /autocomplete="new-password"/)
+  assert.match(component, /所有设备（包括当前设备）会立即退出登录/)
+  assert.match(component, /window\.location\.assign\('\/auth\?passwordChanged=1'\)/)
+  assert.match(authService, /\/auth\/account\/username/)
+  assert.match(authService, /\/auth\/account\/password/)
+  assert.match(authComposable, /currentUser\.value = result\.user/)
+  assert.match(authComposable, /clearCurrentAuthState\(\)/)
+})
+
 test('recovery rotation verifies the password and stores hashes while showing plaintext once', async () => {
   const source = await readSource('../src/routes/auth.js')
 
@@ -349,6 +403,19 @@ test('session management and recovery-code rotation require authentication', asy
     for (const request of [
       { method: 'GET', url: '/api/auth/sessions' },
       { method: 'POST', url: '/api/auth/sessions/revoke-all' },
+      {
+        method: 'PUT',
+        url: '/api/auth/account/username',
+        payload: { username: 'next-name', currentPassword: 'not-logged-in' }
+      },
+      {
+        method: 'PUT',
+        url: '/api/auth/account/password',
+        payload: {
+          currentPassword: 'not-logged-in',
+          newPassword: 'new-password-long-enough'
+        }
+      },
       {
         method: 'POST',
         url: '/api/auth/recovery-codes',

@@ -12,10 +12,12 @@ import {
   validatePersistentRateLimitConfiguration
 } from '../src/lib/persistentRateLimit.js'
 import { recordSecurityEvent } from '../src/lib/securityEvents.js'
+import { hashPassword } from '../src/lib/auth.js'
 import { enforceAiRateLimit } from '../src/lib/aiRateLimit.js'
 import securityEventRoutes, {
   validateSecurityEventQuery
 } from '../src/routes/securityEvents.js'
+import { validateSecurityEventDeletion } from '../src/lib/securityEventDeletion.js'
 import {
   MIGRATION_ADVISORY_LOCK_SQL,
   MIGRATION_ADVISORY_UNLOCK_SQL,
@@ -377,6 +379,32 @@ test('security event query validates filters and caps pagination', () => {
   })
 })
 
+test('security event deletion validates a bounded unique BIGINT selection and current password', () => {
+  assert.deepEqual(validateSecurityEventDeletion({
+    currentPassword: 'current-secret',
+    eventIds: ['2', 3, '2']
+  }), {
+    valid: true,
+    currentPassword: 'current-secret',
+    eventIds: ['2', '3']
+  })
+  assert.deepEqual(validateSecurityEventDeletion({ eventIds: ['1'] }), {
+    valid: false,
+    error: 'Current password is required'
+  })
+  assert.deepEqual(validateSecurityEventDeletion({
+    currentPassword: 'current-secret',
+    eventIds: ['0']
+  }), {
+    valid: false,
+    error: 'Invalid security event ID'
+  })
+  assert.equal(validateSecurityEventDeletion({
+    currentPassword: 'current-secret',
+    eventIds: Array.from({ length: 101 }, (_, index) => String(index + 1))
+  }).valid, false)
+})
+
 test('admin security-event route parameterizes validated filters and pagination', async () => {
   let handler
   const calls = []
@@ -385,6 +413,7 @@ test('admin security-event route parameterizes validated filters and pagination'
       assert.equal(path, '/admin/security-events')
       handler = routeHandler
     },
+    post() {},
     async requireAdmin(request, reply) {
       if (request.currentUser?.role !== 'admin') {
         reply.code(403)
@@ -448,6 +477,78 @@ test('admin security-event route parameterizes validated filters and pagination'
   assert.equal(response.pagination.total, 1)
   assert.equal(response.events[0].clientFingerprint, 'a'.repeat(16))
   assert.equal(response.events[0].userAgentFingerprint, 'b'.repeat(16))
+})
+
+test('admin security-event deletion verifies the password, deletes selected IDs, and records the action', async () => {
+  let handler
+  const calls = []
+  const passwordHash = await hashPassword('current-secret')
+  const fastify = {
+    get() {},
+    post(path, routeHandler) {
+      assert.equal(path, '/admin/security-events/delete')
+      handler = routeHandler
+    },
+    async requireAdmin(request, reply) {
+      if (request.currentUser?.role !== 'admin') {
+        reply.code(403)
+        throw new Error('Admin access required')
+      }
+    }
+  }
+  const client = {
+    async query(text, params) {
+      calls.push({ text, params })
+      if (/SELECT password_hash/.test(text)) {
+        return { rows: [{ password_hash: passwordHash }], rowCount: 1 }
+      }
+      if (/DELETE FROM security_events/.test(text)) {
+        return { rows: [{ id: '4' }, { id: '5' }], rowCount: 2 }
+      }
+      if (/INSERT INTO security_events/.test(text)) {
+        return {
+          rows: [{ id: '6', created_at: '2026-08-20T00:00:00.000Z' }],
+          rowCount: 1
+        }
+      }
+      throw new Error('Unexpected query')
+    }
+  }
+
+  await securityEventRoutes(fastify, {
+    queryFn: async () => ({ rows: [] }),
+    transactionFn: async (callback) => callback(client)
+  })
+  const reply = {
+    statusCode: 200,
+    headers: {},
+    header(name, value) {
+      this.headers[name] = value
+      return this
+    },
+    code(value) {
+      this.statusCode = value
+      return this
+    }
+  }
+  const response = await handler({
+    currentUser: { id: '8a6db381-01a5-4731-ae8d-b5c3b49c2be1', role: 'admin' },
+    body: {
+      currentPassword: 'current-secret',
+      eventIds: ['4', '5']
+    },
+    headers: {},
+    log: { error() {} }
+  }, reply)
+
+  assert.equal(reply.statusCode, 200)
+  assert.equal(reply.headers['Cache-Control'], 'private, no-store')
+  assert.deepEqual(response, { ok: true, deletedCount: 2 })
+  const deleteCall = calls.find((call) => /DELETE FROM security_events/.test(call.text))
+  assert.deepEqual(deleteCall.params, [['4', '5']])
+  const auditCall = calls.find((call) => /INSERT INTO security_events/.test(call.text))
+  assert.equal(auditCall.params[0], 'admin.security_events.delete')
+  assert.equal(auditCall.params[6], 2)
 })
 
 test('public auth and authenticated writes await shared limits and expose fail-closed 503 handling', async () => {

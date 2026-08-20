@@ -1,5 +1,9 @@
-import { query } from '../db/index.js'
+import { query, withTransaction } from '../db/index.js'
+import { verifyPassword } from '../lib/auth.js'
+import { validateSecurityEventDeletion } from '../lib/securityEventDeletion.js'
 import {
+  recordSecurityEvent,
+  recordSecurityEventBestEffort,
   SECURITY_EVENT_OUTCOMES,
   SECURITY_EVENT_TYPES
 } from '../lib/securityEvents.js'
@@ -74,6 +78,9 @@ export default async function securityEventRoutes(fastify, options = {}) {
   const queryFn = typeof options.queryFn === 'function'
     ? options.queryFn
     : query
+  const transactionFn = typeof options.transactionFn === 'function'
+    ? options.transactionFn
+    : withTransaction
 
   fastify.get('/admin/security-events', async (request, reply) => {
     reply.header('Cache-Control', 'private, no-store')
@@ -147,6 +154,74 @@ export default async function securityEventRoutes(fastify, options = {}) {
         eventTypes: SECURITY_EVENT_TYPES,
         outcomes: SECURITY_EVENT_OUTCOMES
       }
+    }
+  })
+
+  fastify.post('/admin/security-events/delete', async (request, reply) => {
+    reply.header('Cache-Control', 'private, no-store')
+    await fastify.requireAdmin(request, reply)
+
+    const deletion = validateSecurityEventDeletion(request.body)
+    if (!deletion.valid) {
+      reply.code(400)
+      return { error: deletion.error }
+    }
+
+    const result = await transactionFn(async (client) => {
+      const userResult = await client.query(
+        `
+          SELECT password_hash
+          FROM users
+          WHERE id = $1
+          FOR UPDATE
+        `,
+        [request.currentUser.id]
+      )
+      const user = userResult.rows[0]
+      if (!user || !await verifyPassword(deletion.currentPassword, user.password_hash)) {
+        return { status: 'invalid-password' }
+      }
+
+      const deleted = await client.query(
+        `
+          DELETE FROM security_events
+          WHERE id = ANY($1::bigint[])
+          RETURNING id
+        `,
+        [deletion.eventIds]
+      )
+      const deletedCount = deleted.rowCount || 0
+
+      await recordSecurityEvent({
+        client,
+        request,
+        eventType: 'admin.security_events.delete',
+        outcome: 'success',
+        actorUserId: request.currentUser.id,
+        subjectUserId: request.currentUser.id,
+        resourceType: 'security_event',
+        affectedCount: deletedCount
+      })
+
+      return { status: 'deleted', deletedCount }
+    })
+
+    if (result.status === 'invalid-password') {
+      await recordSecurityEventBestEffort({
+        request,
+        eventType: 'admin.security_events.delete',
+        outcome: 'failure',
+        actorUserId: request.currentUser.id,
+        subjectUserId: request.currentUser.id,
+        resourceType: 'security_event'
+      }, request.log)
+      reply.code(400)
+      return { error: 'Current password is incorrect' }
+    }
+
+    return {
+      ok: true,
+      deletedCount: result.deletedCount
     }
   })
 }

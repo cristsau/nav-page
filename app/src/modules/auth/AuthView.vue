@@ -51,6 +51,9 @@ const redirectTarget = computed(() => {
 })
 
 onMounted(async () => {
+  if (String(route.query.passwordChanged || '') === '1') {
+    successMessage.value = '密码已修改，所有设备均已退出。请使用新密码重新登录。'
+  }
   await initAuth()
 })
 

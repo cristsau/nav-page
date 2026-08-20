@@ -7,9 +7,12 @@ export const SECURITY_EVENT_TYPES = Object.freeze([
   'auth.recovery',
   'auth.recovery_codes.rotate',
   'auth.session.revoke',
+  'auth.account.username.update',
+  'auth.account.password.update',
   'admin.registration.approve',
   'admin.registration.reject',
-  'admin.telegram_config.update'
+  'admin.telegram_config.update',
+  'admin.security_events.delete'
 ])
 
 export const SECURITY_EVENT_OUTCOMES = Object.freeze([
