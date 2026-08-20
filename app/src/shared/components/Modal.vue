@@ -2,6 +2,8 @@
 import { nextTick, onBeforeUnmount, ref, watch } from 'vue'
 import Icon from './Icon.vue'
 
+let modalSequence = 0
+
 const props = defineProps({
   show: {
     type: Boolean,
@@ -14,11 +16,30 @@ const props = defineProps({
   width: {
     type: String,
     default: '480px'
+  },
+  initialFocusSelector: {
+    type: String,
+    default: ''
   }
 })
 
 const emit = defineEmits(['close'])
+const dialog = ref(null)
 const closeButton = ref(null)
+const titleId = `modal-title-${++modalSequence}`
+let returnFocusElement = null
+let previousBodyOverflow = ''
+let modalIsActive = false
+
+const focusableSelector = [
+  'a[href]:not([tabindex="-1"])',
+  'button:not([disabled]):not([tabindex="-1"])',
+  'input:not([disabled]):not([type="hidden"]):not([tabindex="-1"])',
+  'select:not([disabled]):not([tabindex="-1"])',
+  'textarea:not([disabled]):not([tabindex="-1"])',
+  '[contenteditable="true"]:not([tabindex="-1"])',
+  '[tabindex]:not([tabindex="-1"])'
+].join(',')
 
 function close() {
   emit('close')
@@ -32,24 +53,86 @@ function onOverlayClick(e) {
 
 function onKeyDown(e) {
   if (e.key === 'Escape') {
+    e.preventDefault()
+    e.stopPropagation()
     close()
   }
 }
 
-watch(() => props.show, (val) => {
+function getFocusableElements() {
+  return Array.from(dialog.value?.querySelectorAll(focusableSelector) || [])
+    .filter((element) => (
+      !element.hasAttribute('hidden')
+      && element.getAttribute('aria-hidden') !== 'true'
+      && element.getClientRects().length > 0
+    ))
+}
+
+function trapFocus(event) {
+  const focusable = getFocusableElements()
+  if (!focusable.length) {
+    event.preventDefault()
+    dialog.value?.focus()
+    return
+  }
+
+  const first = focusable[0]
+  const last = focusable[focusable.length - 1]
+
+  if (event.shiftKey && (document.activeElement === first || !dialog.value?.contains(document.activeElement))) {
+    event.preventDefault()
+    last.focus()
+  } else if (!event.shiftKey && (document.activeElement === last || !dialog.value?.contains(document.activeElement))) {
+    event.preventDefault()
+    first.focus()
+  }
+}
+
+function restoreFocus() {
+  const target = returnFocusElement
+  returnFocusElement = null
+  if (target?.isConnected && typeof target.focus === 'function') {
+    target.focus()
+  }
+}
+
+async function focusInitialElement() {
+  await nextTick()
+  const requested = props.initialFocusSelector
+    ? dialog.value?.querySelector(props.initialFocusSelector)
+    : null
+  const target = requested
+    || dialog.value?.querySelector('[data-modal-initial-focus], [autofocus]')
+    || getFocusableElements().find((element) => element !== closeButton.value)
+    || closeButton.value
+    || dialog.value
+  target?.focus()
+}
+
+watch(() => props.show, async (val, previousValue) => {
   if (val) {
+    modalIsActive = true
+    returnFocusElement = document.activeElement
+    previousBodyOverflow = document.body.style.overflow
     document.body.style.overflow = 'hidden'
     document.addEventListener('keydown', onKeyDown)
-    nextTick(() => closeButton.value?.focus())
-  } else {
-    document.body.style.overflow = ''
+    await focusInitialElement()
+  } else if (previousValue && modalIsActive) {
+    modalIsActive = false
+    document.body.style.overflow = previousBodyOverflow
     document.removeEventListener('keydown', onKeyDown)
+    await nextTick()
+    restoreFocus()
   }
-})
+}, { immediate: true })
 
 onBeforeUnmount(() => {
-  document.body.style.overflow = ''
+  if (modalIsActive) {
+    document.body.style.overflow = previousBodyOverflow
+  }
   document.removeEventListener('keydown', onKeyDown)
+  if (modalIsActive) restoreFocus()
+  modalIsActive = false
 })
 </script>
 
@@ -58,14 +141,18 @@ onBeforeUnmount(() => {
     <Transition name="modal">
       <div v-if="show" class="modal-overlay" @click="onOverlayClick">
         <div
+          ref="dialog"
           class="modal-content"
           :style="{ maxWidth: width }"
           role="dialog"
           aria-modal="true"
-          :aria-label="title"
+          :aria-labelledby="title ? titleId : undefined"
+          :aria-label="title ? undefined : '对话框'"
+          tabindex="-1"
+          @keydown.tab="trapFocus"
         >
           <div class="modal__header">
-            <h3 class="modal__title">{{ title }}</h3>
+            <h2 :id="titleId" class="modal__title">{{ title }}</h2>
             <button ref="closeButton" type="button" class="modal__close" aria-label="关闭弹窗" @click="close">
               <Icon name="close" :size="18" />
             </button>
@@ -113,14 +200,15 @@ onBeforeUnmount(() => {
 }
 
 .modal__title {
+  margin: 0;
   font-size: 18px;
   font-weight: 600;
   color: var(--text-primary);
 }
 
 .modal__close {
-  width: 32px;
-  height: 32px;
+  width: 44px;
+  height: 44px;
   display: flex;
   align-items: center;
   justify-content: center;

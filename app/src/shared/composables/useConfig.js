@@ -12,6 +12,12 @@ import {
   buildWebSearchUrl,
   normalizeEngineMonogram
 } from '@/shared/utils/unifiedSearch'
+import {
+  colorSchemes,
+  resolveThemeMutedColors
+} from '@/shared/config/colorSchemes'
+
+export { colorSchemes } from '@/shared/config/colorSchemes'
 
 const defaultCustomTheme = {
   primary: '#6b8c7a',
@@ -93,96 +99,6 @@ export const searchEngines = {
   bilibili: { id: 'bilibili', name: 'Bilibili', url: 'https://search.bilibili.com/all?keyword=', icon: '哔', type: 'web', isBuiltIn: true },
   github: { id: 'github', name: 'GitHub', url: 'https://github.com/search?q=', icon: 'GH', type: 'web', isBuiltIn: true },
   weibo: { id: 'weibo', name: '微博', url: 'https://s.weibo.com/weibo?q=', icon: '微', type: 'web', isBuiltIn: true }
-}
-
-export const colorSchemes = {
-  cream: {
-    name: '奶油',
-    primary: '#a08060',
-    bg: '#faf8f5',
-    bgSecondary: '#f5f2ed',
-    bgCard: '#ffffff',
-    textPrimary: '#4a4540',
-    textSecondary: '#7a756d',
-    darkBg: '#1e1815',
-    darkBgSecondary: '#2a211d',
-    darkBgCard: '#372b25',
-    darkTextPrimary: '#f1e8df',
-    darkTextSecondary: '#c7b7a7'
-  },
-  ocean: {
-    name: '海洋',
-    primary: '#5a8fa8',
-    bg: '#f0f5f8',
-    bgSecondary: '#e5eef3',
-    bgCard: '#ffffff',
-    textPrimary: '#3a5060',
-    textSecondary: '#6a8090',
-    darkBg: '#0f1820',
-    darkBgSecondary: '#152734',
-    darkBgCard: '#1e3648',
-    darkTextPrimary: '#e3f1f7',
-    darkTextSecondary: '#9fc2d4'
-  },
-  forest: {
-    name: '森林',
-    primary: '#5a8a6a',
-    bg: '#f5f8f5',
-    bgSecondary: '#e8f0e8',
-    bgCard: '#ffffff',
-    textPrimary: '#3a5040',
-    textSecondary: '#6a8070',
-    darkBg: '#121915',
-    darkBgSecondary: '#1a2a20',
-    darkBgCard: '#24382b',
-    darkTextPrimary: '#e6f2e8',
-    darkTextSecondary: '#a9c7b0'
-  },
-  rose: {
-    name: '玫瑰',
-    primary: '#c48a9a',
-    bg: '#faf5f8',
-    bgSecondary: '#f5e8ee',
-    bgCard: '#ffffff',
-    textPrimary: '#5a4050',
-    textSecondary: '#8a7080',
-    darkBg: '#2a151f',
-    darkBgSecondary: '#462432',
-    darkBgCard: '#603142',
-    darkTextPrimary: '#f7e5ec',
-    darkTextSecondary: '#ddb2c0'
-  },
-  lavender: {
-    name: '薰衣草',
-    primary: '#8a8ac4',
-    bg: '#f5f5fa',
-    bgSecondary: '#eaeaf5',
-    bgCard: '#ffffff',
-    textPrimary: '#404060',
-    textSecondary: '#707090',
-    darkBg: '#171623',
-    darkBgSecondary: '#26233a',
-    darkBgCard: '#383454',
-    darkTextPrimary: '#ecebfb',
-    darkTextSecondary: '#bbb8e3'
-  },
-  sunset: {
-    name: '日落',
-    primary: '#c48a6a',
-    bg: '#faf8f5',
-    bgSecondary: '#f5ece5',
-    bgCard: '#ffffff',
-    textPrimary: '#5a4a40',
-    textSecondary: '#8a7060',
-    darkBg: '#261712',
-    darkBgSecondary: '#3d241c',
-    darkBgCard: '#573329',
-    darkTextPrimary: '#f7e9e1',
-    darkTextSecondary: '#ddb49d'
-  },
-  custom: {
-    name: '自定义'
-  }
 }
 
 export const borderRadiusOptions = {
@@ -376,6 +292,7 @@ export function applyStyleConfig() {
   const scheme = getResolvedColorScheme(style)
   const isDark = root.classList.contains('dark')
   const accentColor = scheme.primary
+  const mutedColors = resolveThemeMutedColors(scheme)
 
   root.style.setProperty('--accent-color', accentColor, 'important')
   root.style.setProperty('--accent-hover', adjustColor(accentColor, isDark ? 18 : -15), 'important')
@@ -391,7 +308,7 @@ export function applyStyleConfig() {
     root.style.setProperty('--bg-tertiary', mixColors(scheme.darkBgSecondary, '#ffffff', 0.08), 'important')
     root.style.setProperty('--text-primary', scheme.darkTextPrimary, 'important')
     root.style.setProperty('--text-secondary', scheme.darkTextSecondary, 'important')
-    root.style.setProperty('--text-muted', mixColors(scheme.darkTextSecondary, scheme.darkBg, 0.72), 'important')
+    root.style.setProperty('--text-muted', mutedColors.dark, 'important')
     root.style.setProperty('--border-color', mixColors(scheme.darkBgCard, accentColor, 0.38), 'important')
     root.style.setProperty('--border-light', mixColors(scheme.darkBgSecondary, accentColor, 0.3), 'important')
     root.style.setProperty('--success-color', mixColors('#7fbf90', accentColor, 0.2), 'important')
@@ -406,7 +323,7 @@ export function applyStyleConfig() {
     root.style.setProperty('--bg-tertiary', mixColors(scheme.bgSecondary, accentColor, 0.08), 'important')
     root.style.setProperty('--text-primary', scheme.textPrimary, 'important')
     root.style.setProperty('--text-secondary', scheme.textSecondary, 'important')
-    root.style.setProperty('--text-muted', adjustColor(scheme.textSecondary, 40), 'important')
+    root.style.setProperty('--text-muted', mutedColors.light, 'important')
     root.style.setProperty('--border-color', mixColors(scheme.bgSecondary, accentColor, 0.22), 'important')
     root.style.setProperty('--border-light', mixColors(scheme.bgSecondary, accentColor, 0.12), 'important')
     root.style.setProperty('--success-color', '#7a9f7a', 'important')

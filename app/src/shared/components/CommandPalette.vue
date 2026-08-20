@@ -287,6 +287,7 @@ function handleKeydown(event) {
               v-model="query"
               type="search"
               role="combobox"
+              aria-label="搜索命令"
               autocomplete="off"
               aria-autocomplete="list"
               aria-controls="command-palette-list"
@@ -294,7 +295,7 @@ function handleKeydown(event) {
               :aria-activedescendant="activeCommand ? `command-option-${activeCommand.id}` : undefined"
               placeholder="搜索命令、页面或操作"
             >
-            <kbd>Esc</kbd>
+            <kbd aria-hidden="true">Esc</kbd>
           </label>
 
           <div
@@ -415,8 +416,8 @@ function handleKeydown(event) {
 .command-palette__close {
   display: grid;
   flex: 0 0 auto;
-  width: 40px;
-  height: 40px;
+  width: 44px;
+  height: 44px;
   padding: 0;
   place-items: center;
   color: var(--text-secondary);

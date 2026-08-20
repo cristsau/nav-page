@@ -1,5 +1,6 @@
 <script setup>
 import { computed, nextTick, ref, watch } from 'vue'
+import { useRouter } from 'vue-router'
 import Icon from '@/shared/components/Icon.vue'
 import NavItem from './NavItem.vue'
 import { resolveGroupIcon } from '../navigationUi'
@@ -42,6 +43,8 @@ const props = defineProps({
     default: () => []
   }
 })
+
+const router = useRouter()
 
 const emit = defineEmits([
   'selectGroup',
@@ -122,6 +125,13 @@ function handleGroupKeydown(group, event) {
 
 function handleAddGroup() {
   emit('addGroup')
+}
+
+function openSettingsSection(section) {
+  router.push({
+    path: '/settings',
+    query: { section }
+  })
 }
 
 function handleEditGroup(group, e) {
@@ -437,10 +447,19 @@ const mobileGroupMenuId = computed(() => (
       <!-- 空状态 -->
       <div v-if="activeBookmarks.length === 0 && groups.length === 0" class="empty-state">
         <div class="empty-state__icon"><Icon name="folder" :size="42" /></div>
-        <div class="empty-state__text">还没有分组</div>
-        <button class="btn btn--primary" type="button" @click="handleAddGroup">
-          创建第一个分组
-        </button>
+        <h2 class="empty-state__title">建立你的第一个导航分组</h2>
+        <p class="empty-state__text">可以从空白分组开始，也可以恢复 DOMO NAV 导出的 JSON 备份。</p>
+        <div class="empty-state__actions">
+          <button class="btn btn--primary" type="button" @click="handleAddGroup">
+            <Icon name="plus" :size="17" />创建第一个分组
+          </button>
+          <button class="btn btn--secondary" type="button" @click="openSettingsSection('data')">
+            <Icon name="download" :size="17" />导入 NAV JSON
+          </button>
+          <button class="btn btn--secondary" type="button" @click="openSettingsSection('browser')">
+            <Icon name="browser" :size="17" />安装快速收藏扩展
+          </button>
+        </div>
       </div>
     </div>
 
@@ -858,14 +877,30 @@ const mobileGroupMenuId = computed(() => (
   to { transform: rotate(360deg); }
 }
 
+.empty-state__title {
+  margin: 0;
+  color: var(--text-primary);
+  font-size: 20px;
+}
+
 .empty-state__text {
-  font-size: 16px;
-  color: var(--text-secondary);
-  margin-bottom: 20px;
+  max-width: 560px;
+  margin: 8px auto 22px;
+  color: var(--text-muted);
+  font-size: 14px;
+  line-height: 1.7;
+}
+
+.empty-state__actions {
+  display: flex;
+  flex-wrap: wrap;
+  justify-content: center;
+  gap: 10px;
 }
 
 /* 按钮样式 */
 .btn {
+  min-height: 44px;
   display: inline-flex;
   align-items: center;
   justify-content: center;
@@ -885,6 +920,16 @@ const mobileGroupMenuId = computed(() => (
 
 .btn--primary:hover {
   background: var(--accent-hover);
+}
+
+.btn--secondary {
+  color: var(--text-primary);
+  background: var(--bg-secondary);
+  border: 1px solid var(--border-color);
+}
+
+.btn--secondary:hover {
+  background: var(--bg-hover);
 }
 
 .group-action-overlay {
@@ -1012,6 +1057,10 @@ const mobileGroupMenuId = computed(() => (
     height: 1px;
     overflow: hidden;
     clip: rect(0 0 0 0);
+  }
+
+  .empty-state__actions {
+    display: grid;
   }
 }
 

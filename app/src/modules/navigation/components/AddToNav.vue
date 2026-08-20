@@ -248,7 +248,12 @@ function close() {
 </script>
 
 <template>
-  <Modal :show="show" :title="title" @close="close">
+  <Modal
+    :show="show"
+    :title="title"
+    :initial-focus-selector="mode === 'group' ? '#group-name-field' : '#bookmark-title-field'"
+    @close="close"
+  >
     <!-- 书签表单 -->
     <template v-if="mode === 'bookmark'">
       <div class="form-group">
@@ -262,6 +267,7 @@ function close() {
       <div class="form-group">
         <label class="form-label">标题 *</label>
         <input
+          id="bookmark-title-field"
           v-model="formData.title"
           type="text"
           class="input"
@@ -338,8 +344,9 @@ function close() {
     <!-- 分组表单 -->
     <template v-else>
       <div class="form-group">
-        <label class="form-label">名称 *</label>
+        <label class="form-label" for="group-name-field">名称 *</label>
         <input
+          id="group-name-field"
           v-model="formData.name"
           type="text"
           class="input"
@@ -370,12 +377,13 @@ function close() {
         </div>
       </div>
       <div class="form-group">
-        <label class="form-label">颜色</label>
+        <label class="form-label" for="group-color-field">颜色</label>
         <input
+          id="group-color-field"
           v-model="formData.color"
           type="color"
           class="input"
-          style="height: 40px; padding: 4px;"
+          style="height: 44px; padding: 4px;"
           :disabled="saving"
         >
       </div>

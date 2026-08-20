@@ -10,7 +10,7 @@
 
   --text-primary: #4a4540;
   --text-secondary: #7a756d;
-  --text-muted: #a9a49c;
+  --text-muted: #6f6a63;
 
   --border-color: #e8e4dd;
   --border-light: #f0ede8;
@@ -78,7 +78,7 @@
 
   --text-primary: #f1e8df;
   --text-secondary: #c7b7a7;
-  --text-muted: #88796c;
+  --text-muted: #b0a192;
 
   --border-color: #4d3a31;
   --border-light: #3d2f28;
@@ -105,4 +105,17 @@
   /* 这些变量会被 useConfig.js 动态覆盖 */
   --user-accent-color: var(--accent-color);
   --user-radius: var(--radius-md);
+}
+
+/* Pointer-size policy is applied only to touch-first devices so compact
+   desktop toolbars keep their current density. */
+@media (hover: none), (pointer: coarse), (any-hover: none), (any-pointer: coarse) {
+  button,
+  input[type='button'],
+  input[type='submit'],
+  input[type='reset'],
+  [role='button'] {
+    min-width: 44px !important;
+    min-height: 44px !important;
+  }
 }

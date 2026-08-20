@@ -1,0 +1,70 @@
+import test from 'node:test'
+import assert from 'node:assert/strict'
+import fs from 'node:fs/promises'
+import { fileURLToPath } from 'node:url'
+
+const sourceFile = (path) => fs.readFile(
+  fileURLToPath(new URL(`../../app/src/${path}`, import.meta.url)),
+  'utf8'
+)
+
+test('shared modal traps focus, supports initial focus and restores the opener', async () => {
+  const source = await sourceFile('shared/components/Modal.vue')
+
+  assert.match(source, /initialFocusSelector/)
+  assert.match(source, /@keydown\.tab="trapFocus"/)
+  assert.match(source, /e\.key === 'Escape'/)
+  assert.match(source, /returnFocusElement = document\.activeElement/)
+  assert.match(source, /target\?\.isConnected/)
+  assert.match(source, /aria-modal="true"/)
+  assert.match(source, /:aria-labelledby="title \? titleId : undefined"/)
+  assert.match(source, /width: 44px;\s*height: 44px;/)
+})
+
+test('time settings, search and command palette expose correct accessible names', async () => {
+  const [whisper, commands] = await Promise.all([
+    sourceFile('modules/whisper/Whisper.vue'),
+    sourceFile('shared/components/CommandPalette.vue')
+  ])
+
+  assert.match(whisper, /<Modal[\s\S]*title="页面设置"/)
+  assert.match(whisper, /aria-label="搜索标题、正文或标签"/)
+  assert.doesNotMatch(whisper, /class="settings-modal"/)
+  assert.match(commands, /aria-label="搜索命令"/)
+  assert.match(commands, /<kbd aria-hidden="true">Esc<\/kbd>/)
+})
+
+test('group fields have programmatic labels and touch-first controls keep 44px targets', async () => {
+  const [form, variables, navItem] = await Promise.all([
+    sourceFile('modules/navigation/components/AddToNav.vue'),
+    sourceFile('styles/variables.css'),
+    sourceFile('modules/navigation/components/NavItem.vue')
+  ])
+
+  assert.match(form, /for="group-name-field"[\s\S]*id="group-name-field"/)
+  assert.match(form, /for="group-color-field"[\s\S]*id="group-color-field"/)
+  assert.match(variables, /\(any-pointer: coarse\)[\s\S]*\[role='button'\][\s\S]*min-width: 44px !important;[\s\S]*min-height: 44px !important;/)
+  assert.match(navItem, /class="mobile-action-sheet"[\s\S]*aria-modal="true"/)
+  assert.match(navItem, /@keydown\.tab="trapMobileActionFocus"/)
+})
+
+test('new navigation and media empty states only promise implemented actions', async () => {
+  const [navigation, navGroup, settings, media] = await Promise.all([
+    sourceFile('modules/navigation/Navigation.vue'),
+    sourceFile('modules/navigation/components/NavGroup.vue'),
+    sourceFile('modules/settings/Settings.vue'),
+    sourceFile('modules/media/MediaLibrary.vue')
+  ])
+
+  assert.match(navigation, /v-if="groups\.length" class="management-heading"/)
+  assert.match(navGroup, /创建第一个分组/)
+  assert.match(navGroup, /导入 NAV JSON/)
+  assert.match(navGroup, /安装快速收藏扩展/)
+  assert.doesNotMatch(navGroup, /浏览器原生书签|推荐分组模板/)
+  assert.match(settings, /id="settings-browser"/)
+  assert.match(settings, /id="settings-data"/)
+  assert.match(media, /!images\.length && libraryIsEmpty/)
+  assert.match(media, /图片库还是空的/)
+  assert.match(media, /没有匹配的图片/)
+  assert.match(media, /@click="resetFilters"/)
+})

@@ -648,7 +648,7 @@ onBeforeUnmount(() => {
       </div>
     </header>
 
-    <main class="main" :class="{ 'has-management-bar': managementMode }">
+    <main class="main" :class="{ 'has-management-bar': groups.length && managementMode }">
       <section class="search-section animate-fade-in">
         <h1 class="search-section__title">搜索你想找的内容</h1>
         <div ref="searchBoxHost">
@@ -657,7 +657,7 @@ onBeforeUnmount(() => {
       </section>
 
       <section class="content-section">
-        <div class="management-heading">
+        <div v-if="groups.length" class="management-heading">
           <div>
             <p class="management-heading__eyebrow">导航管理</p>
             <p class="management-heading__hint">批量整理书签，或调整分组与当前分组书签的顺序。</p>
@@ -687,7 +687,7 @@ onBeforeUnmount(() => {
         </div>
 
         <div
-          v-if="managementMode === 'select'"
+          v-if="groups.length && managementMode === 'select'"
           class="management-bar management-bar--selection"
           :aria-busy="managementBusy"
         >
@@ -745,7 +745,7 @@ onBeforeUnmount(() => {
         </div>
 
         <div
-          v-else-if="managementMode === 'sort'"
+          v-else-if="groups.length && managementMode === 'sort'"
           class="management-bar management-bar--sort"
           :aria-busy="managementBusy"
         >

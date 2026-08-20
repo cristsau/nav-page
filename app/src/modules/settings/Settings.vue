@@ -103,7 +103,7 @@ async function handleExit() {
         <GeneralSettings />
         <AppearanceSettings />
         <SearchSettings id="settings-search" tabindex="-1" />
-        <BrowserIntegrationSettings />
+        <BrowserIntegrationSettings id="settings-browser" tabindex="-1" />
         <UserManagementSettings />
         <AccountSecuritySettings
           v-if="backendAuthEnabled"
@@ -115,7 +115,7 @@ async function handleExit() {
           id="settings-security-audit"
           tabindex="-1"
         />
-        <DataSettings />
+        <DataSettings id="settings-data" tabindex="-1" />
 
         <div class="about-section">
           <div class="about-section__brand">
