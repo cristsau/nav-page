@@ -47,8 +47,10 @@ The audit records these event families:
 - login success, invalid credentials and denied unapproved/rate-limited attempts;
 - logout and individual/bulk session revocation;
 - recovery-code rotation and account recovery;
+- username and password updates;
 - registration approval/rejection, including Telegram-driven decisions;
-- administrator Telegram configuration updates.
+- administrator Telegram configuration updates;
+- administrator deletion of selected security-audit records.
 
 Events store only structured fields: event type, outcome, actor/subject user UUID when known, resource UUID when applicable, affected count and HMAC fingerprints for client IP/User-Agent. Passwords, recovery codes, session tokens, usernames, raw IP addresses, raw User-Agent values, request bodies and note content are never audit fields.
 
@@ -57,11 +59,14 @@ Administrators can query the newest events with:
 ```text
 GET /api/admin/security-events?page=1&pageSize=50
 GET /api/admin/security-events?eventType=auth.login&outcome=failure
+POST /api/admin/security-events/delete
 ```
 
 The endpoint requires `requireAdmin`, caps pages at 200 events, sends `Cache-Control: private, no-store` and exposes only 16-character correlation fingerprints rather than full digests. The administrator UI request also uses browser `cache: no-store`.
 
-Migration 016 does not install an automatic audit-retention delete. Retention duration and any archive/export requirement remain an explicit operations decision; do not add default deletion until that policy is approved.
+The settings UI keeps the audit section collapsed by default and does not query the list until an administrator expands it. Manual deletion is deliberately protected: the administrator selects explicit event IDs (at most 100 per request) and re-enters the current password. The API verifies that password and deletes the selected rows in one transaction, then inserts a new `admin.security_events.delete` event containing only the deleted count. A later administrator may delete an older deletion event, but every successful operation leaves a new audit event. Passwords and deleted event payloads are never copied into the replacement event.
+
+Migration 016 does not install an automatic audit-retention delete. Manual, password-confirmed selection is not a substitute for a bounded retention policy. Retention duration and any archive/export requirement remain an explicit operations decision; do not add silent pruning until that policy is approved.
 
 ## Migration concurrency and rollback
 
@@ -69,9 +74,10 @@ Migration 016 does not install an automatic audit-retention delete. Retention du
 
 Application rollback normally keeps migration 016, its two additive tables and its ledger row. An older release's exact-set `verify:migrations` command expects only the migration files bundled with that older release, so it will report a ledger mismatch after 016 exists. That expected mismatch is not proof that the older API is incompatible. Do not delete the 016 ledger row or drop its tables merely to satisfy the old verifier; use the current release verifier plus targeted compatibility checks. No destructive down migration is provided.
 
-This first version does not automatically delete `security_events`. Monitor table
-growth and define an explicit retention period before a larger or public rollout;
-do not add silent pruning without preserving the agreed audit and incident window.
+This version does not automatically delete `security_events`. Monitor table growth
+and define an explicit retention period before a larger or public rollout; manual
+administrator deletion must not be treated as silent pruning or as proof that old
+records no longer exist in retained backups.
 
 ## Release checks
 
@@ -83,7 +89,9 @@ Before a production switch:
 4. Confirm unauthenticated `/api/admin/security-events` returns `401`.
 5. Confirm an administrator can page the endpoint without seeing raw IP/User-Agent values.
 6. Exercise a disposable failed login and a successful login; confirm both events appear.
-7. In CI or an isolated release environment, confirm an exhausted test bucket returns
+7. Confirm the audit section is collapsed before its first request, wrong-password deletion changes no rows, and a correct-password disposable deletion removes only the selected row while adding one deletion event.
+8. Confirm username updates preserve the current session and password updates revoke every session.
+9. In CI or an isolated release environment, confirm an exhausted test bucket returns
    `429` plus `Retry-After`, and a deliberately unavailable test database returns
    `503` rather than silently using local memory. Do not interrupt the production
    database to perform this check.

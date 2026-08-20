@@ -49,6 +49,7 @@ const APP_CONFIG_EXPORT_SCHEMA = Object.freeze({
     providers: {
       chatgpt: {
         enabled: true,
+        useServerManaged: true,
         mode: true,
         apiMode: true,
         endpoint: true,

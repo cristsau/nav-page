@@ -390,6 +390,10 @@ test('server-managed provider reads an owner-only secret file and public catalog
   assert.equal(resolved.apiMode, 'responses')
   assert.equal(resolved.apiKey, secret)
   assert.equal(resolved.serverManaged, true)
+  assert.equal(resolved.serverManagedAvailable, true)
+  assert.equal(resolved.managedBaseUrl, 'https://proxy.example.test')
+  assert.equal(resolved.managedEndpoint, 'https://proxy.example.test/v1/responses')
+  assert.equal(resolved.managedApiMode, 'responses')
 
   const publicResponse = toPublicModelCatalogResponse({
     models: [{ id: 'gpt-5.7' }],
@@ -401,11 +405,19 @@ test('server-managed provider reads an owner-only secret file and public catalog
     stale: false,
     verifiedAt: new Date(0).toISOString(),
     serverManaged: true,
+    serverManagedAvailable: true,
+    managedBaseUrl: resolved.managedBaseUrl,
+    managedEndpoint: resolved.managedEndpoint,
+    managedApiMode: resolved.managedApiMode,
     apiKey: secret,
     authorization: `Bearer ${secret}`
   })
 
   assert.equal(publicResponse.serverManaged, true)
+  assert.equal(publicResponse.serverManagedAvailable, true)
+  assert.equal(publicResponse.managedBaseUrl, 'https://proxy.example.test')
+  assert.equal(publicResponse.managedEndpoint, 'https://proxy.example.test/v1/responses')
+  assert.equal(publicResponse.managedApiMode, 'responses')
   assert.equal(publicResponse.apiMode, 'responses')
   assert.equal(JSON.stringify(publicResponse).includes(secret), false)
   assert.equal('apiKey' in publicResponse, false)

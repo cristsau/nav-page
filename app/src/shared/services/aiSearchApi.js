@@ -6,7 +6,7 @@ import {
   normalizeDiscoveredChatModels
 } from '@/shared/config/aiModels'
 
-const CHAT_MODEL_CACHE_KEY_PREFIX = 'domo-nav:chat-model-catalog:v2'
+const CHAT_MODEL_CACHE_KEY_PREFIX = 'domo-nav:chat-model-catalog:v3'
 const CHAT_MODEL_CACHE_TTL_MS = 15 * 60 * 1000
 const chatModelMemoryCache = new Map()
 
@@ -53,7 +53,12 @@ function normalizeChatModelCatalog(payload = {}) {
     fetchedAt: normalizeText(source?.fetchedAt || source?.verifiedAt) || new Date().toISOString(),
     providerCached: Boolean(source?.cached) || ['cache', 'stale', 'fallback'].includes(catalogSource),
     providerStale: Boolean(source?.stale) || catalogSource === 'stale',
-    serverManaged: source?.serverManaged !== false,
+    serverManaged: Boolean(source?.serverManaged),
+    serverManagedAvailable: source?.serverManagedAvailable === true
+      || source?.serverManaged === true,
+    managedBaseUrl: normalizeText(source?.managedBaseUrl),
+    managedEndpoint: normalizeText(source?.managedEndpoint),
+    managedApiMode: normalizeText(source?.managedApiMode).toLowerCase(),
     source: catalogSource
   }
 }

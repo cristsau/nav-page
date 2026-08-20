@@ -30,10 +30,13 @@ function compareNumberDescending(left, right) {
   return Number(right || 0) - Number(left || 0)
 }
 
-function buildModelsEndpoint(provider = {}) {
+export function buildModelsEndpoint(provider = {}) {
   const configuredBaseUrl = normalizeText(provider.cliProxyBaseUrl)
   const configuredEndpoint = normalizeText(provider.endpoint)
-  const baseUrl = configuredBaseUrl || configuredEndpoint
+  const isProxyMode = normalizeText(provider.mode).toLowerCase() === 'proxy'
+  const baseUrl = isProxyMode
+    ? (configuredBaseUrl || configuredEndpoint)
+    : (configuredEndpoint || configuredBaseUrl)
 
   return `${normalizeCliProxyBaseUrl(baseUrl)}/v1/models`
 }
@@ -456,7 +459,11 @@ export async function resolveChatProviderModel(
         resolvedModelId,
         configuredMode,
         apiMode: resolvedProvider.apiMode,
-        serverManaged: Boolean(resolvedProvider.serverManaged)
+        serverManaged: Boolean(resolvedProvider.serverManaged),
+        serverManagedAvailable: Boolean(resolvedProvider.serverManagedAvailable),
+        managedBaseUrl: resolvedProvider.managedBaseUrl,
+        managedEndpoint: resolvedProvider.managedEndpoint,
+        managedApiMode: resolvedProvider.managedApiMode
       }
     }
   }
@@ -479,7 +486,11 @@ export async function resolveChatProviderModel(
       resolvedModelId,
       configuredMode,
       apiMode: resolvedProvider.apiMode,
-      serverManaged: Boolean(resolvedProvider.serverManaged)
+      serverManaged: Boolean(resolvedProvider.serverManaged),
+      serverManagedAvailable: Boolean(resolvedProvider.serverManagedAvailable),
+      managedBaseUrl: resolvedProvider.managedBaseUrl,
+      managedEndpoint: resolvedProvider.managedEndpoint,
+      managedApiMode: resolvedProvider.managedApiMode
     }
   }
 }
@@ -507,6 +518,12 @@ export function toPublicModelCatalogResponse(catalog = {}) {
       : 'fallback',
     stale: Boolean(catalog.stale),
     verifiedAt: normalizeText(catalog.verifiedAt) || null,
-    serverManaged: Boolean(catalog.serverManaged)
+    serverManaged: Boolean(catalog.serverManaged),
+    serverManagedAvailable: Boolean(catalog.serverManagedAvailable),
+    managedBaseUrl: normalizeText(catalog.managedBaseUrl),
+    managedEndpoint: normalizeText(catalog.managedEndpoint),
+    managedApiMode: catalog.managedApiMode === 'responses'
+      ? 'responses'
+      : (catalog.managedApiMode === 'chat-completions' ? 'chat-completions' : '')
   }
 }

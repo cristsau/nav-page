@@ -77,20 +77,40 @@ const chatModelCatalog = ref({
   source: '',
   verifiedAt: '',
   serverManaged: false,
+  serverManagedAvailable: false,
+  managedBaseUrl: '',
+  managedEndpoint: '',
+  managedApiMode: '',
   apiMode: 'chat-completions'
 })
 const chatModelsLoading = ref(false)
 const chatModelsError = ref('')
+const chatConnectionSwitching = ref(false)
 
 const allEngines = computed(() => getAllSearchEngines())
 const aggregateEnabled = computed(() => config.value.search?.aggregate?.enabled || false)
 const quickAccessIds = computed(() => config.value.search?.quickAccessEngineIds || [])
-const chatProviderServerManaged = computed(() => Boolean(
-  chatModelCatalog.value.serverManaged
+const chatServerManagedAvailable = computed(() => Boolean(
+  chatModelCatalog.value.serverManagedAvailable
+))
+const chatConnectionSource = computed(() => (
+  chatServerManagedAvailable.value
+  && config.value.search?.providers?.chatgpt?.useServerManaged !== false
+    ? 'server-managed'
+    : 'custom'
+))
+const chatProviderServerManaged = computed(() => (
+  chatConnectionSource.value === 'server-managed'
+))
+const chatManagedBaseUrl = computed(() => (
+  chatModelCatalog.value.managedBaseUrl || ''
+))
+const chatManagedEndpoint = computed(() => (
+  chatModelCatalog.value.managedEndpoint || ''
 ))
 const chatApiMode = computed(() => (
   chatProviderServerManaged.value
-    ? chatModelCatalog.value.apiMode
+    ? (chatModelCatalog.value.managedApiMode || chatModelCatalog.value.apiMode)
     : resolveConfiguredChatApiMode(config.value.search?.providers?.chatgpt)
 ))
 const chatUsesResponsesApi = computed(() => chatApiMode.value === 'responses')
@@ -449,6 +469,43 @@ function updateChatApiMode(apiMode) {
   }
 }
 
+async function changeChatConnectionSource(source) {
+  if (chatConnectionSwitching.value) return
+
+  const useServerManaged = source === 'server-managed'
+  if (useServerManaged && !chatServerManagedAvailable.value) {
+    setProviderMessage('chatgpt', 'error', '服务器托管配置当前不可用')
+    return
+  }
+
+  const previousValue = config.value.search?.providers?.chatgpt?.useServerManaged !== false
+  if (useServerManaged === previousValue) return
+
+  chatConnectionSwitching.value = true
+  setProviderMessage('chatgpt', '', '')
+
+  try {
+    updateConfig('search.providers.chatgpt.useServerManaged', useServerManaged)
+    const saved = await persistConfigNow()
+    if (!saved) throw new Error('配置来源保存失败')
+
+    await loadChatModelCatalog({ force: true })
+    setProviderMessage(
+      'chatgpt',
+      'success',
+      useServerManaged
+        ? '已切换为服务器托管；地址与专用密钥继续由服务器保护。'
+        : '已切换为自定义 API；请启用服务并保存该 API 自己的密钥。'
+    )
+  } catch (error) {
+    updateConfig('search.providers.chatgpt.useServerManaged', previousValue)
+    await persistConfigNow()
+    setProviderMessage('chatgpt', 'error', error.message || '配置来源切换失败')
+  } finally {
+    chatConnectionSwitching.value = false
+  }
+}
+
 async function handleProviderTest(provider) {
   providerTesting.value[provider] = true
   setProviderMessage(provider, '', '')
@@ -608,6 +665,25 @@ async function handleProviderTest(provider) {
         </div>
       </div>
       <div class="provider-grid">
+        <label class="provider-field provider-field--full">
+          <span>配置来源</span>
+          <select
+            class="input"
+            :value="chatConnectionSource"
+            :disabled="chatConnectionSwitching || chatModelsLoading"
+            @change="changeChatConnectionSource($event.target.value)"
+          >
+            <option value="server-managed" :disabled="!chatServerManagedAvailable">
+              服务器托管 CLI Proxy（推荐）
+            </option>
+            <option value="custom">自定义 API</option>
+          </select>
+          <span class="provider-key__hint">
+            {{ chatProviderServerManaged
+              ? '使用服务器只读 Secret；地址可查看但不可在网页覆盖。'
+              : '使用本账号保存的地址和密钥；服务器托管密钥不会发送到自定义地址。' }}
+          </span>
+        </label>
         <label class="provider-field">
           <span>启用</span>
           <input
@@ -646,8 +722,10 @@ async function handleProviderTest(provider) {
           <input
             class="input"
             type="text"
-            :value="config.search?.providers?.chatgpt?.cliProxyBaseUrl"
-            :disabled="chatProviderServerManaged"
+            :value="chatProviderServerManaged
+              ? chatManagedBaseUrl
+              : config.search?.providers?.chatgpt?.cliProxyBaseUrl"
+            :readonly="chatProviderServerManaged"
             placeholder="https://your-proxy.example.com"
             @input="updateConfig('search.providers.chatgpt.cliProxyBaseUrl', $event.target.value)"
           >
@@ -657,8 +735,10 @@ async function handleProviderTest(provider) {
           <input
             class="input"
             type="text"
-            :value="config.search?.providers?.chatgpt?.endpoint"
-            :disabled="chatProviderServerManaged"
+            :value="chatProviderServerManaged
+              ? chatManagedEndpoint
+              : config.search?.providers?.chatgpt?.endpoint"
+            :readonly="chatProviderServerManaged"
             placeholder="https://api.openai.com/v1/responses"
             @input="updateConfig('search.providers.chatgpt.endpoint', $event.target.value)"
           >
@@ -798,6 +878,10 @@ async function handleProviderTest(provider) {
         <p v-if="!chatUsesResponsesApi" class="provider-grid__notice">
           <Icon name="alert" :size="15" />
           当前为 Chat Completions 兼容网关，推理强度和内置联网搜索参数不会发送。
+        </p>
+        <p v-else-if="!chatProviderServerManaged" class="provider-grid__notice provider-grid__notice--safe">
+          <Icon name="lock" :size="15" />
+          自定义 API 只使用你在此模式保存的密钥；不会借用或泄露服务器托管的 CLI Proxy 密钥。
         </p>
       </div>
       <div class="provider-actions">
@@ -1319,6 +1403,17 @@ async function handleProviderTest(provider) {
 
 .provider-grid__notice .app-icon {
   margin-top: 1px;
+}
+
+.provider-grid__notice--safe {
+  color: var(--text-secondary);
+  background: color-mix(in srgb, var(--success-color) 8%, var(--bg-secondary));
+}
+
+.provider-field .input[readonly] {
+  cursor: text;
+  color: var(--text-secondary);
+  background: var(--bg-secondary);
 }
 
 .provider-key__label {

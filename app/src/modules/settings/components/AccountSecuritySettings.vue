@@ -1,10 +1,13 @@
 <script setup>
-import { computed, onBeforeUnmount, onMounted, ref } from 'vue'
+import { computed, onBeforeUnmount, onMounted, ref, watch } from 'vue'
 import Icon from '@/shared/components/Icon.vue'
 import { useAuth } from '@/shared/composables/useAuth'
 
 const {
+  currentUser,
   backendAuthEnabled,
+  updateUsername,
+  updatePassword,
   getSessions,
   revokeSession,
   revokeOtherSessions,
@@ -21,6 +24,13 @@ const recoveryStatus = ref({
 })
 const recoveryCodes = ref([])
 const currentPassword = ref('')
+const username = ref('')
+const usernameCurrentPassword = ref('')
+const usernameLoading = ref(false)
+const passwordCurrentPassword = ref('')
+const newPassword = ref('')
+const confirmPassword = ref('')
+const passwordLoading = ref(false)
 const loading = ref(false)
 const sessionAction = ref('')
 const recoveryLoading = ref(false)
@@ -33,6 +43,14 @@ const currentSession = computed(() => (
 const otherSessionCount = computed(() => (
   sessions.value.filter((session) => !session.current).length
 ))
+
+watch(
+  () => currentUser.value?.username,
+  (value) => {
+    if (!usernameCurrentPassword.value) username.value = String(value || '')
+  },
+  { immediate: true }
+)
 
 function formatDate(value) {
   if (!value) return '暂无记录'
@@ -92,7 +110,97 @@ function getSecurityErrorMessage(error, fallback) {
   if (/authentication required/i.test(value)) {
     return '登录状态已失效，请重新登录。'
   }
+  if (/username is already in use|username already exists/i.test(value)) {
+    return '这个用户名已经被使用，请换一个。'
+  }
+  if (/username of 1 to 128 characters/i.test(value)) {
+    return '用户名需要为 1–128 个字符，且不能包含控制字符。'
+  }
+  if (/password must be at least 12 characters/i.test(value)) {
+    return '新密码至少需要 12 个字符。'
+  }
+  if (/password must be 1024 characters or fewer/i.test(value)) {
+    return '密码长度不能超过 1024 个字符。'
+  }
+  if (/new password must be different/i.test(value)) {
+    return '新密码不能与当前密码相同。'
+  }
   return value || fallback
+}
+
+async function handleUsernameUpdate() {
+  if (usernameLoading.value) return
+  if (!username.value.trim()) {
+    setFeedback({ error: '请输入新用户名。' })
+    return
+  }
+  if (!usernameCurrentPassword.value) {
+    setFeedback({ error: '请输入当前密码以验证身份。' })
+    return
+  }
+
+  usernameLoading.value = true
+  setFeedback()
+  try {
+    const result = await updateUsername({
+      username: username.value,
+      currentPassword: usernameCurrentPassword.value
+    })
+    username.value = result.user?.username || username.value.trim().toLowerCase()
+    usernameCurrentPassword.value = ''
+    setFeedback({
+      message: result.changed
+        ? '用户名已更新，当前登录会话继续有效。'
+        : '用户名没有变化。'
+    })
+  } catch (error) {
+    usernameCurrentPassword.value = ''
+    setFeedback({
+      error: getSecurityErrorMessage(error, '用户名修改失败，请稍后重试。')
+    })
+  } finally {
+    usernameLoading.value = false
+  }
+}
+
+async function handlePasswordUpdate() {
+  if (passwordLoading.value) return
+  if (!passwordCurrentPassword.value) {
+    setFeedback({ error: '请输入当前密码以验证身份。' })
+    return
+  }
+  if (newPassword.value.length < 12) {
+    setFeedback({ error: '新密码至少需要 12 个字符。' })
+    return
+  }
+  if (newPassword.value !== confirmPassword.value) {
+    setFeedback({ error: '两次输入的新密码不一致。' })
+    return
+  }
+  if (!window.confirm(
+    '修改密码后，所有设备（包括当前设备）会立即退出登录。确定继续吗？'
+  )) {
+    return
+  }
+
+  passwordLoading.value = true
+  setFeedback()
+  try {
+    await updatePassword({
+      currentPassword: passwordCurrentPassword.value,
+      newPassword: newPassword.value
+    })
+    passwordCurrentPassword.value = ''
+    newPassword.value = ''
+    confirmPassword.value = ''
+    window.location.assign('/auth?passwordChanged=1')
+  } catch (error) {
+    passwordCurrentPassword.value = ''
+    setFeedback({
+      error: getSecurityErrorMessage(error, '密码修改失败，请稍后重试。')
+    })
+    passwordLoading.value = false
+  }
 }
 
 async function refreshSecurityData() {
@@ -318,6 +426,10 @@ onMounted(refreshSecurityData)
 onBeforeUnmount(() => {
   recoveryCodes.value = []
   currentPassword.value = ''
+  usernameCurrentPassword.value = ''
+  passwordCurrentPassword.value = ''
+  newPassword.value = ''
+  confirmPassword.value = ''
 })
 </script>
 
@@ -347,6 +459,109 @@ onBeforeUnmount(() => {
     <p v-if="errorMessage" class="feedback feedback--error" role="alert">
       {{ errorMessage }}
     </p>
+
+    <div class="security-block">
+      <div class="block-heading">
+        <div>
+          <h4>账户资料</h4>
+          <p>修改登录用户名或密码。两项操作都需要验证当前密码。</p>
+        </div>
+      </div>
+
+      <div class="account-forms">
+        <form class="account-form" @submit.prevent="handleUsernameUpdate">
+          <div class="account-form__heading">
+            <Icon name="edit" :size="18" />
+            <div>
+              <strong>修改用户名</strong>
+              <p>修改后当前会话继续有效，页面中的用户名会立即同步。</p>
+            </div>
+          </div>
+          <div class="account-form__fields">
+            <label class="security-field">
+              <span>新用户名</span>
+              <input
+                v-model="username"
+                name="username"
+                type="text"
+                autocomplete="username"
+                maxlength="128"
+                required
+              >
+            </label>
+            <label class="security-field">
+              <span>当前密码</span>
+              <input
+                v-model="usernameCurrentPassword"
+                name="username-current-password"
+                type="password"
+                autocomplete="current-password"
+                placeholder="用于确认是本人操作"
+                required
+              >
+            </label>
+          </div>
+          <button
+            class="button button--primary account-form__submit"
+            type="submit"
+            :disabled="usernameLoading || passwordLoading"
+          >
+            {{ usernameLoading ? '修改中...' : '保存用户名' }}
+          </button>
+        </form>
+
+        <form class="account-form" @submit.prevent="handlePasswordUpdate">
+          <div class="account-form__heading">
+            <Icon name="lock" :size="18" />
+            <div>
+              <strong>修改密码</strong>
+              <p>新密码至少 12 个字符；成功后所有设备都会退出登录。</p>
+            </div>
+          </div>
+          <div class="account-form__fields">
+            <label class="security-field">
+              <span>当前密码</span>
+              <input
+                v-model="passwordCurrentPassword"
+                name="password-current-password"
+                type="password"
+                autocomplete="current-password"
+                required
+              >
+            </label>
+            <label class="security-field">
+              <span>新密码</span>
+              <input
+                v-model="newPassword"
+                name="new-password"
+                type="password"
+                autocomplete="new-password"
+                minlength="12"
+                required
+              >
+            </label>
+            <label class="security-field">
+              <span>确认新密码</span>
+              <input
+                v-model="confirmPassword"
+                name="confirm-password"
+                type="password"
+                autocomplete="new-password"
+                minlength="12"
+                required
+              >
+            </label>
+          </div>
+          <button
+            class="button button--danger account-form__submit"
+            type="submit"
+            :disabled="passwordLoading || usernameLoading"
+          >
+            {{ passwordLoading ? '修改中...' : '修改密码并退出所有设备' }}
+          </button>
+        </form>
+      </div>
+    </div>
 
     <div class="security-block">
       <div class="block-heading">
@@ -637,6 +852,56 @@ onBeforeUnmount(() => {
   color: var(--error-color);
 }
 
+.account-forms {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 12px;
+  margin-top: 16px;
+}
+
+.account-form {
+  display: flex;
+  flex-direction: column;
+  gap: 14px;
+  padding: 16px;
+  border: 1px solid var(--border-light);
+  border-radius: var(--radius-md);
+  background: var(--bg-secondary);
+}
+
+.account-form__heading {
+  display: flex;
+  align-items: flex-start;
+  gap: 10px;
+  color: var(--accent-color);
+}
+
+.account-form__heading > div {
+  min-width: 0;
+}
+
+.account-form__heading strong {
+  color: var(--text-primary);
+  font-size: 14px;
+}
+
+.account-form__heading p {
+  margin: 5px 0 0;
+  color: var(--text-muted);
+  font-size: 12px;
+  line-height: 1.55;
+}
+
+.account-form__fields {
+  display: grid;
+  gap: 11px;
+}
+
+.account-form__submit {
+  width: 100%;
+  margin-top: auto;
+}
+
 .session-list {
   display: grid;
   gap: 10px;
@@ -843,6 +1108,10 @@ onBeforeUnmount(() => {
   }
 
   .recovery-form {
+    grid-template-columns: 1fr;
+  }
+
+  .account-forms {
     grid-template-columns: 1fr;
   }
 

@@ -21,6 +21,8 @@ import {
   fetchBackendSession,
   loginWithBackend,
   logoutWithBackend,
+  updateBackendUsername,
+  updateBackendPassword,
   fetchBackendSessions,
   revokeBackendSession,
   revokeOtherBackendSessions,
@@ -119,6 +121,26 @@ export function useAuth() {
   async function getSessions() {
     if (!isBackendAuthEnabled()) return []
     return fetchBackendSessions()
+  }
+
+  async function updateUsername(payload) {
+    if (!isBackendAuthEnabled()) {
+      throw new Error('当前认证模式不支持修改用户名。')
+    }
+
+    const result = await updateBackendUsername(payload)
+    currentUser.value = result.user || currentUser.value
+    return result
+  }
+
+  async function updatePassword(payload) {
+    if (!isBackendAuthEnabled()) {
+      throw new Error('当前认证模式不支持修改密码。')
+    }
+
+    const result = await updateBackendPassword(payload)
+    clearCurrentAuthState()
+    return result
   }
 
   async function revokeSession(sessionId) {
@@ -258,6 +280,8 @@ export function useAuth() {
     refreshAll,
     login,
     logout,
+    updateUsername,
+    updatePassword,
     getSessions,
     revokeSession,
     revokeOtherSessions,

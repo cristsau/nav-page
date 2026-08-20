@@ -31,3 +31,10 @@ export function fetchAdminSecurityEvents(options = {}) {
     cache: 'no-store'
   })
 }
+
+export function deleteAdminSecurityEvents({ eventIds, currentPassword }) {
+  return apiRequest('/admin/security-events/delete', {
+    method: 'POST',
+    body: JSON.stringify({ eventIds, currentPassword })
+  })
+}

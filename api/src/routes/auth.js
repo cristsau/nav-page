@@ -315,6 +315,186 @@ export default async function authRoutes(fastify) {
     return { ok: true }
   })
 
+  fastify.put('/auth/account/username', async (request, reply) => {
+    await fastify.requireAuth(request, reply)
+
+    const currentPassword = String(request.body?.currentPassword || '')
+    const username = normalizeUsername(request.body?.username)
+    if (!currentPassword) {
+      reply.code(400)
+      return { error: 'Current password is required' }
+    }
+    if (!isValidUsername(username)) {
+      reply.code(400)
+      return { error: 'A username of 1 to 128 characters is required' }
+    }
+
+    let update
+    try {
+      update = await withTransaction(async (client) => {
+        const userResult = await client.query(
+          `
+            SELECT *
+            FROM users
+            WHERE id = $1
+            FOR UPDATE
+          `,
+          [request.currentUser.id]
+        )
+        const user = userResult.rows[0]
+        if (!user || !await verifyPassword(currentPassword, user.password_hash)) {
+          return { status: 'invalid-password' }
+        }
+        if (user.username === username) {
+          return { status: 'unchanged', user }
+        }
+
+        const updatedUser = await client.query(
+          `
+            UPDATE users
+            SET username = $2,
+                updated_at = NOW()
+            WHERE id = $1
+            RETURNING *
+          `,
+          [request.currentUser.id, username]
+        )
+
+        await recordSecurityEvent({
+          client,
+          request,
+          eventType: 'auth.account.username.update',
+          outcome: 'success',
+          actorUserId: request.currentUser.id,
+          subjectUserId: request.currentUser.id,
+          resourceType: 'user',
+          resourceId: request.currentUser.id,
+          affectedCount: 1
+        })
+
+        return { status: 'updated', user: updatedUser.rows[0] }
+      })
+    } catch (error) {
+      if (error?.code === '23505') {
+        reply.code(409)
+        return { error: 'Username is already in use' }
+      }
+      throw error
+    }
+
+    if (update.status === 'invalid-password') {
+      await recordSecurityEventBestEffort({
+        request,
+        eventType: 'auth.account.username.update',
+        outcome: 'failure',
+        actorUserId: request.currentUser.id,
+        subjectUserId: request.currentUser.id,
+        resourceType: 'user',
+        resourceId: request.currentUser.id
+      }, request.log)
+      reply.code(400)
+      return { error: 'Current password is incorrect' }
+    }
+
+    return {
+      user: sanitizeUser(update.user),
+      changed: update.status === 'updated'
+    }
+  })
+
+  fastify.put('/auth/account/password', async (request, reply) => {
+    await fastify.requireAuth(request, reply)
+
+    const currentPassword = String(request.body?.currentPassword || '')
+    const newPassword = String(request.body?.newPassword || '')
+    if (!currentPassword) {
+      reply.code(400)
+      return { error: 'Current password is required' }
+    }
+
+    const passwordValidation = validateNewPassword(newPassword)
+    if (!passwordValidation.valid) {
+      reply.code(400)
+      return { error: passwordValidation.error }
+    }
+
+    const update = await withTransaction(async (client) => {
+      const userResult = await client.query(
+        `
+          SELECT password_hash
+          FROM users
+          WHERE id = $1
+          FOR UPDATE
+        `,
+        [request.currentUser.id]
+      )
+      const user = userResult.rows[0]
+      if (!user || !await verifyPassword(currentPassword, user.password_hash)) {
+        return { status: 'invalid-password' }
+      }
+      if (await verifyPassword(newPassword, user.password_hash)) {
+        return { status: 'same-password' }
+      }
+
+      await client.query(
+        `
+          UPDATE users
+          SET password_hash = $2,
+              password_changed_at = NOW(),
+              updated_at = NOW()
+          WHERE id = $1
+        `,
+        [request.currentUser.id, await hashPassword(newPassword)]
+      )
+      const revokedSessions = await client.query(
+        'DELETE FROM sessions WHERE user_id = $1',
+        [request.currentUser.id]
+      )
+
+      await recordSecurityEvent({
+        client,
+        request,
+        eventType: 'auth.account.password.update',
+        outcome: 'success',
+        actorUserId: request.currentUser.id,
+        subjectUserId: request.currentUser.id,
+        resourceType: 'user',
+        resourceId: request.currentUser.id,
+        affectedCount: revokedSessions.rowCount || 0
+      })
+
+      return {
+        status: 'updated',
+        revokedSessionCount: revokedSessions.rowCount || 0
+      }
+    })
+
+    if (update.status === 'invalid-password') {
+      await recordSecurityEventBestEffort({
+        request,
+        eventType: 'auth.account.password.update',
+        outcome: 'failure',
+        actorUserId: request.currentUser.id,
+        subjectUserId: request.currentUser.id,
+        resourceType: 'user',
+        resourceId: request.currentUser.id
+      }, request.log)
+      reply.code(400)
+      return { error: 'Current password is incorrect' }
+    }
+    if (update.status === 'same-password') {
+      reply.code(400)
+      return { error: 'New password must be different from the current password' }
+    }
+
+    await fastify.clearSessionCookie(reply)
+    return {
+      ok: true,
+      signInRequired: true,
+      revokedSessionCount: update.revokedSessionCount
+    }
+  })
+
   fastify.get('/auth/sessions', async (request, reply) => {
     await fastify.requireAuth(request, reply)
 
