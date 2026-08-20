@@ -158,13 +158,14 @@ test('public share route explicitly skips browser and API session resolution', a
     readFile(authPluginUrl, 'utf8')
   ])
   const skipDecisionIndex = routerSource.indexOf('const shouldResolveSession = !to.meta.skipSession')
-  const sessionIndex = routerSource.indexOf('await fetchBackendSession()')
+  const sessionIndex = routerSource.indexOf('await initAuth()')
 
   assert.match(routerSource, /publicShell: true/)
   assert.match(routerSource, /skipSession: true/)
   assert.ok(skipDecisionIndex >= 0)
   assert.ok(sessionIndex > skipDecisionIndex)
   assert.match(routerSource, /if \(!shouldResolveSession\) \{\s+return true\s+\}/)
+  assert.doesNotMatch(routerSource, /fetchBackendSession/)
   assert.match(authPluginSource, /if \(request\.routeOptions\.config\?\.skipSession\) return/)
 })
 
