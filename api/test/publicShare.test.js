@@ -171,16 +171,22 @@ test('public share route explicitly skips browser and API session resolution', a
 
 test('public share view is an article without internal type, count or decrypt UI', async () => {
   const viewUrl = new URL('../../app/src/modules/whisper/ShareView.vue', import.meta.url)
-  const source = await readFile(viewUrl, 'utf8')
+  const managerUrl = new URL('../../app/src/modules/whisper/components/ShareManager.vue', import.meta.url)
+  const [source, managerSource] = await Promise.all([
+    readFile(viewUrl, 'utf8'),
+    readFile(managerUrl, 'utf8')
+  ])
 
   assert.match(source, /<article[^>]+class="share-article"/)
   assert.match(source, /<CopyableNoteContent/)
   assert.match(source, /noindex, noarchive, nofollow/)
   assert.match(source, /link\[rel="canonical"\]/)
-  assert.match(source, /VITE_PUBLIC_APP_ORIGIN/)
+  assert.match(source, /resolvePublicAppOrigin/)
   assert.match(source, /MANAGED_META_PROPERTIES/)
   assert.match(source, /querySelectorAll\(`meta\[property=/)
   assert.doesNotMatch(source, /window\.location\.origin/)
+  assert.match(managerSource, /buildPublicShareUrl/)
+  assert.doesNotMatch(managerSource, /window\.location\.origin/)
   assert.doesNotMatch(source, /showPasswordModal|handleDecrypt|decrypt\(/)
   assert.doesNotMatch(source, />备忘录<|>日记<|浏览\s*\{\{/)
 })

@@ -1,18 +1,23 @@
 # DOMO NAV Deployment Guide
 
-## 当前线上部署
+## 当前线上部署（2026-08-20 只读基线）
 
 - 域名：[https://nav.skrskr.net](https://nav.skrskr.net)
 - 反代域名：[https://nav.cristsau.cn](https://nav.cristsau.cn)
-- 服务器：`oracle-JP`
-- 对外端口：`80 / 443`
-- 前端发布目录：`/home/web/html/nav`
-- 后端：`nav-api`
-- 数据库：`nav-postgres`
-- 当前前端提交：`0a11f1f26bd8e87e39888a56a538a0b12bcf3c04`
-- API 镜像：`nav-api:0dd11faaa3866924ce2bc52e288ff7934bab1e86`
-- 发布证据：
-  `/opt/nav-releases/20260812-061103-0a11f1f26bd8e87e39888a56a538a0b12bcf3c04/ACCEPTANCE.txt`
+- 承载服务器：OVH `ovh-US`；Oracle-JP 不再是当前生产承载
+- 外层入口：Nginx Proxy Manager → `nav-web` → `nav-api`
+- 当前 release：`/opt/nav-stack/releases/20260820-105500-d0d432b4`
+- 当前应用提交：`d0d432b4e0b2e50c25fccb7b45fc609be18c31a0`
+- 前端容器静态目录：`/usr/share/nginx/html`
+- 前端配置挂载：`/etc/nginx/conf.d/default.conf`
+- 后端服务：`nav-api`
+- 数据库服务：`nav-postgres`
+- API 镜像：`nav-ovh-api:d0d432b4e0b2e50c25fccb7b45fc609be18c31a0`
+- 发布证据：当前 release 的 `evidence/PRE_SWITCH.txt`、`evidence/SWITCH.txt`、
+  `evidence/ACCEPTANCE.txt`
+
+以上是带日期的验收快照，不是下一次发布的免检依据。发布前仍须重新核对 release、镜像、
+Compose、容器挂载、代理链、备份和双域状态。
 
 ## 当前定位
 
@@ -60,7 +65,7 @@ Compose 只读挂载 owner-only 文件：
 
 ```yaml
 volumes:
-  - /opt/nav/secrets/nav-ai-cli-proxy-api-key:/run/secrets/nav/cli-proxy-api-key:ro
+  - "${NAV_SECRETS_DIR:?set NAV_SECRETS_DIR to the release-local secrets directory}/cliproxy-api-key:/run/secrets/nav/cli-proxy-api-key:ro"
 ```
 
 密钥文件必须是绝对路径、普通文件、非符号链接，权限只能是 `0400` 或 `0600`。
@@ -74,6 +79,19 @@ API 只信任 loopback 和 `TRUSTED_PROXY_ADDRESSES` 中的精确地址。每次
 到仓库。Compose 网络重建后网关可能变化，发布时必须重查。验收时应从两个不同
 外网客户端经两个域名登录，确认会话页显示的客户端 IP 不同，且限流不会把全部用户视作
 同一地址。
+
+OVH 的正式代理链为“外部客户端或 `v.ps-JP` → Nginx Proxy Manager → `nav-web` →
+`nav-api`”。NPM 必须把实际入站 peer 追加到它已经规范化的 `X-Forwarded-For`；`nav-web`
+使用 [`ovh/nginx.conf`](./ovh/nginx.conf) 原样转发该链，只有头为空时才回退到
+`$remote_addr`，绝不能再次使用 `$proxy_add_x_forwarded_for`。这样 API 不会把 NPM 的
+Docker 地址误记成客户端。
+
+`TRUSTED_PROXY_ADDRESSES` 只能列出 API 真实 socket peer（例如为 `nav-web` 固定的单个
+容器地址）以及确实会出现在 XFF 可信尾部的固定代理地址。`v.ps-JP` 作为外层固定公网
+代理使用时，必须现场确认并精确加入它的单个公网地址；停用该路径后同步移除。禁止配置
+`trustProxy: true`、`0.0.0.0/0`、整个 Docker bridge 或任意 RFC1918 网段。若生产 Compose
+不能固定 `nav-web` 地址，则每次容器重建后必须先查出新地址、更新精确列表并完成伪造 XFF
+负向验收，再开放流量。
 
 认证、已认证写操作和 AI 限流已经迁移到 PostgreSQL。每个 API 副本必须在 owner-only
 `api/.env` 中配置相同的稳定随机值：
@@ -131,6 +149,22 @@ NAV_IMGBED_MAX_IMAGE_BYTES=10485760
 都不得提交到 GitHub、镜像、前端或文档。部署 Compose/override 时必须把该文件只读挂载到
 容器中的同一路径。
 
+仓库的 [`docker-compose.backend.yml`](./docker-compose.backend.yml) 已包含下列正式挂载，
+迁移或新建 release 时不得删除：
+
+```yaml
+volumes:
+  - "${NAV_SECRETS_DIR:?set NAV_SECRETS_DIR to the release-local secrets directory}/imgbed-library-token:/run/secrets/nav/imgbed-library-token:ro"
+```
+
+`NAV_SECRETS_DIR` 必须在 Compose 解析前指向当前 release 自己的 `secrets` 目录；变量缺失时
+Compose 应直接报错，不能回退到全局 `/opt/nav/secrets`。容器内路径保持
+`/run/secrets/nav/imgbed-library-token`，与 `api/.env` 一致。
+
+发布前应在容器内只输出布尔状态与权限检查结果，确认文件存在、非符号链接、非空且为
+`0400`/`0600`，不得输出文件内容。仅配置 upload Token 不能恢复图库同步；仅配置 library
+Token 也不能恢复笔记上传。双 Token、Base URL、上传目录和只读挂载必须作为同一个门禁验收。
+
 当前 `/media` 支持图片列表、引用、保留、分享、对账和删除。移除最后一个引用后，只有保留
 策略为 `auto` 的图片才进入清理；上游失败时保留可重试状态。Telegram 来源受平台删除时限
 约束，旧记录可能只能解除关联并撤销公开访问，不能把所有 2xx 响应都描述成物理删除来源。
@@ -187,21 +221,54 @@ VITE_PUBLIC_APP_ORIGIN=https://nav.skrskr.net
 
 `NAV_PUBLIC_APP_ORIGIN` 是 canonical/OG URL 的固定可信来源，必须是无路径、无查询参数的
 HTTPS origin；不要从请求 `Host` 或 `X-Forwarded-Host` 动态生成。Compose 以只读方式把
-`/home/web/html/nav` 挂载到 `/var/www/nav`。
+当前 release 的 `frontend-dist` 挂载到 API 容器内的 `/var/www/nav`；宿主机 release 路径
+属于发布时现场值，不写成固定全局目录。
+
+`nav.skrskr.net` 是公开分享的唯一规范域名：ShareManager 新建或复制链接、浏览器端
+canonical/OG 更新以及服务端为抓取器生成的 canonical/OG URL 都必须读取上述两个同值环境
+变量，不得读取 `window.location.origin`。`nav.cristsau.cn` 继续作为完整可登录的应用别名，
+也继续兼容已有分享路径，但页面元数据始终指向 `nav.skrskr.net`。不要做全站 301/308，
+也不要设置跨域 Cookie `Domain`；这样可以保留两个域名当前各自的 Secure/HttpOnly 会话行为。
+
+### OVH `nav-web` 正式模板与缓存策略
+
+[`ovh/nginx.conf`](./ovh/nginx.conf) 是 OVH `nav-web` 的正式 `http` context 配置片段。生产
+Compose 应把它只读挂载为 `/etc/nginx/conf.d/default.conf`；它有意不包含 `user`、
+`events` 或 `http` 外壳，并确保 `nav-api` 是同一私有网络中的服务别名。静态根目录沿用
+官方 Nginx 镜像的 `/usr/share/nginx/html`。模板同时保留 12 MB 请求上限、`nosniff`、
+静态页面的 `strict-origin-when-cross-origin`、公开分享页更严格的 `no-referrer`、API 300 秒
+超时与分享页 60 秒超时。缓存边界为：
+
+- `/assets/` 仅包含 Vite 内容哈希构件，返回
+  `Cache-Control: public, max-age=31536000, immutable`，缺失文件必须为 404；
+- `/`, `index.html`、其他 HTML、`manifest.webmanifest` 和未来的 `service-worker.js` 使用
+  `no-cache, must-revalidate`；
+- `/api/` 和动态 `/share/` 显式 `private, no-store`，并禁用代理缓存；
+- 其他静态文件使用正常条件请求，不把 SPA fallback 误标成 immutable。
+
+发布前在候选 `nav-web` 容器中运行 `nginx -t`；发布后分别检查 HTML、manifest、一个真实
+哈希资源、一个不存在的哈希资源、健康接口和动态分享页的状态、`Content-Type` 与缓存头。
+缓存发布只能重建/替换 `nav-web`，不得顺带重建数据库、API、CLIProxyAPI、NPM 或改变 DNS。
 
 在现有通用 SPA `location /` 之前增加下列精确路由。`proxy_pass` 不带尾部 URI，确保
 `/share/:code` 原样到达 Fastify：
 
 ```nginx
 location ^~ /share/ {
-    proxy_pass http://127.0.0.1:3001;
+    proxy_pass http://nav-api:3001;
     proxy_http_version 1.1;
     proxy_set_header Host $host;
-    proxy_set_header X-Real-IP $remote_addr;
-    proxy_set_header X-Forwarded-For $proxy_add_x_forwarded_for;
-    proxy_set_header X-Forwarded-Proto $scheme;
+    proxy_set_header X-Real-IP $nav_real_ip;
+    proxy_set_header X-Forwarded-For $nav_forwarded_for;
+    proxy_set_header X-Forwarded-Proto $nav_forwarded_proto;
+    proxy_read_timeout 60s;
+    proxy_send_timeout 60s;
 }
 ```
+
+其中三个 `$nav_*` 变量由同一 `conf.d` 模板顶部的 `map` 定义。不要把这段替换回
+`$proxy_add_x_forwarded_for`，否则 `nav-web` 会再次追加自己的 Docker 地址，审计记录将
+停在中间代理而不是真实客户端。
 
 这项变更不能单独发布 API：先确认前端目录只读挂载和两个环境变量，再发布 API，最后经
 `nginx -t` 验证后才可加载 nginx 配置。回滚时需同时恢复 nginx `/share/` 路由、API

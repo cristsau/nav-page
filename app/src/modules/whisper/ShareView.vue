@@ -4,6 +4,7 @@ import { useRoute } from 'vue-router'
 import { getShareByCode as getLocalShareByCode } from '@/shared/db/database'
 import { fetchBackendShareByCode, shouldUseBackendNotes } from '@/shared/services/notesApi'
 import Icon from '@/shared/components/Icon.vue'
+import { resolvePublicAppOrigin } from '@/shared/utils/publicAppOrigin'
 import CopyableNoteContent from './components/CopyableNoteContent.vue'
 
 const route = useRoute()
@@ -34,33 +35,6 @@ const MANAGED_META_PROPERTIES = [
   'og:url',
   'og:image'
 ]
-
-function normalizeTrustedPublicOrigin(value) {
-  try {
-    const url = new URL(String(value || '').trim())
-    const isLocalDevelopment = url.protocol === 'http:'
-      && ['localhost', '127.0.0.1', '[::1]'].includes(url.hostname)
-
-    if (
-      (url.protocol !== 'https:' && !isLocalDevelopment)
-      || url.username
-      || url.password
-      || url.pathname !== '/'
-      || url.search
-      || url.hash
-    ) {
-      return ''
-    }
-
-    return url.origin
-  } catch {
-    return ''
-  }
-}
-
-const configuredPublicOrigin = normalizeTrustedPublicOrigin(
-  import.meta.env?.VITE_PUBLIC_APP_ORIGIN
-)
 
 function setMeta(name, content) {
   let element = document.head.querySelector(`meta[name="${name}"]`)
@@ -129,8 +103,11 @@ function summarizeContent(value, fallback) {
 }
 
 function resolveCanonicalUrl() {
-  if (configuredPublicOrigin) {
-    return new URL(route.path, configuredPublicOrigin).href
+  try {
+    return new URL(route.path, resolvePublicAppOrigin()).href
+  } catch {
+    // The server-rendered canonical remains authoritative when a development
+    // build has no configured public origin.
   }
 
   const existingValue = document.head

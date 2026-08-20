@@ -88,7 +88,9 @@ an ignorable warning.
 
 ## Initial installation
 
-Copy the example and adjust every path to the actual oracle-JP deployment:
+Copy the example on the current OVH host and adjust every path to the active
+`/opt/nav-stack/releases/<timestamp>-<short-sha>` layout. Oracle-JP is not the
+current production target, and historical Oracle paths must not be reused:
 
 ```bash
 sudo install -d -m 700 /etc/nav

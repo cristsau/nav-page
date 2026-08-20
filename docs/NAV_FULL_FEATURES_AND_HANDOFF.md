@@ -62,6 +62,7 @@ DOMO NAV 是一个面向个人与小团队的私有化工作台。核心句是�
 | `api/` | Fastify API、迁移和测试 |
 | `extension/` | Chrome/Edge 浏览器扩展 |
 | `docs/` | 安全、备份和交接文档 |
+| `ovh/nginx.conf` | OVH `nav-web` 的 `conf.d/default.conf` 代理与静态缓存模板 |
 | `.github/workflows/ci.yml` | GitHub Actions 测试与构建 |
 | `docker-compose.backend.yml` | API 与 PostgreSQL 编排基线 |
 
@@ -307,7 +308,12 @@ AI 配置仍保存在当前用户的 `appConfig.search.providers.chatgpt` 中：
 - 会话 Token 只保存 SHA-256 摘要
 - Cookie 使用生产安全属性；跨域必须按当前反代与 HTTPS 重新验收
 - 认证、恢复、写操作和 AI 使用持久化限流
-- 可信代理必须精确配置，不能无条件信任任意 `X-Forwarded-For`
+- NPM 必须规范化并追加实际入站 peer；`nav-web` 原样转发 XFF 而不二次追加 Docker 地址
+- API 可信代理必须逐个精确配置，不能使用 `trustProxy: true`、Docker 宽网段或无条件信任 XFF
+- `v.ps-JP` 作为固定外层代理时只信任现场核验的单个公网地址，停用后移除
+- `nav.skrskr.net` 是公开分享 canonical/OG/复制链接主域；`nav.cristsau.cn` 保留独立 Cookie 登录别名
+- Vite `/assets/` 可长期 immutable；HTML、manifest、API 与动态分享页不得使用长期缓存
+- 图床 library Token 必须从当前 release 的 owner-only Secret 目录只读挂载；Compose 通过必填 `NAV_SECRETS_DIR` 解析宿主机路径，不能回退到全局硬编码目录，也不能只恢复 upload Token
 - 审计只记录结构化事件、必要 UUID、数量和带密钥摘要
 - 加密笔记不得自动上传到公开图床
 - 所有删除都必须明确区分“数据库解除引用”和“源对象物理删除”
