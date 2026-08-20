@@ -56,9 +56,9 @@ const mobileActionSheet = ref(null)
 const cardStyle = computed(() => {
   const size = config.value.style.cardSize
   const sizes = {
-    small: { minHeight: '138px', iconSize: '34px' },
-    medium: { minHeight: '154px', iconSize: '44px' },
-    large: { minHeight: '174px', iconSize: '54px' }
+    small: { minHeight: '92px', iconSize: '36px' },
+    medium: { minHeight: '104px', iconSize: '44px' },
+    large: { minHeight: '116px', iconSize: '50px' }
   }
   return sizes[size] || sizes.medium
 })
@@ -301,40 +301,42 @@ function runMobileAction(action) {
         >
       </span>
 
-      <!-- 标题 -->
-      <span class="bookmark-card__title" :title="bookmark.title">{{ bookmark.title }}</span>
-      <span class="bookmark-card__subtitle" :title="bookmarkPresentation.fullSubtitle">
-        {{ bookmarkPresentation.subtitle }}
-      </span>
-      <span
-        v-if="healthPresentation"
-        class="bookmark-card__health"
-        :class="`is-${healthPresentation.tone}`"
-        :title="healthPresentation.httpStatus
-          ? `${healthPresentation.label} · HTTP ${healthPresentation.httpStatus}`
-          : healthPresentation.label"
-      >
-        {{ healthPresentation.label }}
-        <span v-if="healthPresentation.httpStatus">{{ healthPresentation.httpStatus }}</span>
-      </span>
-
-      <!-- 描述（可选显示） -->
-      <span
-        v-if="config.layout.showDescription && bookmark.description"
-        class="bookmark-card__desc"
-      >
-        {{ bookmark.description }}
-      </span>
-      <span
-        v-if="bookmark.tags?.length"
-        class="bookmark-card__tags"
-        :aria-label="`标签：${bookmark.tags.join('、')}`"
-      >
-        <span v-for="tag in bookmark.tags.slice(0, 2)" :key="tag" class="bookmark-card__tag">
-          {{ tag }}
+      <span class="bookmark-card__body">
+        <!-- 标题 -->
+        <span class="bookmark-card__title" :title="bookmark.title">{{ bookmark.title }}</span>
+        <span class="bookmark-card__subtitle" :title="bookmarkPresentation.fullSubtitle">
+          {{ bookmarkPresentation.subtitle }}
         </span>
-        <span v-if="bookmark.tags.length > 2" class="bookmark-card__tag-count">
-          +{{ bookmark.tags.length - 2 }}
+        <span
+          v-if="healthPresentation"
+          class="bookmark-card__health"
+          :class="`is-${healthPresentation.tone}`"
+          :title="healthPresentation.httpStatus
+            ? `${healthPresentation.label} · HTTP ${healthPresentation.httpStatus}`
+            : healthPresentation.label"
+        >
+          {{ healthPresentation.label }}
+          <span v-if="healthPresentation.httpStatus">{{ healthPresentation.httpStatus }}</span>
+        </span>
+
+        <!-- 描述（可选显示） -->
+        <span
+          v-if="config.layout.showDescription && bookmark.description"
+          class="bookmark-card__desc"
+        >
+          {{ bookmark.description }}
+        </span>
+        <span
+          v-if="bookmark.tags?.length"
+          class="bookmark-card__tags"
+          :aria-label="`标签：${bookmark.tags.join('、')}`"
+        >
+          <span v-for="tag in bookmark.tags.slice(0, 2)" :key="tag" class="bookmark-card__tag">
+            {{ tag }}
+          </span>
+          <span v-if="bookmark.tags.length > 2" class="bookmark-card__tag-count">
+            +{{ bookmark.tags.length - 2 }}
+          </span>
         </span>
       </span>
     </button>
@@ -443,8 +445,8 @@ function runMobileAction(action) {
   overflow: hidden;
   background:
     linear-gradient(145deg, color-mix(in srgb, var(--bg-card) 96%, white 4%), var(--bg-card));
-  border-radius: 22px;
-  text-align: center;
+  border-radius: 16px;
+  text-align: left;
   box-shadow:
     0 1px 0 color-mix(in srgb, white 72%, transparent) inset,
     var(--shadow-card);
@@ -456,7 +458,7 @@ function runMobileAction(action) {
 }
 
 .bookmark-card:hover {
-  transform: translateY(-4px);
+  transform: translateY(-2px);
   box-shadow: var(--shadow-card-hover);
   border-color: color-mix(in srgb, var(--accent-color) 22%, var(--border-light));
 }
@@ -544,11 +546,11 @@ function runMobileAction(action) {
 .bookmark-card__main {
   width: 100%;
   min-height: inherit;
-  display: flex;
-  flex-direction: column;
+  display: grid;
+  grid-template-columns: auto minmax(0, 1fr);
   align-items: center;
-  justify-content: center;
-  padding: 48px 15px 20px;
+  gap: 12px;
+  padding: 14px 52px 14px 14px;
   color: inherit;
   background: transparent;
   border: 0;
@@ -568,6 +570,14 @@ function runMobileAction(action) {
 
 .bookmark-card__main:disabled {
   cursor: wait;
+}
+
+.bookmark-card.is-selecting .bookmark-card__main {
+  padding-left: 58px;
+}
+
+.bookmark-card.is-sorting .bookmark-card__main {
+  padding-top: 58px;
 }
 
 .bookmark-card__actions {
@@ -646,7 +656,7 @@ function runMobileAction(action) {
   display: flex;
   align-items: center;
   justify-content: center;
-  margin-bottom: 12px;
+  margin-bottom: 0;
   filter: drop-shadow(0 7px 12px color-mix(in srgb, var(--accent-color) 14%, transparent));
 }
 
@@ -680,6 +690,12 @@ function runMobileAction(action) {
   border-radius: 12px;
 }
 
+.bookmark-card__body {
+  min-width: 0;
+  display: grid;
+  justify-items: start;
+}
+
 .bookmark-card__title {
   font-size: 14px;
   font-weight: 500;
@@ -691,7 +707,7 @@ function runMobileAction(action) {
   -webkit-box-orient: vertical;
   -webkit-line-clamp: 2;
   line-clamp: 2;
-  min-height: calc(1.3em * 2);
+  min-height: 0;
 }
 
 .bookmark-card__subtitle {
@@ -711,7 +727,7 @@ function runMobileAction(action) {
   display: inline-flex;
   align-items: center;
   gap: 4px;
-  margin-top: 7px;
+  margin-top: 6px;
   padding: 3px 7px;
   color: var(--text-muted);
   background: var(--bg-secondary);
@@ -756,7 +772,7 @@ function runMobileAction(action) {
 .bookmark-card__tags {
   display: flex;
   align-items: center;
-  justify-content: center;
+  justify-content: flex-start;
   gap: 5px;
   max-width: 100%;
   margin-top: 8px;
@@ -917,7 +933,7 @@ function runMobileAction(action) {
   }
 
   .bookmark-card__main {
-    padding-top: 58px;
+    padding-right: 64px;
   }
 
   .bookmark-card__selection,

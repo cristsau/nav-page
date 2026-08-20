@@ -316,22 +316,24 @@ async function handleDecrypt() {
 <style scoped>
 .note-card {
   position: relative;
-  padding: 52px 16px 16px;
+  padding: 46px 14px 14px;
   background: var(--bg-card);
   border: 1px solid var(--border-light);
-  border-radius: var(--radius-md);
-  box-shadow: var(--shadow-card);
+  border-radius: 14px;
+  box-shadow: var(--shadow-sm);
   cursor: pointer;
   transition: all var(--transition-normal) var(--ease-smooth);
 }
 
 .note-card:hover {
-  transform: translateY(-3px);
+  transform: translateY(-2px);
   box-shadow: var(--shadow-card-hover);
 }
 
 .note-card:focus-visible {
   border-color: var(--accent-color);
+  outline: 2px solid var(--accent-color);
+  outline-offset: 2px;
 }
 
 .note-card.is-pinned {
@@ -356,7 +358,7 @@ async function handleDecrypt() {
   display: flex;
   align-items: center;
   gap: 8px;
-  margin-bottom: 8px;
+  margin-bottom: 6px;
   color: var(--text-muted);
   font-size: 12px;
 }
@@ -387,20 +389,32 @@ async function handleDecrypt() {
   border-color: color-mix(in srgb, var(--accent-color) 48%, var(--border-light));
 }
 
+.note-card__id:focus-visible,
+.action-btn:focus-visible,
+.btn:focus-visible {
+  outline: 2px solid var(--accent-color);
+  outline-offset: 2px;
+}
+
 .note-card__title {
-  margin-bottom: 8px;
+  margin-bottom: 6px;
   color: var(--text-primary);
-  font-size: 16px;
+  font-size: 14px;
   font-weight: 600;
 }
 
 .note-card__content {
-  min-height: 42px;
-  margin-bottom: 12px;
+  display: -webkit-box;
+  min-height: 0;
+  margin-bottom: 10px;
+  overflow: hidden;
   color: var(--text-secondary);
-  font-size: 14px;
+  font-size: 12.5px;
   line-height: 1.5;
   overflow-wrap: anywhere;
+  -webkit-box-orient: vertical;
+  -webkit-line-clamp: 3;
+  line-clamp: 3;
 }
 
 .note-card__meta {
@@ -577,13 +591,32 @@ async function handleDecrypt() {
   background: var(--bg-secondary);
 }
 
-@media (hover: none), (pointer: coarse) {
+@media (hover: none), (pointer: coarse), (any-hover: none), (any-pointer: coarse) {
+  .note-card {
+    padding-top: 106px;
+  }
+
   .note-card__actions {
+    right: 8px;
+    left: 8px;
+    justify-content: flex-start;
+    max-width: none;
     opacity: 1;
     pointer-events: auto;
     transform: none;
   }
 
+  .note-card__id {
+    min-width: 44px;
+    min-height: 44px;
+    justify-content: center;
+    padding-inline: 10px;
+  }
+
+  .action-btn {
+    width: 44px;
+    height: 44px;
+  }
 }
 
 @media (prefers-reduced-motion: reduce) {

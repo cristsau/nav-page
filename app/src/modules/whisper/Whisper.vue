@@ -731,35 +731,16 @@ onBeforeUnmount(() => {
 
       <!-- 内容区域 -->
       <div v-else class="content">
-        <!-- 置顶备忘录 -->
-        <section v-if="pinnedMemos.length > 0" class="section">
-          <h2 class="section__title"><Icon name="pin" :size="17" /> 置顶</h2>
-          <div class="notes-grid">
-            <NoteCard
-              v-for="note in pinnedMemos"
-              :key="note.id"
-              :note="note"
-              @preview="handlePreviewNote"
-              @edit="handleEditNote"
-              @ai="handleAiNote"
-              @copy-id="handleCopyNoteId"
-              @copy-extract="handleCopyNoteExtract"
-              @delete="handleDeleteNote"
-              @togglePin="handleTogglePin"
-              @toggleComplete="handleToggleComplete"
-              @share="handleShareNote"
-            />
-          </div>
-        </section>
-
-        <!-- 日记时间线 -->
-        <section v-if="diaryGroups.length > 0 && (filterType === 'all' || filterType === 'diary')" class="section">
-          <h2 class="section__title"><Icon name="book" :size="17" /> 日记</h2>
-          <div v-for="[key, group] in diaryGroups" :key="key" class="diary-group">
-            <h3 class="diary-group__title">{{ group.label }}</h3>
+        <div
+          v-if="pinnedMemos.length > 0 || (unpinnedMemos.length > 0 && (filterType === 'all' || filterType === 'memo'))"
+          class="content__rail content__rail--memos"
+        >
+          <!-- 置顶备忘录 -->
+          <section v-if="pinnedMemos.length > 0" class="section section--pinned">
+            <h2 class="section__title"><Icon name="pin" :size="17" /> 置顶</h2>
             <div class="notes-grid">
               <NoteCard
-                v-for="note in group.items"
+                v-for="note in pinnedMemos"
                 :key="note.id"
                 :note="note"
                 @preview="handlePreviewNote"
@@ -773,29 +754,58 @@ onBeforeUnmount(() => {
                 @share="handleShareNote"
               />
             </div>
-          </div>
-        </section>
+          </section>
 
-        <!-- 备忘录 -->
-        <section v-if="unpinnedMemos.length > 0 && (filterType === 'all' || filterType === 'memo')" class="section">
-          <h2 class="section__title"><Icon name="list" :size="17" /> 备忘录</h2>
-          <div class="notes-grid">
-            <NoteCard
-              v-for="note in unpinnedMemos"
-              :key="note.id"
-              :note="note"
-              @preview="handlePreviewNote"
-              @edit="handleEditNote"
-              @ai="handleAiNote"
-              @copy-id="handleCopyNoteId"
-              @copy-extract="handleCopyNoteExtract"
-              @delete="handleDeleteNote"
-              @togglePin="handleTogglePin"
-              @toggleComplete="handleToggleComplete"
-              @share="handleShareNote"
-            />
-          </div>
-        </section>
+          <!-- 备忘录 -->
+          <section v-if="unpinnedMemos.length > 0 && (filterType === 'all' || filterType === 'memo')" class="section section--memo">
+            <h2 class="section__title"><Icon name="list" :size="17" /> 备忘录</h2>
+            <div class="notes-grid">
+              <NoteCard
+                v-for="note in unpinnedMemos"
+                :key="note.id"
+                :note="note"
+                @preview="handlePreviewNote"
+                @edit="handleEditNote"
+                @ai="handleAiNote"
+                @copy-id="handleCopyNoteId"
+                @copy-extract="handleCopyNoteExtract"
+                @delete="handleDeleteNote"
+                @togglePin="handleTogglePin"
+                @toggleComplete="handleToggleComplete"
+                @share="handleShareNote"
+              />
+            </div>
+          </section>
+        </div>
+
+        <div
+          v-if="diaryGroups.length > 0 && (filterType === 'all' || filterType === 'diary')"
+          class="content__rail content__rail--diary"
+        >
+          <!-- 日记时间线 -->
+          <section class="section section--diary">
+            <h2 class="section__title"><Icon name="book" :size="17" /> 日记</h2>
+            <div v-for="[key, group] in diaryGroups" :key="key" class="diary-group">
+              <h3 class="diary-group__title">{{ group.label }}</h3>
+              <div class="notes-grid">
+                <NoteCard
+                  v-for="note in group.items"
+                  :key="note.id"
+                  :note="note"
+                  @preview="handlePreviewNote"
+                  @edit="handleEditNote"
+                  @ai="handleAiNote"
+                  @copy-id="handleCopyNoteId"
+                  @copy-extract="handleCopyNoteExtract"
+                  @delete="handleDeleteNote"
+                  @togglePin="handleTogglePin"
+                  @toggleComplete="handleToggleComplete"
+                  @share="handleShareNote"
+                />
+              </div>
+            </div>
+          </section>
+        </div>
       </div>
     </main>
 
@@ -907,16 +917,17 @@ onBeforeUnmount(() => {
 
 /* 顶部导航 */
 .header {
-  position: sticky;
-  top: var(--app-shell-header-height, 64px);
-  z-index: 100;
+  position: relative;
+  z-index: 1;
   display: flex;
   align-items: center;
   justify-content: space-between;
+  width: min(1200px, 100%);
   height: var(--header-height);
+  margin: 0 auto;
   padding: 0 24px;
-  background: var(--bg-primary);
-  border-bottom: 1px solid var(--border-light);
+  background: transparent;
+  border-bottom: 0;
 }
 
 .header__left {
@@ -1106,7 +1117,7 @@ onBeforeUnmount(() => {
 
 /* 主内容 */
 .main {
-  max-width: 1000px;
+  max-width: 1200px;
   margin: 0 auto;
   padding: 24px;
   padding-bottom: 100px;
@@ -1189,6 +1200,7 @@ onBeforeUnmount(() => {
 
 .filter-tab {
   display: inline-flex;
+  min-height: 44px;
   align-items: center;
   justify-content: center;
   gap: 6px;
@@ -1206,6 +1218,12 @@ onBeforeUnmount(() => {
   color: var(--text-primary);
 }
 
+.filter-tab:focus-visible,
+.memo-status-filter button:focus-visible {
+  outline: 2px solid var(--accent-color);
+  outline-offset: 2px;
+}
+
 .filter-tab.is-active {
   background: var(--bg-card);
   color: var(--text-primary);
@@ -1219,7 +1237,7 @@ onBeforeUnmount(() => {
 }
 
 .memo-status-filter button {
-  min-height: 34px;
+  min-height: 44px;
   padding: 6px 12px;
   color: var(--text-muted);
   background: transparent;
@@ -1306,24 +1324,43 @@ onBeforeUnmount(() => {
 }
 
 /* 内容区域 */
+.content {
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(min(100%, 420px), 1fr));
+  gap: 18px;
+  align-items: start;
+}
+
+.content__rail {
+  min-width: 0;
+  display: grid;
+  gap: 18px;
+  align-content: start;
+}
+
 .section {
-  margin-bottom: 32px;
+  min-width: 0;
+  margin: 0;
+  padding: 14px;
+  background: color-mix(in srgb, var(--bg-card) 94%, var(--accent-color) 6%);
+  border: 1px solid var(--border-light);
+  border-radius: 18px;
 }
 
 .section__title {
   display: flex;
   align-items: center;
   gap: 7px;
-  font-size: 16px;
+  font-size: 14px;
   font-weight: 600;
   color: var(--text-primary);
-  margin-bottom: 16px;
-  padding-bottom: 8px;
-  border-bottom: 2px solid var(--border-light);
+  margin: 0 0 10px;
+  padding: 0 2px 9px;
+  border-bottom: 1px solid var(--border-light);
 }
 
 .diary-group {
-  margin-bottom: 24px;
+  margin-bottom: 18px;
 }
 
 .diary-group__title {
@@ -1335,8 +1372,8 @@ onBeforeUnmount(() => {
 /* 笔记网格 */
 .notes-grid {
   display: grid;
-  grid-template-columns: repeat(auto-fill, minmax(280px, 1fr));
-  gap: 16px;
+  grid-template-columns: minmax(0, 1fr);
+  gap: 10px;
 }
 
 /* 按钮 */
@@ -1516,12 +1553,18 @@ onBeforeUnmount(() => {
   transform: translate(-50%, 10px);
 }
 
+@media (max-width: 900px) {
+  .content {
+    grid-template-columns: minmax(0, 1fr);
+  }
+}
+
 @media (max-width: 640px) {
   .header {
     height: auto;
     min-height: var(--header-height);
     gap: 8px;
-    padding: 8px 12px;
+    padding: 8px max(12px, env(safe-area-inset-right)) 8px max(12px, env(safe-area-inset-left));
   }
 
   .header__left {
@@ -1579,6 +1622,10 @@ onBeforeUnmount(() => {
     grid-template-columns: 1fr;
   }
 
+  .content {
+    grid-template-columns: minmax(0, 1fr);
+  }
+
   .empty-state__actions {
     flex-direction: column;
   }
@@ -1616,8 +1663,18 @@ onBeforeUnmount(() => {
 @media (prefers-reduced-motion: reduce) {
   .create-menu__chevron,
   .create-menu-enter-active,
-  .create-menu-leave-active {
+  .create-menu-leave-active,
+  .header__btn,
+  .btn,
+  .filter-tab,
+  .memo-status-filter button,
+  .toast-enter-active,
+  .toast-leave-active {
     transition: none;
+  }
+
+  .loading__spinner {
+    animation: none;
   }
 }
 </style>
