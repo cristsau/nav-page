@@ -15,6 +15,7 @@ import {
   MEDIA_FILTERS,
   mediaCanDelete,
   mediaCanShare,
+  mediaDeleteRetrySummary,
   mediaDeletionMessage,
   mediaMarkdown,
   mediaNeedsRetention,
@@ -28,6 +29,7 @@ const PAGE_SIZE = 24
 const router = useRouter()
 const images = ref([])
 const counts = ref(null)
+const deleteRetry = ref(null)
 const activeFilter = ref('all')
 const query = ref('')
 const appliedQuery = ref('')
@@ -82,6 +84,7 @@ async function loadImages({ append = false } = {}) {
     images.value = append ? [...images.value, ...result.images] : result.images
     nextCursor.value = result.nextCursor
     if (result.counts) counts.value = result.counts
+    if (result.deleteRetry) deleteRetry.value = result.deleteRetry
   } catch (error) {
     loadError.value = error.message || '图片加载失败，请稍后重试'
     if (!append) images.value = []
@@ -364,6 +367,9 @@ onBeforeUnmount(() => {
         <div class="media-hero__legend" aria-label="保留策略说明">
           <span><Icon name="refresh" :size="15" />自动：最后引用移除后可清理</span>
           <span><Icon name="pin" :size="15" />保留：分享链接长期有效</span>
+          <span v-if="deleteRetry" class="media-hero__maintenance">
+            <Icon name="clock" :size="15" />{{ mediaDeleteRetrySummary(deleteRetry) }}
+          </span>
           <button type="button" :disabled="syncing || loading || loadingMore" @click="syncWithImgBed"><Icon name="refresh" :size="15" />{{ syncing ? '同步中' : '同步图床' }}</button>
         </div>
       </section>
@@ -522,8 +528,10 @@ onBeforeUnmount(() => {
                 <p class="share-retention-note"><Icon name="pin" :size="15" />复制或分享前会自动设为长期保留，避免之后移除笔记引用导致链接失效。</p>
 
                 <div v-if="selectedStatus === 'cleanup_pending'" class="cleanup-panel">
-                  <p>上次清理没有完成，原图可能仍存在。</p>
-                  <button type="button" :disabled="Boolean(busyImageId)" @click="retryDelete(selectedImage)"><Icon name="refresh" :size="16" />重试清理</button>
+                  <p>
+                    上次清理没有完成，原图可能仍存在。{{ deleteRetry?.enabled ? '后台会按退避策略继续尝试，也可以立即手动重试。' : '后台重试尚未启用，请手动重试。' }}
+                  </p>
+                  <button type="button" :disabled="Boolean(busyImageId)" @click="retryDelete(selectedImage)"><Icon name="refresh" :size="16" />立即重试清理</button>
                 </div>
 
                 <div class="danger-zone">
@@ -559,7 +567,7 @@ onBeforeUnmount(() => {
 .media-hero h1 { margin: 0; font-size: 1.25rem; letter-spacing: -.025em; }
 .media-hero > div > p:last-child { max-width: 680px; margin: 6px 0 0; color: var(--text-secondary); font-size: .82rem; line-height: 1.55; }
 .media-hero__legend { display: grid; gap: 5px; padding: 10px 12px; color: var(--text-secondary); font-size: .72rem; background: var(--bg-secondary); border: 1px solid var(--border-light); border-radius: 14px; }
-.media-hero__legend span { display: flex; align-items: center; gap: 7px; }.media-hero__legend button { display: flex; min-height: 44px; margin-top: 4px; padding: 0 10px; align-items: center; justify-content: center; gap: 7px; color: var(--text-primary); font: inherit; font-size: .75rem; background: var(--bg-card); border: 1px solid var(--border-color); border-radius: 10px; cursor: pointer; }
+.media-hero__legend span { display: flex; align-items: center; gap: 7px; }.media-hero__legend .media-hero__maintenance { max-width: 360px; align-items: flex-start; padding-top: 4px; border-top: 1px solid var(--border-light); line-height: 1.45; }.media-hero__legend .media-hero__maintenance .app-icon { margin-top: 1px; flex: 0 0 auto; }.media-hero__legend button { display: flex; min-height: 44px; margin-top: 4px; padding: 0 10px; align-items: center; justify-content: center; gap: 7px; color: var(--text-primary); font: inherit; font-size: .75rem; background: var(--bg-card); border: 1px solid var(--border-color); border-radius: 10px; cursor: pointer; }
 .media-toolbar { display: grid; grid-template-columns: minmax(180px, 390px) auto minmax(0, 1fr); gap: 10px; margin-bottom: 18px; align-items: center; }
 .media-search { display: flex; min-height: 46px; padding: 0 14px; align-items: center; gap: 9px; color: var(--text-muted); background: var(--bg-card); border: 1px solid var(--border-color); border-radius: 14px; }
 .media-search:focus-within { color: var(--accent-color); border-color: var(--accent-color); box-shadow: 0 0 0 4px color-mix(in srgb, var(--accent-color) 10%, transparent); }

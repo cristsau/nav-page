@@ -7,6 +7,21 @@ function normalizePositiveInteger(value, fallback) {
   return Number.isSafeInteger(parsed) && parsed > 0 ? parsed : fallback
 }
 
+function normalizeLogLevel(value, fallback) {
+  const normalized = String(value || '').trim().toLowerCase()
+  return new Set([
+    'fatal',
+    'error',
+    'warn',
+    'info',
+    'debug',
+    'trace',
+    'silent'
+  ]).has(normalized)
+    ? normalized
+    : fallback
+}
+
 const nodeEnv = process.env.NODE_ENV || 'development'
 
 function normalizeTrustedProxyAddresses(value) {
@@ -18,6 +33,10 @@ function normalizeTrustedProxyAddresses(value) {
 
 export const config = {
   nodeEnv,
+  apiLogLevel: normalizeLogLevel(
+    process.env.NAV_LOG_LEVEL,
+    nodeEnv === 'production' ? 'warn' : 'info'
+  ),
   port: Number(process.env.PORT || 3001),
   host: process.env.HOST || '0.0.0.0',
   databaseUrl: process.env.DATABASE_URL || 'postgres://nav:nav_password@127.0.0.1:5432/nav',
@@ -67,6 +86,54 @@ export const config = {
   rateLimitKeySecret: String(
     process.env.NAV_RATE_LIMIT_KEY_SECRET || ''
   ).trim(),
+  securityEventRetentionEnabled:
+    process.env.NAV_SECURITY_EVENT_RETENTION_ENABLED === 'true',
+  securityEventRoutineRetentionDays: normalizePositiveInteger(
+    process.env.NAV_SECURITY_EVENT_ROUTINE_RETENTION_DAYS,
+    90
+  ),
+  securityEventDeniedRetentionDays: normalizePositiveInteger(
+    process.env.NAV_SECURITY_EVENT_DENIED_RETENTION_DAYS,
+    180
+  ),
+  securityEventCriticalRetentionDays: normalizePositiveInteger(
+    process.env.NAV_SECURITY_EVENT_CRITICAL_RETENTION_DAYS,
+    365
+  ),
+  securityEventRetentionIntervalSeconds: normalizePositiveInteger(
+    process.env.NAV_SECURITY_EVENT_RETENTION_INTERVAL_SECONDS,
+    21_600
+  ),
+  securityEventRetentionBatchSize: normalizePositiveInteger(
+    process.env.NAV_SECURITY_EVENT_RETENTION_BATCH_SIZE,
+    500
+  ),
+  securityEventRetentionMaxBatchesPerRun: normalizePositiveInteger(
+    process.env.NAV_SECURITY_EVENT_RETENTION_MAX_BATCHES_PER_RUN,
+    20
+  ),
+  mediaDeleteRetryEnabled:
+    process.env.NAV_MEDIA_DELETE_RETRY_ENABLED === 'true',
+  mediaDeleteRetryIntervalSeconds: normalizePositiveInteger(
+    process.env.NAV_MEDIA_DELETE_RETRY_INTERVAL_SECONDS,
+    3_600
+  ),
+  mediaDeleteRetryBatchSize: normalizePositiveInteger(
+    process.env.NAV_MEDIA_DELETE_RETRY_BATCH_SIZE,
+    10
+  ),
+  mediaDeleteRetryMaxAttempts: normalizePositiveInteger(
+    process.env.NAV_MEDIA_DELETE_RETRY_MAX_ATTEMPTS,
+    8
+  ),
+  mediaDeleteRetryBaseBackoffSeconds: normalizePositiveInteger(
+    process.env.NAV_MEDIA_DELETE_RETRY_BASE_BACKOFF_SECONDS,
+    900
+  ),
+  mediaDeleteRetryMaxBackoffSeconds: normalizePositiveInteger(
+    process.env.NAV_MEDIA_DELETE_RETRY_MAX_BACKOFF_SECONDS,
+    86_400
+  ),
   trustedProxyAddresses: normalizeTrustedProxyAddresses(
     process.env.TRUSTED_PROXY_ADDRESSES
   ),

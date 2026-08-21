@@ -7,7 +7,8 @@ import {
   displaySecurityFingerprint,
   securityEventTypeLabel,
   securityOutcomeLabel,
-  securityResourceTypeLabel
+  securityResourceTypeLabel,
+  securityRetentionSummary
 } from '../../app/src/modules/settings/securityAuditUi.js'
 
 const sourceFile = (path) => fs.readFile(
@@ -19,6 +20,7 @@ test('security audit labels and identifiers remain explicit and compact', () => 
   assert.equal(securityEventTypeLabel('auth.login'), '账号登录')
   assert.equal(securityEventTypeLabel('auth.account.username.update'), '修改用户名')
   assert.equal(securityEventTypeLabel('auth.account.password.update'), '修改密码')
+  assert.equal(securityEventTypeLabel('admin.security_events.export'), '导出安全审计记录')
   assert.equal(securityEventTypeLabel('admin.security_events.delete'), '删除安全审计记录')
   assert.equal(securityOutcomeLabel('denied'), '已拒绝')
   assert.equal(securityResourceTypeLabel('session'), '登录会话')
@@ -31,6 +33,16 @@ test('security audit labels and identifiers remain explicit and compact', () => 
   assert.equal(displaySecurityFingerprint(' 0123456789abcdef '), '0123456789abcdef')
   assert.equal(displaySecurityFingerprint('198.51.100.27'), '')
   assert.equal(displaySecurityFingerprint('Security Controls Test Browser'), '')
+  assert.equal(
+    securityRetentionSummary({
+      enabled: true,
+      routineDays: 90,
+      deniedDays: 180,
+      criticalDays: 365
+    }),
+    '自动保留已启用：常规成功 90 天、失败或拒绝登录 180 天、敏感操作 365 天。'
+  )
+  assert.equal(securityRetentionSummary({}), '服务器未返回有效的审计保留策略。')
 })
 
 test('security audit service isolates the admin query contract', async () => {
@@ -42,6 +54,8 @@ test('security audit service isolates the admin query contract', async () => {
   assert.match(source, /pageSize: String\(positiveInteger\(pageSize, DEFAULT_PAGE_SIZE\)\)/)
   assert.match(source, /cache: 'no-store'/)
   assert.match(source, /\/admin\/security-events\/delete/)
+  assert.match(source, /exportAdminSecurityEvents/)
+  assert.match(source, /\/admin\/security-events\/export/)
   assert.match(source, /body: JSON\.stringify\(\{ eventIds, currentPassword \}\)/)
 })
 
@@ -81,6 +95,9 @@ test('settings exposes a responsive admin-only security audit surface', async ()
   assert.match(component, /window\.confirm\([\s\S]*永久删除所选/)
   assert.match(component, /删除后会新建一条操作审计/)
   assert.match(component, /每次最多删除 100 条/)
+  assert.match(component, /在线审计保留策略/)
+  assert.match(component, /导出 CSV/)
+  assert.match(component, /导出 JSON/)
   assert.match(component, /name="copy"/)
   assert.match(component, /@media \(max-width: 640px\)/)
   assert.match(component, /\.fingerprint,[\s\S]*\.event-id,[\s\S]*\.section-heading > \.button,[\s\S]*\.pagination \.button[\s\S]*min-height: 44px/)

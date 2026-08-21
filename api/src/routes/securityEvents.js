@@ -1,6 +1,13 @@
+import { config } from '../config.js'
 import { query, withTransaction } from '../db/index.js'
 import { verifyPassword } from '../lib/auth.js'
 import { validateSecurityEventDeletion } from '../lib/securityEventDeletion.js'
+import {
+  SECURITY_EVENT_EXPORT_MAX_ROWS,
+  normalizeSecurityEventExportFormat,
+  securityEventExportFilename,
+  serializeSecurityEventExport
+} from '../lib/securityEventExport.js'
 import {
   recordSecurityEvent,
   recordSecurityEventBestEffort,
@@ -56,7 +63,7 @@ export function validateSecurityEventQuery(value = {}) {
   }
 }
 
-function mapSecurityEvent(row) {
+export function mapSecurityEvent(row) {
   return {
     id: String(row.id),
     eventType: row.event_type,
@@ -74,6 +81,35 @@ function mapSecurityEvent(row) {
   }
 }
 
+function buildSecurityEventFilter(eventType, outcome) {
+  const conditions = []
+  const params = []
+  if (eventType) {
+    params.push(eventType)
+    conditions.push(`event_type = $${params.length}`)
+  }
+  if (outcome) {
+    params.push(outcome)
+    conditions.push(`outcome = $${params.length}`)
+  }
+  return {
+    params,
+    whereClause: conditions.length ? `WHERE ${conditions.join(' AND ')}` : ''
+  }
+}
+
+function securityEventRetentionPolicy() {
+  return {
+    enabled: config.securityEventRetentionEnabled,
+    routineDays: config.securityEventRoutineRetentionDays,
+    deniedDays: config.securityEventDeniedRetentionDays,
+    criticalDays: config.securityEventCriticalRetentionDays,
+    intervalSeconds: config.securityEventRetentionIntervalSeconds,
+    batchSize: config.securityEventRetentionBatchSize,
+    maxBatchesPerRun: config.securityEventRetentionMaxBatchesPerRun
+  }
+}
+
 export default async function securityEventRoutes(fastify, options = {}) {
   const queryFn = typeof options.queryFn === 'function'
     ? options.queryFn
@@ -81,6 +117,82 @@ export default async function securityEventRoutes(fastify, options = {}) {
   const transactionFn = typeof options.transactionFn === 'function'
     ? options.transactionFn
     : withTransaction
+  const auditBestEffortFn = typeof options.auditBestEffortFn === 'function'
+    ? options.auditBestEffortFn
+    : recordSecurityEventBestEffort
+
+  fastify.get('/admin/security-events/export', async (request, reply) => {
+    reply.header('Cache-Control', 'private, no-store')
+    await fastify.requireAdmin(request, reply)
+
+    const format = normalizeSecurityEventExportFormat(request.query?.format)
+    if (!format) {
+      reply.code(400)
+      return { error: 'format must be csv or json' }
+    }
+
+    const filters = validateSecurityEventQuery(request.query)
+    if (!filters.valid) {
+      reply.code(400)
+      return { error: filters.error }
+    }
+    const filterQuery = buildSecurityEventFilter(filters.eventType, filters.outcome)
+    const exportLimit = SECURITY_EVENT_EXPORT_MAX_ROWS + 1
+    const limitParameter = `$${filterQuery.params.length + 1}`
+    const { rows } = await queryFn(
+      `
+        SELECT
+          id,
+          event_type,
+          outcome,
+          actor_user_id,
+          subject_user_id,
+          resource_type,
+          resource_id,
+          affected_count,
+          client_ip_digest,
+          user_agent_digest,
+          created_at
+        FROM security_events
+        ${filterQuery.whereClause}
+        ORDER BY created_at DESC, id DESC
+        LIMIT ${limitParameter}
+      `,
+      [...filterQuery.params, exportLimit]
+    )
+    const truncated = rows.length > SECURITY_EVENT_EXPORT_MAX_ROWS
+    const events = rows
+      .slice(0, SECURITY_EVENT_EXPORT_MAX_ROWS)
+      .map(mapSecurityEvent)
+    const generatedAt = new Date()
+    const serialized = serializeSecurityEventExport({
+      events,
+      format,
+      generatedAt,
+      truncated,
+      filters: {
+        eventType: filters.eventType,
+        outcome: filters.outcome
+      }
+    })
+
+    await auditBestEffortFn({
+      request,
+      eventType: 'admin.security_events.export',
+      outcome: 'success',
+      actorUserId: request.currentUser.id,
+      subjectUserId: request.currentUser.id,
+      resourceType: 'security_event',
+      affectedCount: events.length
+    }, request.log)
+
+    reply
+      .header('Content-Disposition', `attachment; filename="${securityEventExportFilename(format, generatedAt)}"`)
+      .header('X-NAV-Export-Count', String(events.length))
+      .header('X-NAV-Export-Truncated', String(truncated))
+      .type(serialized.contentType)
+    return reply.send(Buffer.from(serialized.body, 'utf8'))
+  })
 
   fastify.get('/admin/security-events', async (request, reply) => {
     reply.header('Cache-Control', 'private, no-store')
@@ -93,30 +205,21 @@ export default async function securityEventRoutes(fastify, options = {}) {
     }
     const { page, pageSize, eventType, outcome } = filters
 
-    const conditions = []
-    const params = []
-    if (eventType) {
-      params.push(eventType)
-      conditions.push(`event_type = $${params.length}`)
-    }
-    if (outcome) {
-      params.push(outcome)
-      conditions.push(`outcome = $${params.length}`)
-    }
-
-    const whereClause = conditions.length
-      ? `WHERE ${conditions.join(' AND ')}`
-      : ''
+    const filterQuery = buildSecurityEventFilter(eventType, outcome)
     const countResult = await queryFn(
       `
         SELECT COUNT(*)::integer AS total
         FROM security_events
-        ${whereClause}
+        ${filterQuery.whereClause}
       `,
-      params
+      filterQuery.params
     )
 
-    const rowParams = [...params, pageSize, (page - 1) * pageSize]
+    const rowParams = [
+      ...filterQuery.params,
+      pageSize,
+      (page - 1) * pageSize
+    ]
     const limitParameter = `$${rowParams.length - 1}`
     const offsetParameter = `$${rowParams.length}`
 
@@ -135,7 +238,7 @@ export default async function securityEventRoutes(fastify, options = {}) {
           user_agent_digest,
           created_at
         FROM security_events
-        ${whereClause}
+        ${filterQuery.whereClause}
         ORDER BY created_at DESC, id DESC
         LIMIT ${limitParameter}
         OFFSET ${offsetParameter}
@@ -153,7 +256,9 @@ export default async function securityEventRoutes(fastify, options = {}) {
       filters: {
         eventTypes: SECURITY_EVENT_TYPES,
         outcomes: SECURITY_EVENT_OUTCOMES
-      }
+      },
+      retention: securityEventRetentionPolicy(),
+      exportLimit: SECURITY_EVENT_EXPORT_MAX_ROWS
     }
   })
 

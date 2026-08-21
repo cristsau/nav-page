@@ -12,6 +12,7 @@ export const SECURITY_EVENT_TYPES = Object.freeze([
   'admin.registration.approve',
   'admin.registration.reject',
   'admin.telegram_config.update',
+  'admin.security_events.export',
   'admin.security_events.delete'
 ])
 

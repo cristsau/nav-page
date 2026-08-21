@@ -99,6 +99,18 @@ export function mediaCleanupHasFailures(results = []) {
     .some((result) => result?.state === 'delete_failed')
 }
 
+export function mediaDeleteRetrySummary(policy = {}) {
+  if (!policy?.enabled) {
+    return '后台重试尚未启用，失败记录仍可在图片详情中手动重试。'
+  }
+  const intervalSeconds = Number(policy.intervalSeconds || 0)
+  const maxAttempts = Number(policy.maxAttempts || 0)
+  const interval = intervalSeconds >= 3600 && intervalSeconds % 3600 === 0
+    ? `${intervalSeconds / 3600} 小时`
+    : `${Math.max(1, Math.round(intervalSeconds / 60))} 分钟`
+  return `后台会按退避策略约每 ${interval}扫描一次，单张最多尝试 ${maxAttempts} 次。`
+}
+
 export function formatMediaBytes(bytes) {
   const value = Number(bytes || 0)
   if (!Number.isFinite(value) || value <= 0) return '大小未知'

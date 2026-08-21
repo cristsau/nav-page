@@ -266,7 +266,15 @@ export default async function mediaRoutes(fastify) {
     return {
       images: page.map(mapMediaForClient),
       nextCursor: hasMore ? encodeCursor(page.at(-1)) : '',
-      counts: countsResult.rows[0] || {}
+      counts: countsResult.rows[0] || {},
+      deleteRetry: {
+        enabled: config.mediaDeleteRetryEnabled,
+        intervalSeconds: config.mediaDeleteRetryIntervalSeconds,
+        batchSize: config.mediaDeleteRetryBatchSize,
+        maxAttempts: config.mediaDeleteRetryMaxAttempts,
+        baseBackoffSeconds: config.mediaDeleteRetryBaseBackoffSeconds,
+        maxBackoffSeconds: config.mediaDeleteRetryMaxBackoffSeconds
+      }
     }
   })
 

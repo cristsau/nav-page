@@ -4,6 +4,7 @@ import Icon from '@/shared/components/Icon.vue'
 import { useAuth } from '@/shared/composables/useAuth'
 import {
   deleteAdminSecurityEvents,
+  exportAdminSecurityEvents,
   fetchAdminSecurityEvents
 } from '@/shared/services/adminSecurityEventsApi'
 import {
@@ -11,7 +12,8 @@ import {
   displaySecurityFingerprint,
   securityEventTypeLabel,
   securityOutcomeLabel,
-  securityResourceTypeLabel
+  securityResourceTypeLabel,
+  securityRetentionSummary
 } from '../securityAuditUi'
 
 const PAGE_SIZE = 25
@@ -26,6 +28,7 @@ const FALLBACK_EVENT_TYPES = [
   'admin.registration.approve',
   'admin.registration.reject',
   'admin.telegram_config.update',
+  'admin.security_events.export',
   'admin.security_events.delete'
 ]
 const FALLBACK_OUTCOMES = ['success', 'failure', 'denied']
@@ -47,6 +50,9 @@ const deletePassword = ref('')
 const deleting = ref(false)
 const deleteMessage = ref('')
 const errorMessage = ref('')
+const retention = ref(null)
+const exportLimit = ref(10_000)
+const exportingFormat = ref('')
 const copiedKey = ref('')
 let copyTimer = null
 let requestSequence = 0
@@ -121,6 +127,8 @@ async function loadEvents(nextPage = page.value) {
       result?.filters?.outcomes,
       FALLBACK_OUTCOMES
     )
+    retention.value = result?.retention || null
+    exportLimit.value = Number(result?.exportLimit) || 10_000
     loaded.value = true
     selectedEventIds.value = new Set()
     deletePassword.value = ''
@@ -131,6 +139,37 @@ async function loadEvents(nextPage = page.value) {
     errorMessage.value = securityAuditError(error)
   } finally {
     if (sequence === requestSequence) loading.value = false
+  }
+}
+
+async function handleExport(format) {
+  if (exportingFormat.value || loading.value) return
+  exportingFormat.value = format
+  errorMessage.value = ''
+  deleteMessage.value = ''
+
+  try {
+    const result = await exportAdminSecurityEvents({
+      format,
+      eventType: selectedEventType.value,
+      outcome: selectedOutcome.value
+    })
+    const objectUrl = window.URL.createObjectURL(result.blob)
+    const link = document.createElement('a')
+    link.href = objectUrl
+    link.download = result.filename
+    link.style.display = 'none'
+    document.body.appendChild(link)
+    link.click()
+    link.remove()
+    window.setTimeout(() => window.URL.revokeObjectURL(objectUrl), 1_000)
+    deleteMessage.value = result.truncated
+      ? `已导出前 ${result.count} 条记录；结果达到 ${exportLimit.value} 条安全上限，请增加筛选后再次导出。`
+      : `已导出 ${result.count} 条当前筛选记录。`
+  } catch (error) {
+    errorMessage.value = securityAuditError(error)
+  } finally {
+    exportingFormat.value = ''
   }
 }
 
@@ -307,6 +346,24 @@ onBeforeUnmount(() => {
             {{ loading ? '刷新中...' : '刷新' }}
           </button>
           <button
+            class="button button--quiet"
+            type="button"
+            :disabled="loading || deleting || Boolean(exportingFormat)"
+            @click="handleExport('csv')"
+          >
+            <Icon name="download" :size="16" />
+            {{ exportingFormat === 'csv' ? '导出中...' : '导出 CSV' }}
+          </button>
+          <button
+            class="button button--quiet"
+            type="button"
+            :disabled="loading || deleting || Boolean(exportingFormat)"
+            @click="handleExport('json')"
+          >
+            <Icon name="download" :size="16" />
+            {{ exportingFormat === 'json' ? '导出中...' : '导出 JSON' }}
+          </button>
+          <button
             class="button"
             :class="selectionMode ? 'button--quiet' : 'button--danger'"
             type="button"
@@ -335,6 +392,14 @@ onBeforeUnmount(() => {
     </div>
 
     <div v-if="expanded" id="security-audit-content" class="audit-content">
+      <div v-if="retention" class="maintenance-card" role="status">
+        <Icon name="clock" :size="18" />
+        <div>
+          <strong>在线审计保留策略</strong>
+          <p>{{ securityRetentionSummary(retention) }}</p>
+          <small>导出只包含当前在线记录，单次最多 {{ exportLimit.toLocaleString('zh-CN') }} 条；导出操作本身也会被审计。</small>
+        </div>
+      </div>
       <p v-if="deleteMessage" class="feedback feedback--success" aria-live="polite">
         {{ deleteMessage }}
       </p>
@@ -623,7 +688,7 @@ onBeforeUnmount(() => {
 }
 
 .button {
-  min-height: 40px;
+  min-height: 44px;
   display: inline-flex;
   align-items: center;
   justify-content: center;
@@ -635,6 +700,38 @@ onBeforeUnmount(() => {
   font-size: 13px;
   font-weight: 600;
   cursor: pointer;
+}
+
+.maintenance-card {
+  display: flex;
+  align-items: flex-start;
+  gap: 11px;
+  margin-top: 16px;
+  padding: 14px;
+  color: var(--text-secondary);
+  background: var(--bg-secondary);
+  border: 1px solid var(--border-light);
+  border-radius: var(--radius-md);
+}
+
+.maintenance-card > .app-icon {
+  margin-top: 2px;
+  color: var(--accent-color);
+  flex: 0 0 auto;
+}
+
+.maintenance-card strong {
+  color: var(--text-primary);
+  font-size: 13px;
+}
+
+.maintenance-card p,
+.maintenance-card small {
+  display: block;
+  margin: 4px 0 0;
+  color: var(--text-muted);
+  font-size: 11px;
+  line-height: 1.6;
 }
 
 .button--quiet {
