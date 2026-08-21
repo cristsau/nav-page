@@ -3,6 +3,7 @@ import { ref, onMounted } from 'vue'
 import { createShare as createLocalShare, cancelShare as cancelLocalShare, getAllActiveShares as getLocalActiveShares } from '@/shared/db/database'
 import { cancelBackendShare, createBackendShare, fetchBackendShares, shouldUseBackendNotes } from '@/shared/services/notesApi'
 import Icon from '@/shared/components/Icon.vue'
+import { buildPublicShareUrl } from '@/shared/utils/publicAppOrigin'
 
 const props = defineProps({
   show: {
@@ -76,8 +77,7 @@ async function handleShare() {
     const share = await createShare(props.note.id, expireAt)
 
     // 生成分享链接
-    const baseUrl = window.location.origin
-    shareLink.value = `${baseUrl}/share/${share.code}`
+    shareLink.value = buildPublicShareUrl(share.code)
 
     // 复制到剪贴板
     await navigator.clipboard.writeText(shareLink.value)
@@ -124,6 +124,10 @@ function formatDate(timestamp) {
 async function copyLink(link) {
   await navigator.clipboard.writeText(link)
   alert('链接已复制')
+}
+
+function getShareLink(code) {
+  return buildPublicShareUrl(code)
 }
 
 function close() {
@@ -178,7 +182,7 @@ watch(() => props.show, (val) => {
             <span class="share__views">浏览 {{ share.viewCount }} 次</span>
           </div>
           <div class="share__item-actions">
-            <button type="button" class="btn-text" @click="copyLink(`${window.location.origin}/share/${share.code}`)">
+            <button type="button" class="btn-text" @click="copyLink(getShareLink(share.code))">
               复制链接
             </button>
             <button type="button" class="btn-text btn-text--danger" @click="handleCancelShare(share.id)">

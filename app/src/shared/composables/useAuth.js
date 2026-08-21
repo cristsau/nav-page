@@ -37,27 +37,221 @@ import {
   rejectBackendRegistration
 } from '@/shared/services/authApi'
 import { syncBackendTelegramApprovals } from '@/shared/services/adminTelegramApi'
+import {
+  onApiUnauthorized,
+  resetApiUnauthorizedNotification
+} from '@/shared/services/apiClient'
+import {
+  createSessionCoordinator,
+  DEFAULT_SESSION_REVALIDATE_INTERVAL_MS
+} from '@/shared/services/sessionCoordinator'
 
 const currentUser = ref(null)
 const pendingRequests = ref([])
 const approvedUsers = ref([])
 const registrationHistory = ref([])
 const initialized = ref(false)
+const AUTH_SYNC_CHANNEL = 'domo-nav-auth-v1'
+const AUTH_SYNC_STORAGE_KEY = 'domo-nav-auth-sync-v1'
 
-function clearCurrentAuthState() {
-  currentUser.value = null
+let authChannel = null
+let authLifecycleStarted = false
+let authRevalidateTimer = null
+let storageListener = null
+let visibilityListener = null
+let unauthorizedRedirectPending = false
+
+function commitCurrentSession(user) {
+  currentUser.value = user || null
+  if (currentUser.value) return
+
   pendingRequests.value = []
   approvedUsers.value = []
   registrationHistory.value = []
 }
 
-async function refreshCurrentUser() {
-  currentUser.value = isBackendAuthEnabled()
-    ? await fetchBackendSession()
-    : await getCurrentUser()
+async function resolveCurrentSession() {
+  if (isBackendAuthEnabled()) {
+    return fetchBackendSession()
+  }
 
-  return currentUser.value
+  await bootstrapSystem()
+  return getCurrentUser()
 }
+
+const sessionCoordinator = createSessionCoordinator({
+  resolveSession: resolveCurrentSession,
+  readCachedSession: () => currentUser.value,
+  commitSession: commitCurrentSession
+})
+
+function clearCurrentAuthState({ resolved = true } = {}) {
+  sessionCoordinator.invalidate({ resolved })
+  initialized.value = Boolean(resolved)
+}
+
+function isSessionInvalidationMessage(value) {
+  return value?.type === 'session-invalidated'
+}
+
+function redirectToLoginOnce(reason = 'session-expired') {
+  if (typeof window === 'undefined' || unauthorizedRedirectPending) return
+  if (
+    window.location.pathname === '/auth'
+    || window.location.pathname.startsWith('/share/')
+  ) return
+
+  unauthorizedRedirectPending = true
+  const redirect = `${window.location.pathname}${window.location.search}${window.location.hash}`
+  const query = new URLSearchParams({ redirect, reason })
+  window.location.assign(`/auth?${query.toString()}`)
+}
+
+function handleExternalSessionInvalidation(message) {
+  if (!isSessionInvalidationMessage(message)) return
+  clearCurrentAuthState()
+  redirectToLoginOnce('session-invalidated')
+}
+
+function ensureAuthChannel() {
+  if (typeof window === 'undefined' || authChannel) return authChannel
+  if (typeof window.BroadcastChannel !== 'function') return null
+
+  authChannel = new window.BroadcastChannel(AUTH_SYNC_CHANNEL)
+  authChannel.addEventListener('message', (event) => {
+    handleExternalSessionInvalidation(event.data)
+  })
+  return authChannel
+}
+
+function broadcastSessionInvalidation(reason) {
+  if (typeof window === 'undefined') return
+
+  const message = {
+    type: 'session-invalidated',
+    reason,
+    at: Date.now(),
+    nonce: globalThis.crypto?.randomUUID?.() || `${Date.now()}-${Math.random()}`
+  }
+
+  const channel = ensureAuthChannel()
+  if (channel) {
+    channel.postMessage(message)
+    return
+  }
+
+  try {
+    window.localStorage?.setItem(AUTH_SYNC_STORAGE_KEY, JSON.stringify(message))
+    window.localStorage?.removeItem(AUTH_SYNC_STORAGE_KEY)
+  } catch {
+    // Cross-tab notification is best-effort when neither browser mechanism works.
+  }
+}
+
+function invalidateCurrentSession({
+  broadcast = false,
+  notifyOtherTabs = false,
+  redirect = false,
+  reason = 'session-invalidated'
+} = {}) {
+  const wasAuthenticated = Boolean(currentUser.value)
+  clearCurrentAuthState()
+  if (broadcast && (wasAuthenticated || notifyOtherTabs)) {
+    broadcastSessionInvalidation(reason)
+  }
+  if (redirect) {
+    redirectToLoginOnce(reason)
+  }
+}
+
+async function refreshCurrentUser({ force = true } = {}) {
+  const wasAuthenticated = Boolean(currentUser.value)
+  const user = await sessionCoordinator.revalidate({ force })
+  initialized.value = sessionCoordinator.isInitialized()
+
+  if (wasAuthenticated && !user) {
+    invalidateCurrentSession({
+      broadcast: true,
+      notifyOtherTabs: true,
+      redirect: true,
+      reason: 'session-expired'
+    })
+  }
+
+  return user
+}
+
+async function revalidateSessionInBackground() {
+  if (!isBackendAuthEnabled() || !sessionCoordinator.shouldRevalidate()) {
+    return currentUser.value
+  }
+
+  try {
+    return await refreshCurrentUser({ force: false })
+  } catch {
+    // A transient network failure must not turn an authenticated in-memory
+    // session into a logout. The next visibility change can retry safely.
+    return currentUser.value
+  }
+}
+
+function startAuthSessionLifecycle() {
+  if (authLifecycleStarted || typeof window === 'undefined') return
+  authLifecycleStarted = true
+  ensureAuthChannel()
+
+  storageListener = (event) => {
+    if (event.key !== AUTH_SYNC_STORAGE_KEY || !event.newValue) return
+    try {
+      handleExternalSessionInvalidation(JSON.parse(event.newValue))
+    } catch {
+      // Ignore malformed same-origin storage events.
+    }
+  }
+  window.addEventListener('storage', storageListener)
+
+  visibilityListener = () => {
+    if (document.visibilityState === 'visible') {
+      void revalidateSessionInBackground()
+    }
+  }
+  document.addEventListener('visibilitychange', visibilityListener)
+
+  authRevalidateTimer = window.setInterval(() => {
+    if (document.visibilityState === 'visible') {
+      void revalidateSessionInBackground()
+    }
+  }, DEFAULT_SESSION_REVALIDATE_INTERVAL_MS)
+}
+
+function stopAuthSessionLifecycle() {
+  if (!authLifecycleStarted || typeof window === 'undefined') return
+
+  if (storageListener) {
+    window.removeEventListener('storage', storageListener)
+    storageListener = null
+  }
+  if (visibilityListener) {
+    document.removeEventListener('visibilitychange', visibilityListener)
+    visibilityListener = null
+  }
+  if (authRevalidateTimer !== null) {
+    window.clearInterval(authRevalidateTimer)
+    authRevalidateTimer = null
+  }
+  authChannel?.close?.()
+  authChannel = null
+  authLifecycleStarted = false
+}
+
+onApiUnauthorized(() => {
+  if (!isBackendAuthEnabled()) return
+  invalidateCurrentSession({
+    broadcast: true,
+    redirect: true,
+    reason: 'unauthorized'
+  })
+})
 
 async function refreshAdminData() {
   if (currentUser.value?.role !== 'admin') {
@@ -81,19 +275,12 @@ async function refreshAdminData() {
 
 export function useAuth() {
   async function initAuth() {
-    if (initialized.value) return
-    if (!isBackendAuthEnabled()) {
-      await bootstrapSystem()
-    }
-    await refreshCurrentUser()
-    await refreshAdminData()
-    initialized.value = true
+    const user = await sessionCoordinator.initialize()
+    initialized.value = sessionCoordinator.isInitialized()
+    return user
   }
 
   async function refreshAll() {
-    if (!isBackendAuthEnabled()) {
-      await bootstrapSystem()
-    }
     await refreshCurrentUser()
     await refreshAdminData()
   }
@@ -103,9 +290,11 @@ export function useAuth() {
       ? await loginWithBackend(username, password)
       : await loginUser(username, password)
 
-    currentUser.value = user
-    await refreshAdminData()
-    return user
+    const accepted = sessionCoordinator.accept(user)
+    initialized.value = true
+    unauthorizedRedirectPending = false
+    resetApiUnauthorizedNotification()
+    return accepted
   }
 
   async function logout() {
@@ -115,7 +304,10 @@ export function useAuth() {
       logoutUser()
     }
 
-    clearCurrentAuthState()
+    invalidateCurrentSession({
+      broadcast: true,
+      reason: 'logout'
+    })
   }
 
   async function getSessions() {
@@ -129,7 +321,8 @@ export function useAuth() {
     }
 
     const result = await updateBackendUsername(payload)
-    currentUser.value = result.user || currentUser.value
+    sessionCoordinator.accept(result.user || currentUser.value)
+    initialized.value = true
     return result
   }
 
@@ -139,7 +332,10 @@ export function useAuth() {
     }
 
     const result = await updateBackendPassword(payload)
-    clearCurrentAuthState()
+    invalidateCurrentSession({
+      broadcast: true,
+      reason: 'credentials-changed'
+    })
     return result
   }
 
@@ -150,7 +346,10 @@ export function useAuth() {
 
     const result = await revokeBackendSession(sessionId)
     if (result.currentSessionRevoked) {
-      clearCurrentAuthState()
+      invalidateCurrentSession({
+        broadcast: true,
+        reason: 'session-revoked'
+      })
     }
     return result
   }
@@ -168,7 +367,10 @@ export function useAuth() {
     }
 
     const result = await revokeAllBackendSessions()
-    clearCurrentAuthState()
+    invalidateCurrentSession({
+      broadcast: true,
+      reason: 'all-sessions-revoked'
+    })
     return result
   }
 
@@ -196,7 +398,10 @@ export function useAuth() {
     }
 
     const result = await recoverBackendAccount(payload)
-    clearCurrentAuthState()
+    invalidateCurrentSession({
+      broadcast: true,
+      reason: 'account-recovered'
+    })
     return result
   }
 
@@ -277,6 +482,9 @@ export function useAuth() {
     isAdmin: computed(() => currentUser.value?.role === 'admin'),
     backendAuthEnabled: computed(() => isBackendAuthEnabled()),
     initAuth,
+    startAuthSessionLifecycle,
+    stopAuthSessionLifecycle,
+    revalidateSessionInBackground,
     refreshAll,
     login,
     logout,

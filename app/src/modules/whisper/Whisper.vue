@@ -1,12 +1,13 @@
 <script setup>
 import { ref, computed, nextTick, onBeforeUnmount, onMounted } from 'vue'
-import { useRoute, useRouter } from 'vue-router'
+import { useRoute } from 'vue-router'
 import { getCurrentUserId, getNotes as getLocalNotes, addNote as addLocalNote, updateNote as updateLocalNote, deleteNote as deleteLocalNote, toggleNotePin as toggleLocalNotePin, getSetting as getLocalSetting, setSetting as setLocalSetting } from '@/shared/db/database'
 import { fetchBackendSetting, saveBackendSetting, shouldUseBackendSettings } from '@/shared/services/settingsApi'
 import { createBackendNote, deleteBackendNote, fetchBackendNotes, shouldUseBackendNotes, toggleBackendNotePin, updateBackendNote } from '@/shared/services/notesApi'
 import { COMMAND_ACTION_EVENT } from '@/shared/composables/useCommandPalette'
 import { useNoteReminders } from '@/shared/composables/useNoteReminders'
 import Icon from '@/shared/components/Icon.vue'
+import Modal from '@/shared/components/Modal.vue'
 import NoteCard from './components/NoteCard.vue'
 import NoteEditor from './components/NoteEditor.vue'
 import NotePreview from './components/NotePreview.vue'
@@ -18,7 +19,6 @@ import {
 } from '@/modules/media/mediaLibrary'
 import { buildFullNoteText } from './utils/noteCopyText'
 
-const router = useRouter()
 const route = useRoute()
 
 // 笔记数据
@@ -453,14 +453,6 @@ async function clearBgImage() {
 }
 
 // 返回首页
-function goBack() {
-  router.push('/')
-}
-
-function goToMedia() {
-  router.push('/media')
-}
-
 async function openReminderCenter() {
   showReminderCenter.value = true
   await refreshReminders()
@@ -585,13 +577,10 @@ onBeforeUnmount(() => {
 <template>
   <div class="page" :style="bgStyle">
     <!-- 顶部导航 -->
-    <header class="header">
+    <div class="header">
       <div class="header__left">
-        <button class="header__btn" type="button" aria-label="返回导航页" @click="goBack">
-          <Icon name="arrow-left" :size="20" />
-        </button>
         <div>
-          <div class="header__eyebrow">DOMO NAV</div>
+          <div class="header__eyebrow">记录与整理</div>
           <h1 class="header__title" aria-label="日记与备忘录">
             <span class="header__title-full" aria-hidden="true">日记与备忘录</span>
             <span class="header__title-compact" aria-hidden="true">时光</span>
@@ -599,9 +588,6 @@ onBeforeUnmount(() => {
         </div>
       </div>
       <div class="header__actions">
-        <button class="header__btn" type="button" aria-label="打开图片库" title="图片库" @click="goToMedia">
-          <Icon name="image" :size="18" />
-        </button>
         <button
           ref="reminderButtonRef"
           class="header__btn reminder-button"
@@ -664,7 +650,7 @@ onBeforeUnmount(() => {
           </Transition>
         </div>
       </div>
-    </header>
+    </div>
 
     <!-- 主内容 -->
     <main class="main">
@@ -677,7 +663,12 @@ onBeforeUnmount(() => {
       <div class="notes-toolbar">
         <label class="notes-search">
           <Icon name="search" :size="18" />
-          <input v-model="searchQuery" type="search" placeholder="搜索标题、正文或标签">
+          <input
+            v-model="searchQuery"
+            type="search"
+            aria-label="搜索标题、正文或标签"
+            placeholder="搜索标题、正文或标签"
+          >
         </label>
 
         <div class="filter-tabs" aria-label="笔记类型">
@@ -854,39 +845,43 @@ onBeforeUnmount(() => {
     />
 
     <!-- 设置弹窗 -->
-    <div v-if="showSettings" class="settings-modal" @click.self="showSettings = false">
-      <div class="settings-modal__content">
-        <div class="settings-modal__header">
-          <h3>页面设置</h3>
-          <button type="button" class="settings-modal__close" aria-label="关闭设置" @click="showSettings = false">
-            <Icon name="close" :size="17" />
-          </button>
-        </div>
-        <div class="settings-modal__body">
-          <!-- 背景图 -->
-          <div class="settings-item">
-            <div class="settings-item__info">
-              <div class="settings-item__label">页面背景图</div>
-              <div class="settings-item__desc">自定义时光页面背景</div>
-            </div>
-            <div class="settings-item__control">
-              <div class="bg-upload">
-                <div v-if="whisperBgImage" class="bg-preview">
-                  <img :src="whisperBgImage" alt="背景预览">
-                  <button type="button" class="bg-clear" aria-label="清除背景图" @click="clearBgImage">
-                    <Icon name="close" :size="12" />
-                  </button>
-                </div>
-                <label class="upload-btn">
-                  {{ whisperBgImage ? '更换' : '上传图片' }}
-                  <input type="file" accept="image/*" hidden @change="handleBgUpload">
-                </label>
+    <Modal
+      :show="showSettings"
+      title="页面设置"
+      width="420px"
+      initial-focus-selector=".upload-btn"
+      @close="showSettings = false"
+    >
+      <div class="settings-modal__body">
+        <!-- 背景图 -->
+        <div class="settings-item">
+          <div class="settings-item__info">
+            <div class="settings-item__label">页面背景图</div>
+            <div class="settings-item__desc">自定义时光页面背景</div>
+          </div>
+          <div class="settings-item__control">
+            <div class="bg-upload">
+              <div v-if="whisperBgImage" class="bg-preview">
+                <img :src="whisperBgImage" alt="背景预览">
+                <button type="button" class="bg-clear" aria-label="清除背景图" @click="clearBgImage">
+                  <Icon name="close" :size="12" />
+                </button>
               </div>
+              <label
+                class="upload-btn"
+                role="button"
+                tabindex="0"
+                @keydown.enter.prevent="$event.currentTarget.querySelector('input').click()"
+                @keydown.space.prevent="$event.currentTarget.querySelector('input').click()"
+              >
+                {{ whisperBgImage ? '更换' : '上传图片' }}
+                <input type="file" accept="image/*" hidden @change="handleBgUpload">
+              </label>
             </div>
           </div>
         </div>
       </div>
-    </div>
+    </Modal>
 
     <Transition name="toast">
       <div
@@ -905,14 +900,15 @@ onBeforeUnmount(() => {
 
 <style scoped>
 .page {
-  min-height: 100vh;
+  min-height: calc(100vh - var(--app-shell-header-height, 64px));
+  min-height: calc(100dvh - var(--app-shell-header-height, 64px));
   background: var(--bg-primary);
 }
 
 /* 顶部导航 */
 .header {
   position: sticky;
-  top: 0;
+  top: var(--app-shell-header-height, 64px);
   z-index: 100;
   display: flex;
   align-items: center;
@@ -972,8 +968,8 @@ onBeforeUnmount(() => {
 }
 
 .header__actions .header__btn {
-  width: 36px;
-  height: 36px;
+  width: 44px;
+  height: 44px;
   font-size: 16px;
 }
 
@@ -1005,7 +1001,7 @@ onBeforeUnmount(() => {
 }
 
 .create-menu .btn--primary {
-  min-height: 40px;
+  min-height: 44px;
 }
 
 .create-menu__chevron {
@@ -1376,58 +1372,8 @@ onBeforeUnmount(() => {
   background: var(--bg-hover);
 }
 
-/* 设置弹窗 */
-.settings-modal {
-  position: fixed;
-  inset: 0;
-  background: rgba(0, 0, 0, 0.5);
-  display: flex;
-  align-items: center;
-  justify-content: center;
-  z-index: 200;
-}
-
-.settings-modal__content {
-  background: var(--bg-card);
-  border-radius: var(--radius-lg);
-  width: 420px;
-  max-width: 90vw;
-  box-shadow: var(--shadow-lg);
-}
-
-.settings-modal__header {
-  display: flex;
-  align-items: center;
-  justify-content: space-between;
-  padding: 16px 20px;
-  border-bottom: 1px solid var(--border-light);
-}
-
-.settings-modal__header h3 {
-  font-size: 16px;
-  font-weight: 600;
-  color: var(--text-primary);
-}
-
-.settings-modal__close {
-  width: 28px;
-  height: 28px;
-  display: flex;
-  align-items: center;
-  justify-content: center;
-  background: var(--bg-secondary);
-  border: none;
-  border-radius: 6px;
-  cursor: pointer;
-  color: var(--text-secondary);
-}
-
-.settings-modal__close:hover {
-  background: var(--bg-hover);
-}
-
 .settings-modal__body {
-  padding: 20px;
+  padding: 0;
 }
 
 .settings-item {
@@ -1481,14 +1427,14 @@ onBeforeUnmount(() => {
 
 .bg-clear {
   position: absolute;
-  top: -6px;
-  right: -6px;
-  width: 18px;
-  height: 18px;
+  top: 0;
+  right: 0;
+  width: 44px;
+  height: 44px;
   display: flex;
   align-items: center;
   justify-content: center;
-  background: var(--error-color);
+  background: transparent;
   color: #fff;
   border: none;
   border-radius: 50%;
@@ -1496,8 +1442,25 @@ onBeforeUnmount(() => {
   cursor: pointer;
 }
 
+.bg-clear::before {
+  position: absolute;
+  width: 22px;
+  height: 22px;
+  content: '';
+  background: var(--error-color);
+  border-radius: 50%;
+}
+
+.bg-clear :deep(svg) {
+  position: relative;
+  z-index: 1;
+}
+
 .upload-btn {
-  padding: 8px 16px;
+  min-height: 44px;
+  display: inline-flex;
+  align-items: center;
+  padding: 0 16px;
   background: var(--bg-secondary);
   border-radius: var(--radius-md);
   font-size: 13px;
@@ -1508,6 +1471,11 @@ onBeforeUnmount(() => {
 
 .upload-btn:hover {
   background: var(--bg-hover);
+}
+
+.upload-btn:focus-visible {
+  outline: 2px solid var(--accent-color);
+  outline-offset: 2px;
 }
 
 .toast {
@@ -1529,6 +1497,12 @@ onBeforeUnmount(() => {
 
 .toast.is-error {
   background: color-mix(in srgb, var(--error-color) 84%, #111);
+}
+
+@media (max-width: 820px), (pointer: coarse) and (max-width: 1024px) {
+  .toast {
+    bottom: calc(92px + env(safe-area-inset-bottom));
+  }
 }
 
 .toast-enter-active,

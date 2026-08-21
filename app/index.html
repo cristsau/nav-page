@@ -13,9 +13,108 @@
     <link rel="apple-touch-icon" sizes="180x180" href="/icons/apple-touch-icon-180-v1.png">
     <link rel="manifest" href="/manifest.webmanifest">
     <title>DOMO NAV - 个人导航工作台</title>
+    <style>
+      .startup-skeleton {
+        min-height: 100vh;
+        padding: 22px clamp(18px, 5vw, 72px) 48px;
+        color: #f4eee8;
+        background: #1e1815;
+        box-sizing: border-box;
+        font-family: system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
+      }
+      .startup-skeleton__header {
+        display: flex;
+        align-items: center;
+        gap: 12px;
+        max-width: 1400px;
+        margin: 0 auto;
+      }
+      .startup-skeleton__logo,
+      .startup-skeleton__line,
+      .startup-skeleton__search,
+      .startup-skeleton__card {
+        background: linear-gradient(105deg, #302721 20%, #41342d 38%, #302721 58%);
+        background-size: 220% 100%;
+        animation: startup-shimmer 1.6s ease-in-out infinite;
+      }
+      .startup-skeleton__logo {
+        width: 42px;
+        height: 42px;
+        border-radius: 50%;
+      }
+      .startup-skeleton__line {
+        width: 148px;
+        height: 20px;
+        border-radius: 8px;
+      }
+      .startup-skeleton__content {
+        width: min(1080px, 100%);
+        margin: clamp(92px, 14vh, 150px) auto 0;
+      }
+      .startup-skeleton__search {
+        width: min(720px, 100%);
+        height: 68px;
+        margin: 0 auto 72px;
+        border: 1px solid #55483f;
+        border-radius: 24px;
+      }
+      .startup-skeleton__grid {
+        display: grid;
+        grid-template-columns: repeat(4, minmax(0, 1fr));
+        gap: 18px;
+      }
+      .startup-skeleton__card {
+        height: 148px;
+        border: 1px solid #463a33;
+        border-radius: 22px;
+      }
+      @keyframes startup-shimmer {
+        to { background-position-x: -220%; }
+      }
+      @media (max-width: 720px) {
+        .startup-skeleton__content { margin-top: 84px; }
+        .startup-skeleton__search { height: 60px; margin-bottom: 46px; }
+        .startup-skeleton__grid { grid-template-columns: repeat(2, minmax(0, 1fr)); }
+        .startup-skeleton__card { height: 126px; }
+      }
+      @media (prefers-color-scheme: light) {
+        .startup-skeleton { color: #332d29; background: #faf8f5; }
+        .startup-skeleton__logo,
+        .startup-skeleton__line,
+        .startup-skeleton__search,
+        .startup-skeleton__card {
+          background: linear-gradient(105deg, #eee8e1 20%, #ddd3c9 38%, #eee8e1 58%);
+          background-size: 220% 100%;
+        }
+        .startup-skeleton__search,
+        .startup-skeleton__card { border-color: #dfd7ce; }
+      }
+      @media (prefers-reduced-motion: reduce) {
+        .startup-skeleton__logo,
+        .startup-skeleton__line,
+        .startup-skeleton__search,
+        .startup-skeleton__card { animation: none; }
+      }
+    </style>
   </head>
   <body>
-    <div id="app"></div>
+    <div id="app" aria-busy="true">
+      <main class="startup-skeleton" data-startup-skeleton role="status" aria-label="正在加载 DOMO NAV">
+        <header class="startup-skeleton__header" aria-hidden="true">
+          <div class="startup-skeleton__logo"></div>
+          <div class="startup-skeleton__line"></div>
+        </header>
+        <section class="startup-skeleton__content" aria-hidden="true">
+          <div class="startup-skeleton__search"></div>
+          <div class="startup-skeleton__grid">
+            <div class="startup-skeleton__card"></div>
+            <div class="startup-skeleton__card"></div>
+            <div class="startup-skeleton__card"></div>
+            <div class="startup-skeleton__card"></div>
+          </div>
+        </section>
+      </main>
+    </div>
     <script type="module" src="/src/main.js"></script>
   </body>
 </html>

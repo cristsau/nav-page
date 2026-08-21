@@ -1,6 +1,9 @@
 import { createRouter, createWebHistory } from 'vue-router'
-import { bootstrapSystem, getCurrentUser } from '@/shared/db/database'
-import { fetchBackendSession, isBackendAuthEnabled } from '@/shared/services/authApi'
+import { useAuth } from '@/shared/composables/useAuth'
+import {
+  finishRouteProgress,
+  startRouteProgress
+} from '@/shared/services/routeProgress'
 
 const routes = [
   {
@@ -19,7 +22,7 @@ const routes = [
     path: '/quick-add',
     name: 'QuickAdd',
     component: () => import('@/modules/navigation/QuickAddView.vue'),
-    meta: { title: '快速添加' }
+    meta: { title: '快速添加', appShell: false }
   },
   {
     path: '/whisper',
@@ -60,23 +63,18 @@ const router = createRouter({
   history: createWebHistory(),
   routes
 })
+const { initAuth } = useAuth()
 
 router.beforeEach(async (to) => {
+  startRouteProgress()
   const isPublic = Boolean(to.meta.public)
-
-  document.title = to.meta.title ? `${to.meta.title} - DOMO NAV` : 'DOMO NAV - 个人导航工作台'
 
   const shouldResolveSession = !to.meta.skipSession
   if (!shouldResolveSession) {
     return true
   }
 
-  const currentUser = isBackendAuthEnabled()
-    ? await fetchBackendSession()
-    : await (async () => {
-        await bootstrapSystem()
-        return getCurrentUser()
-      })()
+  const currentUser = await initAuth()
 
   if (!currentUser && !isPublic) {
     return {
@@ -90,6 +88,19 @@ router.beforeEach(async (to) => {
   }
 
   return true
+})
+
+router.afterEach((to, _from, failure) => {
+  if (!failure) {
+    document.title = to.meta.title
+      ? `${to.meta.title} - DOMO NAV`
+      : 'DOMO NAV - 个人导航工作台'
+  }
+  finishRouteProgress()
+})
+
+router.onError(() => {
+  finishRouteProgress()
 })
 
 export default router

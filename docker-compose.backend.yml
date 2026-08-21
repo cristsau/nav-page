@@ -33,7 +33,8 @@ services:
       - "127.0.0.1:3001:3001"
     volumes:
       - /home/web/html/nav:/var/www/nav:ro
-      - /opt/nav/secrets/nav-ai-cli-proxy-api-key:/run/secrets/nav/cli-proxy-api-key:ro
+      - "${NAV_SECRETS_DIR:?set NAV_SECRETS_DIR to the release-local secrets directory}/cliproxy-api-key:/run/secrets/nav/cli-proxy-api-key:ro"
+      - "${NAV_SECRETS_DIR:?set NAV_SECRETS_DIR to the release-local secrets directory}/imgbed-library-token:/run/secrets/nav/imgbed-library-token:ro"
 
 volumes:
   nav-postgres-data:

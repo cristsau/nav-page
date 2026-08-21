@@ -46,13 +46,13 @@ test('security audit service isolates the admin query contract', async () => {
 })
 
 test('settings exposes a responsive admin-only security audit surface', async () => {
-  const [settings, component] = await Promise.all([
-    sourceFile('modules/settings/Settings.vue'),
+  const [category, component] = await Promise.all([
+    sourceFile('modules/settings/categories/SecurityAuditCategory.vue'),
     sourceFile('modules/settings/components/SecurityAuditSettings.vue')
   ])
 
-  assert.match(settings, /v-if="backendAuthEnabled && currentUser\?\.role === 'admin'"/)
-  assert.match(settings, /id="settings-security-audit"/)
+  assert.match(category, /v-if="backendAuthEnabled && currentUser\?\.role === 'admin'"/)
+  assert.match(category, /id="settings-security-audit"/)
   assert.match(component, /v-if="backendAuthEnabled && isAdmin"/)
   assert.match(component, /const expanded = ref\(false\)/)
   assert.doesNotMatch(component, /onMounted\(\(\) => loadEvents\(1\)\)/)

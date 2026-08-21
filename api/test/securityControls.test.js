@@ -1,6 +1,7 @@
 import test from 'node:test'
 import assert from 'node:assert/strict'
 import fs from 'node:fs/promises'
+import Fastify from 'fastify'
 import { createApp } from '../src/app.js'
 import {
   CLEANUP_RATE_LIMIT_SQL,
@@ -18,6 +19,7 @@ import securityEventRoutes, {
   validateSecurityEventQuery
 } from '../src/routes/securityEvents.js'
 import { validateSecurityEventDeletion } from '../src/lib/securityEventDeletion.js'
+import { isTrustedProxyAddress } from '../src/lib/requestRateLimit.js'
 import {
   MIGRATION_ADVISORY_LOCK_SQL,
   MIGRATION_ADVISORY_UNLOCK_SQL,
@@ -30,6 +32,66 @@ async function readSource(relativeUrl) {
   const source = await fs.readFile(new URL(relativeUrl, import.meta.url), 'utf8')
   return source.replace(/\r\n?/g, '\n')
 }
+
+async function resolveInjectedClientIp({ remoteAddress, forwardedFor, trustedAddresses }) {
+  const app = Fastify({
+    trustProxy: (address) => isTrustedProxyAddress(address, trustedAddresses)
+  })
+  app.get('/client-ip', async (request) => ({
+    ip: request.ip,
+    ips: request.ips
+  }))
+
+  try {
+    const response = await app.inject({
+      method: 'GET',
+      url: '/client-ip',
+      remoteAddress,
+      headers: forwardedFor
+        ? { 'x-forwarded-for': forwardedFor }
+        : {}
+    })
+    assert.equal(response.statusCode, 200)
+    return response.json()
+  } finally {
+    await app.close()
+  }
+}
+
+test('trusted proxy resolution handles the explicit multi-hop chain', async () => {
+  const navWebAddress = '172.22.0.8'
+  const fixedOuterProxyAddress = '203.0.113.9'
+  const result = await resolveInjectedClientIp({
+    remoteAddress: navWebAddress,
+    forwardedFor: `198.51.100.27, ${fixedOuterProxyAddress}`,
+    trustedAddresses: [navWebAddress, fixedOuterProxyAddress]
+  })
+
+  assert.equal(result.ip, '198.51.100.27')
+  assert.equal(result.ips.includes('198.51.100.27'), true)
+  assert.equal(result.ips.includes(fixedOuterProxyAddress), true)
+  assert.equal(result.ips.includes(navWebAddress), true)
+})
+
+test('untrusted peers stop forged XFF chains and broad proxy ranges stay rejected', async () => {
+  const navWebAddress = '172.22.0.8'
+  const realUntrustedClient = '192.0.2.44'
+  const throughNavWeb = await resolveInjectedClientIp({
+    remoteAddress: navWebAddress,
+    forwardedFor: `198.51.100.66, ${realUntrustedClient}`,
+    trustedAddresses: [navWebAddress]
+  })
+  const direct = await resolveInjectedClientIp({
+    remoteAddress: realUntrustedClient,
+    forwardedFor: '198.51.100.66',
+    trustedAddresses: [navWebAddress]
+  })
+
+  assert.equal(throughNavWeb.ip, realUntrustedClient)
+  assert.equal(direct.ip, realUntrustedClient)
+  assert.equal(isTrustedProxyAddress('172.22.0.99', [navWebAddress]), false)
+  assert.equal(isTrustedProxyAddress('172.22.0.99', ['172.22.0.0/16']), false)
+})
 
 test('persistent limiter stores only keyed digests and uses one atomic database statement', async () => {
   const calls = []

@@ -1,6 +1,7 @@
 import { createApp } from 'vue'
 import App from './App.vue'
 import router from './router'
+import { useAuth } from '@/shared/composables/useAuth'
 import { bootstrapSystem } from '@/shared/db/database'
 
 import './styles/reset.css'
@@ -9,18 +10,33 @@ import './styles/animations.css'
 
 async function bootstrapApp() {
   await bootstrapSystem()
+  const {
+    startAuthSessionLifecycle,
+    stopAuthSessionLifecycle
+  } = useAuth()
+  startAuthSessionLifecycle()
+
+  if (import.meta.hot) {
+    import.meta.hot.dispose(() => stopAuthSessionLifecycle())
+  }
 
   const app = createApp(App)
   app.use(router)
   await router.isReady()
+  const appRoot = document.querySelector('#app')
+  const startupSkeleton = document.querySelector('[data-startup-skeleton]')
   app.mount('#app')
+  appRoot?.removeAttribute('aria-busy')
+  startupSkeleton?.remove()
 }
 
 function renderStartupError(error) {
   console.error('Failed to start DOMO NAV:', error)
+  useAuth().stopAuthSessionLifecycle()
 
   const root = document.querySelector('#app')
   if (!root) return
+  root.removeAttribute('aria-busy')
 
   const panel = document.createElement('main')
   panel.setAttribute('role', 'alert')

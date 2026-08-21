@@ -321,7 +321,7 @@ test('settings exposes protected username and password forms with explicit sessi
   assert.match(component, /window\.location\.assign\('\/auth\?passwordChanged=1'\)/)
   assert.match(authService, /\/auth\/account\/username/)
   assert.match(authService, /\/auth\/account\/password/)
-  assert.match(authComposable, /currentUser\.value = result\.user/)
+  assert.match(authComposable, /sessionCoordinator\.accept\(result\.user/)
   assert.match(authComposable, /clearCurrentAuthState\(\)/)
 })
 

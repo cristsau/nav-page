@@ -30,6 +30,7 @@ export async function fetchBackendSession() {
 export async function loginWithBackend(username, password) {
   const payload = await request('/auth/login', {
     method: 'POST',
+    expectedUnauthorized: true,
     body: JSON.stringify({ username, password })
   })
 
@@ -124,6 +125,7 @@ export async function rotateBackendRecoveryCodes(currentPassword) {
 export async function recoverBackendAccount(payload) {
   const result = await request('/auth/recover', {
     method: 'POST',
+    expectedUnauthorized: true,
     body: JSON.stringify(payload)
   })
   setCurrentUserId(null)
@@ -133,6 +135,7 @@ export async function recoverBackendAccount(payload) {
 export async function registerWithBackend(payload) {
   const result = await request('/auth/register', {
     method: 'POST',
+    expectedUnauthorized: true,
     body: JSON.stringify(payload)
   })
 

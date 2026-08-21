@@ -147,6 +147,37 @@
 
 /* ========== 页面级动画 ========== */
 
+.route-progress {
+  position: fixed;
+  top: 0;
+  right: 0;
+  left: 0;
+  z-index: 2000;
+  height: 3px;
+  pointer-events: none;
+  opacity: 0;
+  transform: scaleX(0.08);
+  transform-origin: left center;
+  background: linear-gradient(
+    90deg,
+    var(--accent-color),
+    color-mix(in srgb, var(--accent-color) 62%, white)
+  );
+  box-shadow: 0 0 12px color-mix(in srgb, var(--accent-color) 50%, transparent);
+  transition: transform 1.8s cubic-bezier(0.12, 0.72, 0.18, 1), opacity 0.12s ease;
+}
+
+.route-progress--visible {
+  opacity: 1;
+  transform: scaleX(0.76);
+}
+
+.route-progress--complete {
+  opacity: 0;
+  transform: scaleX(1);
+  transition: transform 0.14s ease-out, opacity 0.18s ease 0.04s;
+}
+
 /* 页面加载动画 */
 .page-enter-active {
   animation: fadeIn 0.3s ease;

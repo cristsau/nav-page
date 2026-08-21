@@ -48,7 +48,7 @@ test('settings exposes protected username and password forms without storing cre
   assert.match(component, /所有设备（包括当前设备）会立即退出登录/)
   assert.match(authService, /\/auth\/account\/username/)
   assert.match(authService, /\/auth\/account\/password/)
-  assert.match(authComposable, /currentUser\.value = result\.user/)
+  assert.match(authComposable, /sessionCoordinator\.accept\(result\.user/)
   assert.match(authComposable, /clearCurrentAuthState\(\)/)
   assert.match(authView, /route\.query\.passwordChanged/)
   assert.match(authView, /密码已修改，所有设备均已退出/)
