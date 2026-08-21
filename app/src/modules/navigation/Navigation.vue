@@ -594,7 +594,7 @@ onBeforeUnmount(() => {
   <div class="page">
     <main class="main" :class="{ 'has-management-bar': groups.length && managementMode }">
       <section class="search-section animate-fade-in">
-        <h1 class="search-section__title">搜索你想找的内容</h1>
+        <h1 class="search-section__title">统一搜索</h1>
         <div ref="searchBoxHost">
           <SearchBox />
         </div>
@@ -795,19 +795,47 @@ onBeforeUnmount(() => {
 }
 
 .search-section {
-  padding: 60px 0 40px;
-  text-align: center;
+  padding: 28px 4px 22px;
+  text-align: left;
 }
 
 .search-section :deep(.search-box__shortcut) {
   display: none;
 }
 
+.search-section :deep(.search-shell) {
+  width: 100%;
+}
+
+.search-section :deep(.search-box) {
+  min-height: 52px;
+  padding: 3px;
+  border-radius: 999px;
+  box-shadow:
+    0 12px 30px color-mix(in srgb, var(--text-primary) 7%, transparent),
+    inset 0 1px color-mix(in srgb, white 62%, transparent);
+}
+
+.search-section :deep(.search-box__engine),
+.search-section :deep(.search-box__btn) {
+  min-height: 44px;
+  border-radius: 999px;
+}
+
+.search-section :deep(.search-box__field) {
+  min-height: 44px;
+}
+
+.search-section :deep(.search-box__input) {
+  padding-block: 10px;
+}
+
 .search-section__title {
-  font-size: 28px;
-  font-weight: 600;
-  color: var(--text-primary);
-  margin-bottom: 32px;
+  margin: 0 0 10px;
+  color: var(--text-muted);
+  font-size: 11px;
+  font-weight: 750;
+  letter-spacing: 0.14em;
 }
 
 .content-section {
@@ -819,7 +847,7 @@ onBeforeUnmount(() => {
   align-items: flex-end;
   justify-content: space-between;
   gap: 20px;
-  margin-bottom: 12px;
+  margin-bottom: 10px;
   padding: 0 4px;
 }
 
@@ -830,7 +858,7 @@ onBeforeUnmount(() => {
 
 .management-heading__eyebrow {
   color: var(--text-primary);
-  font-size: 14px;
+  font-size: 15px;
   font-weight: 700;
 }
 
@@ -985,12 +1013,12 @@ onBeforeUnmount(() => {
   }
 
   .search-section {
-    padding: 40px 0 24px;
+    padding: 18px 0 16px;
   }
 
   .search-section__title {
-    font-size: 22px;
-    margin-bottom: 24px;
+    margin-bottom: 8px;
+    font-size: 10px;
   }
 
   .page-footer {

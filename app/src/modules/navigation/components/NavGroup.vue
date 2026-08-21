@@ -511,7 +511,7 @@ const mobileGroupMenuId = computed(() => (
 
 <style scoped>
 .nav-groups {
-  margin-top: 36px;
+  margin-top: 20px;
 }
 
 /* Tab 样式 */
@@ -519,12 +519,12 @@ const mobileGroupMenuId = computed(() => (
   display: flex;
   align-items: center;
   gap: 10px;
-  margin-bottom: 26px;
-  padding: 9px;
+  margin-bottom: 16px;
+  padding: 7px;
   background:
     linear-gradient(135deg, color-mix(in srgb, var(--bg-secondary) 96%, white 4%), var(--bg-secondary));
   border: 1px solid color-mix(in srgb, var(--border-light) 78%, transparent);
-  border-radius: 22px;
+  border-radius: 18px;
   box-shadow: 0 1px 0 color-mix(in srgb, white 66%, transparent) inset;
 }
 
@@ -546,7 +546,7 @@ const mobileGroupMenuId = computed(() => (
   min-width: 0;
   background: transparent;
   border: 1px solid transparent;
-  border-radius: 15px;
+  border-radius: 13px;
   white-space: nowrap;
   transition:
     background var(--transition-fast),
@@ -586,7 +586,8 @@ const mobileGroupMenuId = computed(() => (
   display: flex;
   align-items: center;
   gap: 8px;
-  padding: 8px 10px;
+  min-height: 44px;
+  padding: 6px 9px;
   color: var(--text-primary);
   background: transparent;
   border: 0;
@@ -601,8 +602,8 @@ const mobileGroupMenuId = computed(() => (
 }
 
 .groups-tabs__icon {
-  width: 30px;
-  height: 30px;
+  width: 28px;
+  height: 28px;
   display: grid;
   place-items: center;
   flex: 0 0 auto;
@@ -752,7 +753,7 @@ const mobileGroupMenuId = computed(() => (
 }
 
 .groups-tabs__add {
-  min-height: 46px;
+  min-height: 44px;
   display: inline-flex;
   align-items: center;
   justify-content: center;
@@ -795,25 +796,26 @@ const mobileGroupMenuId = computed(() => (
 
 .bookmarks-grid {
   display: grid;
-  grid-template-columns: repeat(auto-fill, minmax(150px, 1fr));
-  gap: 15px;
+  grid-template-columns: repeat(auto-fill, minmax(220px, 1fr));
+  gap: 12px;
   align-items: stretch;
 }
 
 /* 添加书签卡片 */
 .bookmark-card--add {
   display: flex;
-  flex-direction: column;
+  flex-direction: row;
   align-items: center;
-  justify-content: center;
+  justify-content: flex-start;
+  gap: 12px;
   width: 100%;
-  min-height: 154px;
-  padding: 20px 12px;
+  min-height: 104px;
+  padding: 14px;
   color: var(--text-secondary);
   background:
     linear-gradient(145deg, color-mix(in srgb, var(--bg-secondary) 94%, white 6%), var(--bg-secondary));
   border: 1px dashed color-mix(in srgb, var(--accent-color) 38%, var(--border-color));
-  border-radius: 22px;
+  border-radius: 16px;
   cursor: pointer;
   transition:
     color var(--transition-fast),
@@ -826,7 +828,7 @@ const mobileGroupMenuId = computed(() => (
 .bookmark-card--add:hover {
   background: var(--accent-bg);
   border-color: var(--accent-color);
-  transform: translateY(-4px);
+  transform: translateY(-2px);
   box-shadow: 0 14px 30px color-mix(in srgb, var(--accent-color) 13%, transparent);
 }
 
@@ -836,11 +838,11 @@ const mobileGroupMenuId = computed(() => (
 }
 
 .bookmark-card--add .bookmark-card__icon {
-  width: 42px;
-  height: 42px;
+  width: 44px;
+  height: 44px;
   display: grid;
   place-items: center;
-  margin-bottom: 8px;
+  margin-bottom: 0;
   color: var(--accent-color);
   background: color-mix(in srgb, var(--accent-color) 11%, transparent);
   border-radius: 14px;
@@ -1038,7 +1040,7 @@ const mobileGroupMenuId = computed(() => (
   }
 
   .bookmarks-grid {
-    grid-template-columns: repeat(2, minmax(0, 1fr));
+    grid-template-columns: minmax(0, 1fr);
     gap: 10px;
   }
 
