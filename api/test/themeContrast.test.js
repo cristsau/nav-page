@@ -99,6 +99,12 @@ test('appearance settings renders every preset as an accessible persistent choic
   assert.match(appearanceSource, /getSchemePreviewStyle\(scheme\)/)
   assert.match(appearanceSource, /resolveThemeMutedColors\(scheme\)/)
   assert.match(appearanceSource, /applyStyleConfig\(\)/)
+  assert.match(appearanceSource, /if \(scheme\.id === 'linear'\) return -1/)
+  assert.match(appearanceSource, /class="settings-item settings-item--palette"/)
+  assert.match(appearanceSource, /aria-live="polite"/)
+  assert.match(appearanceSource, /当前：\{\{ activeSchemeMeta\.name \}\}/)
+  assert.match(appearanceSource, /grid-template-columns: repeat\(auto-fit, minmax\(190px, 1fr\)\)/)
+  assert.match(appearanceSource, /currentScheme === scheme\.id \? `当前配色：\$\{scheme\.name\}`/)
   assert.match(configSource, /async function setColorScheme\(schemeId\)[\s\S]*persistConfigNow\(\)/)
 })
 
