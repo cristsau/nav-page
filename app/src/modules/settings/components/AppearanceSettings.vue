@@ -1,7 +1,14 @@
 <script setup>
 import { ref, computed, onMounted, watch } from 'vue'
 import { useTheme } from '@/shared/composables/useTheme'
-import { useConfig, colorSchemes, borderRadiusOptions, cardSizeOptions } from '@/shared/composables/useConfig'
+import {
+  applyStyleConfig,
+  useConfig,
+  colorSchemes,
+  borderRadiusOptions,
+  cardSizeOptions
+} from '@/shared/composables/useConfig'
+import { resolveThemeMutedColors } from '@/shared/config/colorSchemes'
 
 const { isDark, setTheme } = useTheme()
 const { config, updateConfig, setColorScheme } = useConfig()
@@ -10,7 +17,11 @@ const themeMode = ref('system')
 const currentScheme = computed(() => config.value.style?.colorScheme || 'cream')
 const activeSchemeMeta = computed(() => {
   return currentScheme.value === 'custom'
-    ? { name: '自定义', ...(config.value.style?.customTheme || {}) }
+    ? {
+        name: '自定义',
+        description: '使用你选择的主色与明暗背景',
+        ...(config.value.style?.customTheme || {})
+      }
     : (colorSchemes[currentScheme.value] || colorSchemes.cream)
 })
 
@@ -27,6 +38,7 @@ const customTheme = computed(() => config.value.style?.customTheme || {})
 const livePreviewStyle = computed(() => {
   const scheme = activeSchemeMeta.value
   const accent = scheme.primary
+  const muted = resolveThemeMutedColors(scheme)
 
   if (isDark.value) {
     return {
@@ -35,7 +47,7 @@ const livePreviewStyle = computed(() => {
       '--preview-soft': scheme.darkBgSecondary,
       '--preview-accent': accent,
       '--preview-text': scheme.darkTextPrimary,
-      '--preview-muted': scheme.darkTextSecondary
+      '--preview-muted': muted.dark
     }
   }
 
@@ -45,32 +57,29 @@ const livePreviewStyle = computed(() => {
     '--preview-soft': scheme.bgSecondary,
     '--preview-accent': accent,
     '--preview-text': scheme.textPrimary,
-    '--preview-muted': scheme.textSecondary
+    '--preview-muted': muted.light
   }
 })
 
-function forceApplyThemeTokens() {
-  const root = document.documentElement
-  const scheme = activeSchemeMeta.value
-  const accent = scheme.primary
+function getSchemePreviewStyle(scheme) {
+  const fallback = customTheme.value
+  const resolved = scheme.id === 'custom'
+    ? fallback
+    : scheme
 
-  root.style.setProperty('--accent-color', accent, 'important')
-
-  if (isDark.value) {
-    root.style.setProperty('--bg-primary', scheme.darkBg, 'important')
-    root.style.setProperty('--bg-secondary', scheme.darkBgSecondary, 'important')
-    root.style.setProperty('--bg-card', scheme.darkBgCard, 'important')
-    root.style.setProperty('--text-primary', scheme.darkTextPrimary, 'important')
-    root.style.setProperty('--text-secondary', scheme.darkTextSecondary, 'important')
-    root.style.setProperty('--accent-bg', `${accent}38`, 'important')
-  } else {
-    root.style.setProperty('--bg-primary', scheme.bg, 'important')
-    root.style.setProperty('--bg-secondary', scheme.bgSecondary, 'important')
-    root.style.setProperty('--bg-card', scheme.bgCard, 'important')
-    root.style.setProperty('--text-primary', scheme.textPrimary, 'important')
-    root.style.setProperty('--text-secondary', scheme.textSecondary, 'important')
-    root.style.setProperty('--accent-bg', `${accent}22`, 'important')
+  return {
+    '--scheme-color': resolved.primary || fallback.primary || '#6b8c7a',
+    '--scheme-bg': isDark.value
+      ? (resolved.darkBg || fallback.darkBg)
+      : (resolved.bg || fallback.bg),
+    '--scheme-card': isDark.value
+      ? (resolved.darkBgCard || fallback.darkBgCard)
+      : (resolved.bgCard || fallback.bgCard)
   }
+}
+
+function forceApplyThemeTokens() {
+  applyStyleConfig()
 }
 
 onMounted(() => {
@@ -163,12 +172,18 @@ function clearBgImage() {
           <button
             v-for="scheme in colorSchemeList"
             :key="scheme.id"
+            type="button"
             class="color-scheme"
             :class="{ 'is-active': currentScheme === scheme.id }"
-            :style="{ '--scheme-color': scheme.primary || customTheme.primary || '#6b8c7a' }"
+            :style="getSchemePreviewStyle(scheme)"
+            :aria-pressed="currentScheme === scheme.id"
+            :aria-label="`使用${scheme.name}配色`"
             @click="selectColorScheme(scheme.id)"
           >
-            <span class="color-scheme__preview"></span>
+            <span class="color-scheme__preview" aria-hidden="true">
+              <span class="color-scheme__preview-card"></span>
+              <span class="color-scheme__preview-accent"></span>
+            </span>
             <span class="color-scheme__name">{{ scheme.name }}</span>
           </button>
         </div>
@@ -180,13 +195,16 @@ function clearBgImage() {
         <span class="theme-preview__badge">{{ activeSchemeMeta.name }}</span>
         <span class="theme-preview__badge">{{ isDark ? 'dark' : 'light' }}</span>
       </div>
+      <p v-if="activeSchemeMeta.description" class="theme-preview__description">
+        {{ activeSchemeMeta.description }}
+      </p>
       <div class="theme-preview__canvas">
         <div class="theme-preview__surface">
           <div class="theme-preview__dot"></div>
           <div class="theme-preview__line theme-preview__line--strong"></div>
           <div class="theme-preview__line"></div>
         </div>
-        <button class="theme-preview__button">Preview</button>
+        <span class="theme-preview__button" aria-hidden="true">Preview</span>
       </div>
     </div>
 
@@ -372,6 +390,7 @@ function clearBgImage() {
   border-radius: var(--radius-md);
   cursor: pointer;
   color: var(--text-primary);
+  min-height: 44px;
 }
 
 .theme-option.is-active,
@@ -386,9 +405,31 @@ function clearBgImage() {
 }
 
 .color-scheme__preview {
-  width: 18px;
-  height: 18px;
-  border-radius: 50%;
+  position: relative;
+  width: 32px;
+  height: 24px;
+  flex: 0 0 auto;
+  overflow: hidden;
+  border: 1px solid color-mix(in srgb, var(--scheme-color) 24%, var(--scheme-card));
+  border-radius: 7px;
+  background: var(--scheme-bg);
+}
+
+.color-scheme__preview-card {
+  position: absolute;
+  inset: 5px 8px 4px 5px;
+  border-radius: 3px;
+  background: var(--scheme-card);
+  box-shadow: 0 1px 3px color-mix(in srgb, var(--scheme-color) 18%, transparent);
+}
+
+.color-scheme__preview-accent {
+  position: absolute;
+  top: 5px;
+  right: 4px;
+  width: 5px;
+  height: 14px;
+  border-radius: 999px;
   background: var(--scheme-color);
 }
 
@@ -420,6 +461,13 @@ function clearBgImage() {
   justify-content: space-between;
 }
 
+.theme-preview__description {
+  margin: 10px 0 0;
+  color: var(--preview-muted);
+  font-size: 12px;
+  line-height: 1.5;
+}
+
 .theme-preview__surface {
   flex: 1;
   padding: 14px;
@@ -448,6 +496,10 @@ function clearBgImage() {
 }
 
 .theme-preview__button {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  min-height: 44px;
   padding: 10px 18px;
   border: none;
   border-radius: 999px;
