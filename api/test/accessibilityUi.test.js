@@ -10,6 +10,10 @@ const sourceFile = (path) => fs.readFile(
 
 test('shared modal traps focus, supports initial focus and restores the opener', async () => {
   const source = await sourceFile('shared/components/Modal.vue')
+  const contentStyle = source.match(/\.modal-content\s*\{([\s\S]*?)\}/)?.[1] || ''
+  const headerStyle = source.match(/\.modal__header\s*\{([\s\S]*?)\}/)?.[1] || ''
+  const bodyStyle = source.match(/\.modal__body\s*\{([\s\S]*?)\}/)?.[1] || ''
+  const footerStyle = source.match(/\.modal__footer\s*\{([\s\S]*?)\}/)?.[1] || ''
 
   assert.match(source, /initialFocusSelector/)
   assert.match(source, /@keydown\.tab="trapFocus"/)
@@ -19,6 +23,15 @@ test('shared modal traps focus, supports initial focus and restores the opener',
   assert.match(source, /aria-modal="true"/)
   assert.match(source, /:aria-labelledby="title \? titleId : undefined"/)
   assert.match(source, /width: 44px;\s*height: 44px;/)
+  assert.match(contentStyle, /display:\s*flex;/)
+  assert.match(contentStyle, /flex-direction:\s*column;/)
+  assert.match(contentStyle, /overflow:\s*hidden;/)
+  assert.doesNotMatch(contentStyle, /overflow-y:\s*auto;/)
+  assert.match(headerStyle, /flex:\s*0 0 auto;/)
+  assert.match(bodyStyle, /flex:\s*1 1 auto;/)
+  assert.match(bodyStyle, /min-height:\s*0;/)
+  assert.match(bodyStyle, /overflow-y:\s*auto;/)
+  assert.match(footerStyle, /flex:\s*0 0 auto;/)
 })
 
 test('time settings, search and command palette expose correct accessible names', async () => {

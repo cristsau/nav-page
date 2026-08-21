@@ -183,19 +183,26 @@ onBeforeUnmount(() => {
 }
 
 .modal-content {
+  display: flex;
+  flex-direction: column;
   background: var(--bg-card);
   border-radius: var(--radius-lg);
   width: 100%;
   max-height: 90vh;
-  overflow-y: auto;
+  max-height: min(90vh, calc(100dvh - 40px));
+  overflow: hidden;
   box-shadow: var(--shadow-lg);
 }
 
 .modal__header {
+  position: relative;
+  z-index: 1;
+  flex: 0 0 auto;
   display: flex;
   align-items: center;
   justify-content: space-between;
   padding: 20px 24px;
+  background: var(--bg-card);
   border-bottom: 1px solid var(--border-light);
 }
 
@@ -227,14 +234,22 @@ onBeforeUnmount(() => {
 }
 
 .modal__body {
+  flex: 1 1 auto;
+  min-height: 0;
+  overflow-y: auto;
+  overscroll-behavior: contain;
   padding: 24px;
 }
 
 .modal__footer {
+  position: relative;
+  z-index: 1;
+  flex: 0 0 auto;
   display: flex;
   justify-content: flex-end;
   gap: 12px;
   padding: 16px 24px;
+  background: var(--bg-card);
   border-top: 1px solid var(--border-light);
 }
 
