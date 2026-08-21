@@ -5,6 +5,7 @@ export const DARK_RAISED_SURFACE_WHITE_MIX = 0.04
 export const colorSchemes = {
   cream: {
     name: '奶油',
+    description: '温暖柔和的棕色日常界面',
     primary: '#a08060',
     bg: '#faf8f5',
     bgSecondary: '#f5f2ed',
@@ -19,6 +20,7 @@ export const colorSchemes = {
   },
   ocean: {
     name: '海洋',
+    description: '清爽克制的蓝灰信息空间',
     primary: '#5a8fa8',
     bg: '#f0f5f8',
     bgSecondary: '#e5eef3',
@@ -33,6 +35,7 @@ export const colorSchemes = {
   },
   forest: {
     name: '森林',
+    description: '安静自然的深绿工作台',
     primary: '#5a8a6a',
     bg: '#f5f8f5',
     bgSecondary: '#e8f0e8',
@@ -47,6 +50,7 @@ export const colorSchemes = {
   },
   rose: {
     name: '玫瑰',
+    description: '柔和细腻的玫瑰色界面',
     primary: '#c48a9a',
     bg: '#faf5f8',
     bgSecondary: '#f5e8ee',
@@ -61,6 +65,7 @@ export const colorSchemes = {
   },
   lavender: {
     name: '薰衣草',
+    description: '轻盈平衡的紫灰层级',
     primary: '#8a8ac4',
     bg: '#f5f5fa',
     bgSecondary: '#eaeaf5',
@@ -75,6 +80,7 @@ export const colorSchemes = {
   },
   sunset: {
     name: '日落',
+    description: '温暖沉稳的橙棕氛围',
     primary: '#c48a6a',
     bg: '#faf8f5',
     bgSecondary: '#f5ece5',
@@ -86,6 +92,21 @@ export const colorSchemes = {
     darkBgCard: '#573329',
     darkTextPrimary: '#f7e9e1',
     darkTextSecondary: '#ddb49d'
+  },
+  linear: {
+    name: 'Linear',
+    description: '冷灰底色、靛蓝强调与低噪层级',
+    primary: '#5e6ad2',
+    bg: '#f7f8fa',
+    bgSecondary: '#eef0f4',
+    bgCard: '#ffffff',
+    textPrimary: '#17181b',
+    textSecondary: '#5d6069',
+    darkBg: '#0f1012',
+    darkBgSecondary: '#17181c',
+    darkBgCard: '#1d1e23',
+    darkTextPrimary: '#f3f4f6',
+    darkTextSecondary: '#a9acb5'
   },
   custom: {
     name: '自定义'

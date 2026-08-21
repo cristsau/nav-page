@@ -16,7 +16,7 @@ const builtInThemes = Object.entries(colorSchemes)
   .filter(([themeId]) => themeId !== 'custom')
 
 test('all built-in helper text colors meet WCAG AA on page, card and input surfaces', () => {
-  assert.equal(builtInThemes.length, 6)
+  assert.equal(builtInThemes.length, 7)
 
   for (const [themeId, scheme] of builtInThemes) {
     const muted = resolveThemeMutedColors(scheme)
@@ -53,6 +53,53 @@ test('all built-in helper text colors meet WCAG AA on page, card and input surfa
       }
     }
   }
+})
+
+test('Linear preset exposes a complete accessible light and dark palette', () => {
+  const linear = colorSchemes.linear
+
+  assert.equal(linear.name, 'Linear')
+  assert.equal(linear.primary, '#5e6ad2')
+  assert.match(linear.description, /靛蓝/)
+
+  for (const key of [
+    'bg',
+    'bgSecondary',
+    'bgCard',
+    'textPrimary',
+    'textSecondary',
+    'darkBg',
+    'darkBgSecondary',
+    'darkBgCard',
+    'darkTextPrimary',
+    'darkTextSecondary'
+  ]) {
+    assert.match(linear[key], /^#[0-9a-f]{6}$/i, `Linear is missing ${key}`)
+  }
+
+  assert.ok(contrastRatio('#ffffff', linear.primary) >= MUTED_TEXT_MIN_CONTRAST)
+  assert.ok(contrastRatio(linear.textSecondary, linear.bgCard) >= MUTED_TEXT_MIN_CONTRAST)
+  assert.ok(contrastRatio(linear.darkTextSecondary, linear.darkBgCard) >= MUTED_TEXT_MIN_CONTRAST)
+})
+
+test('appearance settings renders every preset as an accessible persistent choice', async () => {
+  const [appearanceSource, configSource] = await Promise.all([
+    fs.readFile(
+      fileURLToPath(new URL('../../app/src/modules/settings/components/AppearanceSettings.vue', import.meta.url)),
+      'utf8'
+    ),
+    fs.readFile(
+      fileURLToPath(new URL('../../app/src/shared/composables/useConfig.js', import.meta.url)),
+      'utf8'
+    )
+  ])
+
+  assert.match(appearanceSource, /Object\.entries\(colorSchemes\)/)
+  assert.match(appearanceSource, /:aria-pressed="currentScheme === scheme\.id"/)
+  assert.match(appearanceSource, /getSchemePreviewStyle\(scheme\)/)
+  assert.match(appearanceSource, /resolveThemeMutedColors\(scheme\)/)
+  assert.match(appearanceSource, /applyStyleConfig\(\)/)
+  assert.match(configSource, /async function setColorScheme\(schemeId\)[\s\S]*persistConfigNow\(\)/)
 })
 
 test('static cream theme helper tokens match the runtime resolver', async () => {
