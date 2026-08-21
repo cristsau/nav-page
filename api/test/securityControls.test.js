@@ -472,8 +472,7 @@ test('admin security-event route parameterizes validated filters and pagination'
   const calls = []
   const fastify = {
     get(path, routeHandler) {
-      assert.equal(path, '/admin/security-events')
-      handler = routeHandler
+      if (path === '/admin/security-events') handler = routeHandler
     },
     post() {},
     async requireAdmin(request, reply) {
@@ -539,6 +538,83 @@ test('admin security-event route parameterizes validated filters and pagination'
   assert.equal(response.pagination.total, 1)
   assert.equal(response.events[0].clientFingerprint, 'a'.repeat(16))
   assert.equal(response.events[0].userAgentFingerprint, 'b'.repeat(16))
+})
+
+test('admin security-event export is bounded, cache-safe, and records the action', async () => {
+  let handler
+  const auditCalls = []
+  const fastify = {
+    get(path, routeHandler) {
+      if (path === '/admin/security-events/export') handler = routeHandler
+    },
+    post() {},
+    async requireAdmin(request, reply) {
+      if (request.currentUser?.role !== 'admin') {
+        reply.code(403)
+        throw new Error('Admin access required')
+      }
+    }
+  }
+  await securityEventRoutes(fastify, {
+    queryFn: async (text, params) => {
+      assert.match(text, /LIMIT \$3/)
+      assert.deepEqual(params, ['auth.login', 'failure', 10_001])
+      return {
+        rows: [{
+          id: '42',
+          event_type: 'auth.login',
+          outcome: 'failure',
+          actor_user_id: null,
+          subject_user_id: null,
+          resource_type: null,
+          resource_id: null,
+          affected_count: null,
+          client_ip_digest: 'a'.repeat(64),
+          user_agent_digest: 'b'.repeat(64),
+          created_at: '2026-08-01T00:00:00.000Z'
+        }]
+      }
+    },
+    async auditBestEffortFn(value) {
+      auditCalls.push(value)
+      return true
+    }
+  })
+
+  const reply = {
+    statusCode: 200,
+    headers: {},
+    header(name, value) {
+      this.headers[name] = value
+      return this
+    },
+    type(value) {
+      this.headers['Content-Type'] = value
+      return this
+    },
+    code(value) {
+      this.statusCode = value
+      return this
+    },
+    send(value) {
+      return value
+    }
+  }
+  const response = await handler({
+    currentUser: { id: '8a6db381-01a5-4731-ae8d-b5c3b49c2be1', role: 'admin' },
+    query: { format: 'json', eventType: 'auth.login', outcome: 'failure' },
+    headers: {},
+    log: { error() {} }
+  }, reply)
+
+  assert.equal(reply.headers['Cache-Control'], 'private, no-store')
+  assert.equal(reply.headers['X-NAV-Export-Count'], '1')
+  assert.equal(reply.headers['X-NAV-Export-Truncated'], 'false')
+  assert.match(reply.headers['Content-Disposition'], /nav-security-events-.*\.json/)
+  assert.equal(Buffer.isBuffer(response), true)
+  assert.equal(JSON.parse(response.toString()).events[0].clientFingerprint, 'a'.repeat(16))
+  assert.equal(auditCalls[0].eventType, 'admin.security_events.export')
+  assert.equal(auditCalls[0].affectedCount, 1)
 })
 
 test('admin security-event deletion verifies the password, deletes selected IDs, and records the action', async () => {

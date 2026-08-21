@@ -31,7 +31,8 @@ export async function fetchMediaImages({
   return {
     images: payload.images || payload.items || [],
     nextCursor: payload.nextCursor || payload.cursor || '',
-    counts: payload.counts || null
+    counts: payload.counts || null,
+    deleteRetry: payload.deleteRetry || null
   }
 }
 

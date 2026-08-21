@@ -1,8 +1,16 @@
+x-nav-logging: &nav-logging
+  driver: local
+  options:
+    max-size: "10m"
+    max-file: "3"
+    compress: "true"
+
 services:
   nav-postgres:
     image: postgres:16-alpine
     container_name: nav-postgres
     restart: unless-stopped
+    logging: *nav-logging
     environment:
       POSTGRES_DB: nav
       POSTGRES_USER: nav
@@ -22,6 +30,7 @@ services:
       context: ./api
     container_name: nav-api
     restart: unless-stopped
+    logging: *nav-logging
     depends_on:
       nav-postgres:
         condition: service_healthy

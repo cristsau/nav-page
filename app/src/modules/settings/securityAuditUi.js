@@ -9,6 +9,7 @@ const EVENT_TYPE_LABELS = Object.freeze({
   'admin.registration.approve': '批准注册',
   'admin.registration.reject': '拒绝注册',
   'admin.telegram_config.update': '更新 Telegram 配置',
+  'admin.security_events.export': '导出安全审计记录',
   'admin.security_events.delete': '删除安全审计记录'
 })
 
@@ -54,4 +55,21 @@ export function compactSecurityIdentifier(value) {
 export function displaySecurityFingerprint(value) {
   const normalized = String(value || '').trim().toLowerCase()
   return /^[0-9a-f]{16}$/.test(normalized) ? normalized : ''
+}
+
+export function securityRetentionSummary(policy = {}) {
+  const routineDays = Number(policy.routineDays || 0)
+  const deniedDays = Number(policy.deniedDays || 0)
+  const criticalDays = Number(policy.criticalDays || 0)
+  if (
+    ![routineDays, deniedDays, criticalDays]
+      .every((value) => Number.isSafeInteger(value) && value > 0)
+  ) {
+    return '服务器未返回有效的审计保留策略。'
+  }
+
+  const windows = `常规成功 ${routineDays} 天、失败或拒绝登录 ${deniedDays} 天、敏感操作 ${criticalDays} 天`
+  return policy.enabled
+    ? `自动保留已启用：${windows}。`
+    : `自动保留尚未启用；当前策略预案为${windows}。`
 }

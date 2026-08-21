@@ -171,6 +171,7 @@ async function verifyMediaLibrarySchema() {
   assertExactSet('media asset columns', columns.rows.map((row) => row.column_name), expectedColumns)
 
   const expectedIndexes = [
+    'idx_media_assets_delete_retry',
     'idx_media_assets_user_created',
     'idx_media_assets_user_retention',
     'idx_media_assets_user_state'

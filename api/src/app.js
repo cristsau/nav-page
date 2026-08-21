@@ -49,7 +49,30 @@ function stripBodylessDeleteJsonContentType(request) {
 
 export function createApp() {
   const app = Fastify({
-    logger: true,
+    logger: {
+      level: config.apiLogLevel,
+      redact: {
+        paths: [
+          'req.headers.authorization',
+          'req.headers.cookie',
+          'req.headers["x-api-key"]',
+          'req.body.password',
+          'req.body.currentPassword',
+          'req.body.newPassword',
+          'req.body.recoveryCode',
+          'req.body.apiKey',
+          'req.body.token',
+          'res.headers["set-cookie"]',
+          'authorization',
+          'cookie',
+          'password',
+          'token',
+          'apiKey',
+          'api_key'
+        ],
+        censor: '[Redacted]'
+      }
+    },
     trustProxy: (address) => isTrustedProxyAddress(address)
   })
 

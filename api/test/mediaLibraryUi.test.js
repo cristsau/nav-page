@@ -9,6 +9,7 @@ import {
   mediaCanShare,
   mediaCleanupHasFailures,
   mediaCleanupMessage,
+  mediaDeleteRetrySummary,
   mediaDeletionMessage,
   mediaMarkdown,
   mediaNeedsRetention,
@@ -81,6 +82,14 @@ test('media deletion messages distinguish provider disposition and cache cleanup
     { state: 'delete_failed' }
   ]), true)
   assert.equal(mediaCleanupHasFailures([{ state: 'deleted' }]), false)
+  assert.equal(
+    mediaDeleteRetrySummary({ enabled: false }),
+    '后台重试尚未启用，失败记录仍可在图片详情中手动重试。'
+  )
+  assert.equal(
+    mediaDeleteRetrySummary({ enabled: true, intervalSeconds: 3600, maxAttempts: 8 }),
+    '后台会按退避策略约每 1 小时扫描一次，单张最多尝试 8 次。'
+  )
 })
 
 test('media list updates retain order and merge server truth', () => {
@@ -108,6 +117,8 @@ test('media page is responsive, accessible and truthful about destructive action
   assert.match(source, /await ensureKeptForSharing\(image\)/)
   assert.match(source, /updated\.state === 'deleted'/)
   assert.match(source, /mediaDeletionMessage\(updated/)
+  assert.match(source, /mediaDeleteRetrySummary/)
+  assert.match(source, /后台会按退避策略继续尝试/)
   assert.match(source, /能否物理删除取决于来源/)
   assert.doesNotMatch(source, /永久删除|删除原图|安全清理原图/)
   assert.doesNotMatch(source, /删除后公开链接立即失效/)
@@ -126,6 +137,7 @@ test('media API contract stays isolated in one frontend service', async () => {
   assert.match(source, /imagePath\(imageId, '\/retry-delete'\)/)
   assert.match(source, /request\('\/media\/reconcile'/)
   assert.match(source, /deletion: payload\.deletion \|\| image\.deletion \|\| null/)
+  assert.match(source, /deleteRetry: payload\.deleteRetry \|\| null/)
 })
 
 test('shared navigation, time and command surfaces expose the media library', async () => {

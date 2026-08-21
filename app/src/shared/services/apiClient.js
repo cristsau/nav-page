@@ -76,6 +76,36 @@ function notifyUnauthorized(path) {
   }
 }
 
+async function responseError(response, path, options) {
+  const contentType = response.headers.get('content-type') || ''
+  const payload = contentType.includes('application/json')
+    ? await response.json()
+    : { error: await response.text() }
+  const error = new Error(payload.error || `Request failed: ${response.status}`)
+  error.status = response.status
+  error.code = payload.code || ''
+  error.payload = payload
+  if (response.status === 401 && shouldNotifyUnauthorized(path, options)) {
+    notifyUnauthorized(path)
+  }
+  return error
+}
+
+function downloadFilename(response) {
+  const disposition = response.headers.get('content-disposition') || ''
+  const utf8Match = disposition.match(/filename\*=UTF-8''([^;]+)/i)
+  if (utf8Match) {
+    try {
+      return decodeURIComponent(utf8Match[1].trim())
+    } catch {
+      return utf8Match[1].trim()
+    }
+  }
+  const quotedMatch = disposition.match(/filename="([^"]+)"/i)
+  const plainMatch = disposition.match(/filename=([^;]+)/i)
+  return (quotedMatch?.[1] || plainMatch?.[1] || 'download').trim()
+}
+
 export async function apiRequest(path, options = {}) {
   const response = await fetch(
     `${API_BASE_URL}${path}`,
@@ -99,4 +129,20 @@ export async function apiRequest(path, options = {}) {
   }
 
   return payload
+}
+
+export async function apiFileRequest(path, options = {}) {
+  const response = await fetch(
+    `${API_BASE_URL}${path}`,
+    buildApiRequestOptions(options)
+  )
+
+  if (!response.ok) throw await responseError(response, path, options)
+
+  return {
+    blob: await response.blob(),
+    filename: downloadFilename(response),
+    count: Number(response.headers.get('x-nav-export-count') || 0),
+    truncated: response.headers.get('x-nav-export-truncated') === 'true'
+  }
 }
