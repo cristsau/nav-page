@@ -393,46 +393,48 @@ function runMobileAction(action) {
     </button>
 
     <Teleport to="body">
-      <div
-        v-if="showMobileActions"
-        class="mobile-action-overlay"
-        @click.self="closeMobileActions()"
-        @keydown.esc.stop.prevent="closeMobileActions()"
-      >
-        <section
-          ref="mobileActionSheet"
-          :id="mobileMenuId"
-          class="mobile-action-sheet"
-          role="dialog"
-          aria-modal="true"
-          :aria-labelledby="`${mobileMenuId}-title`"
-          @keydown.tab="trapMobileActionFocus"
+      <Transition name="bookmark-action-dialog">
+        <div
+          v-if="showMobileActions"
+          class="mobile-action-overlay"
+          @click.self="closeMobileActions()"
+          @keydown.esc.stop.prevent="closeMobileActions()"
         >
-          <header class="mobile-action-sheet__header">
-            <div>
-              <div class="mobile-action-sheet__eyebrow">书签操作</div>
-              <h2 :id="`${mobileMenuId}-title`">{{ bookmark.title }}</h2>
+          <section
+            ref="mobileActionSheet"
+            :id="mobileMenuId"
+            class="mobile-action-sheet"
+            role="dialog"
+            aria-modal="true"
+            :aria-labelledby="`${mobileMenuId}-title`"
+            @keydown.tab="trapMobileActionFocus"
+          >
+            <header class="mobile-action-sheet__header">
+              <div>
+                <div class="mobile-action-sheet__eyebrow">书签操作</div>
+                <h2 :id="`${mobileMenuId}-title`">{{ bookmark.title }}</h2>
+              </div>
+              <button type="button" aria-label="关闭书签操作" @click="closeMobileActions()">
+                <Icon name="close" :size="20" />
+              </button>
+            </header>
+            <div class="mobile-action-sheet__actions">
+              <button ref="mobileFirstAction" type="button" @click="runMobileAction('ai')">
+                <Icon name="sparkles" :size="19" />
+                <span>AI 分析</span>
+              </button>
+              <button type="button" @click="runMobileAction('edit')">
+                <Icon name="edit" :size="19" />
+                <span>编辑书签</span>
+              </button>
+              <button class="is-danger" type="button" @click="runMobileAction('delete')">
+                <Icon name="trash" :size="19" />
+                <span>删除书签</span>
+              </button>
             </div>
-            <button type="button" aria-label="关闭书签操作" @click="closeMobileActions()">
-              <Icon name="close" :size="20" />
-            </button>
-          </header>
-          <div class="mobile-action-sheet__actions">
-            <button ref="mobileFirstAction" type="button" @click="runMobileAction('ai')">
-              <Icon name="sparkles" :size="19" />
-              <span>AI 分析</span>
-            </button>
-            <button type="button" @click="runMobileAction('edit')">
-              <Icon name="edit" :size="19" />
-              <span>编辑书签</span>
-            </button>
-            <button class="is-danger" type="button" @click="runMobileAction('delete')">
-              <Icon name="trash" :size="19" />
-              <span>删除书签</span>
-            </button>
-          </div>
-        </section>
-      </div>
+          </section>
+        </div>
+      </Transition>
     </Teleport>
   </article>
 </template>
@@ -825,9 +827,10 @@ function runMobileAction(action) {
   inset: 0;
   z-index: 1200;
   display: flex;
-  align-items: flex-end;
+  align-items: center;
   justify-content: center;
-  padding: 16px;
+  overflow-y: auto;
+  padding: clamp(20px, 5vh, 48px) 20px;
   background: color-mix(in srgb, black 54%, transparent);
   backdrop-filter: blur(5px);
   overscroll-behavior: contain;
@@ -835,12 +838,34 @@ function runMobileAction(action) {
 
 .mobile-action-sheet {
   width: min(100%, 460px);
-  overflow: hidden;
+  max-height: min(620px, calc(100dvh - 64px));
+  overflow: auto;
   color: var(--text-primary);
   background: var(--bg-card);
   border: 1px solid var(--border-color);
   border-radius: 24px;
   box-shadow: var(--shadow-lg);
+}
+
+.bookmark-action-dialog-enter-active,
+.bookmark-action-dialog-leave-active {
+  transition: opacity 160ms ease;
+}
+
+.bookmark-action-dialog-enter-active .mobile-action-sheet,
+.bookmark-action-dialog-leave-active .mobile-action-sheet {
+  transition: transform 190ms var(--ease-smooth), opacity 160ms ease;
+}
+
+.bookmark-action-dialog-enter-from,
+.bookmark-action-dialog-leave-to {
+  opacity: 0;
+}
+
+.bookmark-action-dialog-enter-from .mobile-action-sheet,
+.bookmark-action-dialog-leave-to .mobile-action-sheet {
+  opacity: 0;
+  transform: translateY(12px) scale(0.98);
 }
 
 .mobile-action-sheet__header {
@@ -923,7 +948,7 @@ function runMobileAction(action) {
   to { transform: rotate(360deg); }
 }
 
-@media (hover: none), (pointer: coarse), (any-hover: none), (any-pointer: coarse) {
+@media (hover: none) and (pointer: coarse), (max-width: 760px) {
   .bookmark-card__actions {
     display: none;
   }
@@ -943,13 +968,34 @@ function runMobileAction(action) {
   }
 }
 
+@media (max-width: 640px) {
+  .mobile-action-overlay {
+    align-items: flex-end;
+    padding: 12px 12px max(12px, env(safe-area-inset-bottom));
+  }
+
+  .mobile-action-sheet {
+    max-height: min(78dvh, 620px);
+    border-radius: 24px 24px 18px 18px;
+  }
+
+  .bookmark-action-dialog-enter-from .mobile-action-sheet,
+  .bookmark-action-dialog-leave-to .mobile-action-sheet {
+    transform: translateY(24px);
+  }
+}
+
 @media (prefers-reduced-motion: reduce) {
   .bookmark-card,
   .bookmark-card__actions,
   .bookmark-card__main,
   .bookmark-card__selection,
   .bookmark-card__sort-actions button,
-  .action-btn {
+  .action-btn,
+  .bookmark-action-dialog-enter-active,
+  .bookmark-action-dialog-leave-active,
+  .bookmark-action-dialog-enter-active .mobile-action-sheet,
+  .bookmark-action-dialog-leave-active .mobile-action-sheet {
     transition: none;
   }
 

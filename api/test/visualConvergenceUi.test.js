@@ -88,12 +88,12 @@ test('converged layouts retain focus, touch and reduced-motion protections', asy
 
   assert.match(group, /\.groups-tabs__main \{[\s\S]*?min-height: 44px/)
   assert.match(group, /\.groups-tabs__main:focus-visible/)
-  assert.match(group, /@media \(hover: none\), \(pointer: coarse\), \(any-hover: none\), \(any-pointer: coarse\)[\s\S]*?\.groups-tabs__sort-actions button \{[\s\S]*?width: 44px;[\s\S]*?height: 44px/)
+  assert.match(group, /@media \(hover: none\) and \(pointer: coarse\), \(max-width: 760px\)[\s\S]*?\.groups-tabs__sort-actions button \{[\s\S]*?width: 44px;[\s\S]*?height: 44px/)
   assert.match(group, /@media \(prefers-reduced-motion: reduce\)[\s\S]*?\.bookmark-card--add/)
 
   assert.match(item, /\.bookmark-card__more \{[\s\S]*?width: 44px;[\s\S]*?height: 44px/)
   assert.match(item, /\.bookmark-card__more:focus-visible/)
-  assert.match(item, /@media \(hover: none\), \(pointer: coarse\), \(any-hover: none\), \(any-pointer: coarse\)[\s\S]*?\.bookmark-card__selection,[\s\S]*?width: 44px;[\s\S]*?height: 44px/)
+  assert.match(item, /@media \(hover: none\) and \(pointer: coarse\), \(max-width: 760px\)[\s\S]*?\.bookmark-card__selection,[\s\S]*?width: 44px;[\s\S]*?height: 44px/)
   assert.match(item, /@media \(prefers-reduced-motion: reduce\)[\s\S]*?\.bookmark-card__main/)
 
   assert.match(whisper, /\.filter-tab \{[\s\S]*?min-height: 44px/)

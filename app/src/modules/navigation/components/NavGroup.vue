@@ -464,47 +464,49 @@ const mobileGroupMenuId = computed(() => (
     </div>
 
     <Teleport to="body">
-      <div
-        v-if="mobileActionGroup"
-        class="group-action-overlay"
-        @click.self="closeMobileGroupActions()"
-        @keydown.esc.stop.prevent="closeMobileGroupActions()"
-      >
-        <section
-          ref="mobileGroupActionSheet"
-          :id="mobileGroupMenuId"
-          class="group-action-sheet"
-          role="dialog"
-          aria-modal="true"
-          :aria-labelledby="`${mobileGroupMenuId}-title`"
-          @keydown.tab="trapMobileGroupActionFocus"
+      <Transition name="group-action-dialog">
+        <div
+          v-if="mobileActionGroup"
+          class="group-action-overlay"
+          @click.self="closeMobileGroupActions()"
+          @keydown.esc.stop.prevent="closeMobileGroupActions()"
         >
-          <header class="group-action-sheet__header">
-            <div>
-              <div class="group-action-sheet__eyebrow">分组操作</div>
-              <h2 :id="`${mobileGroupMenuId}-title`">{{ mobileActionGroup.name }}</h2>
+          <section
+            ref="mobileGroupActionSheet"
+            :id="mobileGroupMenuId"
+            class="group-action-sheet"
+            role="dialog"
+            aria-modal="true"
+            :aria-labelledby="`${mobileGroupMenuId}-title`"
+            @keydown.tab="trapMobileGroupActionFocus"
+          >
+            <header class="group-action-sheet__header">
+              <div>
+                <div class="group-action-sheet__eyebrow">分组操作</div>
+                <h2 :id="`${mobileGroupMenuId}-title`">{{ mobileActionGroup.name }}</h2>
+              </div>
+              <button type="button" aria-label="关闭分组操作" @click="closeMobileGroupActions()">
+                <Icon name="close" :size="20" />
+              </button>
+            </header>
+            <div class="group-action-sheet__actions">
+              <button ref="mobileGroupFirstAction" type="button" @click="runMobileGroupAction('edit')">
+                <Icon name="edit" :size="19" />
+                <span>编辑分组</span>
+              </button>
+              <button
+                class="is-danger"
+                type="button"
+                :disabled="pendingGroupId === mobileActionGroup.id"
+                @click="runMobileGroupAction('delete')"
+              >
+                <Icon name="trash" :size="19" />
+                <span>删除分组</span>
+              </button>
             </div>
-            <button type="button" aria-label="关闭分组操作" @click="closeMobileGroupActions()">
-              <Icon name="close" :size="20" />
-            </button>
-          </header>
-          <div class="group-action-sheet__actions">
-            <button ref="mobileGroupFirstAction" type="button" @click="runMobileGroupAction('edit')">
-              <Icon name="edit" :size="19" />
-              <span>编辑分组</span>
-            </button>
-            <button
-              class="is-danger"
-              type="button"
-              :disabled="pendingGroupId === mobileActionGroup.id"
-              @click="runMobileGroupAction('delete')"
-            >
-              <Icon name="trash" :size="19" />
-              <span>删除分组</span>
-            </button>
-          </div>
-        </section>
-      </div>
+          </section>
+        </div>
+      </Transition>
     </Teleport>
   </div>
 </template>
@@ -939,9 +941,10 @@ const mobileGroupMenuId = computed(() => (
   inset: 0;
   z-index: 1200;
   display: flex;
-  align-items: flex-end;
+  align-items: center;
   justify-content: center;
-  padding: 16px;
+  overflow-y: auto;
+  padding: clamp(20px, 5vh, 48px) 20px;
   background: color-mix(in srgb, black 54%, transparent);
   backdrop-filter: blur(5px);
   overscroll-behavior: contain;
@@ -949,12 +952,34 @@ const mobileGroupMenuId = computed(() => (
 
 .group-action-sheet {
   width: min(100%, 460px);
-  overflow: hidden;
+  max-height: min(620px, calc(100dvh - 64px));
+  overflow: auto;
   color: var(--text-primary);
   background: var(--bg-card);
   border: 1px solid var(--border-color);
   border-radius: 24px;
   box-shadow: var(--shadow-lg);
+}
+
+.group-action-dialog-enter-active,
+.group-action-dialog-leave-active {
+  transition: opacity 160ms ease;
+}
+
+.group-action-dialog-enter-active .group-action-sheet,
+.group-action-dialog-leave-active .group-action-sheet {
+  transition: transform 190ms var(--ease-smooth), opacity 160ms ease;
+}
+
+.group-action-dialog-enter-from,
+.group-action-dialog-leave-to {
+  opacity: 0;
+}
+
+.group-action-dialog-enter-from .group-action-sheet,
+.group-action-dialog-leave-to .group-action-sheet {
+  opacity: 0;
+  transform: translateY(12px) scale(0.98);
 }
 
 .group-action-sheet__header {
@@ -1064,9 +1089,24 @@ const mobileGroupMenuId = computed(() => (
   .empty-state__actions {
     display: grid;
   }
+
+  .group-action-overlay {
+    align-items: flex-end;
+    padding: 12px 12px max(12px, env(safe-area-inset-bottom));
+  }
+
+  .group-action-sheet {
+    max-height: min(78dvh, 620px);
+    border-radius: 24px 24px 18px 18px;
+  }
+
+  .group-action-dialog-enter-from .group-action-sheet,
+  .group-action-dialog-leave-to .group-action-sheet {
+    transform: translateY(24px);
+  }
 }
 
-@media (hover: none), (pointer: coarse), (any-hover: none), (any-pointer: coarse) {
+@media (hover: none) and (pointer: coarse), (max-width: 760px) {
   .groups-tabs__actions {
     display: none;
   }
@@ -1087,7 +1127,11 @@ const mobileGroupMenuId = computed(() => (
   .groups-tabs__sort-actions button,
   .groups-tabs__action,
   .groups-tabs__add,
-  .bookmark-card--add {
+  .bookmark-card--add,
+  .group-action-dialog-enter-active,
+  .group-action-dialog-leave-active,
+  .group-action-dialog-enter-active .group-action-sheet,
+  .group-action-dialog-leave-active .group-action-sheet {
     transition: none;
   }
 

@@ -1,6 +1,7 @@
 <script setup>
 import { ref, computed, onMounted, watch } from 'vue'
 import { useTheme } from '@/shared/composables/useTheme'
+import Icon from '@/shared/components/Icon.vue'
 import {
   applyStyleConfig,
   useConfig,
@@ -25,9 +26,17 @@ const activeSchemeMeta = computed(() => {
     : (colorSchemes[currentScheme.value] || colorSchemes.cream)
 })
 
-const colorSchemeList = computed(() => [
-  ...Object.entries(colorSchemes).map(([key, value]) => ({ id: key, ...value }))
-])
+const colorSchemeList = computed(() => Object.entries(colorSchemes)
+  .map(([key, value], index) => ({ id: key, sourceIndex: index, ...value }))
+  .sort((left, right) => {
+    const rank = (scheme) => {
+      if (scheme.id === 'linear') return -1
+      if (scheme.id === 'custom') return 1
+      return 0
+    }
+
+    return rank(left) - rank(right) || left.sourceIndex - right.sourceIndex
+  }))
 
 const radiusList = Object.entries(borderRadiusOptions).map(([key, value]) => ({ id: key, ...value }))
 const sizeList = Object.entries(cardSizeOptions).map(([key, value]) => ({ id: key, ...value }))
@@ -162,10 +171,16 @@ function clearBgImage() {
       </div>
     </div>
 
-    <div class="settings-item">
-      <div class="settings-item__info">
-        <div class="settings-item__label">配色方案</div>
-        <div class="settings-item__desc">内置方案和自定义方案都可切换</div>
+    <div class="settings-item settings-item--palette">
+      <div class="settings-item__heading">
+        <div class="settings-item__info">
+          <div class="settings-item__label">配色方案</div>
+          <div class="settings-item__desc">点击配色卡片即可应用；保存后会在登录设备间同步</div>
+        </div>
+        <div class="settings-item__current" aria-live="polite">
+          <Icon name="palette" :size="16" />
+          <span>当前：{{ activeSchemeMeta.name }}</span>
+        </div>
       </div>
       <div class="settings-item__control">
         <div class="color-schemes">
@@ -177,14 +192,25 @@ function clearBgImage() {
             :class="{ 'is-active': currentScheme === scheme.id }"
             :style="getSchemePreviewStyle(scheme)"
             :aria-pressed="currentScheme === scheme.id"
-            :aria-label="`使用${scheme.name}配色`"
+            :aria-label="currentScheme === scheme.id ? `当前配色：${scheme.name}` : `使用${scheme.name}配色`"
             @click="selectColorScheme(scheme.id)"
           >
             <span class="color-scheme__preview" aria-hidden="true">
               <span class="color-scheme__preview-card"></span>
               <span class="color-scheme__preview-accent"></span>
             </span>
-            <span class="color-scheme__name">{{ scheme.name }}</span>
+            <span class="color-scheme__copy">
+              <span class="color-scheme__name-row">
+                <span class="color-scheme__name">{{ scheme.name }}</span>
+                <span v-if="scheme.id === 'linear'" class="color-scheme__badge">推荐</span>
+              </span>
+              <span class="color-scheme__description">
+                {{ scheme.description || '使用你设置的专属颜色' }}
+              </span>
+            </span>
+            <span v-if="currentScheme === scheme.id" class="color-scheme__selected" aria-hidden="true">
+              <Icon name="check" :size="16" :stroke-width="2.2" />
+            </span>
           </button>
         </div>
       </div>
@@ -349,13 +375,50 @@ function clearBgImage() {
   display: block;
 }
 
+.settings-item--palette {
+  display: grid;
+  gap: 16px;
+}
+
 .settings-item:last-child {
   border-bottom: none;
 }
 
 .settings-item__info {
   flex: 1;
+  min-width: 0;
   padding-right: 20px;
+}
+
+.settings-item__heading {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 20px;
+}
+
+.settings-item--palette .settings-item__info {
+  padding-right: 0;
+}
+
+.settings-item--palette .settings-item__control {
+  width: 100%;
+  min-width: 0;
+}
+
+.settings-item__current {
+  display: inline-flex;
+  align-items: center;
+  flex: 0 0 auto;
+  gap: 7px;
+  min-height: 36px;
+  padding: 7px 11px;
+  color: var(--accent-color);
+  background: var(--accent-bg);
+  border: 1px solid color-mix(in srgb, var(--accent-color) 36%, var(--border-light));
+  border-radius: 999px;
+  font-size: 12px;
+  font-weight: 650;
 }
 
 .settings-item__label {
@@ -371,11 +434,16 @@ function clearBgImage() {
 }
 
 .theme-options,
-.option-pills,
-.color-schemes {
+.option-pills {
   display: flex;
   flex-wrap: wrap;
   gap: 8px;
+}
+
+.color-schemes {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(190px, 1fr));
+  gap: 10px;
 }
 
 .theme-option,
@@ -393,11 +461,32 @@ function clearBgImage() {
   min-height: 44px;
 }
 
+.color-scheme {
+  position: relative;
+  min-width: 0;
+  min-height: 76px;
+  padding: 12px;
+  text-align: left;
+  border: 1px solid var(--border-light);
+  transition:
+    border-color var(--transition-fast),
+    background var(--transition-fast),
+    box-shadow var(--transition-fast),
+    transform var(--transition-fast);
+}
+
+.color-scheme:hover {
+  transform: translateY(-1px);
+  border-color: color-mix(in srgb, var(--accent-color) 42%, var(--border-light));
+  background: var(--bg-hover);
+}
+
 .theme-option.is-active,
 .option-pill.is-active,
 .color-scheme.is-active {
   background: var(--accent-bg);
-  box-shadow: 0 0 0 2px var(--accent-color);
+  border-color: var(--accent-color);
+  box-shadow: 0 0 0 2px color-mix(in srgb, var(--accent-color) 34%, transparent);
 }
 
 .theme-option input {
@@ -413,6 +502,59 @@ function clearBgImage() {
   border: 1px solid color-mix(in srgb, var(--scheme-color) 24%, var(--scheme-card));
   border-radius: 7px;
   background: var(--scheme-bg);
+}
+
+.color-scheme__copy {
+  display: grid;
+  min-width: 0;
+  gap: 4px;
+}
+
+.color-scheme__name-row {
+  display: flex;
+  align-items: center;
+  min-width: 0;
+  gap: 7px;
+}
+
+.color-scheme__name {
+  overflow: hidden;
+  font-size: 13px;
+  font-weight: 700;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.color-scheme__badge {
+  flex: 0 0 auto;
+  padding: 2px 6px;
+  color: var(--accent-color);
+  background: color-mix(in srgb, var(--accent-color) 14%, transparent);
+  border-radius: 999px;
+  font-size: 10px;
+  font-weight: 700;
+}
+
+.color-scheme__description {
+  display: -webkit-box;
+  overflow: hidden;
+  color: var(--text-muted);
+  font-size: 11px;
+  line-height: 1.35;
+  -webkit-box-orient: vertical;
+  -webkit-line-clamp: 2;
+}
+
+.color-scheme__selected {
+  display: grid;
+  place-items: center;
+  flex: 0 0 auto;
+  width: 24px;
+  height: 24px;
+  margin-left: auto;
+  color: #fff;
+  background: var(--accent-color);
+  border-radius: 50%;
 }
 
 .color-scheme__preview-card {
@@ -609,11 +751,39 @@ function clearBgImage() {
   .custom-theme-grid {
     grid-template-columns: 1fr 1fr;
   }
+
+  .settings-item__heading {
+    align-items: stretch;
+    flex-direction: column;
+    gap: 10px;
+  }
+
+  .settings-item__current {
+    align-self: flex-start;
+  }
+
+  .color-schemes {
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+  }
 }
 
 @media (max-width: 520px) {
   .custom-theme-grid {
     grid-template-columns: 1fr;
+  }
+
+  .color-schemes {
+    grid-template-columns: minmax(0, 1fr);
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .color-scheme {
+    transition: none;
+  }
+
+  .color-scheme:hover {
+    transform: none;
   }
 }
 </style>

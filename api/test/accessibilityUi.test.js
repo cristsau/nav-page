@@ -35,10 +35,11 @@ test('time settings, search and command palette expose correct accessible names'
 })
 
 test('group fields have programmatic labels and touch-first controls keep 44px targets', async () => {
-  const [form, variables, navItem] = await Promise.all([
+  const [form, variables, navItem, navGroup] = await Promise.all([
     sourceFile('modules/navigation/components/AddToNav.vue'),
     sourceFile('styles/variables.css'),
-    sourceFile('modules/navigation/components/NavItem.vue')
+    sourceFile('modules/navigation/components/NavItem.vue'),
+    sourceFile('modules/navigation/components/NavGroup.vue')
   ])
 
   assert.match(form, /for="group-name-field"[\s\S]*id="group-name-field"/)
@@ -46,6 +47,12 @@ test('group fields have programmatic labels and touch-first controls keep 44px t
   assert.match(variables, /\(any-pointer: coarse\)[\s\S]*\[role='button'\][\s\S]*min-width: 44px !important;[\s\S]*min-height: 44px !important;/)
   assert.match(navItem, /class="mobile-action-sheet"[\s\S]*aria-modal="true"/)
   assert.match(navItem, /@keydown\.tab="trapMobileActionFocus"/)
+  assert.match(navItem, /\.mobile-action-overlay\s*\{[\s\S]*?align-items: center;/)
+  assert.match(navItem, /@media \(max-width: 640px\)[\s\S]*?\.mobile-action-overlay\s*\{[\s\S]*?align-items: flex-end;/)
+  assert.match(navGroup, /\.group-action-overlay\s*\{[\s\S]*?align-items: center;/)
+  assert.match(navGroup, /@media \(max-width: 640px\)[\s\S]*?\.group-action-overlay\s*\{[\s\S]*?align-items: flex-end;/)
+  assert.match(navItem, /<Transition name="bookmark-action-dialog">/)
+  assert.match(navGroup, /<Transition name="group-action-dialog">/)
 })
 
 test('new navigation and media empty states only promise implemented actions', async () => {
