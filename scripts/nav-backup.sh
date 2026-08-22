@@ -151,7 +151,7 @@ detail: $message"
 
   # The bot token is supplied to curl through its stdin-backed config, never
   # through argv (and therefore never through /proc/<pid>/cmdline).
-  if ! curl --config - \
+  if ! curl -q --config - \
     --fail --silent --show-error \
     --max-time "${NAV_TELEGRAM_TIMEOUT_SECONDS:-10}" \
     --data-urlencode "chat_id=$TELEGRAM_CHAT_ID_VALUE" \

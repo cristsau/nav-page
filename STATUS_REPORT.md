@@ -86,6 +86,9 @@
 
 - 仓库已有 `scripts/nav-backup.sh`、`scripts/nav-restore-rehearsal.sh`、环境示例和
   `docs/NAV_BACKUP_RUNBOOK.md`；受控发布会做发布前后备份与隔离恢复演练。
+- 仓库已补充三组默认不启用的 systemd 调度模板、独立 `OnFailure` 通知、只在成功后发送的
+  双 dead-man 心跳、最新备份选择器和只安装不启用的部署脚本；生产配置和现场验收完成前
+  状态仍是 `SOURCE_READY / NOT_DEPLOYED`。
 - 2026-08-23 OVH 只读核验确认：未安装 `restic`，没有 NAV/restic systemd unit 或 timer，
   也没有 `/etc/nav/nav-backup.env`、`/etc/nav/restic.env` 和 `/usr/local/sbin` 稳定入口。
 - 因此当前没有自动计划、异地加密上传、远端保留清理、备份失败外部报警或定期恢复演练。
@@ -102,7 +105,7 @@
 
 ## 仍未完成
 
-1. 自动异地加密备份、远端保留策略、定期隔离恢复、失败报警与外部 dead-man。
+1. 为 OVH 配置并验收自动异地加密备份、远端保留策略、定期隔离恢复、失败报警与外部 dead-man。
 2. 唯一 RP ID 决策后的 Passkey/WebAuthn。
 3. 提前/离线提醒与定时失效链接检查。
 4. PostgreSQL 中文 BM25、错别字模糊匹配、向量语义检索和带来源的个人数据助理。

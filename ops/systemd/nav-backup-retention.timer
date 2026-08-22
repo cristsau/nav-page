@@ -1,0 +1,12 @@
+[Unit]
+Description=Schedule DOMO NAV bounded backup retention
+
+[Timer]
+OnCalendar=Sun *-*-* 05:17:00 UTC
+RandomizedDelaySec=20m
+AccuracySec=1m
+Persistent=true
+Unit=nav-backup-retention.service
+
+[Install]
+WantedBy=timers.target

@@ -9,6 +9,12 @@ Those operations require a fresh production-change authorization, a
 last-minute backup, a maintenance window, rollback preparation, and acceptance
 checks.
 
+Repository automation status on 2026-08-23: the systemd units, success
+heartbeat, independent `OnFailure` notifier, latest-backup selector and
+installer are source-controlled candidates. The installer does not enable or
+start timers. Until the production host is separately configured and accepted,
+the presence of these files must not be described as automatic offsite backup.
+
 ## Safety properties
 
 - Backups are written under a mode-`700` local root with `umask 077`.
@@ -117,6 +123,58 @@ sudo bash scripts/nav-backup.sh \
 Dry-run performs no dump, file copy, restore container start, Telegram call,
 cloud write, or deletion.
 
+### Install the scheduler files without enabling them
+
+The repository provides:
+
+```text
+scripts/install-nav-backup-systemd.sh
+ops/systemd/nav-backup.service
+ops/systemd/nav-backup.timer
+ops/systemd/nav-backup-retention.service
+ops/systemd/nav-backup-retention.timer
+ops/systemd/nav-restore-rehearsal.service
+ops/systemd/nav-restore-rehearsal.timer
+ops/systemd/nav-scheduled-failure@.service
+```
+
+After reviewing the exact release and paths, install them from a clean, locked
+merge SHA:
+
+```bash
+sudo bash scripts/install-nav-backup-systemd.sh
+```
+
+This copies scripts and units, creates only the bounded backup/report
+directories, runs `systemd-analyze verify` when available, and reloads systemd.
+It deliberately does **not** create credentials, initialize restic, enable a
+timer, start a job, alter containers, or delete a backup.
+
+The example release paths contain `REPLACE_WITH_RELEASE` and the runtime
+container names contain `REPLACE_*`. Replace them with the currently accepted
+OVH release and exact `docker ps` names. Every later NAV release must update and
+dry-run these paths before the previous release is eligible for removal.
+
+### Scheduler layout
+
+| Unit | Default schedule | Mutation gate | Success signal |
+| --- | --- | --- | --- |
+| `nav-backup.service` | daily at 03:17 UTC plus 0–15 min jitter | encrypted upload only | backup heartbeat |
+| `nav-backup-retention.service` | Sunday 05:17 UTC plus 0–20 min jitter | cloud upload plus separately enabled local/remote retention | backup heartbeat |
+| `nav-restore-rehearsal.service` | Wednesday 04:47 UTC plus 0–20 min jitter | isolated, network-less temporary PostgreSQL only | restore heartbeat |
+
+All timers use `Persistent=true`. The backup scripts share a nonblocking lock;
+an accidental overlap fails rather than running two snapshots concurrently.
+The rehearsal selector accepts only a regular `nav-*` directory directly below
+`NAV_BACKUP_ROOT` and refuses to send a success signal for a backup older than
+`NAV_REHEARSAL_MAX_BACKUP_AGE_HOURS`.
+
+The units use a read-only system view plus narrow write paths under
+`/var/backups` and `/run/lock`, resource deprioritization, `UMask=0077`,
+`NoNewPrivileges`, private devices/tmp, and kernel/control-group protections.
+They still need the Docker socket and outbound HTTPS for PostgreSQL tools,
+restic, Telegram and the external heartbeat.
+
 ## Local backup
 
 Run:
@@ -188,6 +246,45 @@ host, broken timer, or disabled unit. The external dead-man covers a missing
 success heartbeat. Keep the two mechanisms independent and test both failure
 paths; neither changes the script's non-zero exit semantics.
 
+The supplied `nav-scheduled-failure@.service` calls
+`/usr/local/sbin/nav-job-failure-notify`. It reads the same strict two-key,
+mode-`600` Telegram credential file and reports only host, unit and UTC time;
+it never copies journal output, environment values or exception payloads into
+Telegram. It is intentionally separate from the backup process so early config
+or dependency failures still have a notification path.
+
+## External success heartbeat and uptime monitor
+
+Create two independent dead-man checks outside OVH: one for daily backup and
+one for weekly restore. Store their bearer-like ping URLs only in
+`/etc/nav/nav-heartbeat.env`:
+
+```text
+NAV_BACKUP_HEARTBEAT_URL=https://<external-monitor>/<secret-backup-id>
+NAV_RESTORE_HEARTBEAT_URL=https://<external-monitor>/<secret-restore-id>
+NAV_HEARTBEAT_TIMEOUT_SECONDS=10
+```
+
+Set owner `root:root` and mode `600`. `nav-heartbeat` rejects non-HTTPS URLs,
+passes the URL to curl through stdin rather than argv, and exits non-zero if the
+external service does not acknowledge it. systemd invokes it only through
+`ExecStartPost`, so a failed backup or failed restore can never create a false
+success heartbeat.
+
+Recommended external policies:
+
+- daily backup check: expected every 24 hours, grace at least 6 hours beyond
+  the longest observed backup and restic-check duration;
+- weekly restore check: expected every 7 days, grace at least 24 hours;
+- independent HTTPS uptime checks for both `nav.skrskr.net/api/health` and
+  `nav.cristsau.cn/api/health`, from outside OVH, every 5 minutes with an alert
+  only after multiple consecutive failures.
+
+The dead-man provider must not run on OVH. A provider-hosted monitor is the
+simplest option; a later self-hosted monitor belongs on another retained node
+and requires its own authorization. Never put a real heartbeat URL in Git,
+chat, a systemd unit, process arguments or logs.
+
 ## Encrypted Cloudflare R2/S3 export
 
 Use a dedicated bucket and a dedicated restic credential. Do not reuse the
@@ -247,6 +344,19 @@ paths and statistics but no restic password or S3 secret.
 There is no plaintext bundle upload fallback. If restic or its encrypted
 repository is unavailable, cloud export fails closed and the completed local
 backup remains available.
+
+The minimum production inputs that cannot be committed are:
+
+1. one dedicated R2/S3 bucket and bucket-scoped access key;
+2. one randomly generated restic repository password, preserved independently
+   from OVH in a recoverable password vault;
+3. the backup and restore dead-man URLs;
+4. a dedicated Telegram bot token/chat target or an explicitly accepted reuse
+   of the existing administrator alert channel.
+
+Enter them only on the server or the provider's own consent page. The key ID,
+secret, password and heartbeat URLs must not be pasted into an issue, PR,
+documentation, terminal transcript or Codex message.
 
 ## Retention
 
@@ -337,6 +447,51 @@ Acceptance criteria:
 
 Reports are mode `600` files under `NAV_REHEARSAL_REPORT_DIR`. A rehearsal
 failure returns non-zero and sends the same opt-in Telegram alert.
+
+For the scheduled path, test the selector before enabling its timer:
+
+```bash
+sudo /usr/local/sbin/nav-restore-latest --config /etc/nav/nav-backup.env
+```
+
+It chooses only the newest eligible local backup and then delegates to the same
+isolated rehearsal script. It does not restore production or switch traffic.
+
+## First production enablement gate
+
+Do not enable timers immediately after file installation. Complete this order
+in one authorized maintenance window:
+
+1. verify current release/container paths and file ownership/modes without
+   printing contents;
+2. initialize the dedicated restic repository once and record its repository
+   ID without recording credentials;
+3. run the backup script manually with `--cloud-upload`, then verify the exact
+   restic snapshot and manifest evidence;
+4. run one full `nav-restore-latest` isolated restore and confirm table set,
+   row counts and migration rows;
+5. send clearly labelled manual backup/restore heartbeat tests and confirm the
+   provider deadlines;
+6. run each systemd service manually and review its exit status/journal;
+7. inject a harmless preflight failure to prove `OnFailure`, then restore the
+   valid config;
+8. enable only the three timers and inspect their next-run times:
+
+   ```bash
+   sudo systemctl enable --now \
+     nav-backup.timer \
+     nav-backup-retention.timer \
+     nav-restore-rehearsal.timer
+   systemctl list-timers --all 'nav-*'
+   ```
+
+9. recheck NAV/CLIProxyAPI/PostgreSQL/NPM/Vaultwarden/Komari health and restart
+   counts; scheduler enablement must not rebuild or restart them.
+
+Rollback disables the three timers and stops only a currently running backup
+or rehearsal after confirming its stage. Keep completed local/cloud snapshots,
+restic password, evidence and config files intact; rollback must not delete the
+only recovery copy.
 
 ## Cloud recovery rehearsal
 
