@@ -134,6 +134,16 @@ export const config = {
     process.env.NAV_MEDIA_DELETE_RETRY_MAX_BACKOFF_SECONDS,
     86_400
   ),
+  maintenanceAlertsEnabled:
+    process.env.NAV_MAINTENANCE_ALERTS_ENABLED === 'true',
+  maintenanceAlertFailureThreshold: normalizePositiveInteger(
+    process.env.NAV_MAINTENANCE_ALERT_FAILURE_THRESHOLD,
+    3
+  ),
+  maintenanceAlertCooldownSeconds: normalizePositiveInteger(
+    process.env.NAV_MAINTENANCE_ALERT_COOLDOWN_SECONDS,
+    21_600
+  ),
   trustedProxyAddresses: normalizeTrustedProxyAddresses(
     process.env.TRUSTED_PROXY_ADDRESSES
   ),

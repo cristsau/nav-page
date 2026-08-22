@@ -1,26 +1,15 @@
 # NAV background maintenance
 
-Status: `LOCAL_READY / NOT_PUSHED / NOT_DEPLOYED` on 2026-08-21.
+Status on 2026-08-22:
 
-This document covers two bounded workers and the API/container log limits in the
-local candidate `codex/nav-unfinished-p1-20260821`. It contains no credentials.
+- bounded security-event retention and image-delete retry: `VERIFIED_LIVE` in production SHA `369024f9883a87fb0e1bc05a7665cb2e76437ae2`;
+- persistent job status and in-process Telegram failure/recovery alerts: `LOCAL_READY / NOT_PUSHED / NOT_DEPLOYED` on branch `codex/nav-maintenance-observability-20260822`.
 
-## Safety defaults
+This document contains no credentials, private data or real environment values.
 
-Both workers are disabled in `api/.env.example`. Merely deploying the code and
-migration does not delete audit rows or retry image deletion:
+## Existing bounded workers
 
-```dotenv
-NAV_SECURITY_EVENT_RETENTION_ENABLED=false
-NAV_MEDIA_DELETE_RETRY_ENABLED=false
-```
-
-Migration `017_background_maintenance.sql` only creates a partial index for
-pending automatic image deletions. It does not update or delete existing rows.
-
-## Security-event retention
-
-The proposed policy is:
+Security-event retention uses three online windows:
 
 | Class | Examples | Online retention |
 | --- | --- | ---: |
@@ -28,83 +17,111 @@ The proposed policy is:
 | Denied | failed or denied login | 180 days |
 | Critical | recovery, account changes, administrator operations | 365 days |
 
-The worker uses one database advisory lock across replicas, deletes the oldest
-eligible records in batches of 500, runs at most 20 batches per cycle, and waits
-for an active cycle during graceful shutdown. It never stores deleted event
-payloads in a replacement log.
+The worker holds one PostgreSQL advisory lock across replicas, deletes the
+oldest eligible rows in bounded batches and waits for an active cycle during a
+graceful shutdown. Backups retain their historical rows; online retention is not
+backup destruction.
 
-Before enabling it, run a current PostgreSQL backup and isolated restore. Then
-perform a read-only count using the same three policy windows and retain the
-result in release evidence. Existing backups still contain their historical
-rows; online retention is not backup destruction.
+The image worker considers only `auto` assets in `delete_pending` or
+`delete_failed`, with a bounded attempt count and exponential backoff. Every
+candidate is revalidated under a row lock immediately before the upstream
+delete. A restored note reference returns the asset to active state instead of
+deleting it.
 
-## Security-event export
+Migration `017_background_maintenance.sql` added only the partial retry index.
+It was applied and verified before the workers were enabled in production.
 
-Administrators can export the current filtered online records as CSV or JSON.
-The endpoint is capped at 10,000 records and reports truncation in response
-headers and in the UI. It includes only structured IDs, counts, timestamps and
-the same 16-character correlation fingerprints shown in settings. Raw IP,
-User-Agent, credentials, tokens and request bodies are not exported.
+## Persistent status
 
-## Image deletion retry
+Migration `018_maintenance_observability.sql` adds
+`maintenance_job_status` and seeds these internal jobs:
 
-Only rows satisfying all of these conditions are candidates:
+- `security_event_retention`;
+- `media_delete_retry`.
 
-- retention is `auto`;
-- state is `delete_pending` or `delete_failed`;
-- the configured maximum attempt count has not been reached;
-- exponential backoff has elapsed.
+For each completed run it stores only:
 
-Each selected row is passed through the existing deletion transaction, which
-locks the row and rechecks retention, pending state and live note references
-before calling the image-bed delete API. A newly restored reference returns the
-asset to active state instead of deleting it. One advisory lock prevents two API
-replicas from running the batch together; manual retries remain safe because the
-row is revalidated under lock.
+- start, success/failure and duration timestamps;
+- a small whitelist of numeric counters;
+- consecutive failure count;
+- a bounded error code such as `ECONNREFUSED`;
+- failure-alert reservation and notification-delivery status.
 
-Recommended first production settings after the image-library Token is verified:
+It never stores an exception message, stack, URL, image name, request body,
+credential, Token or deleted audit payload. A second replica that skips because
+the advisory lock is held does not overwrite the last completed state.
+
+Administrators read the state through:
+
+```text
+GET /api/admin/maintenance/status
+```
+
+The endpoint is administrator-only and returns `Cache-Control: private,
+no-store`. Settings displays `已关闭`, `等待首次运行`, `正常` or `需关注`, plus
+last success/failure, duration, counters and notification delivery. The security
+audit section remains collapsed and loads both audit rows and task status only
+when opened.
+
+## Failure and recovery notifications
+
+The new alert settings are deliberately disabled in the example file:
 
 ```dotenv
-NAV_MEDIA_DELETE_RETRY_ENABLED=true
-NAV_MEDIA_DELETE_RETRY_INTERVAL_SECONDS=3600
-NAV_MEDIA_DELETE_RETRY_BATCH_SIZE=10
-NAV_MEDIA_DELETE_RETRY_MAX_ATTEMPTS=8
-NAV_MEDIA_DELETE_RETRY_BASE_BACKOFF_SECONDS=900
-NAV_MEDIA_DELETE_RETRY_MAX_BACKOFF_SECONDS=86400
+NAV_MAINTENANCE_ALERTS_ENABLED=false
+NAV_MAINTENANCE_ALERT_FAILURE_THRESHOLD=3
+NAV_MAINTENANCE_ALERT_COOLDOWN_SECONDS=21600
 ```
+
+When enabled, the worker reserves an alert only after the configured consecutive
+failure threshold and suppresses repeated alerts during the cooldown. It reuses
+each enabled administrator Telegram target and sends only the task label,
+failure count, bounded error code and time. The first later successful run sends
+one recovery notification. Per-target delivery uses `Promise.allSettled`, so one
+invalid administrator target does not prevent delivery to the others.
+
+This is **in-process monitoring**. If the host, container, network or scheduler
+is completely offline, it cannot notify. Independent off-host health checks and
+a dead-man signal remain mandatory.
 
 ## Logging bounds
 
-The API defaults to `warn` in production and redacts authorization, cookie,
-API-key, password and token fields. Source Compose uses Docker's `local` driver
-for API and PostgreSQL with `10m × 3` compressed files per container. External
-alert delivery is not part of this candidate; worker failures are structured
-server errors ready for a later alert collector.
+The API defaults to `warn` in production and redacts authorization, cookies,
+API keys, passwords and Token fields. Source Compose uses Docker's `local`
+driver with `10m × 3` compressed files per API/PostgreSQL container. Persistent
+maintenance status is bounded to two rows and is updated in place, so it does
+not create an ever-growing event table.
 
-## Release and acceptance
+## Release and acceptance for migration 018
 
-1. Let GitHub CI install dependencies, run the complete API tests and build the
-   Vue frontend. Do not replace failed CI with a local unreviewed build.
-2. Back up PostgreSQL and complete an isolated restore rehearsal.
-3. Deploy the code with both workers disabled; apply and verify migration 017.
-4. Confirm both domains can list security events and export narrowly filtered
-   CSV/JSON without raw network values.
-5. Confirm the image library reports the retry policy and manual retry still
-   works.
-6. Enable image retry first, observe at least one interval, and verify no image
-   with an active note reference is removed.
-7. Count retention candidates, approve the result, then enable audit retention
-   and verify the first bounded batch and table/index health.
+1. Let GitHub CI install dependencies, run the full API suite and build Vue; do
+   not install project npm dependencies on the user's computer.
+2. Lock the merge SHA, back up PostgreSQL/configuration and prove an isolated
+   restore before switching.
+3. Apply and verify migration `018`; confirm exactly the two seeded job rows and
+   all constraints without modifying worker data.
+4. Rebuild only `nav-api` and `nav-web`. Keep PostgreSQL, CLIProxyAPI, NPM and
+   unrelated services untouched.
+5. With alerts still disabled, confirm both domains can expand Settings →
+   Account Security and Audit, read both jobs, refresh, and retain login state.
+6. Confirm a normal worker run updates success time and counters without adding
+   security-event rows or leaking raw errors.
+7. Verify the administrator Telegram test target, then enable alerts. Use an
+   injected test failure or isolated fixture—not a destructive production
+   failure—to prove threshold, cooldown, delivery status and recovery once.
+8. Confirm health, container restart counts, API logs, dual-domain CORS, image
+   library, AI and existing background-worker behavior.
 
-Rollback is configuration-first: set either worker's `ENABLED` value to `false`
-and rebuild only `nav-api` from the last known-good release. Migration 017 is an
-additive index and can safely remain after application rollback. Do not drop the
-index or rewrite migration history during an incident.
+Rollback is application-first: disable `NAV_MAINTENANCE_ALERTS_ENABLED`, restore
+the previous release SHA `369024f9883a87fb0e1bc05a7665cb2e76437ae2`, and
+rebuild only API/Web. Migration `018` is additive and may safely remain; do not
+drop the table or rewrite migration history during an incident.
 
 ## Still outside this batch
 
-- remote/offsite backup scheduling and dead-man alerting;
-- external delivery of worker-failure alerts;
+- automatic encrypted offsite backup scheduling, restore drills and backup
+  failure alerts;
+- independent external uptime/dead-man monitoring;
 - Passkey/WebAuthn;
 - offline push reminders and scheduled broken-link scans;
 - BM25/fuzzy/vector search, unified sourced AI assistant and cost visibility.

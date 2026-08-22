@@ -13,6 +13,7 @@ import aiSearchRoutes from './routes/aiSearch.js'
 import authRoutes from './routes/auth.js'
 import customSearchEngineRoutes from './routes/customSearchEngines.js'
 import migrationRoutes from './routes/migration.js'
+import maintenanceRoutes from './routes/maintenance.js'
 import mediaRoutes from './routes/media.js'
 import navigationRoutes from './routes/navigation.js'
 import noteAiRoutes from './routes/noteAi.js'
@@ -114,6 +115,7 @@ export function createApp() {
   app.register(authRoutes, { prefix: '/api' })
   app.register(customSearchEngineRoutes, { prefix: '/api' })
   app.register(migrationRoutes, { prefix: '/api' })
+  app.register(maintenanceRoutes, { prefix: '/api' })
   app.register(mediaRoutes, { prefix: '/api' })
   app.register(navigationRoutes, { prefix: '/api' })
   app.register(noteAiRoutes, { prefix: '/api' })

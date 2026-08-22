@@ -419,12 +419,86 @@ async function verifySecurityControlsSchema() {
   }
 }
 
+async function verifyMaintenanceObservabilitySchema() {
+  const expectedColumns = [
+    'job_name',
+    'last_started_at',
+    'last_succeeded_at',
+    'last_failed_at',
+    'last_duration_ms',
+    'last_outcome',
+    'last_result',
+    'consecutive_failures',
+    'last_error_code',
+    'alert_open',
+    'last_alert_at',
+    'last_notification_kind',
+    'last_notification_status',
+    'last_notification_at',
+    'last_notification_error_code',
+    'updated_at'
+  ]
+  const columns = await query(
+    `
+      SELECT column_name
+      FROM information_schema.columns
+      WHERE table_schema = current_schema()
+        AND table_name = 'maintenance_job_status'
+    `
+  )
+  assertExactSet(
+    'maintenance job status columns',
+    columns.rows.map((row) => row.column_name),
+    expectedColumns
+  )
+
+  const expectedConstraints = [
+    'maintenance_job_status_job_name_check',
+    'maintenance_job_status_duration_check',
+    'maintenance_job_status_outcome_check',
+    'maintenance_job_status_result_check',
+    'maintenance_job_status_failure_count_check',
+    'maintenance_job_status_error_code_check',
+    'maintenance_job_status_notification_kind_check',
+    'maintenance_job_status_notification_status_check',
+    'maintenance_job_status_notification_error_check'
+  ]
+  const constraints = await query(
+    `
+      SELECT conname
+      FROM pg_constraint
+      WHERE conrelid = 'maintenance_job_status'::regclass
+        AND conname = ANY($1::text[])
+    `,
+    [expectedConstraints]
+  )
+  assertExactSet(
+    'maintenance job status constraints',
+    constraints.rows.map((row) => row.conname),
+    expectedConstraints
+  )
+
+  const jobs = await query(
+    `
+      SELECT job_name
+      FROM maintenance_job_status
+      ORDER BY job_name ASC
+    `
+  )
+  assertExactSet(
+    'maintenance job status seeds',
+    jobs.rows.map((row) => row.job_name),
+    ['media_delete_retry', 'security_event_retention']
+  )
+}
+
 async function main() {
   await verifyMigrationLedger()
   await verifyNavigationMaintenanceSchema()
   await verifyReminderSchema()
   await verifyMediaLibrarySchema()
   await verifySecurityControlsSchema()
+  await verifyMaintenanceObservabilitySchema()
   console.log('migration schema verification complete')
 }
 

@@ -161,3 +161,37 @@ test('media retry scheduler prevents overlap and shutdown waits for the active b
   await stopping
   assert.equal(stopped, true)
 })
+
+test('media retry scheduler reports an operational failure without exposing it to persistence directly', async () => {
+  let timeoutCallback
+  const observations = []
+  const clockValues = [5_000, 5_600]
+  const stop = startMediaDeleteRetry({
+    enabled: true,
+    policy: POLICY,
+    poolInstance: {},
+    retryFn() {},
+    runFn: async () => {
+      throw Object.assign(new Error('private upstream message'), { code: 'ETIMEDOUT' })
+    },
+    observer: {
+      async failed(payload) { observations.push(payload) }
+    },
+    clock: () => clockValues.shift(),
+    timerApi: {
+      setTimeout(callback) {
+        timeoutCallback = callback
+        return { unref() {} }
+      },
+      clearTimeout() {},
+      setInterval() { return { unref() {} } },
+      clearInterval() {}
+    }
+  })
+
+  timeoutCallback()
+  await stop()
+  assert.equal(observations.length, 1)
+  assert.equal(observations[0].durationMs, 600)
+  assert.equal(observations[0].error.code, 'ETIMEDOUT')
+})

@@ -42,6 +42,17 @@ const MAX_BATCHES_PER_RUN = 100
 const MIN_INTERVAL_SECONDS = 300
 const STARTUP_DELAY_MS = 30_000
 
+async function notifyObserver(observer, method, payload, logger) {
+  try {
+    await observer?.[method]?.(payload)
+  } catch (error) {
+    logger?.warn?.(
+      { err: error, observerMethod: method },
+      'security-event retention status could not be recorded'
+    )
+  }
+}
+
 function boundedInteger(value, name, { minimum = 1, maximum }) {
   const parsed = Number(value)
   if (
@@ -161,8 +172,10 @@ export function startSecurityEventRetention({
   policy,
   poolInstance,
   logger,
+  observer,
   pruneFn = pruneExpiredSecurityEvents,
-  timerApi = globalThis
+  timerApi = globalThis,
+  clock = () => Date.now()
 }) {
   if (!enabled) return async () => {}
 
@@ -175,17 +188,34 @@ export function startSecurityEventRetention({
   const run = () => {
     if (stopped || activeRun) return activeRun
 
+    const startedAtMs = clock()
+
     activeRun = Promise.resolve()
       .then(() => pruneFn({ poolInstance, policy: validatedPolicy }))
-      .then((result) => {
+      .then(async (result) => {
+        const finishedAtMs = clock()
+        await notifyObserver(observer, 'succeeded', {
+          result,
+          startedAt: new Date(startedAtMs),
+          finishedAt: new Date(finishedAtMs),
+          durationMs: Math.max(0, finishedAtMs - startedAtMs)
+        }, logger)
         if (result?.deletedCount > 0) {
           logger?.info?.(
             { deletedCount: result.deletedCount, batches: result.batches },
             'expired security events pruned'
           )
         }
+        return result
       })
-      .catch((error) => {
+      .catch(async (error) => {
+        const finishedAtMs = clock()
+        await notifyObserver(observer, 'failed', {
+          error,
+          startedAt: new Date(startedAtMs),
+          finishedAt: new Date(finishedAtMs),
+          durationMs: Math.max(0, finishedAtMs - startedAtMs)
+        }, logger)
         logger?.error?.(error, 'failed to prune expired security events')
       })
       .finally(() => {

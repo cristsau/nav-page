@@ -43,6 +43,17 @@ export const SELECT_MEDIA_DELETE_RETRY_CANDIDATES_SQL = `
 
 const STARTUP_DELAY_MS = 30_000
 
+async function notifyObserver(observer, method, payload, logger) {
+  try {
+    await observer?.[method]?.(payload)
+  } catch (error) {
+    logger?.warn?.(
+      { err: error, observerMethod: method },
+      'media-delete retry status could not be recorded'
+    )
+  }
+}
+
 function boundedInteger(value, name, { minimum = 1, maximum }) {
   const parsed = Number(value)
   if (
@@ -180,8 +191,10 @@ export function startMediaDeleteRetry({
   poolInstance,
   retryFn,
   logger,
+  observer,
   runFn = retryPendingMediaDeletions,
-  timerApi = globalThis
+  timerApi = globalThis,
+  clock = () => Date.now()
 }) {
   if (!enabled) return async () => {}
 
@@ -193,6 +206,8 @@ export function startMediaDeleteRetry({
 
   const run = () => {
     if (stopped || activeRun) return activeRun
+
+    const startedAtMs = clock()
 
     activeRun = Promise.resolve()
       .then(() => runFn({
@@ -206,15 +221,30 @@ export function startMediaDeleteRetry({
           )
         }
       }))
-      .then((result) => {
+      .then(async (result) => {
+        const finishedAtMs = clock()
+        await notifyObserver(observer, 'succeeded', {
+          result,
+          startedAt: new Date(startedAtMs),
+          finishedAt: new Date(finishedAtMs),
+          durationMs: Math.max(0, finishedAtMs - startedAtMs)
+        }, logger)
         if (result?.processed > 0) {
           const log = result.failed > 0 || result.errors > 0
             ? logger?.warn
             : logger?.info
           log?.call(logger, result, 'media delete retry batch finished')
         }
+        return result
       })
-      .catch((error) => {
+      .catch(async (error) => {
+        const finishedAtMs = clock()
+        await notifyObserver(observer, 'failed', {
+          error,
+          startedAt: new Date(startedAtMs),
+          finishedAt: new Date(finishedAtMs),
+          durationMs: Math.max(0, finishedAtMs - startedAtMs)
+        }, logger)
         logger?.error?.(error, 'failed to run media delete retry batch')
       })
       .finally(() => {

@@ -17,12 +17,16 @@ test('server, config and Compose keep maintenance and logs bounded', async () =>
 
   assert.match(server, /startSecurityEventRetention/)
   assert.match(server, /startMediaDeleteRetry/)
+  assert.match(server, /createMaintenanceJobObserver/)
+  assert.match(server, /sendMaintenanceJobNotificationToAdmins/)
   assert.match(server, /attemptMediaAssetDeletion/)
   assert.match(server, /await Promise\.all/)
   assert.match(config, /NAV_SECURITY_EVENT_RETENTION_ENABLED/)
   assert.match(config, /NAV_MEDIA_DELETE_RETRY_ENABLED/)
+  assert.match(config, /NAV_MAINTENANCE_ALERTS_ENABLED/)
   assert.match(envExample, /NAV_SECURITY_EVENT_RETENTION_ENABLED=false/)
   assert.match(envExample, /NAV_MEDIA_DELETE_RETRY_ENABLED=false/)
+  assert.match(envExample, /NAV_MAINTENANCE_ALERTS_ENABLED=false/)
   assert.match(app, /level: config\.apiLogLevel/)
   assert.match(app, /req\.headers\.authorization/)
   assert.match(app, /req\.headers\.cookie/)
@@ -60,6 +64,29 @@ test('migration and verifier include the partial retry index', async () => {
   assert.match(migration, /WHERE retention = 'auto'/)
   assert.match(migration, /state IN \('delete_pending', 'delete_failed'\)/)
   assert.match(verifier, /idx_media_assets_delete_retry/)
+})
+
+test('maintenance observability is additive, bounded and admin-only', async () => {
+  const [migration, verifier, app, route, statusService, auditUi] = await Promise.all([
+    source('../src/db/migrations/018_maintenance_observability.sql'),
+    source('../src/db/verifyMigrations.js'),
+    source('../src/app.js'),
+    source('../src/routes/maintenance.js'),
+    source('../../app/src/shared/services/adminMaintenanceApi.js'),
+    source('../../app/src/modules/settings/components/SecurityAuditSettings.vue')
+  ])
+
+  assert.match(migration, /CREATE TABLE IF NOT EXISTS maintenance_job_status/)
+  assert.match(migration, /last_result JSONB/)
+  assert.match(migration, /consecutive_failures/)
+  assert.match(migration, /last_notification_status/)
+  assert.match(verifier, /verifyMaintenanceObservabilitySchema/)
+  assert.match(app, /app\.register\(maintenanceRoutes/)
+  assert.match(route, /requireAdmin/)
+  assert.match(route, /private, no-store/)
+  assert.match(statusService, /\/admin\/maintenance\/status/)
+  assert.match(auditUi, /后台维护状态/)
+  assert.match(auditUi, /外部 dead-man 监控/)
 })
 
 test('admin and media surfaces explain automatic maintenance', async () => {

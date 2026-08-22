@@ -130,3 +130,34 @@ test('retention scheduler prevents overlap and shutdown waits for active pruning
   await stopping
   assert.equal(stopped, true)
 })
+
+test('retention scheduler reports one completed run to the observer', async () => {
+  let timeoutCallback
+  const observations = []
+  const clockValues = [1_000, 1_250]
+  const stop = startSecurityEventRetention({
+    enabled: true,
+    policy: POLICY,
+    poolInstance: {},
+    pruneFn: async () => ({ deletedCount: 2, batches: 1, skipped: null }),
+    observer: {
+      async succeeded(payload) { observations.push(payload) }
+    },
+    clock: () => clockValues.shift(),
+    timerApi: {
+      setTimeout(callback) {
+        timeoutCallback = callback
+        return { unref() {} }
+      },
+      clearTimeout() {},
+      setInterval() { return { unref() {} } },
+      clearInterval() {}
+    }
+  })
+
+  timeoutCallback()
+  await stop()
+  assert.equal(observations.length, 1)
+  assert.equal(observations[0].durationMs, 250)
+  assert.equal(observations[0].result.deletedCount, 2)
+})
