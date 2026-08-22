@@ -7,6 +7,7 @@ import {
   exportAdminSecurityEvents,
   fetchAdminSecurityEvents
 } from '@/shared/services/adminSecurityEventsApi'
+import { fetchAdminMaintenanceStatus } from '@/shared/services/adminMaintenanceApi'
 import {
   compactSecurityIdentifier,
   displaySecurityFingerprint,
@@ -51,11 +52,17 @@ const deleting = ref(false)
 const deleteMessage = ref('')
 const errorMessage = ref('')
 const retention = ref(null)
+const maintenanceJobs = ref([])
+const maintenanceAlerts = ref(null)
+const maintenanceLoaded = ref(false)
+const maintenanceLoading = ref(false)
+const maintenanceError = ref('')
 const exportLimit = ref(10_000)
 const exportingFormat = ref('')
 const copiedKey = ref('')
 let copyTimer = null
 let requestSequence = 0
+let maintenanceRequestSequence = 0
 
 const isAdmin = computed(() => currentUser.value?.role === 'admin')
 const totalPages = computed(() => Math.max(1, Math.ceil(total.value / PAGE_SIZE)))
@@ -97,6 +104,88 @@ function securityAuditError(error) {
   if (error?.status === 401) return '登录状态已失效，请重新登录。'
   if (error?.status === 403) return '只有管理员可以查看安全审计。'
   return error?.message || '安全审计读取失败，请稍后重试。'
+}
+
+function formatInterval(seconds) {
+  const value = Number(seconds || 0)
+  if (!Number.isFinite(value) || value <= 0) return '间隔未知'
+  if (value % 86_400 === 0) return `每 ${value / 86_400} 天`
+  if (value % 3_600 === 0) return `每 ${value / 3_600} 小时`
+  return `每 ${Math.round(value / 60)} 分钟`
+}
+
+function formatDuration(milliseconds) {
+  if (milliseconds === null || milliseconds === undefined || milliseconds === '') {
+    return '耗时未知'
+  }
+  const value = Number(milliseconds)
+  if (!Number.isFinite(value) || value < 0) return '耗时未知'
+  if (value < 1_000) return `${Math.round(value)} 毫秒`
+  if (value < 60_000) return `${(value / 1_000).toFixed(value < 10_000 ? 1 : 0)} 秒`
+  return `${(value / 60_000).toFixed(1)} 分钟`
+}
+
+function maintenanceState(job) {
+  if (!job?.enabled) return { label: '已关闭', tone: 'disabled' }
+  if (job.lastOutcome === 'failed' || Number(job.consecutiveFailures || 0) > 0) {
+    return { label: '需关注', tone: 'failed' }
+  }
+  if (job.lastOutcome === 'succeeded') return { label: '正常', tone: 'healthy' }
+  return { label: '等待首次运行', tone: 'idle' }
+}
+
+function maintenanceResultSummary(job) {
+  const result = job?.lastResult || {}
+  if (job?.name === 'security_event_retention') {
+    return `上次清理 ${Number(result.deletedCount || 0)} 条，共 ${Number(result.batches || 0)} 批。`
+  }
+  if (job?.name === 'media_delete_retry') {
+    return [
+      `上次处理 ${Number(result.processed || 0)} 项`,
+      `删除 ${Number(result.deleted || 0)} 项`,
+      `仍待重试 ${Number(result.failed || 0)} 项`,
+      `异常 ${Number(result.errors || 0)} 项`
+    ].join('，') + '。'
+  }
+  return '尚无运行结果。'
+}
+
+function notificationStatusLabel(status) {
+  return {
+    sent: '通知已发送',
+    partial: '部分通知发送失败',
+    skipped: '未配置可用通知目标',
+    failed: '通知发送失败'
+  }[status] || '尚未发送通知'
+}
+
+const maintenanceAlertSummary = computed(() => {
+  if (!maintenanceAlerts.value?.enabled) {
+    return '运行内 Telegram 失败告警当前关闭；任务状态仍会持续记录。'
+  }
+  const threshold = Number(maintenanceAlerts.value.failureThreshold || 0)
+  const cooldown = formatInterval(maintenanceAlerts.value.cooldownSeconds)
+    .replace(/^每\s*/, '')
+  return `连续失败 ${threshold} 次后通知管理员，重复通知冷却 ${cooldown}。`
+})
+
+async function loadMaintenanceStatus() {
+  if (!backendAuthEnabled.value || !isAdmin.value) return
+  const sequence = ++maintenanceRequestSequence
+  maintenanceLoading.value = true
+  maintenanceError.value = ''
+  try {
+    const result = await fetchAdminMaintenanceStatus()
+    if (sequence !== maintenanceRequestSequence) return
+    maintenanceJobs.value = Array.isArray(result?.jobs) ? result.jobs : []
+    maintenanceAlerts.value = result?.alerts || null
+    maintenanceLoaded.value = true
+  } catch (error) {
+    if (sequence !== maintenanceRequestSequence) return
+    maintenanceError.value = securityAuditError(error)
+  } finally {
+    if (sequence === maintenanceRequestSequence) maintenanceLoading.value = false
+  }
 }
 
 async function loadEvents(nextPage = page.value) {
@@ -142,6 +231,13 @@ async function loadEvents(nextPage = page.value) {
   }
 }
 
+async function refreshAuditAndMaintenance() {
+  await Promise.all([
+    loadEvents(page.value),
+    loadMaintenanceStatus()
+  ])
+}
+
 async function handleExport(format) {
   if (exportingFormat.value || loading.value) return
   exportingFormat.value = format
@@ -180,7 +276,12 @@ function toggleExpanded() {
     return
   }
   if (expanded.value && !loaded.value && !loading.value) {
-    loadEvents(1)
+    void Promise.all([
+      loadEvents(1),
+      loadMaintenanceStatus()
+    ])
+  } else if (expanded.value && !maintenanceLoaded.value && !maintenanceLoading.value) {
+    void loadMaintenanceStatus()
   }
 }
 
@@ -315,6 +416,7 @@ async function copyIdentifier(value, key) {
 
 onBeforeUnmount(() => {
   requestSequence += 1
+  maintenanceRequestSequence += 1
   deletePassword.value = ''
   selectedEventIds.value = new Set()
   if (copyTimer) window.clearTimeout(copyTimer)
@@ -339,11 +441,11 @@ onBeforeUnmount(() => {
           <button
             class="button button--quiet"
             type="button"
-            :disabled="loading || deleting"
-            @click="loadEvents(page)"
+            :disabled="loading || maintenanceLoading || deleting"
+            @click="refreshAuditAndMaintenance"
           >
             <Icon name="refresh" :size="16" />
-            {{ loading ? '刷新中...' : '刷新' }}
+            {{ loading || maintenanceLoading ? '刷新中...' : '刷新' }}
           </button>
           <button
             class="button button--quiet"
@@ -392,6 +494,72 @@ onBeforeUnmount(() => {
     </div>
 
     <div v-if="expanded" id="security-audit-content" class="audit-content">
+      <section class="maintenance-overview" aria-labelledby="maintenance-status-title">
+        <div class="maintenance-overview__heading">
+          <div>
+            <h4 id="maintenance-status-title">后台维护状态</h4>
+            <p>{{ maintenanceAlertSummary }}</p>
+          </div>
+          <span class="maintenance-overview__scope">运行内监测</span>
+        </div>
+
+        <p v-if="maintenanceError" class="maintenance-overview__error" role="alert">
+          {{ maintenanceError }}
+        </p>
+        <p v-else-if="maintenanceLoading && !maintenanceLoaded" class="maintenance-overview__loading" aria-live="polite">
+          正在读取后台任务状态...
+        </p>
+        <div v-else class="maintenance-jobs">
+          <article v-for="job in maintenanceJobs" :key="job.name" class="maintenance-job">
+            <div class="maintenance-job__header">
+              <div>
+                <strong>{{ job.label }}</strong>
+                <span>{{ job.enabled ? formatInterval(job.intervalSeconds) : '不会自动执行' }}</span>
+              </div>
+              <span
+                class="maintenance-job__state"
+                :class="`maintenance-job__state--${maintenanceState(job).tone}`"
+              >
+                {{ maintenanceState(job).label }}
+              </span>
+            </div>
+
+            <dl class="maintenance-job__details">
+              <div>
+                <dt>最近成功</dt>
+                <dd>{{ job.lastSucceededAt ? formatDate(job.lastSucceededAt) : '尚无记录' }}</dd>
+              </div>
+              <div>
+                <dt>最近失败</dt>
+                <dd>{{ job.lastFailedAt ? formatDate(job.lastFailedAt) : '尚无记录' }}</dd>
+              </div>
+              <div>
+                <dt>连续失败</dt>
+                <dd>{{ Number(job.consecutiveFailures || 0) }} 次</dd>
+              </div>
+              <div>
+                <dt>最近耗时</dt>
+                <dd>{{ formatDuration(job.lastDurationMs) }}</dd>
+              </div>
+            </dl>
+
+            <p v-if="job.lastOutcome === 'succeeded'" class="maintenance-job__result">
+              {{ maintenanceResultSummary(job) }}
+            </p>
+            <p v-else-if="job.lastOutcome === 'failed'" class="maintenance-job__result maintenance-job__result--failed">
+              任务执行失败，错误代码 {{ job.lastErrorCode || 'UNEXPECTED_ERROR' }}；详细异常只保留在受限服务器日志中。
+            </p>
+            <p v-if="job.lastNotificationAt" class="maintenance-job__notification">
+              {{ notificationStatusLabel(job.lastNotificationStatus) }} · {{ formatDate(job.lastNotificationAt) }}
+            </p>
+          </article>
+        </div>
+
+        <small class="maintenance-overview__note">
+          此处监测应用进程仍在运行时的任务结果；整台主机或容器完全离线仍需独立的外部 dead-man 监控。
+        </small>
+      </section>
+
       <div v-if="retention" class="maintenance-card" role="status">
         <Icon name="clock" :size="18" />
         <div>
@@ -712,6 +880,153 @@ onBeforeUnmount(() => {
   background: var(--bg-secondary);
   border: 1px solid var(--border-light);
   border-radius: var(--radius-md);
+}
+
+.maintenance-overview {
+  display: grid;
+  gap: 14px;
+  margin-top: 16px;
+  padding: 16px;
+  background: var(--bg-secondary);
+  border: 1px solid var(--border-light);
+  border-radius: var(--radius-md);
+}
+
+.maintenance-overview__heading,
+.maintenance-job__header {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 16px;
+}
+
+.maintenance-overview__heading h4 {
+  margin: 0;
+  color: var(--text-primary);
+  font-size: 14px;
+}
+
+.maintenance-overview__heading p,
+.maintenance-overview__note,
+.maintenance-overview__loading,
+.maintenance-overview__error {
+  margin: 4px 0 0;
+  color: var(--text-muted);
+  font-size: 12px;
+  line-height: 1.6;
+}
+
+.maintenance-overview__error {
+  color: var(--error-color);
+}
+
+.maintenance-overview__scope,
+.maintenance-job__state {
+  flex: 0 0 auto;
+  padding: 5px 9px;
+  border-radius: 999px;
+  font-size: 11px;
+  line-height: 1.2;
+}
+
+.maintenance-overview__scope {
+  color: var(--text-secondary);
+  background: var(--bg-primary);
+  border: 1px solid var(--border-light);
+}
+
+.maintenance-jobs {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 12px;
+}
+
+.maintenance-job {
+  display: grid;
+  align-content: start;
+  gap: 12px;
+  min-width: 0;
+  padding: 14px;
+  background: var(--bg-primary);
+  border: 1px solid var(--border-light);
+  border-radius: var(--radius-md);
+}
+
+.maintenance-job__header strong,
+.maintenance-job__header span {
+  display: block;
+}
+
+.maintenance-job__header strong {
+  color: var(--text-primary);
+  font-size: 13px;
+}
+
+.maintenance-job__header > div > span {
+  margin-top: 4px;
+  color: var(--text-muted);
+  font-size: 11px;
+}
+
+.maintenance-job__state--healthy {
+  color: var(--success-color);
+  background: color-mix(in srgb, var(--success-color) 13%, transparent);
+}
+
+.maintenance-job__state--failed {
+  color: var(--error-color);
+  background: color-mix(in srgb, var(--error-color) 13%, transparent);
+}
+
+.maintenance-job__state--idle {
+  color: var(--accent-color);
+  background: color-mix(in srgb, var(--accent-color) 13%, transparent);
+}
+
+.maintenance-job__state--disabled {
+  color: var(--text-muted);
+  background: color-mix(in srgb, var(--text-muted) 10%, transparent);
+}
+
+.maintenance-job__details {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 10px;
+  margin: 0;
+}
+
+.maintenance-job__details div {
+  min-width: 0;
+}
+
+.maintenance-job__details dt {
+  color: var(--text-muted);
+  font-size: 10px;
+}
+
+.maintenance-job__details dd {
+  margin: 3px 0 0;
+  overflow-wrap: anywhere;
+  color: var(--text-secondary);
+  font-size: 11px;
+  line-height: 1.45;
+}
+
+.maintenance-job__result,
+.maintenance-job__notification {
+  margin: 0;
+  color: var(--text-muted);
+  font-size: 11px;
+  line-height: 1.55;
+}
+
+.maintenance-job__result--failed {
+  color: var(--error-color);
+}
+
+.maintenance-job__notification {
+  padding-top: 10px;
+  border-top: 1px solid var(--border-light);
 }
 
 .maintenance-card > .app-icon {
@@ -1074,6 +1389,22 @@ onBeforeUnmount(() => {
   }
 
   .filters {
+    grid-template-columns: 1fr;
+  }
+
+  .maintenance-overview__heading,
+  .maintenance-job__header {
+    align-items: stretch;
+    flex-direction: column;
+  }
+
+  .maintenance-overview__scope,
+  .maintenance-job__state {
+    align-self: flex-start;
+  }
+
+  .maintenance-jobs,
+  .maintenance-job__details {
     grid-template-columns: 1fr;
   }
 

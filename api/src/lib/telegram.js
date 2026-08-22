@@ -145,6 +145,46 @@ export async function sendDecisionNotificationToAdmins(requestRecord, decisionLa
   return { skipped: false, sent: targets.length }
 }
 
+export async function sendMaintenanceJobNotificationToAdmins({
+  jobLabel,
+  kind,
+  occurredAt,
+  consecutiveFailures,
+  errorCode
+}) {
+  const targets = await getEnabledAdminTelegramTargets()
+  if (!targets.length) {
+    return { skipped: true, sent: 0, failed: 0 }
+  }
+
+  const text = kind === 'recovery'
+    ? [
+        'DOMO NAV 后台任务已恢复',
+        `任务: ${jobLabel}`,
+        `恢复时间: ${formatDate(occurredAt)}`
+      ].join('\n')
+    : [
+        'DOMO NAV 后台任务连续失败',
+        `任务: ${jobLabel}`,
+        `连续失败: ${Number(consecutiveFailures || 0)} 次`,
+        `错误代码: ${errorCode || 'UNEXPECTED_ERROR'}`,
+        `发生时间: ${formatDate(occurredAt)}`,
+        '',
+        '请登录 NAV 设置查看后台维护状态。'
+      ].join('\n')
+
+  const results = await Promise.allSettled(targets.map((target) =>
+    callTelegram(target.config.botToken, 'sendMessage', {
+      chat_id: target.config.adminChatId,
+      text
+    })
+  ))
+  const sent = results.filter((result) => result.status === 'fulfilled').length
+  const failed = results.length - sent
+
+  return { skipped: false, sent, failed }
+}
+
 function parseDecisionCommand(update, adminChatId) {
   const message = update?.message
   const text = message?.text?.trim()

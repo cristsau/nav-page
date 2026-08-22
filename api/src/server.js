@@ -5,9 +5,14 @@ import { pool, runMigrations } from './db/index.js'
 import { deleteImgBedUserImage } from './lib/imgBedLibraryClient.js'
 import { attemptMediaAssetDeletion } from './lib/mediaAssets.js'
 import { startMediaDeleteRetry } from './lib/mediaDeleteRetry.js'
+import {
+  createMaintenanceJobObserver,
+  MAINTENANCE_JOB_NAMES
+} from './lib/maintenanceJobStatus.js'
 import { configureOutboundNetwork } from './lib/network.js'
 import { validatePersistentRateLimitConfiguration } from './lib/persistentRateLimit.js'
 import { startSecurityEventRetention } from './lib/securityEventRetention.js'
+import { sendMaintenanceJobNotificationToAdmins } from './lib/telegram.js'
 
 configureOutboundNetwork()
 
@@ -42,6 +47,15 @@ async function main() {
       port: config.port
     })
 
+    const observerOptions = {
+      poolInstance: pool,
+      logger: app.log,
+      alertsEnabled: config.maintenanceAlertsEnabled,
+      failureThreshold: config.maintenanceAlertFailureThreshold,
+      alertCooldownSeconds: config.maintenanceAlertCooldownSeconds,
+      notifyFn: sendMaintenanceJobNotificationToAdmins
+    }
+
     stopSecurityEventRetention = startSecurityEventRetention({
       enabled: config.securityEventRetentionEnabled,
       policy: {
@@ -53,7 +67,12 @@ async function main() {
         maxBatchesPerRun: config.securityEventRetentionMaxBatchesPerRun
       },
       poolInstance: pool,
-      logger: app.log
+      logger: app.log,
+      observer: createMaintenanceJobObserver({
+        ...observerOptions,
+        jobName: MAINTENANCE_JOB_NAMES.SECURITY_EVENT_RETENTION,
+        jobLabel: '安全审计定期清理'
+      })
     })
 
     stopMediaDeleteRetry = startMediaDeleteRetry({
@@ -67,6 +86,11 @@ async function main() {
       },
       poolInstance: pool,
       logger: app.log,
+      observer: createMaintenanceJobObserver({
+        ...observerOptions,
+        jobName: MAINTENANCE_JOB_NAMES.MEDIA_DELETE_RETRY,
+        jobLabel: '图床删除失败重试'
+      }),
       retryFn: ({ id, userId }) => attemptMediaAssetDeletion(
         userId,
         id,
