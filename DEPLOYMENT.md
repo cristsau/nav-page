@@ -1,18 +1,18 @@
 # DOMO NAV Deployment Guide
 
-## 当前线上部署（2026-08-20 只读基线）
+## 当前线上部署（2026-08-23 只读基线）
 
 - 域名：[https://nav.skrskr.net](https://nav.skrskr.net)
 - 反代域名：[https://nav.cristsau.cn](https://nav.cristsau.cn)
 - 承载服务器：OVH `ovh-US`；Oracle-JP 不再是当前生产承载
 - 外层入口：Nginx Proxy Manager → `nav-web` → `nav-api`
-- 当前 release：`/opt/nav-stack/releases/20260820-105500-d0d432b4`
-- 当前应用提交：`d0d432b4e0b2e50c25fccb7b45fc609be18c31a0`
+- 当前 release：`/opt/nav-stack/releases/20260822-162146-5a42279`
+- 当前应用提交：`5a42279e7fba2d9f378ae7e6532f7e1f2464ef6a`
 - 前端容器静态目录：`/usr/share/nginx/html`
 - 前端配置挂载：`/etc/nginx/conf.d/default.conf`
 - 后端服务：`nav-api`
 - 数据库服务：`nav-postgres`
-- API 镜像：`nav-ovh-api:d0d432b4e0b2e50c25fccb7b45fc609be18c31a0`
+- API 镜像：`nav-ovh-api:5a42279e7fba2d9f378ae7e6532f7e1f2464ef6a`
 - 发布证据：当前 release 的 `evidence/PRE_SWITCH.txt`、`evidence/SWITCH.txt`、
   `evidence/ACCEPTANCE.txt`
 
@@ -27,8 +27,9 @@ Compose、容器挂载、代理链、备份和双域状态。
 - 可用于日常自用、演示和小范围内测
 
 还不是最终商业交付版。会话撤销、账号恢复、动态 AI 模型目录、Responses API、数据导出、
-命令面板、导航维护、到期提醒、图片库、本地备份/恢复工具、数据库共享限流、统一审计和
-图床删除结果闭环已经上线。异地备份、告警、Passkey、多环境部署和客户自部署文档仍未收口。
+命令面板、导航维护、到期提醒、图片库、数据库共享限流、统一审计、分层保留、图片删除重试、
+后台状态和运行内失败/恢复告警已经上线。自动异地加密备份、主机外失联监测、Passkey、
+多环境部署和客户自部署文档仍未收口。
 
 ## 开发到线上发布流程
 
@@ -106,24 +107,23 @@ NAV_RATE_LIMIT_KEY_SECRET=<至少 32 字符的独立随机值>
 
 ## 备份与恢复
 
-当前运行手册与稳定入口：
+仓库已提供运行手册与脚本：
 
 - `docs/NAV_BACKUP_RUNBOOK.md`
 - `scripts/nav-backup.sh`
 - `scripts/nav-restore-rehearsal.sh`
 - `scripts/nav-backup.env.example`
-- `/usr/local/sbin/nav-backup`
-- `/usr/local/sbin/nav-restore-rehearsal`
-- `/etc/nav/nav-backup.env`
 
 脚本支持同一 PostgreSQL 导出快照、完整表集合/行数/迁移记录、严格树清单、校验和、
-隔离恢复、restic 加密上传双闸门和失败报警。没有 bucket-scoped R2 凭据、独立 restic
-密码文件和专用报警端点前，只能算本地备份与恢复能力，不能声称异地备份和报警已经启用。
+隔离恢复、restic 加密上传双闸门和失败报警。2026-08-23 只读核验确认 OVH 尚未安装
+`restic`，也没有 `/etc/nav/nav-backup.env`、`/etc/nav/restic.env`、`/usr/local/sbin/nav-backup`、
+`/usr/local/sbin/nav-restore-rehearsal` 或 NAV/restic 的 systemd timer。因此当前只能证明每次
+受控发布创建备份并完成隔离恢复，不能声称自动异地备份和失败报警已经启用。
 
-2026-08-02 的 `0dd11fa` 发布前与发布后备份均完成无网络隔离恢复演练；发布前为 14 张表和
-13 条迁移，发布后为 16 张表和 15 条迁移，逐表行数完全一致。备份项目源已指向精确发布
-提交；证据见当前 release 的 `ACCEPTANCE.txt`。当前没有启用计划任务、云上传、远端删除
-或失败报警。
+2026-08-22 的 `5a42279` 发布前与发布后备份均完成无网络隔离恢复演练；发布前为 16 张表和
+16 条迁移，发布后为 17 张表和 17 条迁移。迁移 018 只增加固定两行的后台任务状态表；
+证据保存在当前 release 的受限 `evidence` 中。当前没有启用计划备份、异地上传、远端保留
+清理或主机外失败报警。
 
 2026-08-12 的前端热修 `0a11f1f` 发布前创建了
 `/var/backups/nav/nav-20260812T061320Z-0dd11faaa386`，并在无网络临时 PostgreSQL 中完成
