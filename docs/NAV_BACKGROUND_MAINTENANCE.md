@@ -1,9 +1,13 @@
 # NAV background maintenance
 
-Status on 2026-08-22:
+Status on 2026-08-23:
 
-- bounded security-event retention and image-delete retry: `VERIFIED_LIVE` in production SHA `369024f9883a87fb0e1bc05a7665cb2e76437ae2`;
-- persistent job status and in-process Telegram failure/recovery alerts: `LOCAL_READY / NOT_PUSHED / NOT_DEPLOYED` on branch `codex/nav-maintenance-observability-20260822`.
+- bounded security-event retention, image-delete retry, persistent job status and
+  in-process Telegram failure/recovery alerts: `VERIFIED_LIVE` in production SHA
+  `5a42279e7fba2d9f378ae7e6532f7e1f2464ef6a`;
+- migration `018` is applied, the two fixed job rows exist, both workers have a
+  successful run, and production alerts are enabled after a labelled Telegram
+  target test.
 
 This document contains no credentials, private data or real environment values.
 
@@ -65,7 +69,7 @@ when opened.
 
 ## Failure and recovery notifications
 
-The new alert settings are deliberately disabled in the example file:
+The alert settings remain deliberately disabled in the repository example:
 
 ```dotenv
 NAV_MAINTENANCE_ALERTS_ENABLED=false
@@ -94,6 +98,9 @@ not create an ever-growing event table.
 
 ## Release and acceptance for migration 018
 
+The following gate was completed for PR #27 and remains the required pattern
+for later releases:
+
 1. Let GitHub CI install dependencies, run the full API suite and build Vue; do
    not install project npm dependencies on the user's computer.
 2. Lock the merge SHA, back up PostgreSQL/configuration and prove an isolated
@@ -112,10 +119,11 @@ not create an ever-growing event table.
 8. Confirm health, container restart counts, API logs, dual-domain CORS, image
    library, AI and existing background-worker behavior.
 
-Rollback is application-first: disable `NAV_MAINTENANCE_ALERTS_ENABLED`, restore
-the previous release SHA `369024f9883a87fb0e1bc05a7665cb2e76437ae2`, and
-rebuild only API/Web. Migration `018` is additive and may safely remain; do not
-drop the table or rewrite migration history during an incident.
+The verified application rollback is to disable
+`NAV_MAINTENANCE_ALERTS_ENABLED`, restore the previous release SHA
+`369024f9883a87fb0e1bc05a7665cb2e76437ae2`, and rebuild only API/Web. Migration
+`018` is additive and may safely remain; do not drop the table or rewrite
+migration history during an incident.
 
 ## Still outside this batch
 
