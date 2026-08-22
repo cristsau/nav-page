@@ -70,7 +70,7 @@ PostgreSQL 迁移校验、API 测试与 Vite 生产构建由
 2. [产品与架构概览](./PROJECT.md)
 3. [部署、回滚与安全边界](./DEPLOYMENT.md)
 4. [后端演进计划](./BACKEND_PLAN.md)
-5. [备份与恢复运行手册](./docs/NAV_BACKUP_RUNBOOK.md)
+5. [备份、自动调度与恢复运行手册](./docs/NAV_BACKUP_RUNBOOK.md)
 6. [完整功能与跨电脑续作交接](./docs/NAV_FULL_FEATURES_AND_HANDOFF.md)
 7. [共享限流与安全审计](./docs/NAV_SECURITY_CONTROLS.md)
 8. [后台保留与图片删除重试](./docs/NAV_BACKGROUND_MAINTENANCE.md)

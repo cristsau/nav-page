@@ -137,7 +137,7 @@ detail: $message"
 
   # The token is read by curl from its stdin-backed config and never appears
   # in the process command line.
-  if ! curl --config - \
+  if ! curl -q --config - \
     --fail --silent --show-error \
     --max-time "${NAV_TELEGRAM_TIMEOUT_SECONDS:-10}" \
     --data-urlencode "chat_id=$TELEGRAM_CHAT_ID_VALUE" \

@@ -1,0 +1,12 @@
+[Unit]
+Description=Schedule the DOMO NAV daily encrypted offsite backup
+
+[Timer]
+OnCalendar=*-*-* 03:17:00 UTC
+RandomizedDelaySec=15m
+AccuracySec=1m
+Persistent=true
+Unit=nav-backup.service
+
+[Install]
+WantedBy=timers.target
