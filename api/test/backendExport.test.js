@@ -94,7 +94,7 @@ function createFixtureClient() {
     shares: [{
       id: SHARE_ID,
       note_id: MEMO_ID,
-      code: 'share-code',
+      code: 'Share001',
       expire_at: '2026-08-31T00:00:00.000Z',
       view_count: '3',
       created_at: '2026-07-31T06:30:00.000Z'
