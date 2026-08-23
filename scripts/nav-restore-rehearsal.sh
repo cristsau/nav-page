@@ -8,14 +8,15 @@ export LC_ALL=C
 readonly EX_USAGE=64
 readonly EX_UNAVAILABLE=69
 readonly EX_SOFTWARE=70
-readonly EX_CANTCREAT=73
 readonly EX_TEMPFAIL=75
 readonly EX_CONFIG=78
 readonly EX_VERIFY=80
+readonly CANONICAL_BACKUP_LOCK_FILE='/run/lock/nav-backup.lock'
 
 PROGRAM_NAME="$(basename "$0")"
 CONFIG_FILE="${NAV_BACKUP_CONFIG:-/etc/nav/nav-backup.env}"
 BACKUP_DIR=""
+BACKUP_ROOT_OVERRIDE=""
 CLI_DRY_RUN=false
 RUN_ISOLATED=false
 DRY_RUN=false
@@ -23,6 +24,8 @@ CURRENT_STAGE="initialization"
 TEMP_DIR=""
 REHEARSAL_CONTAINER=""
 REPORT_FILE=""
+BACKUP_LOCK_FD=8
+RESTORE_LOCK_FD=9
 
 log() {
   printf '%s [%s] %s\n' "$(date -u +'%Y-%m-%dT%H:%M:%SZ')" "$PROGRAM_NAME" "$*" >&2
@@ -39,7 +42,7 @@ usage() {
   cat <<'EOF'
 Usage:
   nav-restore-rehearsal.sh --backup DIR [--config FILE] [--dry-run]
-                           [--run-isolated]
+                           [--backup-root DIR] [--run-isolated]
 
 Default mode verifies manifest.sha256 and runs pg_restore -l without restoring.
 --run-isolated additionally requires NAV_ENABLE_RESTORE_CONTAINER=true and
@@ -223,6 +226,11 @@ while (($#)); do
       BACKUP_DIR="$2"
       shift 2
       ;;
+    --backup-root)
+      (($# >= 2)) || { usage >&2; exit "$EX_USAGE"; }
+      BACKUP_ROOT_OVERRIDE="$2"
+      shift 2
+      ;;
     --dry-run)
       CLI_DRY_RUN=true
       shift
@@ -248,6 +256,7 @@ assert_safe_settings_file "$CONFIG_FILE"
 source "$CONFIG_FILE"
 
 : "${NAV_BACKUP_ROOT:=/var/backups/nav}"
+: "${NAV_BACKUP_LOCK_FILE:=$CANONICAL_BACKUP_LOCK_FILE}"
 : "${NAV_RESTORE_LOCK_FILE:=/run/lock/nav-restore-rehearsal.lock}"
 : "${NAV_REHEARSAL_REPORT_DIR:=/var/backups/nav-rehearsal-reports}"
 : "${NAV_DB_CONTAINER:=nav-postgres}"
@@ -261,6 +270,10 @@ source "$CONFIG_FILE"
 : "${NAV_TELEGRAM_TIMEOUT_SECONDS:=10}"
 : "${NAV_DRY_RUN:=false}"
 
+if [[ -n "$BACKUP_ROOT_OVERRIDE" ]]; then
+  NAV_BACKUP_ROOT="$BACKUP_ROOT_OVERRIDE"
+fi
+
 if is_true "$NAV_DRY_RUN" || "$CLI_DRY_RUN"; then
   DRY_RUN=true
 else
@@ -268,6 +281,8 @@ else
 fi
 
 [[ "$NAV_BACKUP_ROOT" == /* ]] || fatal "$EX_CONFIG" "NAV_BACKUP_ROOT must be absolute"
+[[ "$NAV_BACKUP_LOCK_FILE" == "$CANONICAL_BACKUP_LOCK_FILE" ]] \
+  || fatal "$EX_CONFIG" "NAV_BACKUP_LOCK_FILE must remain $CANONICAL_BACKUP_LOCK_FILE"
 [[ "$NAV_RESTORE_LOCK_FILE" == /* ]] || fatal "$EX_CONFIG" "NAV_RESTORE_LOCK_FILE must be absolute"
 [[ "$NAV_REHEARSAL_REPORT_DIR" == /* ]] || fatal "$EX_CONFIG" "NAV_REHEARSAL_REPORT_DIR must be absolute"
 [[ "$NAV_DB_CONTAINER" =~ ^[A-Za-z0-9][A-Za-z0-9_.-]*$ ]] || fatal "$EX_CONFIG" "invalid NAV_DB_CONTAINER"
@@ -282,10 +297,54 @@ require_uint NAV_TELEGRAM_TIMEOUT_SECONDS "$NAV_TELEGRAM_TIMEOUT_SECONDS"
 "$RUN_ISOLATED" && ! is_true "$NAV_ENABLE_RESTORE_CONTAINER" \
   && fatal "$EX_CONFIG" "--run-isolated requires NAV_ENABLE_RESTORE_CONTAINER=true"
 
-for command_name in stat realpath flock sha256sum mktemp install rm find sort cmp readlink; do
+for command_name in stat realpath flock sha256sum mktemp install rm find sort cmp readlink python3; do
   command -v "$command_name" >/dev/null 2>&1 \
     || fatal "$EX_UNAVAILABLE" "required command is unavailable: $command_name"
 done
+
+if ! "$DRY_RUN"; then
+  [[ "$EUID" == 0 ]] || fatal "$EX_CONFIG" "NAV restore rehearsal must run as root"
+  [[ -d /run && ! -L /run && "$(realpath -e -- /run)" == /run ]] \
+    || fatal "$EX_CONFIG" "/run is unavailable or unsafe"
+  [[ "$(stat -c '%u' -- /run)" == 0 ]] \
+    || fatal "$EX_CONFIG" "/run must be root-owned"
+  if [[ ! -e /run/lock && ! -L /run/lock ]]; then
+    install -d -m 0755 -- /run/lock
+  fi
+  [[ -d /run/lock && ! -L /run/lock && "$(realpath -e -- /run/lock)" == /run/lock ]] \
+    || fatal "$EX_CONFIG" "canonical backup lock parent is unsafe"
+  [[ "$(stat -c '%u' -- /run/lock)" == 0 ]] \
+    || fatal "$EX_CONFIG" "canonical backup lock parent must be root-owned"
+  lock_parent_mode="$(stat -c '%a' -- /run/lock)"
+  (( (8#$lock_parent_mode & 022) == 0 || (8#$lock_parent_mode & 01000) != 0 )) \
+    || fatal "$EX_CONFIG" "writable canonical backup lock parent must have the sticky bit"
+  python3 - "$NAV_BACKUP_LOCK_FILE" <<'PY' \
+    || fatal "$EX_CONFIG" "canonical backup lock is unsafe"
+import os
+import stat
+import sys
+
+path = sys.argv[1]
+flags = os.O_RDWR | os.O_CREAT | os.O_CLOEXEC | os.O_NOFOLLOW
+fd = os.open(path, flags, 0o600)
+try:
+    descriptor = os.fstat(fd)
+    path_stat = os.lstat(path)
+    if not stat.S_ISREG(descriptor.st_mode) or stat.S_ISLNK(path_stat.st_mode):
+        raise SystemExit(1)
+    if descriptor.st_uid != 0 or descriptor.st_ino != path_stat.st_ino or descriptor.st_dev != path_stat.st_dev:
+        raise SystemExit(1)
+    if stat.S_IMODE(descriptor.st_mode) & 0o022:
+        raise SystemExit(1)
+    os.fchmod(fd, 0o600)
+finally:
+    os.close(fd)
+PY
+  exec 8>>"$NAV_BACKUP_LOCK_FILE"
+  chmod 0600 "$NAV_BACKUP_LOCK_FILE"
+  flock -n "$BACKUP_LOCK_FD" \
+    || fatal "$EX_TEMPFAIL" "a NAV backup, retention job, or restore rehearsal is already running"
+fi
 
 [[ "$BACKUP_DIR" == /* ]] || fatal "$EX_CONFIG" "--backup must be an absolute path"
 [[ -d "$BACKUP_DIR" && ! -L "$BACKUP_DIR" ]] || fatal "$EX_CONFIG" "backup must be a regular directory"
@@ -335,9 +394,9 @@ if [[ -e "$NAV_RESTORE_LOCK_FILE" || -L "$NAV_RESTORE_LOCK_FILE" ]]; then
   [[ "$(stat -c '%u' -- "$NAV_RESTORE_LOCK_FILE")" == "$EUID" ]] \
     || fatal "$EX_CONFIG" "restore lock must be owned by uid $EUID"
 fi
-exec 9>"$NAV_RESTORE_LOCK_FILE"
+exec 9>>"$NAV_RESTORE_LOCK_FILE"
 chmod 0600 "$NAV_RESTORE_LOCK_FILE"
-flock -n 9 || fatal "$EX_TEMPFAIL" "another restore rehearsal is already running"
+flock -n "$RESTORE_LOCK_FD" || fatal "$EX_TEMPFAIL" "another restore rehearsal is already running"
 
 TEMP_DIR="$(mktemp -d "${TMPDIR:-/tmp}/nav-restore-check.XXXXXXXX")"
 chmod 0700 "$TEMP_DIR"

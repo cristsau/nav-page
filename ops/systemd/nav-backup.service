@@ -11,6 +11,9 @@ Type=oneshot
 User=root
 Group=root
 UMask=0077
+Environment=RESTIC_CACHE_DIR=/var/cache/nav-restic
+CacheDirectory=nav-restic
+CacheDirectoryMode=0700
 ExecStart=/usr/local/sbin/nav-backup --config /etc/nav/nav-backup.env --cloud-upload
 ExecStartPost=/usr/local/sbin/nav-heartbeat --config /etc/nav/nav-heartbeat.env backup
 TimeoutStartSec=4h
@@ -32,4 +35,4 @@ RestrictSUIDSGID=true
 LockPersonality=true
 RestrictRealtime=true
 RestrictAddressFamilies=AF_UNIX AF_INET AF_INET6
-ReadWritePaths=/var/backups/nav /var/backups/nav-restic-evidence /var/backups/nav-rehearsal-reports /run/lock
+ReadWritePaths=/var/backups/nav /var/backups/nav-restic-evidence /var/backups/nav-rehearsal-reports /var/cache/nav-restic /run/lock
