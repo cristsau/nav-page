@@ -1,8 +1,8 @@
 # NAV 云端数据安全恢复
 
-> 状态：`READY_FOR_CI / NOT_DEPLOYED`
-> 候选分支：`codex/nav-cloud-restore-guard-20260823`
-> 基线：`origin/master` `3e22a3a1951bc0c17f5d8482e62896e9a7b9d159`
+> 状态：`SOURCE_MERGED / NOT_DEPLOYED`
+> 合并 PR：`#31`
+> 当前源码：`origin/master` `0d26f482fafee6a48c1a169ed12405a3763b9ae0`
 
 ## 目标
 
@@ -81,9 +81,12 @@
 
 ## 已验证与待验证
 
-本地已通过纯 Node 语法检查和恢复校验/路由静态测试。由于本机工作树未安装项目 npm 依赖，完整 Fastify、PostgreSQL、Vue 构建由 GitHub CI 完成。CI 另设独立 `nav_restore_test` 数据库：测试脚本只有在 `NODE_ENV=test`、显式测试开关、localhost 地址和精确数据库名同时满足时才允许清理测试数据。
+本地已通过纯 Node 语法检查和恢复校验/路由静态测试。GitHub CI 已在独立 PostgreSQL 16
+`nav_restore_test` 数据库完成真实恢复演练；测试脚本只有在 `NODE_ENV=test`、显式测试开关、
+localhost 地址和精确数据库名同时满足时才允许清理测试数据。完整 Fastify 测试和 Vue 构建也
+由 GitHub CI 完成，不在用户电脑安装项目 npm 依赖。
 
-合并前至少验证：
+合并门禁已验证：
 
 - 空对象、缺数组、畸形标量、计数不一致、重复 ID/分享码/设置键/图片身份均在任何 `DELETE` 前拒绝。
 - 错密码、过期/篡改计划、跨会话重放、预览后并发写入均不改变数据。
@@ -95,4 +98,6 @@
 
 ## 发布边界
 
-图片重试告警正确性已通过 PR #30 合并到基线；本恢复分支只有在常规 CI 与独立 PostgreSQL 16 恢复演练同时通过后才可合并。本阶段不进入 OVH 发布窗口。
+图片重试告警正确性已通过 PR #30 合并；本恢复能力已通过 PR #31 合并，且常规 CI 与独立
+PostgreSQL 16 恢复演练均通过。它仍未进入 OVH 发布窗口；发布前必须重新备份、隔离恢复，
+只重建获授权的应用服务并完成双域验收。

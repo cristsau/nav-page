@@ -67,7 +67,10 @@ export const RECORD_MAINTENANCE_FAILURE_SQL = `
         updated_at = NOW()
     FROM decision
     WHERE status.job_name = decision.job_name
-    RETURNING status.*, decision.should_notify
+    RETURNING
+      status.*,
+      decision.should_notify,
+      decision.last_alert_at AS previous_alert_at
   )
   SELECT * FROM updated
 `
@@ -89,6 +92,14 @@ export const RECORD_MAINTENANCE_NOTIFICATION_SQL = `
       last_notification_error_code = $5,
       updated_at = NOW()
   WHERE job_name = $1
+`
+
+export const RELEASE_MAINTENANCE_ALERT_RESERVATION_SQL = `
+  UPDATE maintenance_job_status
+  SET last_alert_at = $3,
+      updated_at = NOW()
+  WHERE job_name = $1
+    AND last_alert_at = $2
 `
 
 const RESULT_FIELDS = Object.freeze({
@@ -199,19 +210,29 @@ async function notifyAndRecord({
 }) {
   let status = 'skipped'
   let notificationErrorCode = null
+  const payload = {
+    jobName,
+    jobLabel,
+    kind,
+    occurredAt,
+    consecutiveFailures,
+    errorCode
+  }
 
+  // Deliver at most once per worker cycle. A transport failure is ambiguous:
+  // Telegram may have accepted the message before the response was lost, and
+  // the notifier aggregates such failures across administrator targets. An
+  // immediate retry could therefore produce duplicates. Undelivered attempts
+  // release only the cooldown reservation below, allowing a later worker cycle
+  // to try again while preserving the open alert.
   try {
     const result = typeof notifyFn === 'function'
-      ? await notifyFn({
-          jobName,
-          jobLabel,
-          kind,
-          occurredAt,
-          consecutiveFailures,
-          errorCode
-        })
+      ? await notifyFn(payload)
       : { skipped: true, sent: 0, failed: 0 }
     status = maintenanceNotificationStatus(result)
+    notificationErrorCode = status === 'failed'
+      ? 'NOTIFICATION_DELIVERY_FAILED'
+      : null
   } catch (error) {
     status = 'failed'
     notificationErrorCode = sanitizeMaintenanceErrorCode(error)
@@ -236,6 +257,8 @@ async function notifyAndRecord({
       'maintenance notification status could not be recorded'
     )
   }
+
+  return { status, errorCode: notificationErrorCode }
 }
 
 export function createMaintenanceJobObserver({
@@ -321,7 +344,7 @@ export function createMaintenanceJobObserver({
       ])
       const state = rows[0]
       if (state?.should_notify === true) {
-        await notifyAndRecord({
+        const delivery = await notifyAndRecord({
           poolInstance,
           logger,
           notifyFn,
@@ -332,6 +355,14 @@ export function createMaintenanceJobObserver({
           consecutiveFailures: Number(state.consecutive_failures || 0),
           errorCode
         })
+
+        if (delivery.status === 'failed' || delivery.status === 'skipped') {
+          await poolInstance.query(RELEASE_MAINTENANCE_ALERT_RESERVATION_SQL, [
+            jobName,
+            finished,
+            state.previous_alert_at || null
+          ])
+        }
       }
     }
   }
