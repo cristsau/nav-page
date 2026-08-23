@@ -1,6 +1,6 @@
 # DOMO NAV 完整功能与跨电脑续作交接
 
-> 更新日期：2026-08-23
+> 更新日期：2026-08-24
 > 用途：把本文件交给另一台电脑上的 Codex，快速恢复项目上下文。
 > 安全说明：本文不包含用户名、密码、Token、Cookie、私钥、真实 `.env` 或个人数据。
 
@@ -9,7 +9,7 @@
 - GitHub 仓库：`cristsau/nav-page`，应保持 **Private**。
 - 主分支：`master`。
 - 2026-08-23 最后完成 OVH 双域验收的生产应用 SHA 为
-  `9b0501389de797c99ec646103780b4b83aa4be56`（PR #32 合并点）。本工具分支以该 SHA 为基线；
+  `25c9c133ad6c34b857cf13c293aa5a89c8ef04d7`（PR #34 合并点）。本工具分支以该 SHA 为基线；
   当前 `origin/master` 与生产仍须在下一次任务分别实时核验。
 - PR #26 已把安全审计分层保留与导出、图片删除失败后台退避重试、日志脱敏与容器日志限额合入并发布；迁移 017 已执行，两个后台任务已逐项启用并完成双域验收。
 - 主题对比度、弹窗无障碍、Session single-flight/内存复用、统一 401、路由进度与骨架、缓存/真实 IP/canonical、六分类设置页、统一导航、紧凑搜索、横向书签卡和图片库/时光视觉收敛均已进入上述生产 SHA。
@@ -20,10 +20,10 @@
 - PR #30 已收紧图片删除重试告警语义；PR #31 已加入有预览、当前密码、安全备份回执和
   并发校验的云端替换恢复；PR #32 补齐 Telegram 真实目标投递、零送达告警冷却释放与
   PostgreSQL 16 维护链路演练。三项均已进入当前生产并验收。
-- 本地候选 `codex/nav-release-acceptance-ephemeral-20260823` 已实现随机一次性验收管理员、
-  30 分钟服务端 TTL、登录和 Session 过期拒绝、启动/每分钟精确回收、固定 canonical 备份锁、
-  验收超时/信号转发，以及真实 PostgreSQL 16 账号与备份门禁；状态为
-  `LOCAL_DONE / READY_FOR_GITHUB_CI / NOT_DEPLOYED`。
+- PR #33/#34 已把随机一次性验收管理员、30 分钟服务端 TTL、登录和 Session 过期拒绝、
+  启动/每分钟精确回收、固定 canonical 备份锁、验收超时/信号转发、真实 PostgreSQL 16
+  账号与备份门禁，以及 host-only CIDR 精确校验合并并发布。首次生产生命周期为
+  `status=PASS / cleanup=PASS`，临时账号、marker 与运行时私有目录均清零。
 - 生产入口：`https://nav.skrskr.net`、`https://nav.cristsau.cn`。
 - AI 兼容入口：`https://ap.skrskr.net`。
 - 当前已知生产承载已从异常的 Oracle 主机灾难迁移到 OVH；任何后续发布前必须重新只读核验，不能把本文当作实时状态证明。
@@ -369,7 +369,7 @@ AI 配置仍保存在当前用户的 `appConfig.search.providers.chatgpt` 中：
    - `docs/NAV_SECURITY_CONTROLS.md`
    - `docs/NAV_BACKUP_RUNBOOK.md`
    - `docs/NAV_PRODUCTION_RELEASE_ACCEPTANCE.md`
-6. 只读确认 PR #32、`origin/master` 和实时生产；本文记录的 `9b05013…` 只是 2026-08-23
+6. 只读确认 PR #34、`origin/master` 和实时生产；本文记录的 `25c9c13…` 只是 2026-08-23
    源码与生产验收快照，不能代替当前核验。
 7. 完整 npm 安装、依赖审计、API 测试与 Vite 构建优先交给 GitHub Actions；个人电脑默认只做源码、静态和差异检查。
 8. 只有 CI 通过、PR 合并、生产前备份与恢复门禁通过并取得明确发布授权后，才能发布。
@@ -384,11 +384,13 @@ AI 配置仍保存在当前用户的 `appConfig.search.providers.chatgpt` 中：
 - [x] GitHub Actions API 全测通过
 - [x] Vite 生产构建通过
 - [x] 依赖审计结果已审阅；`nanoid` lock 条目已升级到无该高危公告的 `3.3.18`
-- [x] PR `#18` 至 `#32` 已按独立批次合并，最新 `master` CI 通过
+- [x] PR `#18` 至 `#34` 已按独立批次合并，最新 `master` CI 通过
 - [x] PR `#26/#27` 的分支、PR 与合并后 `master` CI 均通过
 - [x] PR `#28/#29` 已合并且 GitHub CI 通过；异地备份仍为源码候选，尚未安装到 OVH
 - [x] PR `#30/#31` 已合并且 GitHub CI 与独立 PostgreSQL 16 恢复演练通过，并随 PR #32 发布
 - [x] PR #32 的 Telegram 精确目标投递、零送达冷却释放与 PostgreSQL 16 维护集成测试通过
+- [x] PR #33/#34 的 Linux root Shell、一次性管理员 PostgreSQL 16、canonical backup
+  PostgreSQL 16、恢复与维护 PostgreSQL 集成门禁全部通过
 - [x] PR `#26/#27` 新增差异未发现 Token、API Key 或真实 `.env`
 
 ### UI、性能与无障碍（已发布并验收）
@@ -428,27 +430,31 @@ AI 配置仍保存在当前用户的 `appConfig.search.providers.chatgpt` 中：
 
 ### 生产发布
 
-以下勾选项是 `9b05013…` 已上线版本的带日期验收，不代表下一次发布时的实时状态：
+以下勾选项是 `25c9c13…` 已上线版本的带日期验收，不代表下一次发布时的实时状态：
 
-- [x] 锁定精确 Git merge SHA：`9b0501389de797c99ec646103780b4b83aa4be56`
+- [x] 锁定精确 Git merge SHA：`25c9c133ad6c34b857cf13c293aa5a89c8ef04d7`
 - [x] 发布前 PostgreSQL 压缩备份与配置副本完成
 - [x] 发布前、发布后均在隔离、无网络 PostgreSQL 16 容器中恢复为 17 张表、17 条迁移
 - [x] 本次无新迁移；迁移数量与发布源码一致，迁移 018 固定保留两条任务状态
-- [x] API/Web/DB/CLIProxyAPI 健康，DB 与 CLIProxyAPI 未重建且重启计数保持 `0`
+- [x] 本次只重建 `nav-api`；`nav-web`、DB、CLIProxyAPI、NPM、Vaultwarden、Komari 容器 ID
+  均保持不变，API 健康且重启计数为 `0`
+- [x] 一次性管理员生命周期与精确清理通过；临时账号、marker 和 `/run` 私有目录均为 `0`
 - [x] `nav.skrskr.net` 登录态验收
 - [x] `nav.cristsau.cn` 登录态验收
 - [x] Cookie 为 `Secure`、`HttpOnly`、`SameSite=None`；双域互相跨域预检通过
 - [x] 双域返回的前端 `index.html` SHA-256 与发布构建完全一致
 - [x] 两项后台任务状态、运行内告警策略和 Telegram 测试目标通过
-- [x] 失败时可按发布前 release 回滚 API/Web；PostgreSQL 与 CLIProxyAPI 不参与应用回滚
+- [x] 失败时可按固定上一 release 回滚应用；PostgreSQL 与 CLIProxyAPI 不参与应用回滚
 
 ### 生产发布证据
 
-- OVH 发布目录：`/opt/nav-stack/releases/20260823-191619-9b05013`
-- 双域前端 `index.html` SHA-256：`2c21947bd73fae227534ba15645106f87954db32be9a122843a2e934f5a4c8c4`
+- OVH 发布目录：`/opt/nav-stack/releases/20260823-233024-25c9c13`
+- 本次 `nav-web` 未重建；双域继续复验的前端 `index.html` SHA-256：
+  `2c21947bd73fae227534ba15645106f87954db32be9a122843a2e934f5a4c8c4`
 - 精确源码归档和 PostgreSQL 备份哈希保存在该 release 的受限 evidence 中，不在交接文档复制正文
 - 生产前门禁、切换、登录态、Telegram 目标、告警启用和发布后恢复证据保存在 release 的受限 `evidence` 中
-- 仅应用回滚脚本：`/opt/nav-stack/releases/20260823-191619-9b05013/rollback-release.sh`
+- 仅应用回滚脚本：`/opt/nav-stack/releases/20260823-233024-25c9c13/rollback-release.sh`；固定目标为
+  `/opt/nav-stack/releases/20260823-191619-9b05013`
 - 不在本文保存备份正文、凭据、Cookie 或 Secret；哈希只用于完整性核对。
 - 后续发布登录态验收使用随机一次性管理员和自动清理；工具与硬中断边界见
   `docs/NAV_PRODUCTION_RELEASE_ACCEPTANCE.md`，不再依赖真实管理员的 release 明文密码。
@@ -471,7 +477,8 @@ origin/master、未提交内容、GitHub PR/CI 和实时生产状态。不要从
 
 截至 2026-08-23，账户与审计控制、AI 配置、图床双 Token、主题/无障碍、Session、
 缓存/代理、设置/导航、视觉收敛、迁移 017/018、两个后台任务状态、云端安全恢复和运行内
-Telegram 失败/恢复告警已经发布到 OVH SHA 9b05013。当前 GitHub master 可能已继续前进；
+Telegram 失败/恢复告警，以及一次性管理员发布验收生命周期已经发布到 OVH SHA 25c9c13。
+当前 GitHub master 可能已继续前进；
 先只读核对 origin/master、实时生产 SHA、
 双域、容器健康、备份和当前数据库边界；不要推断 Oracle 旧个人数据已恢复。当前首要生产
 缺口是把仓库已有的自动异地加密备份候选安全配置到 OVH，完成首次云端快照、定期隔离恢复、
