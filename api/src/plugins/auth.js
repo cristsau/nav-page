@@ -9,6 +9,10 @@ import {
   isAuthenticatedWriteRequest
 } from '../lib/requestRateLimit.js'
 import { sanitizeUser } from '../lib/users.js'
+import {
+  inspectReleaseAcceptanceLoginEligibility,
+  isReleaseAcceptanceUsername
+} from '../ops/releaseAcceptanceAccount.js'
 
 async function authPlugin(fastify) {
   let nextExpiredSessionCleanupAt = 0
@@ -118,6 +122,24 @@ async function authPlugin(fastify) {
     }
 
     const session = rows[0]
+    if (isReleaseAcceptanceUsername(session.username)) {
+      const eligibility = await inspectReleaseAcceptanceLoginEligibility(
+        { query },
+        {
+          userId: session.id,
+          username: session.username
+        }
+      )
+      if (!eligibility.active) {
+        await query(
+          'DELETE FROM sessions WHERE id = $1 AND user_id = $2',
+          [session.session_id, session.id]
+        )
+        await fastify.clearSessionCookie(reply)
+        return
+      }
+    }
+
     request.session = {
       id: session.session_id,
       expiresAt: session.expires_at,

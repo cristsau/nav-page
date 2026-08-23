@@ -10,7 +10,9 @@
     "verify:migrations": "node src/db/verifyMigrations.js",
     "test": "node --test",
     "test:restore:integration": "node --test --test-concurrency=1 integration/dataRestorePostgres.integration.js",
-    "test:maintenance:integration": "node --test --test-concurrency=1 integration/maintenancePostgres.integration.js"
+    "test:maintenance:integration": "node --test --test-concurrency=1 integration/maintenancePostgres.integration.js",
+    "test:release-acceptance:integration": "node --test --test-concurrency=1 integration/releaseAcceptancePostgres.integration.js",
+    "test:backup-gate:integration": "node --test --test-concurrency=1 integration/backupGatePostgres.integration.js"
   },
   "dependencies": {
     "@fastify/cookie": "^11.0.2",

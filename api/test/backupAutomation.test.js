@@ -39,6 +39,24 @@ test('backup automation shell scripts pass bash syntax validation when bash is a
     assert.equal(result.status, 0, `${relativePath}: ${result.stderr}`)
   }
 })
+
+test('backup snapshot fails closed around release acceptance residue', async () => {
+  const backup = await read('scripts/nav-backup.sh')
+  const gate = backup.indexOf("hashtext('nav_release_acceptance_account')")
+  const markerCheck = backup.indexOf('release_acceptance_account:')
+  const userCheck = backup.indexOf('nav_release_accept_')
+  const dump = backup.indexOf('pg_dump -U')
+
+  assert.ok(gate >= 0 && markerCheck >= 0 && userCheck >= 0)
+  assert.ok(gate < dump && markerCheck < dump && userCheck < dump)
+  assert.match(backup, /release acceptance residue blocks database backup/)
+  assert.match(backup, /backup must run outside the release acceptance lifecycle/)
+  assert.match(backup, /CANONICAL_BACKUP_LOCK_FILE='\/run\/lock\/nav-backup\.lock'/)
+  assert.match(backup, /NAV_BACKUP_LOCK_FILE must remain/)
+  assert.match(backup, /os\.O_NOFOLLOW/)
+  assert.match(backup, /exec 9>>"\$NAV_BACKUP_LOCK_FILE"/)
+  assert.doesNotMatch(backup, /exec 9>"\$NAV_BACKUP_LOCK_FILE"/)
+})
 test('systemd schedules separate daily backup, weekly retention, and isolated restore', async () => {
   const daily = await read('ops/systemd/nav-backup.service')
   const retention = await read('ops/systemd/nav-backup-retention.service')

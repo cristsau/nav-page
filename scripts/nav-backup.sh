@@ -11,6 +11,7 @@ readonly EX_SOFTWARE=70
 readonly EX_CANTCREAT=73
 readonly EX_TEMPFAIL=75
 readonly EX_CONFIG=78
+readonly CANONICAL_BACKUP_LOCK_FILE='/run/lock/nav-backup.lock'
 
 PROGRAM_NAME="$(basename "$0")"
 CONFIG_FILE="${NAV_BACKUP_CONFIG:-/etc/nav/nav-backup.env}"
@@ -289,12 +290,16 @@ while (($#)); do
   esac
 done
 
+if is_true "${NAV_ACCEPTANCE_EPHEMERAL:-false}"; then
+  fatal "$EX_CONFIG" 'backup must run outside the release acceptance lifecycle'
+fi
+
 assert_safe_settings_file "$CONFIG_FILE"
 # shellcheck source=/dev/null
 source "$CONFIG_FILE"
 
 : "${NAV_BACKUP_ROOT:=/var/backups/nav}"
-: "${NAV_BACKUP_LOCK_FILE:=/run/lock/nav-backup.lock}"
+: "${NAV_BACKUP_LOCK_FILE:=$CANONICAL_BACKUP_LOCK_FILE}"
 : "${NAV_DB_CONTAINER:=nav-postgres}"
 : "${NAV_DB_NAME:=nav}"
 : "${NAV_DB_USER:=nav}"
@@ -331,7 +336,8 @@ else
 fi
 
 [[ "$NAV_BACKUP_ROOT" == /* ]] || fatal "$EX_CONFIG" "NAV_BACKUP_ROOT must be absolute"
-[[ "$NAV_BACKUP_LOCK_FILE" == /* ]] || fatal "$EX_CONFIG" "NAV_BACKUP_LOCK_FILE must be absolute"
+[[ "$NAV_BACKUP_LOCK_FILE" == "$CANONICAL_BACKUP_LOCK_FILE" ]] \
+  || fatal "$EX_CONFIG" "NAV_BACKUP_LOCK_FILE must remain $CANONICAL_BACKUP_LOCK_FILE"
 [[ "$NAV_FRONTEND_DIR" == /* ]] || fatal "$EX_CONFIG" "NAV_FRONTEND_DIR must be absolute"
 [[ "$NAV_PROJECT_DIR" == /* ]] || fatal "$EX_CONFIG" "NAV_PROJECT_DIR must be absolute"
 [[ "$NAV_RESTIC_EVIDENCE_DIR" == /* ]] || fatal "$EX_CONFIG" "NAV_RESTIC_EVIDENCE_DIR must be absolute"
@@ -358,7 +364,7 @@ require_uint NAV_RESTIC_KEEP_MONTHLY "$NAV_RESTIC_KEEP_MONTHLY"
   && fatal "$EX_CONFIG" "--forget-cloud requires --cloud-upload and NAV_ENABLE_RESTIC_FORGET=true"
 
 CURRENT_STAGE="dependency checks"
-for command_name in stat realpath flock find sort sha256sum cp mv mktemp awk install xargs sed grep cmp readlink; do
+for command_name in stat realpath flock find sort sha256sum cp mv mktemp awk install xargs sed grep cmp readlink python3; do
   command -v "$command_name" >/dev/null 2>&1 \
     || fatal "$EX_UNAVAILABLE" "required command is unavailable: $command_name"
 done
@@ -427,14 +433,44 @@ if "$DRY_RUN"; then
   exit 0
 fi
 
-install -d -m 0755 -- "$(dirname "$NAV_BACKUP_LOCK_FILE")"
-if [[ -e "$NAV_BACKUP_LOCK_FILE" || -L "$NAV_BACKUP_LOCK_FILE" ]]; then
-  [[ -f "$NAV_BACKUP_LOCK_FILE" && ! -L "$NAV_BACKUP_LOCK_FILE" ]] \
-    || fatal "$EX_CONFIG" "backup lock must be a regular non-symlink file"
-  [[ "$(stat -c '%u' -- "$NAV_BACKUP_LOCK_FILE")" == "$EUID" ]] \
-    || fatal "$EX_CONFIG" "backup lock must be owned by uid $EUID"
+[[ "$EUID" == 0 ]] || fatal "$EX_CONFIG" "canonical NAV backup must run as root"
+[[ -d /run && ! -L /run && "$(realpath -e -- /run)" == /run ]] \
+  || fatal "$EX_CONFIG" "/run is unavailable or unsafe"
+[[ "$(stat -c '%u' -- /run)" == 0 ]] \
+  || fatal "$EX_CONFIG" "/run must be root-owned"
+if [[ ! -e /run/lock && ! -L /run/lock ]]; then
+  install -d -m 0755 -- /run/lock
 fi
-exec 9>"$NAV_BACKUP_LOCK_FILE"
+[[ -d /run/lock && ! -L /run/lock && "$(realpath -e -- /run/lock)" == /run/lock ]] \
+  || fatal "$EX_CONFIG" "canonical backup lock parent is unsafe"
+[[ "$(stat -c '%u' -- /run/lock)" == 0 ]] \
+  || fatal "$EX_CONFIG" "canonical backup lock parent must be root-owned"
+lock_parent_mode="$(stat -c '%a' -- /run/lock)"
+(( (8#$lock_parent_mode & 022) == 0 || (8#$lock_parent_mode & 01000) != 0 )) \
+  || fatal "$EX_CONFIG" "writable canonical backup lock parent must have the sticky bit"
+python3 - "$NAV_BACKUP_LOCK_FILE" <<'PY' \
+  || fatal "$EX_CONFIG" "canonical backup lock is unsafe"
+import os
+import stat
+import sys
+
+path = sys.argv[1]
+flags = os.O_RDWR | os.O_CREAT | os.O_CLOEXEC | os.O_NOFOLLOW
+fd = os.open(path, flags, 0o600)
+try:
+    descriptor = os.fstat(fd)
+    path_stat = os.lstat(path)
+    if not stat.S_ISREG(descriptor.st_mode) or stat.S_ISLNK(path_stat.st_mode):
+        raise SystemExit(1)
+    if descriptor.st_uid != 0 or descriptor.st_ino != path_stat.st_ino or descriptor.st_dev != path_stat.st_dev:
+        raise SystemExit(1)
+    if stat.S_IMODE(descriptor.st_mode) & 0o022:
+        raise SystemExit(1)
+    os.fchmod(fd, 0o600)
+finally:
+    os.close(fd)
+PY
+exec 9>>"$NAV_BACKUP_LOCK_FILE"
 chmod 0600 "$NAV_BACKUP_LOCK_FILE"
 flock -n "$LOCK_FD" || fatal "$EX_TEMPFAIL" "another NAV backup is already running"
 
@@ -515,6 +551,7 @@ copy_path_list() {
 }
 
 start_snapshot_holder() {
+  local guard_status marker_count user_count
   CURRENT_STAGE="PostgreSQL snapshot export"
   coproc NAV_SNAPSHOT_HOLDER {
     docker exec -i "$NAV_DB_CONTAINER" \
@@ -527,9 +564,40 @@ start_snapshot_holder() {
 
   printf '%s\n' \
     'BEGIN ISOLATION LEVEL REPEATABLE READ READ ONLY;' \
+    "SELECT 'locked'
+       FROM (
+         SELECT pg_advisory_xact_lock(
+           hashtext(current_database()),
+           hashtext('nav_release_acceptance_account')
+         )
+       ) AS acceptance_guard;" \
+    "SELECT concat(
+       (SELECT count(*) FROM public.system_settings
+         WHERE LEFT(key, LENGTH('release_acceptance_account:')) = 'release_acceptance_account:'),
+       E'\\t',
+       (SELECT count(*) FROM public.users
+         WHERE LEFT(username, LENGTH('nav_release_accept_')) = 'nav_release_accept_')
+     );" \
     'SELECT pg_export_snapshot();' \
     >&"$SNAPSHOT_HOLDER_WRITE_FD" \
     || fatal "$EX_SOFTWARE" "could not request a PostgreSQL exported snapshot"
+
+  if ! IFS= read -r -t "$NAV_PG_SNAPSHOT_TIMEOUT_SECONDS" guard_status \
+    <&"$SNAPSHOT_HOLDER_READ_FD"; then
+    fatal "$EX_TEMPFAIL" "timed out waiting for the release acceptance advisory lock"
+  fi
+  [[ "$guard_status" == locked ]] \
+    || fatal "$EX_SOFTWARE" "PostgreSQL did not confirm the release acceptance advisory lock"
+
+  if ! IFS=$'\t' read -r -t "$NAV_PG_SNAPSHOT_TIMEOUT_SECONDS" marker_count user_count \
+    <&"$SNAPSHOT_HOLDER_READ_FD"; then
+    fatal "$EX_TEMPFAIL" "timed out waiting for the release acceptance backup gate"
+  fi
+  [[ "$marker_count" =~ ^[0-9]+$ && "$user_count" =~ ^[0-9]+$ ]] \
+    || fatal "$EX_SOFTWARE" "PostgreSQL returned invalid release acceptance residue counts"
+  if ((marker_count != 0 || user_count != 0)); then
+    fatal "$EX_TEMPFAIL" "release acceptance residue blocks database backup"
+  fi
 
   if ! IFS= read -r -t "$NAV_PG_SNAPSHOT_TIMEOUT_SECONDS" SNAPSHOT_ID \
     <&"$SNAPSHOT_HOLDER_READ_FD"; then

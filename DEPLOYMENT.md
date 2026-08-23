@@ -6,15 +6,17 @@
 - 反代域名：[https://nav.cristsau.cn](https://nav.cristsau.cn)
 - 承载服务器：OVH `ovh-US`；Oracle-JP 不再是当前生产承载
 - 外层入口：Nginx Proxy Manager → `nav-web` → `nav-api`
-- 当前 release：`/opt/nav-stack/releases/20260822-162146-5a42279`
-- 当前应用提交：`5a42279e7fba2d9f378ae7e6532f7e1f2464ef6a`
+- 当前 release：`/opt/nav-stack/releases/20260823-191619-9b05013`
+- 当前应用提交：`9b0501389de797c99ec646103780b4b83aa4be56`
 - 前端容器静态目录：`/usr/share/nginx/html`
 - 前端配置挂载：`/etc/nginx/conf.d/default.conf`
 - 后端服务：`nav-api`
 - 数据库服务：`nav-postgres`
-- API 镜像：`nav-ovh-api:5a42279e7fba2d9f378ae7e6532f7e1f2464ef6a`
-- 发布证据：当前 release 的 `evidence/PRE_SWITCH.txt`、`evidence/SWITCH.txt`、
-  `evidence/ACCEPTANCE.txt`
+- API 镜像：`nav-ovh-api:9b0501389de797c99ec646103780b4b83aa4be56`
+- 前端 `index.html` SHA-256：
+  `2c21947bd73fae227534ba15645106f87954db32be9a122843a2e934f5a4c8c4`
+- 发布证据：当前 release 的 `evidence/FINAL_ACCEPTANCE.txt`、
+  `evidence/BACKUP_RESTORE_ACCEPTANCE.txt` 与 `evidence/POST_BACKUP_RESTORE_ACCEPTANCE.txt`
 
 以上是带日期的验收快照，不是下一次发布的免检依据。发布前仍须重新核对 release、镜像、
 Compose、容器挂载、代理链、备份和双域状态。
@@ -120,10 +122,14 @@ NAV_RATE_LIMIT_KEY_SECRET=<至少 32 字符的独立随机值>
 `/usr/local/sbin/nav-restore-rehearsal` 或 NAV/restic 的 systemd timer。因此当前只能证明每次
 受控发布创建备份并完成隔离恢复，不能声称自动异地备份和失败报警已经启用。
 
-2026-08-22 的 `5a42279` 发布前与发布后备份均完成无网络隔离恢复演练；发布前为 16 张表和
-16 条迁移，发布后为 17 张表和 17 条迁移。迁移 018 只增加固定两行的后台任务状态表；
-证据保存在当前 release 的受限 `evidence` 中。当前没有启用计划备份、异地上传、远端保留
-清理或主机外失败报警。
+2026-08-23 的 `9b05013` 发布前与发布后备份均在无网络 PostgreSQL 16 临时容器中完成隔离
+恢复，均为 17 张表、17 条迁移和逐表行数精确一致；本次没有新迁移，只读迁移校验通过。
+只重建 `nav-api`、`nav-web`，PostgreSQL、CLIProxyAPI、NPM、Vaultwarden 和 Komari 未重建。
+证据保存在当前 release 的受限 `evidence` 中。当前仍没有启用计划备份、异地上传、远端
+保留清理或主机外失败报警。
+
+2026-08-22 的 `5a42279` 是上一生产 release 的历史恢复证据：发布前为 16 张表和 16 条迁移，
+发布后为 17 张表和 17 条迁移。它继续作为应用回滚目标，不再是当前 release。
 
 2026-08-12 的前端热修 `0a11f1f` 发布前创建了
 `/var/backups/nav/nav-20260812T061320Z-0dd11faaa386`，并在无网络临时 PostgreSQL 中完成
@@ -191,6 +197,21 @@ Token 也不能恢复笔记上传。双 Token、Base URL、上传目录和只读
 固定镜像构建，再做生产备份/隔离恢复、受控迁移、API 切换、前端 `index.html` 最后替换、
 双域验收和发布后恢复演练。严禁对含生产专属文件的 `/opt/nav` 执行 `git reset`、清空目录
 或覆盖式拉取。
+
+后续登录态验收不得复制或读取真实管理员长期密码。候选 API 镜像必须由包含一次性管理员
+CLI 且已通过 CI 的精确 SHA 构建，发布脚本再使用
+[`scripts/release/nav-with-ephemeral-admin.sh`](./scripts/release/nav-with-ephemeral-admin.sh)
+把“创建 → 双域验收 → 精确清理”绑定为一个生命周期；只有验收命令与清理都成功才能写入
+PASS。镜像构建必须传入 `--build-arg NAV_RELEASE_SHA=<40hex>`；wrapper 会核对镜像
+revision、容器健康、目标 PostgreSQL 容器身份，并按 `nav-release.lock → nav-backup.lock`
+固定顺序阻止验收与备份并发。备份锁路径固定为 `/run/lock/nav-backup.lock`，两个入口都会
+拒绝改名。验收必须显式设置 30–1200 秒上限；账号 marker 固定 30 分钟 TTL，登录、已有
+Session、API 启动恢复与 60 秒恢复扫描共同阻止强杀后遗留管理员继续使用。
+`scripts/nav-backup.sh` 还会在 exported snapshot 内检查一次性
+账号及 marker 都为 0 后才允许 dump。发布前后备份必须统一调用该 canonical 入口，不能在
+release 中复制一份无门禁的直接 `pg_dump`。硬中断恢复、私有凭据目录、数据库 marker、
+证据脱敏和最终零残留门禁见
+[`docs/NAV_PRODUCTION_RELEASE_ACCEPTANCE.md`](./docs/NAV_PRODUCTION_RELEASE_ACCEPTANCE.md)。
 
 前端独立 release 使用 `umask 077` 保护源码和证据，但发布到 Nginx live 目录时必须显式
 把目录安装为 `0755`、静态文件安装为 `0644`，不能用 `cp -a` 把构建目录的 `0600` 权限
@@ -327,15 +348,17 @@ location ^~ /share/ {
 
 ## 回滚
 
-当前前端热修的回滚入口：
+当前生产应用回滚入口：
 
 ```bash
-sudo /opt/nav-releases/20260812-061103-0a11f1f26bd8e87e39888a56a538a0b12bcf3c04/rollback-frontend.sh
+sudo /opt/nav-stack/releases/20260823-191619-9b05013/rollback-release.sh
 ```
 
-它只在当前 live `index.html` 仍与本次热修哈希一致时恢复前端快照，不修改 API 环境、
-数据库、Compose、Nginx 或 Secret。旧 release 下的 `rollback.sh` 是 API/前端联合回滚，
-会切换 API 镜像，不得用于本次纯前端热修的常规回滚。
+该脚本的已验证目标是上一 release
+`/opt/nav-stack/releases/20260822-162146-5a42279`，提交
+`5a42279e7fba2d9f378ae7e6532f7e1f2464ef6a`。执行前仍须重新核对当前 release、容器和脚本
+内容；回滚只恢复应用版本，保留已经应用的加法迁移，不得用旧整库覆盖发布后的用户写入。
 
-正常应用回滚保留已经应用的加法迁移，不得恢复旧整库覆盖发布后的用户写入。只有明确的
-数据损坏事故才评估在新数据库/新 volume 中恢复并验收后切换。
+`/opt/nav-releases/20260812-061103-0a11f1f26bd8e87e39888a56a538a0b12bcf3c04/rollback-frontend.sh`
+只属于 2026-08-12 纯前端热修的历史记录，禁止用于当前生产。只有明确的数据损坏事故才评估
+在新数据库/新 volume 中恢复并验收后切换。

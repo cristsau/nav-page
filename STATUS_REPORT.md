@@ -8,34 +8,37 @@
 ## 当前源码与生产基线
 
 - GitHub：`cristsau/nav-page`（Private），默认分支 `master`。
-- 2026-08-23 当前 GitHub `origin/master`：
-  `0d26f482fafee6a48c1a169ed12405a3763b9ae0`（PR #31）。这是源码基线，不是生产版本证明。
-- 最新合并但尚未发布的 PR：
+- 2026-08-23 最后完成生产验收的 merge SHA：
+  `9b0501389de797c99ec646103780b4b83aa4be56`（PR #32）。当前 `origin/master` 必须现场核验。
+- 当前生产源码包含的连续 PR：
   - [#28 发布文档校准](https://github.com/cristsau/nav-page/pull/28)
-  - [#29 异地备份调度候选](https://github.com/cristsau/nav-page/pull/29)
+  - [#29 异地备份调度候选](https://github.com/cristsau/nav-page/pull/29)（源码已包含，运行环境仍为
+    `NOT_CONFIGURED / NOT_ENABLED`）
   - [#30 图片删除重试告警正确性](https://github.com/cristsau/nav-page/pull/30)
   - [#31 云端恢复防误操作门禁](https://github.com/cristsau/nav-page/pull/31)
-- 最新已合并并发布的应用 PR：
+- 已在此前发布的应用 PR：
   - [#26 有界后台维护](https://github.com/cristsau/nav-page/pull/26)
   - [#27 后台任务可观测性](https://github.com/cristsau/nav-page/pull/27)
-- 最后完成 OVH 双域验收的应用提交（`VERIFIED_LIVE` 快照）：
-  `5a42279e7fba2d9f378ae7e6532f7e1f2464ef6a`。
-- 当前 OVH release：`/opt/nav-stack/releases/20260822-162146-5a42279`。
-- 应用回滚基线：`369024f9883a87fb0e1bc05a7665cb2e76437ae2`；迁移 018 为加法迁移，
-  应用回滚时保留。
+- 最新合并并发布的应用 PR：
+  - [#32 维护通知投递与 PostgreSQL 集成门禁](https://github.com/cristsau/nav-page/pull/32)
+- 当前 OVH release：`/opt/nav-stack/releases/20260823-191619-9b05013`。
+- 当前 API 镜像：`nav-ovh-api:9b0501389de797c99ec646103780b4b83aa4be56`。
+- 应用回滚目标：上一 release `/opt/nav-stack/releases/20260822-162146-5a42279`，提交
+  `5a42279e7fba2d9f378ae7e6532f7e1f2464ef6a`；迁移 018 为加法迁移，应用回滚时保留。
 - 生产域名：
   - `https://nav.skrskr.net`
   - `https://nav.cristsau.cn`
 - 2026-08-23 只读复核：双域首页与 `/api/health` 均为 200，API/Web/PostgreSQL 健康；
   CLIProxyAPI、Nginx Proxy Manager、Vaultwarden 和 Komari 保持运行。
 
-PR #30 已在源码修复图片删除重试把未解决失败误记为成功的问题；PR #31 已在源码加入云端
-恢复预览、当前密码、确认文字、安全备份回执、并发状态校验和真实 PostgreSQL 16 恢复演练。
-两项都尚未进入上述 OVH 生产 SHA，状态为 `SOURCE_MERGED / NOT_DEPLOYED`。
+PR #30 的图片删除重试告警正确性、PR #31 的云端安全恢复，以及 PR #32 的 Telegram 精确
+目标投递与独立 PostgreSQL 16 维护演练，均已进入上述生产 SHA 并完成双域验收。当前状态为
+`VERIFIED_LIVE`。当前仓库分支可能在本文提交后继续前进，不能用本快照替代 Git 现场核验。
 
-当前本地候选 `codex/nav-maintenance-delivery-pg-20260823` 进一步把 Telegram 配置测试改为
-向精确 Chat ID 发送测试消息；零送达会有界重试且不消耗完整告警冷却，并新增独立 PostgreSQL
-16 维护链路演练。该候选尚未推送、合并或发布，状态为 `LOCAL_CANDIDATE / NOT_DEPLOYED`。
+本地候选 `codex/nav-release-acceptance-ephemeral-20260823` 正在补齐不读取真实管理员密码的
+一次性登录态验收生命周期、30 分钟服务端过期保护、固定 canonical 备份锁、强杀恢复、真实
+PostgreSQL 16 账号/备份门禁和发布文档。它尚未推送、合并或发布，状态为
+`LOCAL_DONE / READY_FOR_GITHUB_CI / NOT_DEPLOYED`；当前生产仍是 `9b05013`。
 
 ## 当前生产已完成
 
@@ -86,16 +89,19 @@ PR #30 已在源码修复图片删除重试把未解决失败误记为成功的�
 
 ## 最新生产发布与恢复证据
 
-- PR #27 分支、PR 与合并后 `master` 的 GitHub Actions 均通过。
+- PR #32 分支、PR 与合并后 `master` 的 GitHub Actions 均通过；`test-and-build`、
+  `restore-postgres-integration` 与 `maintenance-postgres-integration` 三项均成功。
 - 源码归档 SHA-256 在 OVH 解包前核验；API 与 Vite 在隔离构建容器中构建。
-- 发布前 PostgreSQL 备份在无网络临时 PostgreSQL 中恢复为 16 张表、16 条迁移。
-- 加法迁移 `018_maintenance_observability.sql` 成功并固定写入两条任务状态。
+- 发布前 PostgreSQL 备份在无网络临时 PostgreSQL 16 中恢复为 17 张表、17 条迁移；本次
+  没有新迁移，新 API 镜像的只读迁移校验通过。
+- 加法迁移 `018_maintenance_observability.sql` 保持已应用并固定写入两条任务状态。
 - 只重建 `nav-api` 与 `nav-web`；PostgreSQL、CLIProxyAPI、NPM、Vaultwarden 和 Komari 未重建，
   发布验收时重启计数保持 0。
 - 双域通过健康、精确前端、CORS、登录会话、后台状态、缓存和退出验收。
-- 发布后备份在无网络临时 PostgreSQL 中恢复为 17 张表、17 条迁移。
-- 脱敏验收摘要：
-  `D:/DomoCodex/out/nav-release-20260822-162146-5a42279/RELEASE_ACCEPTANCE.md`。
+- 发布后备份同样在无网络临时 PostgreSQL 16 中恢复为 17 张表、17 条迁移。
+- 脱敏验收证据保存在当前 OVH release 的受限 `evidence` 目录；文件包括
+  `FINAL_ACCEPTANCE.txt`、`BACKUP_RESTORE_ACCEPTANCE.txt` 和
+  `POST_BACKUP_RESTORE_ACCEPTANCE.txt`。
 
 ## 备份与恢复现状（PARTIAL）
 
@@ -117,8 +123,8 @@ PR #30 已在源码修复图片删除重试把未解决失败误记为成功的�
 - 安全 JSON 导入导出可用；尚无 Chrome/Edge 书签 HTML、Markdown 批量导入导出与一键
   完整生态恢复。
 - PWA 元数据和主屏幕图标可用；尚无完整 Service Worker、离线缓存和推送。
-- 云端 JSON 恢复的密码二次确认、只读差异预览和替换边界已进入 PR #31 源码，但尚未发布；
-  图床对象、外层代理和超过 5,000 条记录的分片/流式恢复仍不在该能力内。
+- 云端 JSON 恢复的密码二次确认、只读差异预览和替换边界已随 PR #32 发布；图床对象、
+  外层代理和超过 5,000 条记录的分片/流式恢复仍不在该能力内。
 
 ## 仍未完成
 
@@ -142,5 +148,8 @@ PR #30 已在源码修复图片删除重试把未解决失败误记为成功的�
 - 生产只发布通过 CI 的精确 merge SHA，并使用独立 release 目录。
 - 每次生产发布先备份、隔离恢复，再迁移、切换、双域验收，最后做发布后恢复演练。
 - Secret 不进入 Git、文档、镜像、前端或日志。
+- 后续生产登录态验收必须使用随机一次性管理员；真实管理员长期密码不得进入 release。
+  候选 SHA 必须先包含并通过一次性账号工具的 CI，账号生命周期、自动清理和硬中断恢复门禁见
+  [`docs/NAV_PRODUCTION_RELEASE_ACCEPTANCE.md`](./docs/NAV_PRODUCTION_RELEASE_ACCEPTANCE.md)。
 - 生产数据库写入、定时器启用、凭据安装、DNS/代理修改、容器重建、服务重启和删除均需
   单独列出影响、备份、回滚与验收，并取得明确授权。
