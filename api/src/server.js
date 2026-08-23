@@ -13,25 +13,50 @@ import { configureOutboundNetwork } from './lib/network.js'
 import { validatePersistentRateLimitConfiguration } from './lib/persistentRateLimit.js'
 import { startSecurityEventRetention } from './lib/securityEventRetention.js'
 import { sendMaintenanceJobNotificationToAdmins } from './lib/telegram.js'
+import {
+  recoverExpiredReleaseAcceptanceAccounts,
+  startReleaseAcceptanceAccountRecovery
+} from './ops/releaseAcceptanceAccount.js'
 
 configureOutboundNetwork()
 
 async function main() {
   validatePersistentRateLimitConfiguration()
   await runMigrations()
+  const initialAcceptanceRecovery = await recoverExpiredReleaseAcceptanceAccounts({
+    poolInstance: pool
+  })
   await ensureAdminUser()
 
   const app = createApp()
   let stopSecurityEventRetention = async () => {}
   let stopMediaDeleteRetry = async () => {}
+  let stopReleaseAcceptanceRecovery = async () => {}
   let closing = false
+
+  if (initialAcceptanceRecovery.cleanedCount > 0) {
+    app.log.warn(
+      { cleanedCount: initialAcceptanceRecovery.cleanedCount },
+      'expired release acceptance account recovered during startup'
+    )
+  }
+  if (initialAcceptanceRecovery.failedCount > 0) {
+    app.log.error(
+      {
+        failedCount: initialAcceptanceRecovery.failedCount,
+        failures: initialAcceptanceRecovery.failures
+      },
+      'release acceptance account recovery requires operator review'
+    )
+  }
 
   const close = async () => {
     if (closing) return
     closing = true
     await Promise.all([
       stopSecurityEventRetention(),
-      stopMediaDeleteRetry()
+      stopMediaDeleteRetry(),
+      stopReleaseAcceptanceRecovery()
     ])
     await app.close()
     await pool.end()
@@ -99,10 +124,16 @@ async function main() {
         { requireAuto: true, requirePending: true }
       )
     })
+
+    stopReleaseAcceptanceRecovery = startReleaseAcceptanceAccountRecovery({
+      poolInstance: pool,
+      logger: app.log
+    })
   } catch (error) {
     await Promise.all([
       stopSecurityEventRetention(),
-      stopMediaDeleteRetry()
+      stopMediaDeleteRetry(),
+      stopReleaseAcceptanceRecovery()
     ])
     await app.close()
     throw error

@@ -4,7 +4,7 @@ Status on 2026-08-23:
 
 - bounded security-event retention, image-delete retry, persistent job status and
   in-process Telegram failure/recovery alerts: `VERIFIED_LIVE` in production SHA
-  `5a42279e7fba2d9f378ae7e6532f7e1f2464ef6a`;
+  `9b0501389de797c99ec646103780b4b83aa4be56`;
 - migration `018` is applied, the two fixed job rows exist, both workers have a
   successful run, and production alerts are enabled after a labelled Telegram
   target test.
@@ -32,9 +32,9 @@ candidate is revalidated under a row lock immediately before the upstream
 delete. A restored note reference returns the asset to active state instead of
 deleting it.
 
-The stricter image-delete alert accounting described below is merged in PR #30
-but remains `SOURCE_MERGED / NOT_DEPLOYED` until its exact merge SHA is released
-and the live worker status is revalidated.
+The stricter image-delete alert accounting described below was merged in PR #30
+and released with PR #32. The live worker status, unresolved backlog semantics
+and recovery notification state were revalidated on both production domains.
 
 A completed scheduler cycle is healthy only when the unresolved image-delete
 backlog is empty. Upstream delete failures, unexpected per-item errors and
@@ -97,17 +97,17 @@ failure count, bounded error code and time. The first later successful run sends
 one recovery notification. Per-target delivery uses `Promise.allSettled`, so one
 invalid administrator target does not prevent delivery to the others.
 
-The current local candidate verifies both the Bot Token and the exact numeric
-Chat ID by sending a labelled test message and checking Telegram's bot identity,
-message ID and returned target. Each worker cycle makes at most one notification
+PR #32 verifies both the Bot Token and the exact numeric Chat ID by sending a
+labelled test message and checking Telegram's bot identity, message ID and
+returned target. Each worker cycle makes at most one notification
 attempt. Telegram may already have accepted a message when a timeout or
 connection error loses the response, so an immediate retry could create a
 duplicate alert. If delivery is failed or skipped, the failure remains open but
 only the new cooldown reservation is released, so a later worker cycle can try
-again; partial or complete delivery keeps the cooldown. This candidate is not
-active in production until its exact merge SHA is separately released.
+again; partial or complete delivery keeps the cooldown. This behavior is active
+and verified in the production SHA above.
 
-The candidate also adds an isolated PostgreSQL 16 GitHub CI maintenance
+PR #32 also adds an isolated PostgreSQL 16 GitHub CI maintenance
 exercise using only `nav_maintenance_test`. It fails closed unless
 `NODE_ENV=test`, the explicit maintenance test switch, a localhost host and the
 exact database name all match.
@@ -130,8 +130,8 @@ not create an ever-growing event table.
 
 ## Release and acceptance for migration 018
 
-The following gate was completed for PR #27 and remains the required pattern
-for later releases:
+The following gate was completed for PR #27 and repeated for PR #32; it remains
+the required pattern for later releases:
 
 1. Let GitHub CI install dependencies, run the full API suite and build Vue; do
    not install project npm dependencies on the user's computer.
@@ -152,9 +152,10 @@ for later releases:
 8. Confirm health, container restart counts, API logs, dual-domain CORS, image
    library, AI and existing background-worker behavior.
 
-The verified application rollback is to disable
-`NAV_MAINTENANCE_ALERTS_ENABLED`, restore the previous release SHA
-`369024f9883a87fb0e1bc05a7665cb2e76437ae2`, and rebuild only API/Web. Migration
+The current verified application rollback is to disable
+`NAV_MAINTENANCE_ALERTS_ENABLED`, restore the previous release
+`/opt/nav-stack/releases/20260822-162146-5a42279` at SHA
+`5a42279e7fba2d9f378ae7e6532f7e1f2464ef6a`, and rebuild only API/Web. Migration
 `018` is additive and may safely remain; do not drop the table or rewrite
 migration history during an incident.
 

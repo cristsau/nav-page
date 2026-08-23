@@ -22,8 +22,24 @@ the presence of these files must not be described as automatic offsite backup.
   snapshot. `pg_dump --snapshot`, the complete `public` ordinary/partitioned
   table set, every table row count, `schema_migrations` content, and attachment
   URL inventory all use that same snapshot.
+- Before exporting that snapshot, the same transaction acquires the
+  `nav_release_acceptance_account` advisory lock and proves that both the
+  `release_acceptance_account:` marker prefix and `nav_release_accept_` user
+  prefix have zero rows. Any residue exits with a temporary failure before
+  `pg_dump`, so a crashed release-acceptance account cannot enter a recoverable
+  backup.
+- The release-acceptance wrapper holds this script's canonical
+  `/run/lock/nav-backup.lock` for the complete create/accept/cleanup lifecycle.
+  Both entrypoints reject any other lock path; the backup script creates/opens
+  the root-owned non-symlink lock without truncation. Backups must remain outside
+  that wrapper; release-specific scripts must call this canonical entry instead
+  of duplicating a direct `pg_dump` path.
 - PostgreSQL is exported with
   `pg_dump -Fc --no-owner --no-acl --snapshot=<exported-id>`.
+- GitHub CI's isolated PostgreSQL 16 gate executes this canonical script against
+  a real database. It proves a clean backup, marker and username residue refusal
+  before `pg_dump`, and waiting behind the same advisory lock while a provision
+  transaction remains open.
 - Every backup contains an exact type/mode/path/symlink-target tree,
   `manifest.sha256`, and a successful `pg_restore -l` catalog. Restore
   validation rejects extra as well as missing files, directories, and

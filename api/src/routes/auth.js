@@ -24,6 +24,10 @@ import {
 } from '../lib/securityEvents.js'
 import { sendDecisionNotificationToAdmins, sendRegistrationNotificationToAdmins } from '../lib/telegram.js'
 import { mapRegistrationRequest, sanitizeUser } from '../lib/users.js'
+import {
+  inspectReleaseAcceptanceLoginEligibility,
+  isReleaseAcceptanceUsername
+} from '../ops/releaseAcceptanceAccount.js'
 
 const UUID_PATTERN = /^[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i
 
@@ -196,6 +200,22 @@ export default async function authRoutes(fastify) {
         }
       }
 
+      if (isReleaseAcceptanceUsername(user.username)) {
+        const eligibility = await inspectReleaseAcceptanceLoginEligibility(
+          client,
+          {
+            userId: user.id,
+            username: user.username
+          }
+        )
+        if (!eligibility.active) {
+          return {
+            status: 'invalid',
+            subjectUserId: user.id
+          }
+        }
+      }
+
       if (user.status !== 'approved') {
         return {
           status: 'unapproved',
@@ -317,6 +337,11 @@ export default async function authRoutes(fastify) {
 
   fastify.put('/auth/account/username', async (request, reply) => {
     await fastify.requireAuth(request, reply)
+
+    if (isReleaseAcceptanceUsername(request.currentUser.username)) {
+      reply.code(403)
+      return { error: 'Release acceptance accounts cannot change identity' }
+    }
 
     const currentPassword = String(request.body?.currentPassword || '')
     const username = normalizeUsername(request.body?.username)

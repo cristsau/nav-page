@@ -28,6 +28,8 @@ services:
   nav-api:
     build:
       context: ./api
+      args:
+        NAV_RELEASE_SHA: "${NAV_RELEASE_SHA:-development}"
     container_name: nav-api
     restart: unless-stopped
     logging: *nav-logging
