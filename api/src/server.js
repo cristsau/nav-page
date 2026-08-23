@@ -5,6 +5,7 @@ import { pool, runMigrations } from './db/index.js'
 import { deleteImgBedUserImage } from './lib/imgBedLibraryClient.js'
 import { startAiUsageRetention } from './lib/aiUsageRetention.js'
 import { attemptMediaAssetDeletion } from './lib/mediaAssets.js'
+import { startBookmarkHealthScheduler } from './lib/bookmarkHealthScheduler.js'
 import { startMediaDeleteRetry } from './lib/mediaDeleteRetry.js'
 import {
   createMaintenanceJobObserver,
@@ -13,6 +14,7 @@ import {
 import { configureOutboundNetwork } from './lib/network.js'
 import { validatePersistentRateLimitConfiguration } from './lib/persistentRateLimit.js'
 import { startSecurityEventRetention } from './lib/securityEventRetention.js'
+import { startNoteReminderGeneration } from './lib/noteReminderScheduler.js'
 import { sendMaintenanceJobNotificationToAdmins } from './lib/telegram.js'
 import {
   recoverExpiredReleaseAcceptanceAccounts,
@@ -33,6 +35,8 @@ async function main() {
   let stopSecurityEventRetention = async () => {}
   let stopMediaDeleteRetry = async () => {}
   let stopAiUsageRetention = async () => {}
+  let stopNoteReminderGeneration = async () => {}
+  let stopBookmarkHealthScheduler = async () => {}
   let stopReleaseAcceptanceRecovery = async () => {}
   let closing = false
 
@@ -59,6 +63,8 @@ async function main() {
       stopSecurityEventRetention(),
       stopMediaDeleteRetry(),
       stopAiUsageRetention(),
+      stopNoteReminderGeneration(),
+      stopBookmarkHealthScheduler(),
       stopReleaseAcceptanceRecovery()
     ])
     await app.close()
@@ -145,6 +151,38 @@ async function main() {
       })
     })
 
+    stopNoteReminderGeneration = startNoteReminderGeneration({
+      enabled: config.noteReminderSchedulerEnabled,
+      policy: {
+        intervalSeconds: config.noteReminderSchedulerIntervalSeconds,
+        batchSize: config.noteReminderSchedulerBatchSize
+      },
+      poolInstance: pool,
+      logger: app.log,
+      observer: createMaintenanceJobObserver({
+        ...observerOptions,
+        jobName: MAINTENANCE_JOB_NAMES.NOTE_REMINDER_GENERATION,
+        jobLabel: '提前提醒生成'
+      })
+    })
+
+    stopBookmarkHealthScheduler = startBookmarkHealthScheduler({
+      enabled: config.bookmarkHealthSchedulerEnabled,
+      policy: {
+        intervalSeconds: config.bookmarkHealthSchedulerIntervalSeconds,
+        batchSize: config.bookmarkHealthSchedulerBatchSize,
+        staleHours: config.bookmarkHealthSchedulerStaleHours,
+        concurrency: config.bookmarkHealthSchedulerConcurrency
+      },
+      poolInstance: pool,
+      logger: app.log,
+      observer: createMaintenanceJobObserver({
+        ...observerOptions,
+        jobName: MAINTENANCE_JOB_NAMES.BOOKMARK_HEALTH_CHECK,
+        jobLabel: '书签定时失效检查'
+      })
+    })
+
     stopReleaseAcceptanceRecovery = startReleaseAcceptanceAccountRecovery({
       poolInstance: pool,
       logger: app.log
@@ -154,6 +192,8 @@ async function main() {
       stopSecurityEventRetention(),
       stopMediaDeleteRetry(),
       stopAiUsageRetention(),
+      stopNoteReminderGeneration(),
+      stopBookmarkHealthScheduler(),
       stopReleaseAcceptanceRecovery()
     ])
     await app.close()

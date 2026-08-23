@@ -23,13 +23,29 @@ const props = defineProps({
     type: String,
     default: ''
   },
+  notificationError: {
+    type: String,
+    default: ''
+  },
   localOnly: {
     type: Boolean,
     default: false
+  },
+  notificationPermission: {
+    type: String,
+    default: 'default'
   }
 })
 
-const emit = defineEmits(['close', 'refresh', 'read', 'read-all', 'view', 'complete'])
+const emit = defineEmits([
+  'close',
+  'refresh',
+  'read',
+  'read-all',
+  'view',
+  'complete',
+  'request-notifications'
+])
 const panelRef = ref(null)
 const closeButtonRef = ref(null)
 let previousBodyOverflow = ''
@@ -156,13 +172,34 @@ onBeforeUnmount(() => {
               <Icon name="circle-check" :size="16" />
               全部已读
             </button>
+            <button
+              v-if="notificationPermission === 'default'"
+              type="button"
+              @click="emit('request-notifications')"
+            >
+              <Icon name="clock" :size="16" />
+              启用系统通知
+            </button>
           </div>
 
-          <p v-if="localOnly" class="reminder-center__notice" role="note">
-            本地模式仅在此页面打开时计算到期提醒；关闭页面后不会发送系统通知。
+          <p v-if="notificationPermission === 'denied'" class="reminder-center__notice" role="note">
+            浏览器已阻止系统通知。可在站点权限中重新允许；NAV 内的提醒中心仍可正常使用。
+          </p>
+          <p v-else-if="notificationPermission === 'unsupported'" class="reminder-center__notice" role="note">
+            当前浏览器不支持网页系统通知，NAV 内的提醒中心仍可正常使用。
+          </p>
+          <p v-else-if="localOnly" class="reminder-center__notice" role="note">
+            本地模式会在 NAV 页面保持打开时计算提前提醒；关闭页面后不能继续生成通知。
           </p>
           <p v-else class="reminder-center__notice" role="note">
-            提醒会在打开 NAV 时同步；当前版本不会请求浏览器系统通知。
+            服务端可提前生成提醒；浏览器通知仅在你主动授权后发送。网页完全关闭时仍不会后台推送。
+          </p>
+          <p
+            v-if="notificationError"
+            class="reminder-center__notice is-error"
+            role="status"
+          >
+            {{ notificationError }}
           </p>
 
           <div class="reminder-center__content" aria-live="polite">
@@ -202,6 +239,11 @@ onBeforeUnmount(() => {
                   <time :datetime="reminder.dueAt" :class="{ 'is-overdue': isOverdue(reminder) }">
                     {{ isOverdue(reminder) ? '已到期' : '即将到期' }} · {{ formatDueAt(reminder.dueAt) }}
                   </time>
+                  <span v-if="reminder.remindBeforeMinutes" class="reminder-card__advance">
+                    提前 {{ reminder.remindBeforeMinutes >= 1440
+                      ? `${Math.round(reminder.remindBeforeMinutes / 1440)} 天`
+                      : `${reminder.remindBeforeMinutes} 分钟` }}提醒
+                  </span>
                   <div class="reminder-card__actions">
                     <button type="button" @click="emit('view', reminder)">查看</button>
                     <button type="button" @click="emit('complete', reminder)">
@@ -332,6 +374,11 @@ onBeforeUnmount(() => {
   line-height: 1.55;
   background: var(--bg-secondary);
   border-radius: 12px;
+}
+
+.reminder-center__notice.is-error {
+  color: var(--error-color);
+  border: 1px solid color-mix(in srgb, var(--error-color) 36%, transparent);
 }
 
 .reminder-center__content {

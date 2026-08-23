@@ -1,5 +1,6 @@
 <script setup>
-import { computed, nextTick, ref, watch } from 'vue'
+import { computed, nextTick, onBeforeUnmount, onMounted, ref, watch } from 'vue'
+import { onBeforeRouteLeave } from 'vue-router'
 import { encrypt, hashPassword } from '@/shared/utils/crypto'
 import {
   MAX_NOTE_TAGS,
@@ -29,6 +30,10 @@ const props = defineProps({
   saving: {
     type: Boolean,
     default: false
+  },
+  autosaveHandler: {
+    type: Function,
+    default: null
   }
 })
 
@@ -47,6 +52,8 @@ const formData = ref({
   mood: '',
   dueAt: '',
   completed: false,
+  remindBeforeMinutes: 0,
+  revision: 1,
   attachments: []
 })
 
@@ -61,6 +68,12 @@ const imageInputRef = ref(null)
 const uploadingImage = ref(false)
 const imageMessage = ref('')
 const imageMessageType = ref('')
+const autosaveStatus = ref('idle')
+const autosaveMessage = ref('')
+const initialEncrypted = ref(false)
+let autosaveTimer = null
+let autosaveSequence = 0
+let initializingForm = false
 
 // 是否编辑模式
 const isEdit = computed(() => !!props.note?.id)
@@ -97,13 +110,16 @@ function currentSnapshot() {
   return JSON.stringify({
     ...formData.value,
     password: '',
-    confirmPassword: ''
+    confirmPassword: '',
+    revision: 0
   })
 }
 
 // 监听显示状态，初始化表单
 watch(() => props.show, async (val) => {
   if (val) {
+    initializingForm = true
+    clearAutosaveTimer()
     if (props.note?.id) {
       formData.value = {
         type: props.note.type,
@@ -117,18 +133,27 @@ watch(() => props.show, async (val) => {
         mood: props.note.mood || '',
         dueAt: toDateTimeLocal(props.note.dueAt),
         completed: Boolean(props.note.completed),
+        remindBeforeMinutes: Number(props.note.remindBeforeMinutes || 0),
+        revision: Number(props.note.revision || 1),
         attachments: [...(props.note.attachments || [])]
       }
     } else {
       resetForm(props.note?.type || 'memo')
     }
+    initialEncrypted.value = Boolean(formData.value.encrypted)
     tagMessage.value = ''
     tagMessageType.value = ''
     imageMessage.value = ''
     imageMessageType.value = ''
+    autosaveStatus.value = props.note?.id && !props.note.encrypted ? 'saved' : 'idle'
+    autosaveMessage.value = ''
     initialSnapshot.value = currentSnapshot()
     await nextTick()
+    initializingForm = false
     titleInputRef.value?.focus()
+  } else {
+    clearAutosaveTimer()
+    autosaveSequence += 1
   }
 })
 
@@ -145,6 +170,8 @@ function resetForm(type = 'memo') {
     mood: '',
     dueAt: '',
     completed: false,
+    remindBeforeMinutes: 0,
+    revision: 1,
     attachments: []
   }
   tagInput.value = ''
@@ -153,6 +180,128 @@ function resetForm(type = 'memo') {
   imageMessage.value = ''
   imageMessageType.value = ''
 }
+
+function clearAutosaveTimer() {
+  if (autosaveTimer !== null) {
+    window.clearTimeout(autosaveTimer)
+    autosaveTimer = null
+  }
+}
+
+function buildPlainPayload() {
+  return {
+    type: formData.value.type,
+    title: formData.value.title.trim() || buildDefaultTitle(),
+    content: formData.value.content,
+    encrypted: false,
+    password: '',
+    tags: [...formData.value.tags],
+    entryDate: formData.value.type === 'diary' ? formData.value.entryDate : '',
+    mood: formData.value.type === 'diary' ? formData.value.mood : '',
+    dueAt: formData.value.type === 'memo' && formData.value.dueAt
+      ? new Date(formData.value.dueAt).toISOString()
+      : null,
+    remindBeforeMinutes: formData.value.type === 'memo' && formData.value.dueAt
+      ? Number(formData.value.remindBeforeMinutes || 0)
+      : 0,
+    completed: formData.value.type === 'memo' && formData.value.completed,
+    attachments: [...formData.value.attachments],
+    revision: Number(formData.value.revision || 1)
+  }
+}
+
+async function runAutosave() {
+  autosaveTimer = null
+  if (
+    !props.show
+    || !isEdit.value
+    || formData.value.encrypted
+    || initialEncrypted.value !== Boolean(formData.value.encrypted)
+    || props.saving
+    || uploadingImage.value
+    || typeof props.autosaveHandler !== 'function'
+  ) return
+
+  if (autosaveStatus.value === 'saving') {
+    autosaveTimer = window.setTimeout(runAutosave, 1200)
+    return
+  }
+
+  const savedSnapshot = currentSnapshot()
+  if (savedSnapshot === initialSnapshot.value) return
+  const sequence = ++autosaveSequence
+  autosaveStatus.value = 'saving'
+  autosaveMessage.value = '正在自动保存'
+  try {
+    const updated = await props.autosaveHandler(buildPlainPayload())
+    if (sequence !== autosaveSequence || !props.show) return
+    if (updated?.revision) formData.value.revision = Number(updated.revision)
+    if (currentSnapshot() === savedSnapshot) {
+      initialSnapshot.value = currentSnapshot()
+      autosaveStatus.value = 'saved'
+      autosaveMessage.value = '已自动保存'
+    } else {
+      autosaveStatus.value = 'pending'
+      autosaveMessage.value = '有新修改等待保存'
+      clearAutosaveTimer()
+      autosaveTimer = window.setTimeout(runAutosave, 1200)
+    }
+  } catch (error) {
+    if (sequence !== autosaveSequence) return
+    autosaveStatus.value = 'error'
+    autosaveMessage.value = error?.status === 409
+      ? '其他设备已修改此笔记，请关闭后重新打开'
+      : `自动保存失败：${error?.message || '请手动保存'}`
+  }
+}
+
+watch(formData, () => {
+  if (
+    initializingForm
+    || !props.show
+    || !isEdit.value
+    || formData.value.encrypted
+    || initialEncrypted.value !== Boolean(formData.value.encrypted)
+    || typeof props.autosaveHandler !== 'function'
+  ) return
+  if (currentSnapshot() === initialSnapshot.value) return
+  autosaveStatus.value = 'pending'
+  autosaveMessage.value = '修改将在片刻后自动保存'
+  clearAutosaveTimer()
+  autosaveTimer = window.setTimeout(runAutosave, 1200)
+}, { deep: true })
+
+function handleBeforeUnload(event) {
+  if (!props.show || currentSnapshot() === initialSnapshot.value) return
+  event.preventDefault()
+  event.returnValue = ''
+}
+
+onMounted(() => window.addEventListener('beforeunload', handleBeforeUnload))
+onBeforeUnmount(() => {
+  clearAutosaveTimer()
+  autosaveSequence += 1
+  window.removeEventListener('beforeunload', handleBeforeUnload)
+})
+
+onBeforeRouteLeave(async () => {
+  if (!props.show || currentSnapshot() === initialSnapshot.value) return true
+
+  if (
+    isEdit.value
+    && !formData.value.encrypted
+    && initialEncrypted.value === Boolean(formData.value.encrypted)
+    && !props.saving
+    && !uploadingImage.value
+    && typeof props.autosaveHandler === 'function'
+  ) {
+    clearAutosaveTimer()
+    await runAutosave()
+    if (currentSnapshot() === initialSnapshot.value) return true
+  }
+
+  return window.confirm('尚有未保存的修改，离开此页面会丢失这些修改。确定离开吗？')
+})
 
 // 添加标签
 function addTag() {
@@ -319,20 +468,45 @@ function removeImage(index) {
 }
 
 function handleEncryptionToggle() {
+  clearAutosaveTimer()
+  if (
+    initialEncrypted.value
+    && !formData.value.encrypted
+    && props.note?.encrypted
+    && !props.note?._unlocked
+  ) {
+    formData.value.encrypted = true
+    imageMessage.value = '请先用原密码解锁正文，再选择取消加密。'
+    imageMessageType.value = 'error'
+    return
+  }
+
   if (formData.value.encrypted && formData.value.attachments.length) {
     formData.value.encrypted = false
     imageMessage.value = '请先移除图片再启用加密；公开图床图片不具备笔记端到端加密。'
     imageMessageType.value = 'error'
   }
+
+  if (initialEncrypted.value !== Boolean(formData.value.encrypted)) {
+    autosaveStatus.value = 'idle'
+    autosaveMessage.value = '加密状态变化必须手动确认保存'
+  }
 }
 
 // 提交表单
 async function handleSubmit() {
-  if (props.saving || uploadingImage.value) return
+  if (props.saving || uploadingImage.value || autosaveStatus.value === 'saving') return
 
   let content = formData.value.content
   let passwordHash = ''
   const title = formData.value.title.trim() || buildDefaultTitle()
+
+  if (
+    isEdit.value
+    && initialEncrypted.value
+    && !formData.value.encrypted
+    && !confirm('确定取消加密并把正文保存为普通笔记吗？')
+  ) return
 
   if (formData.value.encrypted && formData.value.attachments.length) {
     imageMessage.value = '加密笔记不能保存公开图床图片，请先移除图片。'
@@ -366,13 +540,17 @@ async function handleSubmit() {
     dueAt: formData.value.type === 'memo' && formData.value.dueAt
       ? new Date(formData.value.dueAt).toISOString()
       : null,
+    remindBeforeMinutes: formData.value.type === 'memo' && formData.value.dueAt
+      ? Number(formData.value.remindBeforeMinutes || 0)
+      : 0,
     completed: formData.value.type === 'memo' && formData.value.completed,
-    attachments: [...formData.value.attachments]
+    attachments: [...formData.value.attachments],
+    revision: Number(formData.value.revision || 1)
   })
 }
 
 function close() {
-  if (uploadingImage.value) return
+  if (uploadingImage.value || autosaveStatus.value === 'saving') return
   if (!props.saving && initialSnapshot.value && currentSnapshot() !== initialSnapshot.value) {
     if (!confirm('尚有未保存的修改，确定关闭吗？')) return
   }
@@ -399,7 +577,7 @@ function close() {
             {{ noteNumberLabel }}
           </button>
         </div>
-        <button type="button" class="editor__close" aria-label="关闭编辑器" :disabled="saving" @click="close">
+        <button type="button" class="editor__close" aria-label="关闭编辑器" :disabled="saving || autosaveStatus === 'saving'" @click="close">
           <Icon name="close" :size="18" />
         </button>
       </div>
@@ -452,6 +630,17 @@ function close() {
         <label class="form-group form-group--grow">
           <span class="form-label">截止时间（可选）</span>
           <input v-model="formData.dueAt" type="datetime-local" class="input" :disabled="saving">
+        </label>
+        <label v-if="formData.dueAt" class="form-group form-group--grow">
+          <span class="form-label">提前提醒</span>
+          <select v-model.number="formData.remindBeforeMinutes" class="input" :disabled="saving">
+            <option :value="0">到期时</option>
+            <option :value="10">提前 10 分钟</option>
+            <option :value="30">提前 30 分钟</option>
+            <option :value="60">提前 1 小时</option>
+            <option :value="1440">提前 1 天</option>
+            <option :value="10080">提前 7 天</option>
+          </select>
         </label>
         <label v-if="isEdit" class="checkbox-label checkbox-label--status">
           <input v-model="formData.completed" type="checkbox" :disabled="saving">
@@ -624,8 +813,14 @@ function close() {
 
       <!-- 底部操作 -->
       <div class="editor__footer">
-        <button type="button" class="btn btn--secondary" :disabled="saving" @click="close">取消</button>
-        <button type="button" class="btn btn--primary" :disabled="saving" @click="handleSubmit">
+        <p v-if="isEdit && !formData.encrypted" class="editor__autosave" :class="`is-${autosaveStatus}`" aria-live="polite">
+          {{ autosaveMessage || '编辑内容会自动保存，并保留最近 50 个版本' }}
+        </p>
+        <p v-else-if="isEdit && formData.encrypted" class="editor__autosave">
+          加密笔记需手动保存
+        </p>
+        <button type="button" class="btn btn--secondary" :disabled="saving || autosaveStatus === 'saving'" @click="close">取消</button>
+        <button type="button" class="btn btn--primary" :disabled="saving || autosaveStatus === 'saving'" @click="handleSubmit">
           <span v-if="saving" class="button-spinner" aria-hidden="true"></span>
           {{ saving ? '保存中' : (isEdit ? '保存' : '创建') }}
         </button>
@@ -1104,6 +1299,28 @@ function close() {
   border-top: 1px solid var(--border-light);
 }
 
+.editor__autosave {
+  min-width: 0;
+  margin: 0 auto 0 0;
+  align-self: center;
+  color: var(--text-muted);
+  font-size: 11px;
+  line-height: 1.45;
+}
+
+.editor__autosave.is-saving,
+.editor__autosave.is-pending {
+  color: var(--info-color);
+}
+
+.editor__autosave.is-saved {
+  color: var(--success-color);
+}
+
+.editor__autosave.is-error {
+  color: var(--error-color);
+}
+
 .btn {
   display: inline-flex;
   align-items: center;
@@ -1179,6 +1396,14 @@ function close() {
 
   .image-uploader__grid {
     grid-template-columns: repeat(2, minmax(0, 1fr));
+  }
+
+  .editor__footer {
+    flex-wrap: wrap;
+  }
+
+  .editor__autosave {
+    width: 100%;
   }
 }
 

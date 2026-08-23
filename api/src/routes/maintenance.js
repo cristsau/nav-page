@@ -20,6 +20,18 @@ const JOB_DEFINITIONS = Object.freeze([
     label: 'AI 用量定期清理',
     enabled: () => config.aiUsageRetentionEnabled,
     intervalSeconds: () => config.aiUsageRetentionIntervalSeconds
+  },
+  {
+    name: MAINTENANCE_JOB_NAMES.NOTE_REMINDER_GENERATION,
+    label: '提前提醒生成',
+    enabled: () => config.noteReminderSchedulerEnabled,
+    intervalSeconds: () => config.noteReminderSchedulerIntervalSeconds
+  },
+  {
+    name: MAINTENANCE_JOB_NAMES.BOOKMARK_HEALTH_CHECK,
+    label: '书签定时失效检查',
+    enabled: () => config.bookmarkHealthSchedulerEnabled,
+    intervalSeconds: () => config.bookmarkHealthSchedulerIntervalSeconds
   }
 ])
 

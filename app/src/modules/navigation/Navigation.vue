@@ -80,6 +80,7 @@ const moveTargetGroupId = ref('')
 const groupOrderDraft = ref([])
 const bookmarkOrderDrafts = ref({})
 const sortDirty = ref(false)
+const showHealthIssues = ref(false)
 let statusTimer = null
 let aiRequestId = 0
 let aiTagRequestId = 0
@@ -122,6 +123,9 @@ const allCurrentBookmarksSelected = computed(() => (
 const availableMoveGroups = computed(() => (
   groups.value.filter((group) => group.id !== activeGroupId.value)
 ))
+const problemBookmarks = computed(() => orderedBookmarks.value.filter((bookmark) => (
+  ['broken', 'suspect', 'unsupported'].includes(bookmark.healthStatus)
+)))
 
 function resetSortDrafts() {
   groupOrderDraft.value = groups.value.map((group) => group.id)
@@ -244,6 +248,35 @@ async function handleHealthCheckSelected() {
         : `链接检查未完成，已重新同步当前状态：${error.message || '请稍后重试'}`,
       'error'
     )
+  } finally {
+    managementBusy.value = false
+  }
+}
+
+async function recheckProblemBookmark(bookmark) {
+  if (!bookmark?.id || managementBusy.value || !backendNavigationEnabled) return
+  managementBusy.value = true
+  try {
+    await checkBookmarkHealth([bookmark.id])
+    setStatus(`已复查「${bookmark.title}」`, 'success')
+  } catch (error) {
+    await loadData().catch(() => {})
+    setStatus(`复查失败：${error.message || '请稍后重试'}`, 'error')
+  } finally {
+    managementBusy.value = false
+  }
+}
+
+async function recheckAllProblems() {
+  if (!problemBookmarks.value.length || managementBusy.value || !backendNavigationEnabled) return
+  managementBusy.value = true
+  const ids = problemBookmarks.value.slice(0, MAX_MANAGED_BOOKMARKS).map((bookmark) => bookmark.id)
+  try {
+    const checked = await checkBookmarkHealth(ids)
+    setStatus(`已复查 ${checked.length} 个异常链接`, 'success')
+  } catch (error) {
+    await loadData().catch(() => {})
+    setStatus(`批量复查中断，已同步完成结果：${error.message || '请稍后重试'}`, 'error')
   } finally {
     managementBusy.value = false
   }
@@ -707,6 +740,36 @@ onBeforeUnmount(() => {
           </button>
         </div>
 
+        <section v-if="problemBookmarks.length" class="health-issues" aria-labelledby="health-issues-title">
+          <div class="health-issues__header">
+            <div>
+              <p class="management-heading__eyebrow">链接健康</p>
+              <h2 id="health-issues-title">{{ problemBookmarks.length }} 个链接需要关注</h2>
+              <p>连续两次失败才会标记为失效；登录墙、限流和受保护页面不会直接判死。</p>
+            </div>
+            <div class="health-issues__actions">
+              <button type="button" :aria-expanded="showHealthIssues" @click="showHealthIssues = !showHealthIssues">
+                {{ showHealthIssues ? '收起清单' : '查看清单' }}
+              </button>
+              <button type="button" :disabled="managementBusy || !backendNavigationEnabled" @click="recheckAllProblems">
+                <Icon name="refresh" :size="16" />
+                复查全部
+              </button>
+            </div>
+          </div>
+          <ul v-if="showHealthIssues" class="health-issues__list">
+            <li v-for="bookmark in problemBookmarks.slice(0, MAX_MANAGED_BOOKMARKS)" :key="bookmark.id">
+              <span class="health-issues__state" :class="`is-${bookmark.healthStatus}`" aria-hidden="true"></span>
+              <div>
+                <strong>{{ bookmark.title }}</strong>
+                <small>{{ bookmark.url }}</small>
+              </div>
+              <span class="health-issues__label">{{ bookmark.healthStatus === 'broken' ? '连续失败' : bookmark.healthStatus === 'unsupported' ? '无法安全检查' : '待确认' }}</span>
+              <button type="button" :disabled="managementBusy || !backendNavigationEnabled" @click="recheckProblemBookmark(bookmark)">复查</button>
+            </li>
+          </ul>
+        </section>
+
         <NavGroup
           :groups="orderedGroups"
           :bookmarks="orderedBookmarks"
@@ -953,6 +1016,45 @@ onBeforeUnmount(() => {
 
 .management-bar--sort .management-bar__count {
   flex: 1;
+}
+
+.health-issues {
+  margin: 16px 0 20px;
+  padding: 16px;
+  color: var(--text-secondary);
+  background: color-mix(in srgb, var(--warning-color) 8%, var(--bg-card));
+  border: 1px solid color-mix(in srgb, var(--warning-color) 28%, var(--border-light));
+  border-radius: 18px;
+}
+
+.health-issues__header,
+.health-issues__actions,
+.health-issues__list li {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+}
+
+.health-issues__header { justify-content: space-between; }
+.health-issues h2 { margin: 2px 0 4px; color: var(--text-primary); font-size: 15px; }
+.health-issues p { margin: 0; color: var(--text-muted); font-size: 12px; line-height: 1.55; }
+.health-issues button { min-height: 44px; display: inline-flex; align-items: center; justify-content: center; gap: 6px; padding: 8px 12px; color: var(--text-secondary); background: var(--bg-secondary); border: 1px solid var(--border-light); border-radius: 12px; cursor: pointer; }
+.health-issues button:disabled { cursor: not-allowed; opacity: 0.5; }
+.health-issues__list { display: grid; gap: 7px; margin: 14px 0 0; padding: 14px 0 0; border-top: 1px solid var(--border-light); list-style: none; }
+.health-issues__list li { min-width: 0; }
+.health-issues__list li > div { min-width: 0; flex: 1; display: grid; }
+.health-issues__list strong,
+.health-issues__list small { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.health-issues__list small { color: var(--text-muted); }
+.health-issues__state { width: 9px; height: 9px; flex: 0 0 auto; background: var(--warning-color); border-radius: 50%; }
+.health-issues__state.is-broken { background: var(--error-color); }
+
+@media (max-width: 720px) {
+  .health-issues__header { align-items: stretch; flex-direction: column; }
+  .health-issues__actions { display: grid; grid-template-columns: 1fr 1fr; }
+  .health-issues__list li { display: grid; grid-template-columns: 9px minmax(0, 1fr) auto; }
+  .health-issues__label { grid-column: 2; color: var(--text-muted); font-size: 11px; }
+  .health-issues__list li button { grid-column: 3; grid-row: 1 / 3; }
 }
 
 .page-status {

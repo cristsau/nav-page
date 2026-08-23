@@ -19,7 +19,7 @@ const props = defineProps({
   }
 })
 
-const emit = defineEmits(['close', 'edit', 'ai', 'copyId', 'copyExtract', 'copyValue'])
+const emit = defineEmits(['close', 'edit', 'ai', 'history', 'copyId', 'copyExtract', 'copyValue'])
 const dialogRef = ref(null)
 let previouslyFocusedElement = null
 
@@ -233,6 +233,9 @@ onBeforeUnmount(restorePreviousFocus)
         </button>
         <button type="button" class="btn btn--secondary" @click="emit('ai', note)">
           <Icon name="sparkles" :size="16" /> AI 编辑
+        </button>
+        <button type="button" class="btn btn--secondary" @click="emit('history', note)">
+          <Icon name="clock" :size="16" /> 版本历史
         </button>
         <button type="button" class="btn btn--primary" @click="emit('edit', note)">
           <Icon name="edit" :size="16" /> 编辑

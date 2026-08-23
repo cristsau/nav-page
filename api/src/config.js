@@ -142,6 +142,34 @@ export const config = {
     process.env.NAV_MEDIA_DELETE_RETRY_MAX_BACKOFF_SECONDS,
     86_400
   ),
+  noteReminderSchedulerEnabled:
+    process.env.NAV_NOTE_REMINDER_SCHEDULER_ENABLED === 'true',
+  noteReminderSchedulerIntervalSeconds: normalizePositiveInteger(
+    process.env.NAV_NOTE_REMINDER_SCHEDULER_INTERVAL_SECONDS,
+    60
+  ),
+  noteReminderSchedulerBatchSize: normalizePositiveInteger(
+    process.env.NAV_NOTE_REMINDER_SCHEDULER_BATCH_SIZE,
+    500
+  ),
+  bookmarkHealthSchedulerEnabled:
+    process.env.NAV_BOOKMARK_HEALTH_SCHEDULER_ENABLED === 'true',
+  bookmarkHealthSchedulerIntervalSeconds: normalizePositiveInteger(
+    process.env.NAV_BOOKMARK_HEALTH_SCHEDULER_INTERVAL_SECONDS,
+    3_600
+  ),
+  bookmarkHealthSchedulerBatchSize: normalizePositiveInteger(
+    process.env.NAV_BOOKMARK_HEALTH_SCHEDULER_BATCH_SIZE,
+    20
+  ),
+  bookmarkHealthSchedulerStaleHours: normalizePositiveInteger(
+    process.env.NAV_BOOKMARK_HEALTH_SCHEDULER_STALE_HOURS,
+    168
+  ),
+  bookmarkHealthSchedulerConcurrency: normalizePositiveInteger(
+    process.env.NAV_BOOKMARK_HEALTH_SCHEDULER_CONCURRENCY,
+    4
+  ),
   maintenanceAlertsEnabled:
     process.env.NAV_MAINTENANCE_ALERTS_ENABLED === 'true',
   maintenanceAlertFailureThreshold: normalizePositiveInteger(

@@ -11,6 +11,7 @@ import Modal from '@/shared/components/Modal.vue'
 import NoteCard from './components/NoteCard.vue'
 import NoteEditor from './components/NoteEditor.vue'
 import NotePreview from './components/NotePreview.vue'
+import NoteVersionHistory from './components/NoteVersionHistory.vue'
 import ReminderCenter from './components/ReminderCenter.vue'
 import ShareManager from './components/ShareManager.vue'
 import {
@@ -34,7 +35,10 @@ const {
   unreadCount: reminderUnreadCount,
   loading: remindersLoading,
   error: remindersError,
+  notificationError: reminderNotificationError,
   localOnly: remindersLocalOnly,
+  notificationPermission: reminderNotificationPermission,
+  requestNotificationPermission,
   refresh: refreshReminders,
   markRead: markReminderRead,
   markAllRead: markAllRemindersRead
@@ -53,6 +57,8 @@ const showEditor = ref(false)
 const editingNote = ref(null)
 const showPreview = ref(false)
 const previewingNote = ref(null)
+const showVersionHistory = ref(false)
+const versionHistoryNote = ref(null)
 const createMenuOpen = ref(false)
 const createMenuRef = ref(null)
 const createMenuButtonRef = ref(null)
@@ -382,6 +388,47 @@ async function handleSaveNote(data) {
   }
 }
 
+async function handleAutosaveNote(data) {
+  if (!editingNote.value?.id) return null
+  const noteId = editingNote.value.id
+  const mutationResult = await updateNote(noteId, data)
+  if (mutationResult?.note) {
+    editingNote.value = { ...editingNote.value, ...mutationResult.note }
+    const index = notes.value.findIndex((note) => note.id === noteId)
+    if (index >= 0) notes.value.splice(index, 1, mutationResult.note)
+    await refreshReminders()
+    return mutationResult.note
+  }
+  await loadNotes()
+  const updated = notes.value.find((note) => note.id === noteId) || null
+  if (updated) editingNote.value = { ...updated }
+  await refreshReminders()
+  return updated
+}
+
+function handleVersionHistory(note) {
+  showPreview.value = false
+  previewingNote.value = null
+  versionHistoryNote.value = { ...note }
+  showVersionHistory.value = true
+}
+
+async function handleVersionRestored(restoredNote) {
+  showVersionHistory.value = false
+  versionHistoryNote.value = null
+  await loadNotes()
+  await refreshReminders()
+  const note = notes.value.find((item) => item.id === restoredNote?.id) || restoredNote
+  if (note) handlePreviewNote(note)
+  setStatus('历史版本已恢复；恢复前的内容也已保留')
+}
+
+async function handleNotificationPermissionRequest() {
+  const permission = await requestNotificationPermission()
+  if (permission === 'granted') setStatus('浏览器系统通知已启用')
+  else if (permission === 'denied') setStatus('浏览器阻止了系统通知，请在站点权限中允许', 'error')
+}
+
 // 删除笔记
 async function handleDeleteNote(note) {
   if (!confirm(`确定删除「${note.title}」？`)) return
@@ -538,9 +585,11 @@ onMounted(async () => {
   window.addEventListener(COMMAND_ACTION_EVENT, handleCommandAction)
   document.addEventListener('pointerdown', handleCreateMenuPointerDown)
   window.addEventListener('keydown', handleCreateMenuKeydown)
+  window.addEventListener('domonav:open-reminders', openReminderCenter)
 
   await loadNotes()
   await refreshReminders()
+  if (route.query.reminders === '1') await openReminderCenter()
 
   const requestedSearch = Array.isArray(route.query.search)
     ? route.query.search[0]
@@ -571,6 +620,7 @@ onBeforeUnmount(() => {
   window.removeEventListener(COMMAND_ACTION_EVENT, handleCommandAction)
   document.removeEventListener('pointerdown', handleCreateMenuPointerDown)
   window.removeEventListener('keydown', handleCreateMenuKeydown)
+  window.removeEventListener('domonav:open-reminders', openReminderCenter)
 })
 </script>
 
@@ -814,6 +864,7 @@ onBeforeUnmount(() => {
       :show="showEditor"
       :note="editingNote"
       :saving="savingNote"
+      :autosave-handler="handleAutosaveNote"
       @close="showEditor = false; editingNote = null"
       @save="handleSaveNote"
     />
@@ -825,9 +876,17 @@ onBeforeUnmount(() => {
       @close="showPreview = false; previewingNote = null; previewReturnFocus = null"
       @edit="showPreview = false; previewingNote = null; previewReturnFocus = null; handleEditNote($event)"
       @ai="handleAiNote"
+      @history="handleVersionHistory"
       @copy-id="handleCopyNoteId"
       @copy-extract="handleCopyNoteExtract"
       @copy-value="handleCopyValue"
+    />
+
+    <NoteVersionHistory
+      :show="showVersionHistory"
+      :note="versionHistoryNote"
+      @close="showVersionHistory = false; versionHistoryNote = null"
+      @restored="handleVersionRestored"
     />
 
     <!-- 分享管理弹窗 -->
@@ -845,13 +904,16 @@ onBeforeUnmount(() => {
       :unread-count="reminderUnreadCount"
       :loading="remindersLoading"
       :error="remindersError"
+      :notification-error="reminderNotificationError"
       :local-only="remindersLocalOnly"
+      :notification-permission="reminderNotificationPermission"
       @close="showReminderCenter = false"
       @refresh="refreshReminders"
       @read="handleReminderRead"
       @read-all="handleAllRemindersRead"
       @view="handleReminderView"
       @complete="handleReminderComplete"
+      @request-notifications="handleNotificationPermissionRequest"
     />
 
     <!-- 设置弹窗 -->

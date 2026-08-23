@@ -1,7 +1,9 @@
 export const MAINTENANCE_JOB_NAMES = Object.freeze({
   SECURITY_EVENT_RETENTION: 'security_event_retention',
   MEDIA_DELETE_RETRY: 'media_delete_retry',
-  AI_USAGE_RETENTION: 'ai_usage_retention'
+  AI_USAGE_RETENTION: 'ai_usage_retention',
+  NOTE_REMINDER_GENERATION: 'note_reminder_generation',
+  BOOKMARK_HEALTH_CHECK: 'bookmark_health_check'
 })
 
 const KNOWN_JOB_NAMES = new Set(Object.values(MAINTENANCE_JOB_NAMES))
@@ -123,6 +125,16 @@ const RESULT_FIELDS = Object.freeze({
   [MAINTENANCE_JOB_NAMES.AI_USAGE_RETENTION]: [
     'deletedCount',
     'batches'
+  ],
+  [MAINTENANCE_JOB_NAMES.NOTE_REMINDER_GENERATION]: [
+    'generated'
+  ],
+  [MAINTENANCE_JOB_NAMES.BOOKMARK_HEALTH_CHECK]: [
+    'checked',
+    'broken',
+    'suspect',
+    'unsupported',
+    'reachable'
   ]
 })
 

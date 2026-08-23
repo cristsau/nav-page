@@ -68,7 +68,7 @@ test('due reminders are reachable from the notes header and command palette', as
   assert.match(commands, /icon: 'clock'/)
 })
 
-test('reminder center is an accessible mobile sheet with truthful local-only behavior', async () => {
+test('reminder center is an accessible mobile sheet with explicit browser-notification consent', async () => {
   const source = await readReminderCenter()
 
   assert.match(source, /role="dialog"/)
@@ -76,7 +76,8 @@ test('reminder center is an accessible mobile sheet with truthful local-only beh
   assert.match(source, /aria-labelledby="reminder-center-title"/)
   assert.match(source, /previouslyFocusedElement = document\.activeElement/)
   assert.match(source, /previouslyFocusedElement\.focus\(\)/)
-  assert.match(source, /关闭页面后不会发送系统通知/)
+  assert.match(source, /启用系统通知/)
+  assert.match(source, /网页完全关闭时仍不会后台推送/)
   assert.match(source, /max-height: 85dvh/)
   assert.match(source, /min-height: 44px/)
   assert.match(source, /@media \(prefers-reduced-motion: reduce\)/)
@@ -84,12 +85,17 @@ test('reminder center is an accessible mobile sheet with truthful local-only beh
   assert.doesNotMatch(source, /[😀-🙏🌀-🫿]/u)
 })
 
-test('due reminders refresh while the NAV page remains visible', async () => {
+test('due reminders refresh in the active browser session and deduplicate system notifications', async () => {
   const source = await readReminderComposable()
 
   assert.match(source, /NOTE_REMINDER_FOREGROUND_REFRESH_MS = 60_000/)
-  assert.match(source, /window\.setInterval\([\s\S]*refreshWhileVisible/)
-  assert.match(source, /document\.visibilityState === 'visible'/)
+  assert.match(source, /window\.setInterval\([\s\S]*refreshInBackground/)
+  assert.match(source, /registration\.showNotification\(title, options\)/)
+  assert.match(source, /new Notification/)
+  assert.match(source, /notificationError\.value = '系统通知投递失败/)
+  assert.doesNotMatch(source, /error\.value = '系统通知投递失败/)
+  assert.match(source, /系统通知投递失败/)
+  assert.match(source, /NOTE_REMINDER_DELIVERED_STORAGE_KEY/)
   assert.match(source, /window\.clearInterval\(foregroundRefreshTimer\)/)
   assert.match(source, /LOCAL_REMINDER_READ_STORAGE_KEY/)
   assert.match(source, /saveLocalReminderReadIds\(localReadIds\)/)

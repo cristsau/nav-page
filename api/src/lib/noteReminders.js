@@ -27,12 +27,29 @@ export function mapNoteReminder(record) {
       : String(record.title || '未命名备忘录'),
     encrypted: Boolean(record.encrypted),
     dueAt: record.due_at_snapshot,
+    reminderAt: record.reminder_at_snapshot || record.due_at_snapshot,
+    remindBeforeMinutes: Number(record.remind_before_minutes_snapshot || 0),
     triggeredAt: record.triggered_at,
     readAt: record.read_at || null
   }
 }
 
 export async function syncDueNoteReminders(client, userId) {
+  // Serialize reminder reconciliation with note edits. Lock rows in a stable
+  // order so a lead-only change cannot race the cleanup/insert pair and leave
+  // an obsolete reminder protected by the (note_id, due_at) unique key.
+  await client.query(
+    `
+      SELECT id
+      FROM notes
+      WHERE user_id = $1
+        AND type = 'memo'
+      ORDER BY id ASC
+      FOR UPDATE
+    `,
+    [userId]
+  )
+
   await client.query(
     `
       DELETE FROM note_reminders AS reminder
@@ -45,6 +62,10 @@ export async function syncDueNoteReminders(client, userId) {
           OR note.completed = TRUE
           OR note.due_at IS NULL
           OR note.due_at IS DISTINCT FROM reminder.due_at_snapshot
+          OR note.remind_before_minutes IS DISTINCT FROM reminder.remind_before_minutes_snapshot
+          OR (
+            note.due_at - (note.remind_before_minutes * INTERVAL '1 minute')
+          ) IS DISTINCT FROM reminder.reminder_at_snapshot
         )
     `,
     [userId]
@@ -56,19 +77,23 @@ export async function syncDueNoteReminders(client, userId) {
         user_id,
         note_id,
         due_at_snapshot,
+        remind_before_minutes_snapshot,
+        reminder_at_snapshot,
         triggered_at
       )
       SELECT
         note.user_id,
         note.id,
         note.due_at,
+        note.remind_before_minutes,
+        note.due_at - (note.remind_before_minutes * INTERVAL '1 minute'),
         NOW()
       FROM notes AS note
       WHERE note.user_id = $1
         AND note.type = 'memo'
         AND note.completed = FALSE
         AND note.due_at IS NOT NULL
-        AND note.due_at <= NOW()
+        AND note.due_at - (note.remind_before_minutes * INTERVAL '1 minute') <= NOW()
       ON CONFLICT (note_id, due_at_snapshot) DO NOTHING
     `,
     [userId]
@@ -90,6 +115,8 @@ export async function getNoteRemindersForUser(userId, {
           reminder.id,
           reminder.note_id,
           reminder.due_at_snapshot,
+          reminder.remind_before_minutes_snapshot,
+          reminder.reminder_at_snapshot,
           reminder.triggered_at,
           reminder.read_at,
           note.number_id,
@@ -104,6 +131,9 @@ export async function getNoteRemindersForUser(userId, {
           AND note.completed = FALSE
           AND note.due_at IS NOT NULL
           AND note.due_at = reminder.due_at_snapshot
+          AND note.remind_before_minutes = reminder.remind_before_minutes_snapshot
+          AND note.due_at - (note.remind_before_minutes * INTERVAL '1 minute')
+            = reminder.reminder_at_snapshot
         ORDER BY
           (reminder.read_at IS NULL) DESC,
           reminder.due_at_snapshot DESC,
@@ -125,6 +155,9 @@ export async function getNoteRemindersForUser(userId, {
           AND note.completed = FALSE
           AND note.due_at IS NOT NULL
           AND note.due_at = reminder.due_at_snapshot
+          AND note.remind_before_minutes = reminder.remind_before_minutes_snapshot
+          AND note.due_at - (note.remind_before_minutes * INTERVAL '1 minute')
+            = reminder.reminder_at_snapshot
       `,
       [userId]
     )

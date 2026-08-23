@@ -45,6 +45,27 @@ test('maintenance status keeps only bounded counters and sanitized error codes',
       exhausted: 0
     }
   )
+  assert.deepEqual(
+    summarizeMaintenanceResult(
+      MAINTENANCE_JOB_NAMES.NOTE_REMINDER_GENERATION,
+      { generated: 12, title: 'must-not-persist' }
+    ),
+    { generated: 12 }
+  )
+  assert.deepEqual(
+    summarizeMaintenanceResult(
+      MAINTENANCE_JOB_NAMES.BOOKMARK_HEALTH_CHECK,
+      {
+        checked: 4,
+        broken: 1,
+        suspect: 1,
+        unsupported: 1,
+        reachable: 1,
+        url: 'https://must-not-persist.invalid'
+      }
+    ),
+    { checked: 4, broken: 1, suspect: 1, unsupported: 1, reachable: 1 }
+  )
   assert.equal(
     sanitizeMaintenanceErrorCode({ code: 'connect refused / private detail' }),
     'CONNECT_REFUSED_PRIVATE_DETAIL'

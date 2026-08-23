@@ -24,6 +24,7 @@ import noteReminderRoutes from './routes/noteReminders.js'
 import notesRoutes from './routes/notes.js'
 import passkeyRoutes from './routes/passkeys.js'
 import publicSharePageRoutes from './routes/publicSharePage.js'
+import productivityImportRoutes from './routes/productivityImports.js'
 import securityEventRoutes from './routes/securityEvents.js'
 import settingsRoutes from './routes/settings.js'
 import workspaceRoutes from './routes/workspace.js'
@@ -137,6 +138,7 @@ export function createApp() {
   app.register(noteReminderRoutes, { prefix: '/api' })
   app.register(notesRoutes, { prefix: '/api' })
   app.register(passkeyRoutes, { prefix: '/api' })
+  app.register(productivityImportRoutes, { prefix: '/api' })
   app.register(settingsRoutes, { prefix: '/api' })
   app.register(workspaceRoutes, { prefix: '/api' })
 

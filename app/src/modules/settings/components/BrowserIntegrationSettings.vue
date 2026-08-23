@@ -1,7 +1,16 @@
 <script setup>
-import { computed, ref } from 'vue'
+import { computed, onBeforeUnmount, onMounted, ref } from 'vue'
+import {
+  applyPwaUpdate,
+  checkPwaUpdate,
+  getPwaState,
+  subscribePwaState
+} from '@/shared/services/pwa'
 
 const copiedText = ref('')
+const pwaState = ref(getPwaState())
+const pwaChecking = ref(false)
+let unsubscribePwa = null
 
 const navUrl = computed(() => window.location.origin)
 const quickAddUrl = computed(() => `${window.location.origin}/quick-add`)
@@ -20,6 +29,25 @@ async function copyText(value, label) {
 function openLink(url) {
   window.open(url, '_blank', 'noopener')
 }
+
+async function handlePwaUpdate() {
+  if (pwaState.value.updateReady) {
+    applyPwaUpdate()
+    return
+  }
+  pwaChecking.value = true
+  try {
+    const ready = await checkPwaUpdate()
+    copiedText.value = ready ? '发现新版本，可以立即更新' : '当前已是最新版本'
+  } finally {
+    pwaChecking.value = false
+  }
+}
+
+onMounted(() => {
+  unsubscribePwa = subscribePwaState((nextState) => { pwaState.value = nextState })
+})
+onBeforeUnmount(() => unsubscribePwa?.())
 </script>
 
 <template>
@@ -36,6 +64,29 @@ function openLink(url) {
       <div class="settings-item__control settings-item__control--stack">
         <button class="btn btn--secondary" @click="copyText(navUrl, 'DOMO NAV 地址')">复制 DOMO NAV 地址</button>
         <p class="helper-text">Chrome / Edge：打开浏览器设置，搜索“启动时”，选择“打开特定网页”，填入上面的地址。</p>
+      </div>
+    </div>
+
+    <div class="settings-item">
+      <div class="settings-item__info">
+        <div class="settings-item__label">PWA 与离线外壳</div>
+        <div class="settings-item__desc">
+          安装到桌面后可像应用一样启动。离线时只显示安全说明页，不缓存账号数据、笔记、图片或 API 响应。
+        </div>
+      </div>
+      <div class="settings-item__control settings-item__control--stack">
+        <button
+          class="btn btn--secondary"
+          :disabled="!pwaState.registered || pwaChecking"
+          @click="handlePwaUpdate"
+        >
+          {{ pwaState.updateReady ? '应用新版本' : (pwaChecking ? '检查中' : '检查应用更新') }}
+        </button>
+        <p class="helper-text">
+          {{ pwaState.supported
+            ? (pwaState.registered ? '离线外壳已就绪；新版本会等待你确认后刷新。' : '生产 HTTPS 环境加载后会自动启用。')
+            : '当前浏览器不支持 Service Worker。' }}
+        </p>
       </div>
     </div>
 

@@ -90,7 +90,9 @@ export function mapNote(record) {
     entryDate: record.entry_date || '',
     mood: record.mood || '',
     dueAt: record.due_at || null,
+    remindBeforeMinutes: Number(record.remind_before_minutes || 0),
     completed: Boolean(record.completed),
+    revision: Number(record.revision || 1),
     createdAt: record.created_at,
     updatedAt: record.updated_at,
     share: {

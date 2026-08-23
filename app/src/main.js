@@ -3,6 +3,7 @@ import App from './App.vue'
 import router from './router'
 import { useAuth } from '@/shared/composables/useAuth'
 import { bootstrapSystem } from '@/shared/db/database'
+import { registerPwa } from '@/shared/services/pwa'
 
 import './styles/reset.css'
 import './styles/variables.css'
@@ -28,6 +29,7 @@ async function bootstrapApp() {
   app.mount('#app')
   appRoot?.removeAttribute('aria-busy')
   startupSkeleton?.remove()
+  void registerPwa()
 }
 
 function renderStartupError(error) {

@@ -98,6 +98,8 @@ async function verifyReminderSchema() {
     'user_id',
     'note_id',
     'due_at_snapshot',
+    'remind_before_minutes_snapshot',
+    'reminder_at_snapshot',
     'triggered_at',
     'read_at',
     'created_at'
@@ -127,6 +129,72 @@ async function verifyReminderSchema() {
     [expectedIndexes]
   )
   assertExactSet('note reminder indexes', indexes.rows.map((row) => row.indexname), expectedIndexes)
+}
+
+async function verifyProductivityCompletionSchema() {
+  const noteColumns = await query(
+    `
+      SELECT column_name
+      FROM information_schema.columns
+      WHERE table_schema = current_schema()
+        AND table_name = 'notes'
+        AND column_name = ANY($1::text[])
+    `,
+    [['remind_before_minutes', 'revision']]
+  )
+  assertExactSet(
+    'productivity note columns',
+    noteColumns.rows.map((row) => row.column_name),
+    ['remind_before_minutes', 'revision']
+  )
+
+  const expectedVersionColumns = [
+    'id',
+    'user_id',
+    'note_id',
+    'revision',
+    'type',
+    'title',
+    'content',
+    'encrypted',
+    'password_hash',
+    'pinned',
+    'tags',
+    'entry_date',
+    'mood',
+    'due_at',
+    'remind_before_minutes',
+    'completed',
+    'created_at'
+  ]
+  const versionColumns = await query(
+    `
+      SELECT column_name
+      FROM information_schema.columns
+      WHERE table_schema = current_schema()
+        AND table_name = 'note_versions'
+    `
+  )
+  assertExactSet(
+    'note version columns',
+    versionColumns.rows.map((row) => row.column_name),
+    expectedVersionColumns
+  )
+
+  const indexes = await query(
+    `
+      SELECT indexname
+      FROM pg_indexes
+      WHERE schemaname = current_schema()
+        AND indexname = ANY($1::text[])
+    `,
+    [['idx_notes_reminder_generation', 'idx_note_versions_owner_note_created']]
+  )
+  assertExactSet(
+    'productivity indexes',
+    indexes.rows.map((row) => row.indexname),
+    ['idx_notes_reminder_generation', 'idx_note_versions_owner_note_created']
+  )
 }
 
 async function verifyMediaLibrarySchema() {
@@ -622,7 +690,13 @@ async function verifyMaintenanceObservabilitySchema() {
   assertExactSet(
     'maintenance job status seeds',
     jobs.rows.map((row) => row.job_name),
-    ['ai_usage_retention', 'media_delete_retry', 'security_event_retention']
+    [
+      'ai_usage_retention',
+      'bookmark_health_check',
+      'media_delete_retry',
+      'note_reminder_generation',
+      'security_event_retention'
+    ]
   )
 }
 
@@ -750,6 +824,7 @@ async function main() {
   await verifyMigrationLedger()
   await verifyNavigationMaintenanceSchema()
   await verifyReminderSchema()
+  await verifyProductivityCompletionSchema()
   await verifyMediaLibrarySchema()
   await verifySecurityControlsSchema()
   await verifyWebAuthnSchema()
