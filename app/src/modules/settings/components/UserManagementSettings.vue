@@ -102,7 +102,7 @@ async function handleTestTelegram() {
     const result = shouldUseBackendTelegramAdmin()
       ? await testBackendTelegramConfig(telegramForm.value)
       : await testTelegramConfig(telegramForm.value)
-    telegramMessage.value = `连接成功，Bot 名称：${result.result?.username || result.result?.first_name || '未知'}`
+    telegramMessage.value = `测试消息已送达，Bot 名称：${result.result?.username || result.result?.first_name || '未知'}`
   } catch (error) {
     telegramMessage.value = error.message || 'Telegram 连接失败'
   } finally {
@@ -173,14 +173,14 @@ onUnmounted(() => {
       </div>
       <div class="telegram-actions">
         <button class="btn btn--secondary" :disabled="testingTelegram" @click="handleTestTelegram">
-          {{ testingTelegram ? '测试中...' : '测试连接' }}
+          {{ testingTelegram ? '发送中...' : '发送测试消息' }}
         </button>
         <button class="btn btn--primary" :disabled="savingTelegram" @click="handleSaveTelegram">
           {{ savingTelegram ? '保存中...' : '保存 Telegram 配置' }}
         </button>
       </div>
       <div v-if="telegramMessage" class="sync-message">{{ telegramMessage }}</div>
-      <p class="telegram-tip">这里不再写死 TG 信息。发布时每个管理员都可以填自己的 Bot Token 和 Chat ID。</p>
+      <p class="telegram-tip">测试会向填写的 Chat ID 发送一条 DOMO NAV 测试消息，同时验证 Bot Token 与真实接收目标。</p>
     </div>
 
     <div class="user-block">

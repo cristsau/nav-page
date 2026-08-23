@@ -9,10 +9,12 @@
 
 - GitHub：`cristsau/nav-page`（Private），默认分支 `master`。
 - 2026-08-23 当前 GitHub `origin/master`：
-  `3525147298b495ccf63a985698d8e378ea5506b3`（PR #29）。这是源码基线，不是生产版本证明。
+  `0d26f482fafee6a48c1a169ed12405a3763b9ae0`（PR #31）。这是源码基线，不是生产版本证明。
 - 最新合并但尚未发布的 PR：
   - [#28 发布文档校准](https://github.com/cristsau/nav-page/pull/28)
   - [#29 异地备份调度候选](https://github.com/cristsau/nav-page/pull/29)
+  - [#30 图片删除重试告警正确性](https://github.com/cristsau/nav-page/pull/30)
+  - [#31 云端恢复防误操作门禁](https://github.com/cristsau/nav-page/pull/31)
 - 最新已合并并发布的应用 PR：
   - [#26 有界后台维护](https://github.com/cristsau/nav-page/pull/26)
   - [#27 后台任务可观测性](https://github.com/cristsau/nav-page/pull/27)
@@ -27,10 +29,13 @@
 - 2026-08-23 只读复核：双域首页与 `/api/health` 均为 200，API/Web/PostgreSQL 健康；
   CLIProxyAPI、Nginx Proxy Manager、Vaultwarden 和 Komari 保持运行。
 
-当前独立源码候选 `codex/nav-media-alert-correctness-20260823` 修复图片删除重试把
-未解决失败误记为成功的问题：本轮失败、异常和重试耗尽记为失败；仅退避或批次剩余只更新
-进度；只有总积压归零才允许清除告警并发送恢复通知。该候选在合并和精确 SHA 发布前均为
-`NOT_DEPLOYED`。
+PR #30 已在源码修复图片删除重试把未解决失败误记为成功的问题；PR #31 已在源码加入云端
+恢复预览、当前密码、确认文字、安全备份回执、并发状态校验和真实 PostgreSQL 16 恢复演练。
+两项都尚未进入上述 OVH 生产 SHA，状态为 `SOURCE_MERGED / NOT_DEPLOYED`。
+
+当前本地候选 `codex/nav-maintenance-delivery-pg-20260823` 进一步把 Telegram 配置测试改为
+向精确 Chat ID 发送测试消息；零送达会有界重试且不消耗完整告警冷却，并新增独立 PostgreSQL
+16 维护链路演练。该候选尚未推送、合并或发布，状态为 `LOCAL_CANDIDATE / NOT_DEPLOYED`。
 
 ## 当前生产已完成
 
@@ -112,8 +117,8 @@
 - 安全 JSON 导入导出可用；尚无 Chrome/Edge 书签 HTML、Markdown 批量导入导出与一键
   完整生态恢复。
 - PWA 元数据和主屏幕图标可用；尚无完整 Service Worker、离线缓存和推送。
-- 云端 JSON 恢复仍缺少管理员密码二次确认、只读 dry-run 差异预览和更明确的恢复边界；
-  在这些门禁补齐前，不应把在线导入当作完整灾难恢复工具。
+- 云端 JSON 恢复的密码二次确认、只读差异预览和替换边界已进入 PR #31 源码，但尚未发布；
+  图床对象、外层代理和超过 5,000 条记录的分片/流式恢复仍不在该能力内。
 
 ## 仍未完成
 

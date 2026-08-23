@@ -1,9 +1,14 @@
 import { query } from '../db/index.js'
 import { getUserSettingValue, setUserSettingValue } from './userSettings.js'
+import {
+  callTelegram,
+  verifyTelegramConfigDelivery
+} from './telegramClient.js'
+
+export { callTelegram } from './telegramClient.js'
 
 const TELEGRAM_CONFIG_KEY = 'telegramConfig'
 const TELEGRAM_UPDATE_OFFSET_KEY = 'telegramUpdateOffset'
-const TELEGRAM_REQUEST_TIMEOUT_MS = 10000
 
 function formatDate(timestamp) {
   return new Date(timestamp).toLocaleString('zh-CN', { hour12: false })
@@ -15,27 +20,6 @@ function normalizeTelegramConfig(config = {}) {
     botToken: String(config.botToken || '').trim(),
     adminChatId: String(config.adminChatId || '').trim()
   }
-}
-
-export async function callTelegram(botToken, method, payload = {}) {
-  const hasPayload = payload && Object.keys(payload).length > 0
-  const response = await fetch(`https://api.telegram.org/bot${botToken}/${method}`, {
-    method: hasPayload ? 'POST' : 'GET',
-    signal: AbortSignal.timeout(TELEGRAM_REQUEST_TIMEOUT_MS),
-    headers: hasPayload
-      ? {
-          'Content-Type': 'application/json'
-        }
-      : undefined,
-    body: hasPayload ? JSON.stringify(payload) : undefined
-  })
-
-  const data = await response.json().catch(() => ({}))
-  if (!response.ok || data.ok === false) {
-    throw new Error(data.description || `Telegram request failed: ${response.status}`)
-  }
-
-  return data
 }
 
 export async function getAdminTelegramConfig(userId) {
@@ -69,7 +53,7 @@ export async function testAdminTelegramConfig(config) {
     throw new Error('Bot Token and Chat ID are required')
   }
 
-  return callTelegram(normalized.botToken, 'getMe')
+  return verifyTelegramConfigDelivery(normalized)
 }
 
 export async function getEnabledAdminTelegramTargets() {

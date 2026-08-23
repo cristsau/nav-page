@@ -3,6 +3,7 @@ import assert from 'node:assert/strict'
 import {
   createMaintenanceJobObserver,
   MAINTENANCE_JOB_NAMES,
+  RELEASE_MAINTENANCE_ALERT_RESERVATION_SQL,
   RECORD_MAINTENANCE_FAILURE_SQL,
   RECORD_MAINTENANCE_NOTIFICATION_SQL,
   RECORD_MAINTENANCE_PROGRESS_SQL,
@@ -143,6 +144,160 @@ test('a threshold failure reserves a cooldown alert and records partial delivery
   assert.equal(notifications[0].consecutiveFailures, 3)
   assert.equal(notifications[0].errorCode, 'ECONNREFUSED')
   assert.deepEqual(calls[1].params.slice(1, 3), ['failure', 'partial'])
+})
+
+test('zero-delivery failures are not retried and release only the cooldown reservation', async () => {
+  const calls = []
+  let notificationAttempts = 0
+  const previousAlertAt = new Date('2026-08-22T00:00:00Z')
+  const finishedAt = new Date('2026-08-22T02:00:03Z')
+  const observer = createMaintenanceJobObserver({
+    jobName: MAINTENANCE_JOB_NAMES.MEDIA_DELETE_RETRY,
+    jobLabel: '图床删除失败重试',
+    poolInstance: {
+      async query(text, params) {
+        calls.push({ text, params })
+        if (text === RECORD_MAINTENANCE_FAILURE_SQL) {
+          return {
+            rows: [{
+              should_notify: true,
+              consecutive_failures: 3,
+              previous_alert_at: previousAlertAt
+            }]
+          }
+        }
+        return { rowCount: 1, rows: [] }
+      }
+    },
+    alertsEnabled: true,
+    failureThreshold: 3,
+    alertCooldownSeconds: 21_600,
+    async notifyFn() {
+      notificationAttempts += 1
+      return { skipped: false, sent: 0, failed: 1 }
+    }
+  })
+
+  await observer.failed({
+    error: Object.assign(new Error('retry failed'), { code: 'RETRY_FAILED' }),
+    result: { failed: 1, remaining: 1 },
+    startedAt: new Date('2026-08-22T02:00:00Z'),
+    finishedAt,
+    durationMs: 3_000
+  })
+
+  assert.equal(notificationAttempts, 1)
+  assert.equal(calls.length, 3)
+  assert.equal(calls[1].text, RECORD_MAINTENANCE_NOTIFICATION_SQL)
+  assert.deepEqual(calls[1].params.slice(1, 3), ['failure', 'failed'])
+  assert.equal(calls[1].params[4], 'NOTIFICATION_DELIVERY_FAILED')
+  assert.equal(calls[2].text, RELEASE_MAINTENANCE_ALERT_RESERVATION_SQL)
+  assert.deepEqual(calls[2].params, [
+    MAINTENANCE_JOB_NAMES.MEDIA_DELETE_RETRY,
+    finishedAt,
+    previousAlertAt
+  ])
+  assert.doesNotMatch(RELEASE_MAINTENANCE_ALERT_RESERVATION_SQL, /alert_open\s*=/i)
+})
+
+test('a skipped failure alert releases its cooldown reservation without retrying', async () => {
+  const calls = []
+  let notificationAttempts = 0
+  const finishedAt = new Date('2026-08-22T02:10:03Z')
+  const observer = createMaintenanceJobObserver({
+    jobName: MAINTENANCE_JOB_NAMES.SECURITY_EVENT_RETENTION,
+    jobLabel: '安全审计定期清理',
+    poolInstance: {
+      async query(text, params) {
+        calls.push({ text, params })
+        if (text === RECORD_MAINTENANCE_FAILURE_SQL) {
+          return {
+            rows: [{
+              should_notify: true,
+              consecutive_failures: 3,
+              previous_alert_at: null
+            }]
+          }
+        }
+        return { rowCount: 1, rows: [] }
+      }
+    },
+    alertsEnabled: true,
+    failureThreshold: 3,
+    alertCooldownSeconds: 21_600,
+    async notifyFn() {
+      notificationAttempts += 1
+      return { skipped: true, sent: 0, failed: 0 }
+    }
+  })
+
+  await observer.failed({
+    error: Object.assign(new Error('cleanup failed'), { code: 'CLEANUP_FAILED' }),
+    result: {},
+    startedAt: new Date('2026-08-22T02:10:00Z'),
+    finishedAt,
+    durationMs: 3_000
+  })
+
+  assert.equal(notificationAttempts, 1)
+  assert.equal(calls.at(-1).text, RELEASE_MAINTENANCE_ALERT_RESERVATION_SQL)
+  assert.deepEqual(calls.at(-1).params, [
+    MAINTENANCE_JOB_NAMES.SECURITY_EVENT_RETENTION,
+    finishedAt,
+    null
+  ])
+})
+
+test('an ambiguous notification exception is not retried and releases the cooldown reservation', async () => {
+  const calls = []
+  let notificationAttempts = 0
+  const finishedAt = new Date('2026-08-22T02:20:03Z')
+  const observer = createMaintenanceJobObserver({
+    jobName: MAINTENANCE_JOB_NAMES.MEDIA_DELETE_RETRY,
+    jobLabel: '图床删除失败重试',
+    poolInstance: {
+      async query(text, params) {
+        calls.push({ text, params })
+        if (text === RECORD_MAINTENANCE_FAILURE_SQL) {
+          return {
+            rows: [{
+              should_notify: true,
+              consecutive_failures: 3,
+              previous_alert_at: null
+            }]
+          }
+        }
+        return { rowCount: 1, rows: [] }
+      }
+    },
+    alertsEnabled: true,
+    failureThreshold: 3,
+    alertCooldownSeconds: 21_600,
+    async notifyFn() {
+      notificationAttempts += 1
+      throw Object.assign(new Error('ambiguous Telegram response'), { code: 'ETIMEDOUT' })
+    }
+  })
+
+  await observer.failed({
+    error: Object.assign(new Error('retry failed'), { code: 'RETRY_FAILED' }),
+    result: { failed: 1 },
+    startedAt: new Date('2026-08-22T02:20:00Z'),
+    finishedAt,
+    durationMs: 3_000
+  })
+
+  assert.equal(notificationAttempts, 1)
+  assert.equal(calls.length, 3)
+  assert.equal(calls[1].text, RECORD_MAINTENANCE_NOTIFICATION_SQL)
+  assert.deepEqual(calls[1].params.slice(1, 3), ['failure', 'failed'])
+  assert.equal(calls[1].params[4], 'ETIMEDOUT')
+  assert.equal(calls[2].text, RELEASE_MAINTENANCE_ALERT_RESERVATION_SQL)
+  assert.deepEqual(calls[2].params, [
+    MAINTENANCE_JOB_NAMES.MEDIA_DELETE_RETRY,
+    finishedAt,
+    null
+  ])
 })
 
 test('a deferred backlog updates bounded progress without clearing or incrementing an alert', async () => {

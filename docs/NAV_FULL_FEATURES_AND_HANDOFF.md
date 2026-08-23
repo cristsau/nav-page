@@ -9,7 +9,7 @@
 - GitHub 仓库：`cristsau/nav-page`，应保持 **Private**。
 - 主分支：`master`。
 - 2026-08-23 当前 GitHub `origin/master` 为
-  `3525147298b495ccf63a985698d8e378ea5506b3`（PR #29 合并点）；这是源码基线。
+  `0d26f482fafee6a48c1a169ed12405a3763b9ae0`（PR #31 合并点）；这是源码基线。
 - 最后完成 OVH 双域验收的生产应用 SHA 为
   `5a42279e7fba2d9f378ae7e6532f7e1f2464ef6a`（PR #27 合并点）。源码与生产版本必须分别
   核验，不能再写成同一个“当前 SHA”。
@@ -19,8 +19,10 @@
   Telegram 失败/恢复通知；生产目标验证通过，运行内告警已经启用。
 - 仓库已提供默认不启用的异地备份/保留/隔离恢复 systemd 模板、外部成功心跳和独立
   `OnFailure` 通知；OVH 尚未安装 `restic`、Secret、稳定入口或 timer，不能写成已上线。
-- 独立源码候选 `codex/nav-media-alert-correctness-20260823` 正在收紧图片删除重试告警语义；
-  合并并发布精确 SHA 前属于 `NOT_DEPLOYED`。
+- PR #30 已收紧图片删除重试告警语义；PR #31 已加入有预览、当前密码、安全备份回执和
+  并发校验的云端替换恢复。两项均已合并但尚未发布，属于 `SOURCE_MERGED / NOT_DEPLOYED`。
+- 本地候选 `codex/nav-maintenance-delivery-pg-20260823` 正在补齐 Telegram 真实目标投递测试、
+  零送达告警冷却释放与 PostgreSQL 16 维护链路演练；尚未推送、合并或发布。
 - 生产入口：`https://nav.skrskr.net`、`https://nav.cristsau.cn`。
 - AI 兼容入口：`https://ap.skrskr.net`。
 - 当前已知生产承载已从异常的 Oracle 主机灾难迁移到 OVH；任何后续发布前必须重新只读核验，不能把本文当作实时状态证明。
@@ -365,7 +367,7 @@ AI 配置仍保存在当前用户的 `appConfig.search.providers.chatgpt` 中：
    - `DEPLOYMENT.md`
    - `docs/NAV_SECURITY_CONTROLS.md`
    - `docs/NAV_BACKUP_RUNBOOK.md`
-6. 只读确认 PR #29、`origin/master` 和实时生产；本文记录的 `3525147…` 是源码快照，
+6. 只读确认 PR #31、`origin/master` 和实时生产；本文记录的 `0d26f48…` 是源码快照，
    `5a42279…` 是最后生产验收快照，两者都不能代替当前核验。
 7. 完整 npm 安装、依赖审计、API 测试与 Vite 构建优先交给 GitHub Actions；个人电脑默认只做源码、静态和差异检查。
 8. 只有 CI 通过、PR 合并、生产前备份与恢复门禁通过并取得明确发布授权后，才能发布。
@@ -380,9 +382,10 @@ AI 配置仍保存在当前用户的 `appConfig.search.providers.chatgpt` 中：
 - [x] GitHub Actions API 全测通过
 - [x] Vite 生产构建通过
 - [x] 依赖审计结果已审阅；`nanoid` lock 条目已升级到无该高危公告的 `3.3.18`
-- [x] PR `#18` 至 `#29` 已按独立批次合并，最新 `master` CI 通过
+- [x] PR `#18` 至 `#31` 已按独立批次合并，最新 `master` CI 通过
 - [x] PR `#26/#27` 的分支、PR 与合并后 `master` CI 均通过
 - [x] PR `#28/#29` 已合并且 GitHub CI 通过；异地备份仍为源码候选，尚未安装到 OVH
+- [x] PR `#30/#31` 已合并且 GitHub CI 与独立 PostgreSQL 16 恢复演练通过；尚未发布到 OVH
 - [x] PR `#26/#27` 新增差异未发现 Token、API Key 或真实 `.env`
 
 ### UI、性能与无障碍（已发布并验收）
@@ -461,11 +464,11 @@ origin/master、未提交内容、GitHub PR/CI 和实时生产状态。不要从
 
 截至 2026-08-23，账户与审计控制、AI 配置、图床双 Token、主题/无障碍、Session、
 缓存/代理、设置/导航、视觉收敛、迁移 017/018、两个后台任务状态和运行内 Telegram
-失败/恢复告警已经发布到 OVH SHA 5a42279；GitHub master 已前进到 PR #29 的
-3525147，但 PR #28/#29 并未因此自动进入生产。先只读核对 origin/master、实时生产 SHA、
-双域、容器健康、备份和当前数据库边界；不要推断 Oracle 旧个人数据已恢复。当前首要缺口
-是把仓库已有的自动异地加密备份候选安全配置到 OVH，完成首次云端快照、定期隔离恢复、
-备份失败报警和主机外 dead-man 验收。
+失败/恢复告警已经发布到 OVH SHA 5a42279；GitHub master 已前进到 PR #31 的
+0d26f48。PR #28 至 #31 并未因此自动进入生产。先只读核对 origin/master、实时生产 SHA、
+双域、容器健康、备份和当前数据库边界；不要推断 Oracle 旧个人数据已恢复。当前首要生产
+缺口是把仓库已有的自动异地加密备份候选安全配置到 OVH，完成首次云端快照、定期隔离恢复、
+备份失败报警和主机外 dead-man 验收；当前本地开发候选还需先经 GitHub CI 和 PR 门禁。
 下一项工作必须单独列出影响、备份、回滚、验收和排除项，并等待我明确授权。任何
 生产删除、数据库写入、DNS、代理、容器重建或服务重启都不能从这份交接自动获得授权。
 ```

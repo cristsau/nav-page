@@ -44,10 +44,41 @@ export async function testTelegramConfig(config) {
   if (!config?.botToken || !config?.adminChatId) {
     throw new Error('请先填写 Bot Token 和管理员 Chat ID')
   }
+  const expectedChatId = String(config.adminChatId).trim()
+  if (!/^-?[1-9]\d*$/.test(expectedChatId)) {
+    throw new Error('管理员 Chat ID 必须是数字 ID')
+  }
 
-  return requestTelegram('/api/telegram/get-me', {
+  const bot = await requestTelegram('/api/telegram/get-me', {
     botToken: config.botToken
   })
+  if (!Number.isSafeInteger(Number(bot.result?.id))) {
+    throw new Error('Telegram Bot 身份验证结果无效')
+  }
+  const delivery = await requestTelegram('/api/telegram/send-message', {
+    botToken: config.botToken,
+    chatId: expectedChatId,
+    text: [
+      'DOMO NAV Telegram 测试消息',
+      '',
+      'Bot Token 与管理员 Chat ID 均已验证可用。',
+      `测试时间: ${formatDate(new Date())}`
+    ].join('\n')
+  })
+
+  const messageId = Number(delivery.result?.message_id)
+  const deliveredChatId = String(delivery.result?.chat?.id ?? '').trim()
+  if (!Number.isSafeInteger(messageId) || deliveredChatId !== expectedChatId) {
+    throw new Error('Telegram 测试消息的送达回执无效')
+  }
+
+  return {
+    ...bot,
+    delivery: {
+      sent: true,
+      messageId
+    }
+  }
 }
 
 export async function sendRegistrationNotification(request) {
