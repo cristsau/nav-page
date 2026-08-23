@@ -3,6 +3,7 @@ import { ensureAdminUser } from './bootstrap.js'
 import { config } from './config.js'
 import { pool, runMigrations } from './db/index.js'
 import { deleteImgBedUserImage } from './lib/imgBedLibraryClient.js'
+import { startAiUsageRetention } from './lib/aiUsageRetention.js'
 import { attemptMediaAssetDeletion } from './lib/mediaAssets.js'
 import { startMediaDeleteRetry } from './lib/mediaDeleteRetry.js'
 import {
@@ -31,6 +32,7 @@ async function main() {
   const app = createApp()
   let stopSecurityEventRetention = async () => {}
   let stopMediaDeleteRetry = async () => {}
+  let stopAiUsageRetention = async () => {}
   let stopReleaseAcceptanceRecovery = async () => {}
   let closing = false
 
@@ -56,6 +58,7 @@ async function main() {
     await Promise.all([
       stopSecurityEventRetention(),
       stopMediaDeleteRetry(),
+      stopAiUsageRetention(),
       stopReleaseAcceptanceRecovery()
     ])
     await app.close()
@@ -125,6 +128,23 @@ async function main() {
       )
     })
 
+    stopAiUsageRetention = startAiUsageRetention({
+      enabled: config.aiUsageRetentionEnabled,
+      policy: {
+        retentionDays: config.aiUsageRetentionDays,
+        intervalSeconds: config.aiUsageRetentionIntervalSeconds,
+        batchSize: config.aiUsageRetentionBatchSize,
+        maxBatchesPerRun: config.aiUsageRetentionMaxBatchesPerRun
+      },
+      poolInstance: pool,
+      logger: app.log,
+      observer: createMaintenanceJobObserver({
+        ...observerOptions,
+        jobName: MAINTENANCE_JOB_NAMES.AI_USAGE_RETENTION,
+        jobLabel: 'AI 用量定期清理'
+      })
+    })
+
     stopReleaseAcceptanceRecovery = startReleaseAcceptanceAccountRecovery({
       poolInstance: pool,
       logger: app.log
@@ -133,6 +153,7 @@ async function main() {
     await Promise.all([
       stopSecurityEventRetention(),
       stopMediaDeleteRetry(),
+      stopAiUsageRetention(),
       stopReleaseAcceptanceRecovery()
     ])
     await app.close()

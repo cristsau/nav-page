@@ -370,7 +370,8 @@ async function handleAiBookmark(bookmark, triggerElement = null) {
   try {
     const prompt = buildBookmarkAiPrompt(bookmark, providerId)
     const result = await runBackendAiSearch(providerId, prompt, {
-      webSearchEnabled: false
+      webSearchEnabled: false,
+      feature: 'bookmark_analysis'
     })
     if (requestId !== aiRequestId) return
     aiResult.value = result

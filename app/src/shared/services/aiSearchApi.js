@@ -116,7 +116,8 @@ export async function runBackendAiSearch(engineId, query, options = {}) {
       query,
       ...(options.webSearchEnabled === false
         ? { webSearchEnabled: false }
-        : {})
+        : {}),
+      ...(options.feature ? { feature: options.feature } : {})
     })
   })
 

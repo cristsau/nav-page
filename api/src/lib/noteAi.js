@@ -172,6 +172,7 @@ export function buildNoteAiRequest(providerRecord, input, userId = '') {
 }
 
 export async function runNoteAi(providerRecord, input, userId = '') {
+  const startedAt = Date.now()
   const request = buildNoteAiRequest(providerRecord, input, userId)
   await assertSafeOutboundEndpoint(request.endpoint)
   const controller = new AbortController()
@@ -210,7 +211,10 @@ export async function runNoteAi(providerRecord, input, userId = '') {
         label: request.prompts.label,
         tags: parseNoteAiTags(rawText, input.tags),
         provider: providerRecord.id,
-        model: request.model
+        model: request.model,
+        apiMode: request.apiMode,
+        usage: payload?.usage || null,
+        latencyMs: Math.max(0, Date.now() - startedAt)
       }
     }
 
@@ -220,7 +224,10 @@ export async function runNoteAi(providerRecord, input, userId = '') {
       label: request.prompts.label,
       text: rawText,
       provider: providerRecord.id,
-      model: request.model
+      model: request.model,
+      apiMode: request.apiMode,
+      usage: payload?.usage || null,
+      latencyMs: Math.max(0, Date.now() - startedAt)
     }
   } catch (error) {
     if (error?.name === 'AbortError') {

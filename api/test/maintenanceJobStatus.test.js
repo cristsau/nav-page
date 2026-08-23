@@ -22,6 +22,13 @@ test('maintenance status keeps only bounded counters and sanitized error codes',
   )
   assert.deepEqual(
     summarizeMaintenanceResult(
+      MAINTENANCE_JOB_NAMES.AI_USAGE_RETENTION,
+      { deletedCount: 5, batches: 1, prompt: 'must-not-persist' }
+    ),
+    { deletedCount: 5, batches: 1 }
+  )
+  assert.deepEqual(
+    summarizeMaintenanceResult(
       MAINTENANCE_JOB_NAMES.MEDIA_DELETE_RETRY,
       { processed: 3, deleted: 1, errors: 1, url: 'https://private.invalid' }
     ),

@@ -14,6 +14,12 @@ const JOB_DEFINITIONS = Object.freeze([
     label: '图床删除失败重试',
     enabled: () => config.mediaDeleteRetryEnabled,
     intervalSeconds: () => config.mediaDeleteRetryIntervalSeconds
+  },
+  {
+    name: MAINTENANCE_JOB_NAMES.AI_USAGE_RETENTION,
+    label: 'AI 用量定期清理',
+    enabled: () => config.aiUsageRetentionEnabled,
+    intervalSeconds: () => config.aiUsageRetentionIntervalSeconds
   }
 ])
 

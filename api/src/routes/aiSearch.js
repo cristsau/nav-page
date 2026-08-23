@@ -12,6 +12,10 @@ import {
 import { assertSafeOutboundEndpoint } from '../lib/outboundEndpoints.js'
 import { resolveProviderTestConfig } from '../lib/settingsSecrets.js'
 import { getUserSettingValue } from '../lib/userSettings.js'
+import {
+  AI_USAGE_FEATURES
+} from '../lib/aiUsage.js'
+import { recordRuntimeAiUsageSafely } from '../lib/aiUsageRuntime.js'
 
 const DEFAULT_BRAVE_ENDPOINT = 'https://api.search.brave.com/res/v1/web/search'
 const REQUEST_TIMEOUT_MS = 45000
@@ -138,6 +142,7 @@ async function runBraveSearch(provider, queryText) {
 }
 
 async function runChatSearch(provider, queryText, userId = '') {
+  const startedAt = Date.now()
   const providerResolution = await resolveChatProviderModel(provider)
   const resolvedProvider = providerResolution.provider
 
@@ -196,7 +201,55 @@ async function runChatSearch(provider, queryText, userId = '') {
     items: chatRequest.apiMode === 'responses' ? extractResponseSources(payload) : [],
     externalUrl: buildExternalUrl('chatgpt', queryText),
     model: chatRequest.model,
-    usage: payload?.usage || null
+    apiMode: chatRequest.apiMode,
+    usage: payload?.usage || null,
+    latencyMs: Math.max(0, Date.now() - startedAt)
+  }
+}
+
+function publicChatSearchResult(result) {
+  const {
+    usage: _usage,
+    apiMode: _apiMode,
+    latencyMs: _latencyMs,
+    ...publicResult
+  } = result
+  return publicResult
+}
+
+async function runTrackedChatSearch({
+  provider,
+  queryText,
+  userId,
+  feature,
+  logger
+}) {
+  const startedAt = Date.now()
+  try {
+    const result = await runChatSearch(provider, queryText, userId)
+    await recordRuntimeAiUsageSafely({
+      userId,
+      feature,
+      provider: 'chatgpt',
+      model: result.model,
+      apiMode: result.apiMode,
+      success: true,
+      usage: result.usage,
+      latencyMs: result.latencyMs
+    }, logger)
+    return publicChatSearchResult(result)
+  } catch (error) {
+    await recordRuntimeAiUsageSafely({
+      userId,
+      feature,
+      provider: 'chatgpt',
+      model: provider?.model || 'unknown',
+      apiMode: provider?.apiMode || 'unknown',
+      success: false,
+      usage: null,
+      latencyMs: Math.max(0, Date.now() - startedAt)
+    }, logger)
+    throw error
   }
 }
 
@@ -255,7 +308,13 @@ export default async function aiSearchRoutes(fastify) {
       }
 
       if (provider === 'chatgpt') {
-        const result = await runChatSearch(providerConfig, '请只回复：连接成功', request.currentUser.id)
+        const result = await runTrackedChatSearch({
+          provider: providerConfig,
+          queryText: '请只回复：连接成功',
+          userId: request.currentUser.id,
+          feature: AI_USAGE_FEATURES.PROVIDER_TEST,
+          logger: request.log
+        })
         return {
           ok: true,
           provider,
@@ -313,12 +372,19 @@ export default async function aiSearchRoutes(fastify) {
             }
           : (providers.chatgpt || {})
 
+        const requestedFeature = normalizeText(request.body?.feature).toLowerCase()
+        const feature = requestedFeature === AI_USAGE_FEATURES.BOOKMARK_ANALYSIS
+          ? AI_USAGE_FEATURES.BOOKMARK_ANALYSIS
+          : AI_USAGE_FEATURES.WEB_SEARCH
+
         return {
-          result: await runChatSearch(
-            chatProvider,
+          result: await runTrackedChatSearch({
+            provider: chatProvider,
             queryText,
-            request.currentUser.id
-          )
+            userId: request.currentUser.id,
+            feature,
+            logger: request.log
+          })
         }
       }
 

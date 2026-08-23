@@ -622,7 +622,127 @@ async function verifyMaintenanceObservabilitySchema() {
   assertExactSet(
     'maintenance job status seeds',
     jobs.rows.map((row) => row.job_name),
-    ['media_delete_retry', 'security_event_retention']
+    ['ai_usage_retention', 'media_delete_retry', 'security_event_retention']
+  )
+}
+
+async function verifyWorkspaceSearchSchema() {
+  const expectedIndexes = [
+    'idx_nav_bookmarks_user_lower_title',
+    'idx_notes_user_lower_title_unencrypted',
+    'idx_notes_user_number_unencrypted'
+  ]
+  const indexes = await query(
+    `
+      SELECT indexname
+      FROM pg_indexes
+      WHERE schemaname = current_schema()
+        AND indexname = ANY($1::text[])
+    `,
+    [expectedIndexes]
+  )
+  assertExactSet(
+    'workspace search baseline indexes',
+    indexes.rows.map((row) => row.indexname),
+    expectedIndexes
+  )
+
+  const trgm = await query(
+    `SELECT EXISTS (SELECT 1 FROM pg_extension WHERE extname = 'pg_trgm') AS enabled`
+  )
+  if (trgm.rows[0]?.enabled === true) {
+    const expectedTrgmIndexes = [
+      'idx_nav_bookmarks_title_trgm',
+      'idx_nav_bookmarks_description_trgm',
+      'idx_notes_title_trgm_unencrypted',
+      'idx_notes_content_trgm_unencrypted'
+    ]
+    const trgmIndexes = await query(
+      `
+        SELECT indexname
+        FROM pg_indexes
+        WHERE schemaname = current_schema()
+          AND indexname = ANY($1::text[])
+      `,
+      [expectedTrgmIndexes]
+    )
+    assertExactSet(
+      'workspace search trigram indexes',
+      trgmIndexes.rows.map((row) => row.indexname),
+      expectedTrgmIndexes
+    )
+  }
+}
+
+async function verifyAiUsageSchema() {
+  const expectedColumns = [
+    'usage_date',
+    'user_id',
+    'feature',
+    'provider',
+    'model',
+    'api_mode',
+    'request_count',
+    'success_count',
+    'failure_count',
+    'input_tokens',
+    'output_tokens',
+    'cached_input_tokens',
+    'reasoning_tokens',
+    'latency_ms_total',
+    'estimated_cost_microusd',
+    'priced_request_count',
+    'updated_at'
+  ]
+  const columns = await query(
+    `
+      SELECT column_name
+      FROM information_schema.columns
+      WHERE table_schema = current_schema()
+        AND table_name = 'ai_usage_daily'
+    `
+  )
+  assertExactSet(
+    'AI usage daily columns',
+    columns.rows.map((row) => row.column_name),
+    expectedColumns
+  )
+
+  const expectedConstraints = [
+    'ai_usage_daily_feature_check',
+    'ai_usage_daily_provider_check',
+    'ai_usage_daily_model_check',
+    'ai_usage_daily_api_mode_check',
+    'ai_usage_daily_counts_check'
+  ]
+  const constraints = await query(
+    `
+      SELECT conname
+      FROM pg_constraint
+      WHERE conrelid = 'ai_usage_daily'::regclass
+        AND conname = ANY($1::text[])
+    `,
+    [expectedConstraints]
+  )
+  assertExactSet(
+    'AI usage daily constraints',
+    constraints.rows.map((row) => row.conname),
+    expectedConstraints
+  )
+
+  const indexes = await query(
+    `
+      SELECT indexname
+      FROM pg_indexes
+      WHERE schemaname = current_schema()
+        AND tablename = 'ai_usage_daily'
+        AND indexname = 'idx_ai_usage_daily_user_date'
+    `
+  )
+  assertExactSet(
+    'AI usage daily indexes',
+    indexes.rows.map((row) => row.indexname),
+    ['idx_ai_usage_daily_user_date']
   )
 }
 
@@ -634,6 +754,8 @@ async function main() {
   await verifySecurityControlsSchema()
   await verifyWebAuthnSchema()
   await verifyMaintenanceObservabilitySchema()
+  await verifyWorkspaceSearchSchema()
+  await verifyAiUsageSchema()
   console.log('migration schema verification complete')
 }
 

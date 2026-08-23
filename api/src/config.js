@@ -152,6 +152,27 @@ export const config = {
     process.env.NAV_MAINTENANCE_ALERT_COOLDOWN_SECONDS,
     21_600
   ),
+  aiUsageRetentionEnabled:
+    process.env.NAV_AI_USAGE_RETENTION_ENABLED === 'true',
+  aiUsageRetentionDays: normalizePositiveInteger(
+    process.env.NAV_AI_USAGE_RETENTION_DAYS,
+    400
+  ),
+  aiUsageRetentionIntervalSeconds: normalizePositiveInteger(
+    process.env.NAV_AI_USAGE_RETENTION_INTERVAL_SECONDS,
+    86_400
+  ),
+  aiUsageRetentionBatchSize: normalizePositiveInteger(
+    process.env.NAV_AI_USAGE_RETENTION_BATCH_SIZE,
+    500
+  ),
+  aiUsageRetentionMaxBatchesPerRun: normalizePositiveInteger(
+    process.env.NAV_AI_USAGE_RETENTION_MAX_BATCHES_PER_RUN,
+    20
+  ),
+  aiPriceCatalogJson: String(
+    process.env.NAV_AI_PRICE_CATALOG_JSON || ''
+  ).trim(),
   trustedProxyAddresses: normalizeTrustedProxyAddresses(
     process.env.TRUSTED_PROXY_ADDRESSES
   ),
