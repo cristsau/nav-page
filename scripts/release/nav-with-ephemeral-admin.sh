@@ -564,7 +564,12 @@ if not re.fullmatch(r'16[0-9]{4}', direct_version):
     raise SystemExit(1)
 if str(data.get('serverVersionNum') or '') != direct_version:
     raise SystemExit(1)
-if not server_address or str(ipaddress.ip_address(server_address)) not in addresses:
+if not server_address:
+    raise SystemExit(1)
+server_interface = ipaddress.ip_interface(server_address)
+if server_interface.network.prefixlen != server_interface.max_prefixlen:
+    raise SystemExit(1)
+if str(server_interface.ip) not in addresses:
     raise SystemExit(1)
 if int(data.get('databaseServerPort') or 0) != 5432:
     raise SystemExit(1)
