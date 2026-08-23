@@ -1,8 +1,8 @@
 # NAV 云端数据安全恢复
 
-> 状态：`LOCAL_DONE / NOT_DEPLOYED`  
+> 状态：`READY_FOR_CI / NOT_DEPLOYED`
 > 候选分支：`codex/nav-cloud-restore-guard-20260823`  
-> 基线：`origin/master` `3525147298b495ccf63a985698d8e378ea5506b3`
+> 基线：`origin/master` `3e22a3a1951bc0c17f5d8482e62896e9a7b9d159`
 
 ## 目标
 
@@ -73,6 +73,7 @@
   "mode": "replace",
   "restoreShares": false,
   "planToken": "short-lived-signed-plan",
+  "backupReceipt": "short-lived-safety-backup-receipt",
   "currentPassword": "user-entered-at-runtime",
   "confirmation": "恢复"
 }
@@ -80,7 +81,7 @@
 
 ## 已验证与待验证
 
-本地已通过纯 Node 语法检查和恢复校验/路由静态测试。由于本机工作树未安装项目 npm 依赖，完整 Fastify、PostgreSQL、Vue 构建与浏览器测试必须由 GitHub CI 完成。
+本地已通过纯 Node 语法检查和恢复校验/路由静态测试。由于本机工作树未安装项目 npm 依赖，完整 Fastify、PostgreSQL、Vue 构建由 GitHub CI 完成。CI 另设独立 `nav_restore_test` 数据库：测试脚本只有在 `NODE_ENV=test`、显式测试开关、localhost 地址和精确数据库名同时满足时才允许清理测试数据。
 
 合并前至少验证：
 
@@ -89,8 +90,9 @@
 - 混合显式/缺失数字 ID 不冲突；异常大幅前移被拒绝；插入或审计失败时不会提前修改序列。
 - 模拟最后一步插入或审计失败，当前账号数据完整回滚。
 - 用户 A 的恢复不能读取、覆盖或引用用户 B 的数据和图片。
+- 精确 5,000 条上限载荷必须真实恢复，并观察 8 张目标表的 `ShareRowExclusiveLock` 在 60 秒内释放。
 - 双域桌面/手机完成文件选择、备份下载门槛、键盘焦点、分享开关与刷新验收。
 
 ## 发布边界
 
-该分支当前没有推送、合并或发布。建议先独立合并图片重试告警正确性 PR，再将本恢复分支变基到最新 `master`，通过 CI 和隔离 PostgreSQL 恢复演练后，才进入 OVH 备份、发布和回滚窗口。
+图片重试告警正确性已通过 PR #30 合并到基线；本恢复分支只有在常规 CI 与独立 PostgreSQL 16 恢复演练同时通过后才可合并。本阶段不进入 OVH 发布窗口。
