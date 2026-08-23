@@ -332,16 +332,26 @@ simplest option; a later self-hosted monitor belongs on another retained node
 and requires its own authorization. Never put a real heartbeat URL in Git,
 chat, a systemd unit, process arguments or logs.
 
-## Encrypted Cloudflare R2/S3 export
+## Encrypted provider-neutral S3 export
 
 Use a dedicated bucket and a dedicated restic credential. Do not reuse the
 image-bed upload-only token. The backup credential should be scoped only to the
 backup bucket. `restic forget --prune` additionally requires delete access.
 
-Create `/etc/nav/restic-r2.env` with raw, unquoted values:
+No storage provider is required during application development. When a suitable
+provider is selected later, copy the blank template and fill values only on the
+server:
+
+```bash
+sudo install -m 600 scripts/restic-offsite.env.example /etc/nav/restic-offsite.env
+sudo editor /etc/nav/restic-offsite.env
+```
+
+The provider only needs an S3-compatible endpoint. The completed file uses raw,
+unquoted values in this shape:
 
 ```text
-RESTIC_REPOSITORY=s3:https://<account-id>.r2.cloudflarestorage.com/<bucket>/<prefix>
+RESTIC_REPOSITORY=s3:https://<s3-compatible-endpoint>/<bucket>/<prefix>
 RESTIC_PASSWORD_FILE=/etc/nav/restic-password
 AWS_ACCESS_KEY_ID=<scoped-key-id>
 AWS_SECRET_ACCESS_KEY=<scoped-secret>
@@ -358,8 +368,8 @@ independent recovery copy.
 Secure both files:
 
 ```bash
-sudo chown root:root /etc/nav/restic-r2.env /etc/nav/restic-password
-sudo chmod 600 /etc/nav/restic-r2.env /etc/nav/restic-password
+sudo chown root:root /etc/nav/restic-offsite.env /etc/nav/restic-password
+sudo chmod 600 /etc/nav/restic-offsite.env /etc/nav/restic-password
 ```
 
 Repository initialization is intentionally not automatic. After a separate
@@ -401,7 +411,7 @@ backup remains available.
 
 The minimum production inputs that cannot be committed are:
 
-1. one dedicated R2/S3 bucket and bucket-scoped access key;
+1. one dedicated S3-compatible bucket and bucket-scoped access key;
 2. one randomly generated restic repository password, preserved independently
    from OVH in a recoverable password vault;
 3. the backup and restore dead-man URLs;
