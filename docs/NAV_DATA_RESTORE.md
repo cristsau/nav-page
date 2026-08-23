@@ -1,7 +1,7 @@
 # NAV 云端数据安全恢复
 
 > 状态：`READY_FOR_CI / NOT_DEPLOYED`
-> 候选分支：`codex/nav-cloud-restore-guard-20260823`  
+> 候选分支：`codex/nav-cloud-restore-guard-20260823`
 > 基线：`origin/master` `3e22a3a1951bc0c17f5d8482e62896e9a7b9d159`
 
 ## 目标
