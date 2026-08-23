@@ -62,6 +62,37 @@ jobs:
           bash -n scripts/release/nav-with-ephemeral-admin.sh
           bash -n scripts/release/test-nav-with-ephemeral-admin.sh
 
+      - name: Validate backup and recovery shell
+        run: |
+          bash -n \
+            scripts/nav-backup.sh \
+            scripts/nav-restore-rehearsal.sh \
+            scripts/nav-restore-latest.sh \
+            scripts/nav-restore-cloud-latest.sh \
+            scripts/nav-heartbeat.sh \
+            scripts/nav-job-failure-notify.sh \
+            scripts/install-nav-backup-systemd.sh
+          shellcheck --severity=warning \
+            scripts/nav-backup.sh \
+            scripts/nav-restore-rehearsal.sh \
+            scripts/nav-restore-latest.sh \
+            scripts/nav-restore-cloud-latest.sh \
+            scripts/nav-heartbeat.sh \
+            scripts/nav-job-failure-notify.sh \
+            scripts/install-nav-backup-systemd.sh
+
+      - name: Validate backup systemd units
+        run: |
+          sudo install -d -m 0755 /usr/local/sbin /usr/share/doc/domo-nav
+          sudo install -m 0750 scripts/nav-backup.sh /usr/local/sbin/nav-backup
+          sudo install -m 0750 scripts/nav-restore-rehearsal.sh /usr/local/sbin/nav-restore-rehearsal
+          sudo install -m 0750 scripts/nav-restore-latest.sh /usr/local/sbin/nav-restore-latest
+          sudo install -m 0750 scripts/nav-restore-cloud-latest.sh /usr/local/sbin/nav-restore-cloud-latest
+          sudo install -m 0750 scripts/nav-heartbeat.sh /usr/local/sbin/nav-heartbeat
+          sudo install -m 0750 scripts/nav-job-failure-notify.sh /usr/local/sbin/nav-job-failure-notify
+          sudo install -m 0644 docs/NAV_BACKUP_RUNBOOK.md /usr/share/doc/domo-nav/NAV_BACKUP_RUNBOOK.md
+          systemd-analyze verify ops/systemd/*.service ops/systemd/*.timer
+
       - name: Exercise production acceptance shell lifecycle
         env:
           NAV_RELEASE_ACCEPTANCE_SHELL_TEST: "true"

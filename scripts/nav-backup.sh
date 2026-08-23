@@ -174,7 +174,7 @@ cleanup_snapshot_holder() {
   [[ -n "$holder_pid" ]] || return 0
   if kill -0 "$holder_pid" >/dev/null 2>&1; then
     if [[ -n "$SNAPSHOT_HOLDER_WRITE_FD" ]]; then
-      printf '%s\n' 'ROLLBACK;' '\q' >&"$SNAPSHOT_HOLDER_WRITE_FD" 2>/dev/null || true
+      { printf '%s\n' 'ROLLBACK;' '\q' >&"$SNAPSHOT_HOLDER_WRITE_FD"; } 2>/dev/null || true
     fi
     wait "$holder_pid" 2>/dev/null || true
   fi
@@ -379,9 +379,9 @@ fi
 split_paths() {
   local list="$1"
   local -n result_ref="$2"
-  local old_ifs="$IFS"
+  # ShellCheck cannot see that this nameref populates the caller's array.
+  # shellcheck disable=SC2034
   IFS=';' read -r -a result_ref <<< "$list"
-  IFS="$old_ifs"
 }
 
 validate_input_path() {

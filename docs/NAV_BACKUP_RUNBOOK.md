@@ -9,11 +9,13 @@ Those operations require a fresh production-change authorization, a
 last-minute backup, a maintenance window, rollback preparation, and acceptance
 checks.
 
-Repository automation status on 2026-08-23: the systemd units, success
-heartbeat, independent `OnFailure` notifier, latest-backup selector and
-installer are source-controlled candidates. The installer does not enable or
-start timers. Until the production host is separately configured and accepted,
-the presence of these files must not be described as automatic offsite backup.
+Repository automation status on 2026-08-24: the systemd units, success
+heartbeat, independent `OnFailure` notifier, exact cloud-snapshot selector,
+manual local-backup selector and installer are release candidates. This is
+**SOURCE-READY only: NOT DEPLOYED and NOT ENABLED**. The installer does not
+enable or start timers. Until the production host is separately configured and
+accepted, the presence of these files must not be described as automatic
+offsite backup or scheduled restore verification.
 
 ## Safety properties
 
@@ -28,12 +30,14 @@ the presence of these files must not be described as automatic offsite backup.
   prefix have zero rows. Any residue exits with a temporary failure before
   `pg_dump`, so a crashed release-acceptance account cannot enter a recoverable
   backup.
-- The release-acceptance wrapper holds this script's canonical
-  `/run/lock/nav-backup.lock` for the complete create/accept/cleanup lifecycle.
-  Both entrypoints reject any other lock path; the backup script creates/opens
-  the root-owned non-symlink lock without truncation. Backups must remain outside
-  that wrapper; release-specific scripts must call this canonical entry instead
-  of duplicating a direct `pg_dump` path.
+- The release-acceptance wrapper, backup/retention jobs, and restore rehearsal
+  share the canonical `/run/lock/nav-backup.lock`. The restore rehearsal also
+  holds its own `/run/lock/nav-restore-rehearsal.lock`. Entry points reject a
+  replacement canonical lock path; the scripts create/open root-owned
+  non-symlink locks without truncation. Overlap fails closed rather than
+  allowing a backup mutation while a selected recovery copy is being verified.
+  Release-specific scripts must call the canonical backup entry instead of
+  duplicating a direct `pg_dump` path.
 - PostgreSQL is exported with
   `pg_dump -Fc --no-owner --no-acl --snapshot=<exported-id>`.
 - GitHub CI's isolated PostgreSQL 16 gate executes this canonical script against
@@ -53,8 +57,20 @@ the presence of these files must not be described as automatic offsite backup.
 - Cloud export is implemented only through restic. Restic encrypts and
   authenticates repository objects before upload; the scripts contain no
   plaintext `aws s3 cp`, `rclone copy`, or archive-upload path.
+- The scheduled restore path queries the newest snapshot with the configured
+  restic tag, validates one immutable 64-character snapshot ID, path and UTC
+  timestamp, and restores that exact ID. It never substitutes the newest local
+  backup and never re-resolves `latest` after selection.
+- Restic uses the dedicated root-owned mode-`700` cache
+  `/var/cache/nav-restic`. The cache is operational metadata, not a backup or a
+  substitute for independent restic-password custody.
 - Local deletion, cloud upload, and cloud retention each have both a config
   gate and an explicit command-line gate. All are disabled in the example.
+- A cloud rehearsal restores plaintext only into a mode-`700`
+  `.nav-cloud-restore.*` directory directly below the verified configured
+  cloud-restore root. Success, failure and signal handlers remove it only after
+  rechecking its resolved parent, owner and mode; a cleanup failure fails the
+  job instead of being reported as a successful rehearsal.
 - Restore rehearsal uses a newly named, labeled PostgreSQL container with no
   network, no published ports, a read-only root filesystem, and temporary
   filesystems only. It never connects that container to the production network
@@ -144,6 +160,12 @@ cloud write, or deletion.
 The repository provides:
 
 ```text
+scripts/nav-backup.sh
+scripts/nav-restore-rehearsal.sh
+scripts/nav-restore-cloud-latest.sh
+scripts/nav-restore-latest.sh
+scripts/nav-heartbeat.sh
+scripts/nav-job-failure-notify.sh
 scripts/install-nav-backup-systemd.sh
 ops/systemd/nav-backup.service
 ops/systemd/nav-backup.timer
@@ -177,13 +199,22 @@ dry-run these paths before the previous release is eligible for removal.
 | --- | --- | --- | --- |
 | `nav-backup.service` | daily at 03:17 UTC plus 0–15 min jitter | encrypted upload only | backup heartbeat |
 | `nav-backup-retention.service` | Sunday 05:17 UTC plus 0–20 min jitter | cloud upload plus separately enabled local/remote retention | backup heartbeat |
-| `nav-restore-rehearsal.service` | Wednesday 04:47 UTC plus 0–20 min jitter | isolated, network-less temporary PostgreSQL only | restore heartbeat |
+| `nav-restore-rehearsal.service` | Wednesday 04:47 UTC plus 0–20 min jitter | exact newest tagged restic snapshot restored to a private temporary directory, then isolated network-less PostgreSQL verification | restore heartbeat |
 
-All timers use `Persistent=true`. The backup scripts share a nonblocking lock;
-an accidental overlap fails rather than running two snapshots concurrently.
-The rehearsal selector accepts only a regular `nav-*` directory directly below
-`NAV_BACKUP_ROOT` and refuses to send a success signal for a backup older than
-`NAV_REHEARSAL_MAX_BACKUP_AGE_HOURS`.
+All timers use `Persistent=true`. Backup, retention and restore verification
+share the nonblocking canonical `/run/lock/nav-backup.lock`; an accidental
+overlap fails rather than running against a moving recovery set. The scheduled
+rehearsal does **not** select from `NAV_BACKUP_ROOT`. It asks restic for exactly
+one latest snapshot carrying `NAV_RESTIC_TAG`, freezes and validates that
+snapshot's exact ID/path/time, enforces
+`NAV_CLOUD_REHEARSAL_MAX_SNAPSHOT_AGE_HOURS`, restores the exact ID, and then
+delegates to the isolated PostgreSQL verifier.
+
+`nav-restore-latest` remains available only as a manually invoked local
+fallback/rehearsal helper. It selects a regular `nav-*` directory immediately
+below `NAV_BACKUP_ROOT`, applies `NAV_REHEARSAL_MAX_BACKUP_AGE_HOURS`, and calls
+the same isolated verifier. It is not the `ExecStart` target of the scheduled
+restore service and it is not a production database restore tool.
 
 The units use a read-only system view plus narrow write paths under
 `/var/backups` and `/run/lock`, resource deprioritization, `UMask=0077`,
@@ -248,7 +279,7 @@ failed.
 The in-script Telegram call is only the first alert layer. Add an independent
 second layer:
 
-- Put `OnFailure=nav-backup-failure@%n.service` in the backup service's
+- Put `OnFailure=nav-scheduled-failure@%n.service` in each scheduled service's
   `[Unit]` section. The failure unit should invoke a small root-owned notifier
   with its own mode-`600` credential file; do not repeat a token in
   `ExecStart=`.
@@ -316,6 +347,13 @@ AWS_ACCESS_KEY_ID=<scoped-key-id>
 AWS_SECRET_ACCESS_KEY=<scoped-secret>
 AWS_DEFAULT_REGION=auto
 ```
+
+The scheduled services set `RESTIC_CACHE_DIR=/var/cache/nav-restic` and use
+systemd `CacheDirectory=nav-restic` with mode `0700`. For a manual invocation,
+pre-create the same absolute directory as root-owned mode `700`; do not redirect
+the cache into `/tmp`, the backup tree, a home directory, or the cloud-restore
+plaintext workspace. The cache may be recreated and must not be counted as an
+independent recovery copy.
 
 Secure both files:
 
@@ -464,34 +502,76 @@ Acceptance criteria:
 Reports are mode `600` files under `NAV_REHEARSAL_REPORT_DIR`. A rehearsal
 failure returns non-zero and sends the same opt-in Telegram alert.
 
-For the scheduled path, test the selector before enabling its timer:
+### Manual local fallback/rehearsal selector
+
+The local selector remains useful when R2 is unavailable or when an operator
+needs to validate the newest completed local backup manually:
 
 ```bash
 sudo /usr/local/sbin/nav-restore-latest --config /etc/nav/nav-backup.env
 ```
 
 It chooses only the newest eligible local backup and then delegates to the same
-isolated rehearsal script. It does not restore production or switch traffic.
+isolated rehearsal script. It is not wired to the scheduled timer, and it does
+not restore production or switch traffic.
+
+### Scheduled encrypted cloud selector
+
+Before enabling the timer, invoke the scheduled command manually:
+
+```bash
+sudo /usr/local/sbin/nav-restore-cloud-latest \
+  --config /etc/nav/nav-backup.env \
+  --cloud-restore
+```
+
+The command requires both the explicit `--cloud-restore` argument and
+`NAV_ENABLE_CLOUD_RESTORE_REHEARSAL=true`. It asks restic for the latest
+snapshot carrying `NAV_RESTIC_TAG`, validates exactly one immutable snapshot
+record, freezes its 64-character ID and source path, rejects a stale snapshot,
+and restores that exact ID into a private temporary plaintext workspace. It
+then passes the exact restored `nav-*` directory to
+`nav-restore-rehearsal.sh --run-isolated`. The scheduled path must produce a
+restore heartbeat only after isolated PostgreSQL verification and verified
+workspace cleanup have both succeeded.
+
+Restic's repository lock protects exact-ID download from a concurrent restic
+write or prune. Before reading the restored copy, the isolated verifier also
+shares the canonical `/run/lock/nav-backup.lock` with backup/retention and
+serializes rehearsals on `/run/lock/nav-restore-rehearsal.lock`. Neither
+selector connects to the production database or changes traffic.
 
 ## First production enablement gate
 
-Do not enable timers immediately after file installation. Complete this order
-in one authorized maintenance window:
+Do not enable timers immediately after file installation. The repository state
+described by this runbook remains **NOT DEPLOYED / NOT ENABLED**. Complete this
+order in one separately authorized maintenance window:
 
 1. verify current release/container paths and file ownership/modes without
    printing contents;
-2. initialize the dedicated restic repository once and record its repository
+2. create/verify root-owned mode-`700` `/var/cache/nav-restic` and the configured
+   cloud-restore root, and verify all config/password files are regular,
+   non-symlink, root-owned mode-`600` files;
+3. initialize the dedicated restic repository once and record its repository
    ID without recording credentials;
-3. run the backup script manually with `--cloud-upload`, then verify the exact
+4. run the backup script manually with `--cloud-upload`, then verify the exact
    restic snapshot and manifest evidence;
-4. run one full `nav-restore-latest` isolated restore and confirm table set,
-   row counts and migration rows;
-5. send clearly labelled manual backup/restore heartbeat tests and confirm the
+5. with the timer still disabled, set the cloud-rehearsal config gate and run
+   `nav-restore-cloud-latest --cloud-restore`; record the selected exact
+   snapshot ID, table/row/migration matches, and proof that no
+   `.nav-cloud-restore.*` workspace remains;
+6. prove canonical lock contention fails closed, and separately test
+   `nav-restore-latest` against a local backup as a manual fallback. A local-only
+   pass does not satisfy the encrypted cloud-restore gate;
+7. send clearly labelled manual backup/restore heartbeat tests and confirm the
    provider deadlines;
-6. run each systemd service manually and review its exit status/journal;
-7. inject a harmless preflight failure to prove `OnFailure`, then restore the
+8. run each systemd service manually, confirm that
+   `nav-restore-rehearsal.service` executes `nav-restore-cloud-latest`, and
+   review its exit status/journal;
+9. inject a harmless preflight failure to prove
+   `nav-scheduled-failure@%n.service`, then restore the
    valid config;
-8. enable only the three timers and inspect their next-run times:
+10. enable only the three timers and inspect their next-run times:
 
    ```bash
    sudo systemctl enable --now \
@@ -501,7 +581,7 @@ in one authorized maintenance window:
    systemctl list-timers --all 'nav-*'
    ```
 
-9. recheck NAV/CLIProxyAPI/PostgreSQL/NPM/Vaultwarden/Komari health and restart
+11. recheck NAV/CLIProxyAPI/PostgreSQL/NPM/Vaultwarden/Komari health and restart
    counts; scheduler enablement must not rebuild or restart them.
 
 Rollback disables the three timers and stops only a currently running backup
@@ -511,17 +591,24 @@ only recovery copy.
 
 ## Cloud recovery rehearsal
 
-Cloud recovery should be tested separately:
+The scheduled cloud rehearsal automates the exact-ID download and isolated
+database verification on the NAV host, but it remains disabled until the gate
+above passes. A broader off-host recovery drill should still be tested
+separately:
 
 1. Create a mode-`700` temporary directory on a non-production host.
 2. Load the mode-`600` restic environment and password files.
-3. List snapshots and select the intended immutable snapshot ID.
-4. Run `restic restore <snapshot-id> --target <secure-temp-directory>`.
-5. Locate the restored `nav-*` directory.
+3. List snapshots by the configured tag, select one immutable 64-character
+   snapshot ID, and record that exact ID before restore.
+4. Run `restic restore <exact-snapshot-id> --target
+   <secure-temp-directory>`; do not pass `latest` to the restore command.
+5. Locate and validate the exact restored `nav-*` directory and reject content
+   outside the selected snapshot path.
 6. Run `nav-restore-rehearsal.sh` against a copy placed under the configured
    rehearsal `NAV_BACKUP_ROOT`.
-7. Remove the temporary plaintext restore only after verifying its exact
-   resolved path and recording the rehearsal result.
+7. Remove the temporary plaintext restore on success, failure or interruption
+   only after verifying its exact resolved parent, owner and mode, and record
+   both the rehearsal and cleanup result.
 
 Never download or upload a decrypted backup through a public object URL.
 
