@@ -32,6 +32,19 @@ candidate is revalidated under a row lock immediately before the upstream
 delete. A restored note reference returns the asset to active state instead of
 deleting it.
 
+The stricter image-delete alert accounting described below is a source
+candidate and remains `NOT_DEPLOYED` until its exact merge SHA is released and
+the live worker status is revalidated.
+
+A completed scheduler cycle is healthy only when the unresolved image-delete
+backlog is empty. Upstream delete failures, unexpected per-item errors and
+exhausted retries are recorded as bounded maintenance failures and can open the
+existing Telegram alert after its threshold. A cycle that has only deferred or
+batch-limited work updates bounded progress counters without clearing an open
+alert. Recovery is emitted only after the backlog reaches zero. Persisted state
+contains counts and a fixed error code, never image URLs, filenames or upstream
+response text.
+
 Migration `017_background_maintenance.sql` added only the partial retry index.
 It was applied and verified before the workers were enabled in production.
 

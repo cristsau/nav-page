@@ -1,6 +1,10 @@
 # DOMO NAV Backend Plan
 
 > 退役说明（2026-07-31）：OpenClaw 服务已经删除，后续 AI 链路仅维护 ChatGPT / OpenAI-compatible 与 Brave Search。
+>
+> 文档状态（2026-08-23）：这是早期阶段规划的历史快照，不再作为“当前完成度”依据。
+> 当前源码、生产、备份与剩余路线以 `STATUS_REPORT.md` 和
+> `docs/NAV_FULL_FEATURES_AND_HANDOFF.md` 为准。
 
 ## 当前状态
 

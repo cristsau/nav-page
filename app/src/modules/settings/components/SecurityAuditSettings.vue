@@ -127,8 +127,14 @@ function formatDuration(milliseconds) {
 
 function maintenanceState(job) {
   if (!job?.enabled) return { label: '已关闭', tone: 'disabled' }
+  if (Number(job?.lastResult?.exhausted || 0) > 0) {
+    return { label: '重试已耗尽', tone: 'failed' }
+  }
   if (job.lastOutcome === 'failed' || Number(job.consecutiveFailures || 0) > 0) {
     return { label: '需关注', tone: 'failed' }
+  }
+  if (Number(job?.lastResult?.remaining || 0) > 0) {
+    return { label: '仍在处理', tone: 'pending' }
   }
   if (job.lastOutcome === 'succeeded') return { label: '正常', tone: 'healthy' }
   return { label: '等待首次运行', tone: 'idle' }
@@ -143,7 +149,9 @@ function maintenanceResultSummary(job) {
     return [
       `上次处理 ${Number(result.processed || 0)} 项`,
       `删除 ${Number(result.deleted || 0)} 项`,
-      `仍待重试 ${Number(result.failed || 0)} 项`,
+      `本轮失败 ${Number(result.failed || 0)} 项`,
+      `总积压 ${Number(result.remaining || 0)} 项`,
+      `重试耗尽 ${Number(result.exhausted || 0)} 项`,
       `异常 ${Number(result.errors || 0)} 项`
     ].join('，') + '。'
   }
@@ -543,10 +551,16 @@ onBeforeUnmount(() => {
               </div>
             </dl>
 
-            <p v-if="job.lastOutcome === 'succeeded'" class="maintenance-job__result">
+            <p
+              v-if="job.name === 'media_delete_retry' && job.lastStartedAt"
+              class="maintenance-job__result"
+            >
               {{ maintenanceResultSummary(job) }}
             </p>
-            <p v-else-if="job.lastOutcome === 'failed'" class="maintenance-job__result maintenance-job__result--failed">
+            <p v-else-if="job.lastOutcome === 'succeeded'" class="maintenance-job__result">
+              {{ maintenanceResultSummary(job) }}
+            </p>
+            <p v-if="job.lastOutcome === 'failed'" class="maintenance-job__result maintenance-job__result--failed">
               任务执行失败，错误代码 {{ job.lastErrorCode || 'UNEXPECTED_ERROR' }}；详细异常只保留在受限服务器日志中。
             </p>
             <p v-if="job.lastNotificationAt" class="maintenance-job__notification">
@@ -979,6 +993,11 @@ onBeforeUnmount(() => {
 }
 
 .maintenance-job__state--idle {
+  color: var(--accent-color);
+  background: color-mix(in srgb, var(--accent-color) 13%, transparent);
+}
+
+.maintenance-job__state--pending {
   color: var(--accent-color);
   background: color-mix(in srgb, var(--accent-color) 13%, transparent);
 }

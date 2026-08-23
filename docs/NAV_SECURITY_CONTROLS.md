@@ -69,9 +69,11 @@ The endpoint requires `requireAdmin`, caps pages at 200 events, sends `Cache-Con
 
 The settings UI keeps the audit section collapsed by default and does not query the list until an administrator expands it. Manual deletion is deliberately protected: the administrator selects explicit event IDs (at most 100 per request) and re-enters the current password. The API verifies that password and deletes the selected rows in one transaction, then inserts a new `admin.security_events.delete` event containing only the deleted count. A later administrator may delete an older deletion event, but every successful operation leaves a new audit event. Passwords and deleted event payloads are never copied into the replacement event.
 
-The background-retention worker is explicit and disabled by default. Its proposed
-policy keeps routine login/logout successes for 90 days, failed or denied logins
-for 180 days, and recovery/account/administrator-sensitive events for 365 days.
+The background-retention worker stays disabled by default in repository example
+configuration. Production deliberately enabled it after the database backup,
+isolated restore and expiry-count gate. Its active policy keeps routine
+login/logout successes for 90 days, failed or denied logins for 180 days, and
+recovery/account/administrator-sensitive events for 365 days.
 It acquires a PostgreSQL advisory lock, deletes oldest rows in bounded
 `FOR UPDATE SKIP LOCKED` batches, prevents overlapping runs, and waits for an
 active run during shutdown. Enabling it remains an operations decision and must
@@ -91,8 +93,9 @@ export adds `admin.security_events.export` with only the exported row count.
 
 Application rollback normally keeps migration 016, its two additive tables and its ledger row. An older release's exact-set `verify:migrations` command expects only the migration files bundled with that older release, so it will report a ledger mismatch after 016 exists. That expected mismatch is not proof that the older API is incompatible. Do not delete the 016 ledger row or drop its tables merely to satisfy the old verifier; use the current release verifier plus targeted compatibility checks. No destructive down migration is provided.
 
-Automatic deletion stays off unless
-`NAV_SECURITY_EVENT_RETENTION_ENABLED=true` is deliberately configured. Manual
+Automatic deletion stays off in every environment unless
+`NAV_SECURITY_EVENT_RETENTION_ENABLED=true` is deliberately configured; the
+last verified OVH production release has this explicit opt-in enabled. Manual
 administrator deletion and online retention do not remove matching records from
 existing database backups; backup retention is a separate policy.
 
