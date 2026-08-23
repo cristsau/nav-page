@@ -33,7 +33,11 @@ test('settings writes and legacy imports sanitize retired provider config', asyn
   assert.ok(validateIndex > sanitizeIndex)
   assert.match(
     migration,
-    /setting\.id === 'appConfig'[\s\S]*sanitizeRetiredSearchProviders\(setting\.value\)/
+    /sanitizeSettingForBackendExport[\s\S]*sanitizeRetiredSearchProviders\(record\.value\)/
+  )
+  assert.match(
+    migration,
+    /setting\.id === 'appConfig'[\s\S]*mergeAppConfigSecrets\(/
   )
 })
 

@@ -6,6 +6,10 @@ import {
   buildBackendExport,
   sanitizeSettingForBackendExport
 } from '../src/routes/migration.js'
+import {
+  DATA_RESTORE_SOURCES,
+  validateDataRestoreRequest
+} from '../src/lib/dataRestore.js'
 
 const USER_ID = 'aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa'
 const GROUP_ID = 'bbbbbbbb-bbbb-4bbb-8bbb-bbbbbbbbbbbb'
@@ -129,7 +133,7 @@ function createFixtureClient() {
       },
       {
         key: 'theme',
-        value: 'warm-dark'
+        value: 'dark'
       },
       {
         key: 'workspacePreferences',
@@ -291,9 +295,16 @@ test('backend export is import-compatible and preserves cloud data metadata', as
     warning: 'Share codes are bearer links; protect this backup as sensitive data.'
   })
 
-  // The exported data object is accepted unchanged by /migration/import-local.
-  const importPayload = { data: backup.data }
-  assert.deepEqual(Object.keys(importPayload.data).sort(), importKeys.sort())
+  // The exported cloud envelope is accepted unchanged by the guarded restore parser.
+  const restore = validateDataRestoreRequest({
+    ...backup,
+    source: DATA_RESTORE_SOURCES.CLOUD_BACKUP,
+    restoreShares: false
+  })
+  assert.deepEqual(Object.keys(restore.data).sort(), importKeys.sort())
+  assert.equal(restore.counts.notes, 2)
+  assert.equal(restore.counts.shares, 0)
+  assert.equal(restore.backupCounts.shares, 1)
 })
 
 test('backend export isolates users and never serializes API or Telegram secrets', async () => {

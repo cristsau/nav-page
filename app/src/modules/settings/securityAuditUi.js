@@ -6,6 +6,7 @@ const EVENT_TYPE_LABELS = Object.freeze({
   'auth.session.revoke': '撤销登录会话',
   'auth.account.username.update': '修改用户名',
   'auth.account.password.update': '修改密码',
+  'account.data.restore': '恢复云端数据',
   'admin.registration.approve': '批准注册',
   'admin.registration.reject': '拒绝注册',
   'admin.telegram_config.update': '更新 Telegram 配置',
@@ -26,6 +27,7 @@ const RESOURCE_TYPE_LABELS = Object.freeze({
   registration_request: '注册申请',
   recovery_code: '恢复码',
   security_event: '安全审计记录',
+  account_data: '账号数据',
   telegram_config: 'Telegram 配置'
 })
 
