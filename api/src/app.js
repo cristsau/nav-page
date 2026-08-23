@@ -20,6 +20,7 @@ import noteAiRoutes from './routes/noteAi.js'
 import noteImagesRoutes from './routes/noteImages.js'
 import noteReminderRoutes from './routes/noteReminders.js'
 import notesRoutes from './routes/notes.js'
+import passkeyRoutes from './routes/passkeys.js'
 import publicSharePageRoutes from './routes/publicSharePage.js'
 import securityEventRoutes from './routes/securityEvents.js'
 import settingsRoutes from './routes/settings.js'
@@ -66,6 +67,7 @@ export function createApp() {
           'req.body.planToken',
           'req.body.backupReceipt',
           'req.body.backup',
+          'req.body.response',
           'res.headers["set-cookie"]',
           'authorization',
           'cookie',
@@ -128,6 +130,7 @@ export function createApp() {
   app.register(noteImagesRoutes, { prefix: '/api' })
   app.register(noteReminderRoutes, { prefix: '/api' })
   app.register(notesRoutes, { prefix: '/api' })
+  app.register(passkeyRoutes, { prefix: '/api' })
   app.register(settingsRoutes, { prefix: '/api' })
 
   app.setErrorHandler((error, request, reply) => {

@@ -26,7 +26,8 @@ DOMO NAV 是面向个人与小团队的私有化导航工作台。它把导航�
 - iPhone/PWA 主屏幕图标、统一主题 token、触屏操作菜单和命令面板
 - 安全 JSON 导出，以及带预览、当前密码复验和状态签名的替换式恢复候选
 
-部分完成和未完成项目包括自动异地加密备份、外部失联监测、Passkey、离线/提前提醒、
+Passkey/WebAuthn 的完整源码切片已完成，但默认关闭并等待迁移、CI 和真实设备生产验收；
+部分完成和未完成项目还包括自动异地加密备份、外部失联监测、离线/提前提醒、
 定时链接检查、个人数据 RAG 与编辑器版本历史，详见
 [STATUS_REPORT.md](./STATUS_REPORT.md)。
 
@@ -75,5 +76,6 @@ PostgreSQL 迁移校验、API 测试与 Vite 生产构建由
 7. [共享限流与安全审计](./docs/NAV_SECURITY_CONTROLS.md)
 8. [云端 JSON 安全恢复](./docs/NAV_DATA_RESTORE.md)
 9. [后台保留与图片删除重试](./docs/NAV_BACKGROUND_MAINTENANCE.md)
+10. [Passkey / WebAuthn 安全边界与启用手册](./docs/NAV_PASSKEYS.md)
 
 继续开发或发布前，应重新核对 GitHub、当前工作区和实时生产状态；仓库文档不是生产写入授权。

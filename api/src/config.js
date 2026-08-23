@@ -59,6 +59,14 @@ export const config = {
     process.env.AUTH_LOGIN_RATE_LIMIT_WINDOW_SECONDS,
     900
   ),
+  authPasskeyRateLimitMax: normalizePositiveInteger(
+    process.env.AUTH_PASSKEY_RATE_LIMIT_MAX,
+    30
+  ),
+  authPasskeyRateLimitWindowSeconds: normalizePositiveInteger(
+    process.env.AUTH_PASSKEY_RATE_LIMIT_WINDOW_SECONDS,
+    900
+  ),
   authRegisterRateLimitMax: normalizePositiveInteger(
     process.env.AUTH_REGISTER_RATE_LIMIT_MAX,
     5
@@ -147,6 +155,10 @@ export const config = {
   trustedProxyAddresses: normalizeTrustedProxyAddresses(
     process.env.TRUSTED_PROXY_ADDRESSES
   ),
+  webauthnEnabled: process.env.NAV_WEBAUTHN_ENABLED === 'true',
+  webauthnRpId: 'nav.skrskr.net',
+  webauthnOrigin: 'https://nav.skrskr.net',
+  webauthnRpName: 'DOMO NAV',
   corsOrigin: process.env.CORS_ORIGIN || 'http://localhost:5174',
   allowPrivateAiEndpoints: process.env.ALLOW_PRIVATE_AI_ENDPOINTS === 'true',
   allowInsecureAiEndpoints: process.env.ALLOW_INSECURE_AI_ENDPOINTS === 'true',

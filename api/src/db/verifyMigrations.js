@@ -419,6 +419,140 @@ async function verifySecurityControlsSchema() {
   }
 }
 
+async function verifyWebAuthnSchema() {
+  const credentialColumns = [
+    'id',
+    'user_id',
+    'credential_id',
+    'public_key',
+    'webauthn_user_id',
+    'counter',
+    'transports',
+    'device_type',
+    'backed_up',
+    'display_name',
+    'rp_id',
+    'created_at',
+    'last_used_at'
+  ]
+  const challengeColumns = [
+    'id',
+    'user_id',
+    'session_id',
+    'kind',
+    'challenge',
+    'webauthn_user_id',
+    'rp_id',
+    'origin',
+    'expires_at',
+    'used_at',
+    'created_at'
+  ]
+  for (const [tableName, expectedColumns] of [
+    ['webauthn_credentials', credentialColumns],
+    ['webauthn_challenges', challengeColumns]
+  ]) {
+    const columns = await query(
+      `
+        SELECT column_name
+        FROM information_schema.columns
+        WHERE table_schema = current_schema()
+          AND table_name = $1
+      `,
+      [tableName]
+    )
+    assertExactSet(
+      `${tableName} columns`,
+      columns.rows.map((row) => row.column_name),
+      expectedColumns
+    )
+  }
+
+  const expectedConstraints = [
+    'webauthn_challenges_authentication_scope_check',
+    'webauthn_challenges_challenge_key',
+    'webauthn_challenges_expiry_check',
+    'webauthn_challenges_kind_check',
+    'webauthn_challenges_origin_check',
+    'webauthn_challenges_pkey',
+    'webauthn_challenges_registration_scope_check',
+    'webauthn_challenges_rp_id_check',
+    'webauthn_challenges_session_id_fkey',
+    'webauthn_challenges_user_id_fkey',
+    'webauthn_credentials_counter_check',
+    'webauthn_credentials_credential_id_key',
+    'webauthn_credentials_device_type_check',
+    'webauthn_credentials_display_name_check',
+    'webauthn_credentials_pkey',
+    'webauthn_credentials_rp_id_check',
+    'webauthn_credentials_user_id_fkey'
+  ]
+  const constraints = await query(
+    `
+      SELECT conname
+      FROM pg_constraint
+      WHERE conrelid IN (
+          'webauthn_credentials'::regclass,
+          'webauthn_challenges'::regclass
+        )
+        AND conname = ANY($1::text[])
+    `,
+    [expectedConstraints]
+  )
+  assertExactSet(
+    'WebAuthn constraints',
+    constraints.rows.map((row) => row.conname),
+    expectedConstraints
+  )
+
+  const foreignKeys = await query(
+    `
+      SELECT conname, confdeltype
+      FROM pg_constraint
+      WHERE conrelid IN (
+          'webauthn_credentials'::regclass,
+          'webauthn_challenges'::regclass
+        )
+        AND contype = 'f'
+      ORDER BY conname ASC
+    `
+  )
+  assertExactSet(
+    'WebAuthn foreign keys',
+    foreignKeys.rows.map((row) => row.conname),
+    [
+      'webauthn_challenges_session_id_fkey',
+      'webauthn_challenges_user_id_fkey',
+      'webauthn_credentials_user_id_fkey'
+    ]
+  )
+  if (foreignKeys.rows.some((row) => row.confdeltype !== 'c')) {
+    throw new Error('WebAuthn foreign keys must use ON DELETE CASCADE')
+  }
+
+  const expectedIndexes = [
+    'idx_webauthn_challenges_expires',
+    'idx_webauthn_challenges_registration_session',
+    'idx_webauthn_challenges_unused',
+    'idx_webauthn_credentials_user_created',
+    'idx_webauthn_credentials_user_rp'
+  ]
+  const indexes = await query(
+    `
+      SELECT indexname
+      FROM pg_indexes
+      WHERE schemaname = current_schema()
+        AND indexname = ANY($1::text[])
+    `,
+    [expectedIndexes]
+  )
+  assertExactSet(
+    'WebAuthn indexes',
+    indexes.rows.map((row) => row.indexname),
+    expectedIndexes
+  )
+}
+
 async function verifyMaintenanceObservabilitySchema() {
   const expectedColumns = [
     'job_name',
@@ -498,6 +632,7 @@ async function main() {
   await verifyReminderSchema()
   await verifyMediaLibrarySchema()
   await verifySecurityControlsSchema()
+  await verifyWebAuthnSchema()
   await verifyMaintenanceObservabilitySchema()
   console.log('migration schema verification complete')
 }
