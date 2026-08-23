@@ -18,6 +18,8 @@ test('server, config and Compose keep maintenance and logs bounded', async () =>
   assert.match(server, /startSecurityEventRetention/)
   assert.match(server, /startMediaDeleteRetry/)
   assert.match(server, /startAiUsageRetention/)
+  assert.match(server, /startNoteReminderGeneration/)
+  assert.match(server, /startBookmarkHealthScheduler/)
   assert.match(server, /createMaintenanceJobObserver/)
   assert.match(server, /sendMaintenanceJobNotificationToAdmins/)
   assert.match(server, /attemptMediaAssetDeletion/)
@@ -25,10 +27,14 @@ test('server, config and Compose keep maintenance and logs bounded', async () =>
   assert.match(config, /NAV_SECURITY_EVENT_RETENTION_ENABLED/)
   assert.match(config, /NAV_MEDIA_DELETE_RETRY_ENABLED/)
   assert.match(config, /NAV_AI_USAGE_RETENTION_ENABLED/)
+  assert.match(config, /NAV_NOTE_REMINDER_SCHEDULER_ENABLED/)
+  assert.match(config, /NAV_BOOKMARK_HEALTH_SCHEDULER_ENABLED/)
   assert.match(config, /NAV_MAINTENANCE_ALERTS_ENABLED/)
   assert.match(envExample, /NAV_SECURITY_EVENT_RETENTION_ENABLED=false/)
   assert.match(envExample, /NAV_MEDIA_DELETE_RETRY_ENABLED=false/)
   assert.match(envExample, /NAV_AI_USAGE_RETENTION_ENABLED=false/)
+  assert.match(envExample, /NAV_NOTE_REMINDER_SCHEDULER_ENABLED=false/)
+  assert.match(envExample, /NAV_BOOKMARK_HEALTH_SCHEDULER_ENABLED=false/)
   assert.match(envExample, /NAV_MAINTENANCE_ALERTS_ENABLED=false/)
   assert.match(app, /level: config\.apiLogLevel/)
   assert.match(app, /req\.headers\.authorization/)
@@ -39,6 +45,31 @@ test('server, config and Compose keep maintenance and logs bounded', async () =>
   assert.match(compose, /driver: local/)
   assert.match(compose, /max-size: "10m"/)
   assert.equal((compose.match(/logging: \*nav-logging/g) || []).length, 2)
+})
+
+test('migration verification keeps all five maintenance jobs after feature integration', async () => {
+  const [verifier, statusService, maintenanceRoute] = await Promise.all([
+    source('../src/db/verifyMigrations.js'),
+    source('../src/lib/maintenanceJobStatus.js'),
+    source('../src/routes/maintenance.js')
+  ])
+
+  const expectedJobs = [
+    'security_event_retention',
+    'media_delete_retry',
+    'ai_usage_retention',
+    'note_reminder_generation',
+    'bookmark_health_check'
+  ]
+
+  for (const job of expectedJobs) {
+    assert.match(verifier, new RegExp(job))
+    assert.match(statusService, new RegExp(job))
+  }
+
+  assert.match(maintenanceRoute, /AI_USAGE_RETENTION/)
+  assert.match(maintenanceRoute, /NOTE_REMINDER_GENERATION/)
+  assert.match(maintenanceRoute, /BOOKMARK_HEALTH_CHECK/)
 })
 
 test('routes expose retention, export and media retry status without secrets', async () => {

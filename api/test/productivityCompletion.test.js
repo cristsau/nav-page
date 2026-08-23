@@ -267,3 +267,37 @@ test('reminder reconciliation and version restore preserve concurrency and priva
   assert.match(restoreRoute, /DELETE FROM note_reminders WHERE note_id = \$1 AND user_id = \$2/)
   assert.match(restoreRoute, /DELETE FROM note_shares WHERE note_id = \$1 AND user_id = \$2/)
 })
+
+test('migration verification covers productivity checks, uniqueness and cascade foreign keys', async () => {
+  const [verifier, workflow, driftTest] = await Promise.all([
+    source('../src/db/verifyMigrations.js'),
+    source('../../.github/workflows/ci.yml'),
+    source('./productivitySchemaDrift.integration.test.js')
+  ])
+
+  for (const constraint of [
+    'notes_remind_before_minutes_check',
+    'notes_revision_check',
+    'note_reminders_advance_minutes_check',
+    'note_versions_revision_check',
+    'note_versions_remind_before_check',
+    'note_versions_note_revision_unique',
+    'note_versions_user_id_fkey',
+    'note_versions_note_id_fkey'
+  ]) {
+    assert.match(verifier, new RegExp(constraint))
+    assert.match(driftTest, new RegExp(constraint))
+  }
+
+  assert.match(verifier, /pg_get_constraintdef/)
+  assert.match(verifier, /confdeltype/)
+  assert.match(verifier, /convalidated/)
+  assert.match(verifier, /table_name/)
+  assert.match(verifier, /referenced_columns/)
+  assert.match(driftTest, /revision >= 1 OR revision < 1/)
+  assert.match(driftTest, /ON DELETE CASCADE NOT VALID/)
+  assert.match(driftTest, /misplaced note cascade/)
+  assert.match(driftTest, /UNIQUE \(user_id, note_id\)/)
+  assert.match(verifier, /ondeletecascade/)
+  assert.match(workflow, /NAV_PRODUCTIVITY_SCHEMA_DRIFT_TEST: "true"/)
+})

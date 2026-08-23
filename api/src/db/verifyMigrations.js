@@ -181,6 +181,156 @@ async function verifyProductivityCompletionSchema() {
     expectedVersionColumns
   )
 
+  const expectedConstraints = [
+    'notes_remind_before_minutes_check',
+    'notes_revision_check',
+    'note_reminders_advance_minutes_check',
+    'note_versions_revision_check',
+    'note_versions_remind_before_check',
+    'note_versions_note_revision_unique',
+    'note_versions_user_id_fkey',
+    'note_versions_note_id_fkey'
+  ]
+  const constraints = await query(
+    `
+      SELECT
+        constraint_row.conname,
+        constraint_row.contype,
+        constraint_row.confdeltype,
+        constraint_row.convalidated,
+        CASE constraint_row.conrelid
+          WHEN 'notes'::regclass THEN 'notes'
+          WHEN 'note_reminders'::regclass THEN 'note_reminders'
+          WHEN 'note_versions'::regclass THEN 'note_versions'
+          ELSE constraint_row.conrelid::regclass::text
+        END AS table_name,
+        CASE constraint_row.confrelid
+          WHEN 0 THEN NULL
+          WHEN 'users'::regclass THEN 'users'
+          WHEN 'notes'::regclass THEN 'notes'
+          ELSE constraint_row.confrelid::regclass::text
+        END AS referenced_table,
+        ARRAY(
+          SELECT attribute.attname
+          FROM unnest(constraint_row.conkey) WITH ORDINALITY AS key(attnum, ordinal)
+          JOIN pg_attribute AS attribute
+            ON attribute.attrelid = constraint_row.conrelid
+           AND attribute.attnum = key.attnum
+          ORDER BY key.ordinal
+        ) AS columns,
+        ARRAY(
+          SELECT attribute.attname
+          FROM unnest(constraint_row.confkey) WITH ORDINALITY AS key(attnum, ordinal)
+          JOIN pg_attribute AS attribute
+            ON attribute.attrelid = constraint_row.confrelid
+           AND attribute.attnum = key.attnum
+          ORDER BY key.ordinal
+        ) AS referenced_columns,
+        pg_get_constraintdef(constraint_row.oid, FALSE) AS definition
+      FROM pg_constraint AS constraint_row
+      WHERE constraint_row.conrelid = ANY($1::regclass[])
+        AND constraint_row.conname = ANY($2::text[])
+    `,
+    [
+      ['notes', 'note_reminders', 'note_versions'],
+      expectedConstraints
+    ]
+  )
+  assertExactSet(
+    'productivity constraints',
+    constraints.rows.map((row) => row.conname),
+    expectedConstraints
+  )
+
+  const canonicalDefinition = (value) => String(value || '')
+    .toLowerCase()
+    .replace(/public\./g, '')
+    .replace(/[\s()]/g, '')
+  const expectedConstraintShape = {
+    notes_remind_before_minutes_check: {
+      tableName: 'notes',
+      type: 'c',
+      columns: ['remind_before_minutes'],
+      definition: 'checkremind_before_minutes>=0andremind_before_minutes<=43200'
+    },
+    notes_revision_check: {
+      tableName: 'notes',
+      type: 'c',
+      columns: ['revision'],
+      definition: 'checkrevision>=1'
+    },
+    note_reminders_advance_minutes_check: {
+      tableName: 'note_reminders',
+      type: 'c',
+      columns: ['remind_before_minutes_snapshot'],
+      definition: 'checkremind_before_minutes_snapshot>=0andremind_before_minutes_snapshot<=43200'
+    },
+    note_versions_revision_check: {
+      tableName: 'note_versions',
+      type: 'c',
+      columns: ['revision'],
+      definition: 'checkrevision>=1'
+    },
+    note_versions_remind_before_check: {
+      tableName: 'note_versions',
+      type: 'c',
+      columns: ['remind_before_minutes'],
+      definition: 'checkremind_before_minutes>=0andremind_before_minutes<=43200'
+    },
+    note_versions_note_revision_unique: {
+      tableName: 'note_versions',
+      type: 'u',
+      columns: ['note_id', 'revision'],
+      definition: 'uniquenote_id,revision'
+    },
+    note_versions_user_id_fkey: {
+      tableName: 'note_versions',
+      type: 'f',
+      columns: ['user_id'],
+      referencedTable: 'users',
+      referencedColumns: ['id'],
+      deleteAction: 'c',
+      definition: 'foreignkeyuser_idreferencesusersidondeletecascade'
+    },
+    note_versions_note_id_fkey: {
+      tableName: 'note_versions',
+      type: 'f',
+      columns: ['note_id'],
+      referencedTable: 'notes',
+      referencedColumns: ['id'],
+      deleteAction: 'c',
+      definition: 'foreignkeynote_idreferencesnotesidondeletecascade'
+    }
+  }
+
+  for (const row of constraints.rows) {
+    const expected = expectedConstraintShape[row.conname]
+    if (
+      !expected
+      || row.table_name !== expected.tableName
+      || row.contype !== expected.type
+      || row.convalidated !== true
+      || canonicalDefinition(row.definition) !== expected.definition
+    ) {
+      throw new Error(`${row.conname} definition mismatch`)
+    }
+    assertExactSequence(`${row.conname} columns`, row.columns, expected.columns)
+
+    if (expected.type === 'f') {
+      if (
+        row.referenced_table !== expected.referencedTable
+        || row.confdeltype !== expected.deleteAction
+      ) {
+        throw new Error(`${row.conname} foreign key mismatch`)
+      }
+      assertExactSequence(
+        `${row.conname} referenced columns`,
+        row.referenced_columns,
+        expected.referencedColumns
+      )
+    }
+  }
+
   const indexes = await query(
     `
       SELECT indexname

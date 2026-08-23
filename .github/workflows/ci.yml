@@ -111,6 +111,11 @@ jobs:
       - name: Run API tests
         run: npm test --prefix api
 
+      - name: Reject productivity schema drift
+        env:
+          NAV_PRODUCTIVITY_SCHEMA_DRIFT_TEST: "true"
+        run: node --test api/test/productivitySchemaDrift.integration.test.js
+
       - name: Build frontend
         run: npm run build --prefix app
 

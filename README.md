@@ -10,7 +10,7 @@ DOMO NAV 是面向个人与小团队的私有化导航工作台。它把导航�
 
 精确生产版本、验收证据和已知缺口见 [STATUS_REPORT.md](./STATUS_REPORT.md)。
 
-## 当前已实现
+## 当前源码已实现
 
 - 用户登录、注册审批、Telegram 审批同步、用户名/密码修改、会话撤销、恢复码和密码恢复
 - 分组与书签管理、拖拽排序、批量移动/删除和手动失效检查
@@ -31,8 +31,9 @@ DOMO NAV 是面向个人与小团队的私有化导航工作台。它把导航�
 - 安全 JSON 导出，以及带预览、当前密码复验和状态签名的替换式恢复候选
 
 Passkey/WebAuthn 的完整源码切片已完成，但默认关闭并等待迁移、CI 和真实设备生产验收；
-部分完成和未完成项目还包括自动异地加密备份、外部失联监测、网页关闭后的 Web Push、
-向量语义检索与完整块编辑器，详见
+异地加密备份已达到 `SOURCE_READY / USER_CONFIG_LATER / NOT_DEPLOYED`，其余外部配置或
+独立评估项包括主机外失联监测、网页关闭后的 Web Push、真正 BM25/向量语义检索与完整
+块编辑器，详见
 [STATUS_REPORT.md](./STATUS_REPORT.md)。
 
 ## 技术栈
@@ -83,5 +84,6 @@ PostgreSQL 迁移校验、API 测试与 Vite 生产构建由
 10. [Passkey / WebAuthn 安全边界与启用手册](./docs/NAV_PASSKEYS.md)
 11. [统一搜索、个人资料助理与 AI 用量](./docs/NAV_SEARCH_AI.md)
 12. [提前提醒、链接检查、迁移、PWA 与版本历史候选](./docs/NAV_PRODUCTIVITY_COMPLETION.md)
+13. [2026-08-24 本地功能完成候选与外部验收边界](./docs/NAV_LOCAL_FEATURE_COMPLETION_20260824.md)
 
 继续开发或发布前，应重新核对 GitHub、当前工作区和实时生产状态；仓库文档不是生产写入授权。
