@@ -1,10 +1,17 @@
 <script setup>
-import { computed, onMounted, ref } from 'vue'
+import { computed, nextTick, onMounted, ref, shallowRef } from 'vue'
+import Icon from '@/shared/components/Icon.vue'
+import Modal from '@/shared/components/Modal.vue'
 import { clearAllData, exportData, getLocalDataSummary, importData } from '@/shared/db/database'
 import { useConfig } from '@/shared/composables/useConfig'
 import {
+  applyBackendRestore,
+  createCloudRestoreBackup,
+  createLocalRestoreBackup,
+  DATA_RESTORE_MAX_FILE_BYTES,
   exportBackendData,
-  importLocalDataToBackend,
+  exportBackendRestoreSafetyBackup,
+  previewBackendRestore,
   shouldUseBackendMigration
 } from '@/shared/services/migrationApi'
 
@@ -14,6 +21,29 @@ const importing = ref(false)
 const exporting = ref(false)
 const cloudExporting = ref(false)
 const migrating = ref(false)
+const restoreFileInput = ref(null)
+const restorePreviewFocus = ref(null)
+const restorePasswordInput = ref(null)
+const restoreSuccessFocus = ref(null)
+const restoreModalOpen = ref(false)
+const restoreStage = ref('preview')
+const restoreBackup = shallowRef(null)
+const restorePreview = ref(null)
+const restoreResult = ref(null)
+const restoreFileName = ref('')
+const restoreSource = ref('cloud-backup')
+const restoreShares = ref(false)
+const restorePreviewing = ref(false)
+const restoreApplying = ref(false)
+const restoreSafetyBackupDownloading = ref(false)
+const restoreSafetyBackupDownloaded = ref(false)
+const restoreSafetyBackupReceipt = ref('')
+const restorePassword = ref('')
+const restoreConfirmation = ref('')
+const restoreError = ref('')
+const restorePageMessage = ref('')
+const restorePageMessageKind = ref('error')
+let restorePreviewSequence = 0
 const storageInfo = ref({
   used: 0,
   quota: 0
@@ -32,6 +62,84 @@ const shouldShowCloudMigration = computed(() =>
   shouldUseBackendMigration() && localDataSummary.value.total > 0
 )
 const shouldShowCloudExport = computed(() => shouldUseBackendMigration())
+const restoreIsCloudBackup = computed(() => restoreSource.value === 'cloud-backup')
+const restoreModalTitle = computed(() => {
+  if (restoreStage.value === 'success') {
+    return restoreIsCloudBackup.value ? '云端数据已恢复' : '本地数据已迁移'
+  }
+  if (restoreStage.value === 'confirm') return '确认替换云端数据'
+  return restoreIsCloudBackup.value ? '预览云端数据恢复' : '预览本地数据迁移'
+})
+
+const RESTORE_COLLECTIONS = Object.freeze([
+  { key: 'groups', label: '分组' },
+  { key: 'bookmarks', label: '书签' },
+  { key: 'notes', label: '笔记与日记' },
+  { key: 'customEngines', label: '搜索引擎' },
+  { key: 'shares', label: '公开分享' },
+  { key: 'settings', label: '普通设置' }
+])
+
+function boundedCount(value) {
+  const count = Number(value)
+  return Number.isSafeInteger(count) && count >= 0 ? count : 0
+}
+
+function previewCount(container, key) {
+  return boundedCount(container?.[key])
+}
+
+const restoreComparisonRows = computed(() => {
+  const preview = restorePreview.value || {}
+  return RESTORE_COLLECTIONS.map((collection) => {
+    const current = previewCount(preview.current, collection.key)
+    const incoming = previewCount(preview.incoming, collection.key)
+    const backup = previewCount(preview.backupCounts, collection.key)
+    return {
+      ...collection,
+      current,
+      incoming,
+      backup,
+      difference: incoming - current
+    }
+  })
+})
+
+function normalizeRestoreMessages(value) {
+  if (!Array.isArray(value)) return []
+  return value
+    .map((item) => (
+      typeof item === 'string'
+        ? item.trim()
+        : String(item?.message || item?.error || item?.code || '').trim()
+    ))
+    .filter(Boolean)
+}
+
+const restoreWarnings = computed(() => normalizeRestoreMessages(restorePreview.value?.warnings))
+const restoreBlockingErrors = computed(() => (
+  normalizeRestoreMessages(restorePreview.value?.blockingErrors)
+))
+const restoreCanContinue = computed(() => (
+  Boolean(restorePreview.value?.planToken)
+  && !restorePreviewing.value
+  && !restoreBlockingErrors.value.length
+  && restoreSafetyBackupDownloaded.value
+  && Boolean(restoreSafetyBackupReceipt.value)
+))
+const restoreCanApply = computed(() => (
+  restoreCanContinue.value
+  && Boolean(restorePassword.value)
+  && restoreConfirmation.value === '恢复'
+  && !restoreApplying.value
+))
+const restoreBackupShareCount = computed(() => (
+  previewCount(restorePreview.value?.backupCounts, 'shares')
+))
+const restoreResultRows = computed(() => RESTORE_COLLECTIONS.map((collection) => ({
+  ...collection,
+  count: previewCount(restoreResult.value?.imported, collection.key)
+})))
 
 async function refreshLocalDataSummary() {
   localDataSummary.value = await getLocalDataSummary()
@@ -55,7 +163,7 @@ async function refreshLocalState() {
 }
 
 function downloadJson(data, fileName) {
-  const blob = new Blob([JSON.stringify(data, null, 2)], {
+  const blob = new Blob([JSON.stringify(data)], {
     type: 'application/json'
   })
   const url = URL.createObjectURL(blob)
@@ -66,6 +174,295 @@ function downloadJson(data, fileName) {
   anchor.click()
   anchor.remove()
   window.setTimeout(() => URL.revokeObjectURL(url), 0)
+}
+
+function setRestorePageMessage(message = '', kind = 'error') {
+  restorePageMessage.value = String(message || '')
+  restorePageMessageKind.value = kind === 'success' ? 'success' : 'error'
+}
+
+async function focusRestoreStage(stage = restoreStage.value) {
+  await nextTick()
+  if (stage === 'confirm') {
+    restorePasswordInput.value?.focus()
+    return
+  }
+  if (stage === 'success') {
+    restoreSuccessFocus.value?.focus()
+    return
+  }
+  restorePreviewFocus.value?.focus()
+}
+
+function ensureRestoreSize(bytes) {
+  if (boundedCount(bytes) > DATA_RESTORE_MAX_FILE_BYTES) {
+    throw new Error(`备份文件不能超过 ${formatSize(DATA_RESTORE_MAX_FILE_BYTES)}`)
+  }
+}
+
+function restorePreviewIsStale(error) {
+  const code = String(error?.code || '').toLowerCase()
+  const message = String(error?.message || '').trim()
+  return (
+    code.includes('preview')
+    || code.includes('state')
+    || code.includes('backup_receipt')
+    || /恢复预览.*过期|云端数据.*变化|preview.*expired|state.*changed/i.test(message)
+  )
+}
+
+function restoreErrorText(error) {
+  const code = String(error?.code || '').toLowerCase()
+  const message = String(error?.message || '').trim()
+  if (code.includes('password') || /当前密码不正确|current password.*incorrect/i.test(message)) {
+    return '当前登录密码不正确。'
+  }
+  if (restorePreviewIsStale(error)) {
+    return '恢复预览已过期，或云端数据已发生变化。请重新预览后再确认。'
+  }
+  return message || '恢复请求失败'
+}
+
+function resetRestoreFlow({ keepPageMessage = false } = {}) {
+  restorePreviewSequence += 1
+  restoreModalOpen.value = false
+  restoreStage.value = 'preview'
+  restoreBackup.value = null
+  restorePreview.value = null
+  restoreResult.value = null
+  restoreFileName.value = ''
+  restoreSource.value = 'cloud-backup'
+  restoreShares.value = false
+  restorePreviewing.value = false
+  restoreApplying.value = false
+  restoreSafetyBackupDownloading.value = false
+  restoreSafetyBackupDownloaded.value = false
+  restoreSafetyBackupReceipt.value = ''
+  restorePassword.value = ''
+  restoreConfirmation.value = ''
+  restoreError.value = ''
+  if (!keepPageMessage) setRestorePageMessage('')
+  if (restoreFileInput.value) restoreFileInput.value.value = ''
+}
+
+function closeRestoreModal() {
+  if (restoreApplying.value) return
+  if (restoreStage.value === 'success') {
+    finishRestore()
+    return
+  }
+  resetRestoreFlow()
+}
+
+function finishRestore() {
+  const message = restoreIsCloudBackup.value
+    ? '云端备份恢复完成，页面将刷新。'
+    : '本地数据迁移完成，页面将刷新。'
+  setRestorePageMessage(message, 'success')
+  resetRestoreFlow({ keepPageMessage: true })
+  window.location.reload()
+}
+
+async function refreshRestorePreview() {
+  if (!restoreBackup.value || restoreApplying.value) return
+
+  const requestSequence = ++restorePreviewSequence
+  restorePreviewing.value = true
+  restorePreview.value = null
+  restoreSafetyBackupDownloaded.value = false
+  restoreSafetyBackupReceipt.value = ''
+  restoreError.value = ''
+  restorePassword.value = ''
+  restoreConfirmation.value = ''
+
+  try {
+    const payload = await previewBackendRestore(restoreBackup.value, {
+      restoreShares: restoreShares.value
+    })
+    if (requestSequence !== restorePreviewSequence) return
+
+    const preview = payload?.preview
+    if (!preview || typeof preview !== 'object' || Array.isArray(preview)) {
+      throw new Error('服务器返回的恢复预览无效')
+    }
+    const blockingErrors = normalizeRestoreMessages(preview.blockingErrors)
+    if (!blockingErrors.length && !String(preview.planToken || '').trim()) {
+      throw new Error('恢复预览缺少安全计划令牌')
+    }
+    restorePreview.value = preview
+  } catch (error) {
+    if (requestSequence !== restorePreviewSequence) return
+    restoreError.value = restoreErrorText(error)
+  } finally {
+    if (requestSequence === restorePreviewSequence) {
+      restorePreviewing.value = false
+      await focusRestoreStage('preview')
+    }
+  }
+}
+
+async function openRestoreFlow(backup, {
+  fileName,
+  source,
+  restorePublicShares = false
+}) {
+  resetRestoreFlow()
+  restoreBackup.value = backup
+  restoreFileName.value = String(fileName || '')
+  restoreSource.value = source
+  restoreShares.value = restorePublicShares
+  restoreModalOpen.value = true
+  await nextTick()
+  await refreshRestorePreview()
+}
+
+async function handleCloudRestoreFile(event) {
+  const input = event.target
+  const file = input.files?.[0]
+  if (!file) return
+
+  setRestorePageMessage('')
+  try {
+    ensureRestoreSize(file.size)
+    const text = await file.text()
+    const backup = createCloudRestoreBackup(JSON.parse(text))
+    await openRestoreFlow(backup, {
+      fileName: file.name,
+      source: 'cloud-backup',
+      restorePublicShares: false
+    })
+  } catch (error) {
+    setRestorePageMessage(`无法读取云端备份：${restoreErrorText(error)}`)
+  } finally {
+    input.value = ''
+  }
+}
+
+async function handleRestoreSharesChange() {
+  restoreStage.value = 'preview'
+  await refreshRestorePreview()
+}
+
+async function downloadRestoreSafetyBackup() {
+  if (!restorePreview.value || restoreSafetyBackupDownloading.value) return
+
+  const previewSequence = restorePreviewSequence
+  restoreSafetyBackupDownloading.value = true
+  restoreSafetyBackupDownloaded.value = false
+  restoreError.value = ''
+  try {
+    const payload = await exportBackendRestoreSafetyBackup()
+    const backup = payload?.backup
+    const backupReceipt = String(payload?.backupReceipt || '').trim()
+    if (
+      backup?.schema !== 'domo-nav-backup'
+      || Number(backup?.version) !== 1
+      || !backup?.manifest
+      || !backup?.data
+      || !backupReceipt
+    ) {
+      throw new Error('服务器返回的当前云端备份格式无效')
+    }
+    if (previewSequence !== restorePreviewSequence || !restoreModalOpen.value) return
+    const fallbackFileName = (
+      `domo-nav-before-restore-${new Date().toISOString().slice(0, 10)}.json`
+    )
+    downloadJson(backup, backup.fileName || fallbackFileName)
+    restoreSafetyBackupReceipt.value = backupReceipt
+    restoreSafetyBackupDownloaded.value = true
+  } catch (error) {
+    if (previewSequence === restorePreviewSequence && restoreModalOpen.value) {
+      restoreError.value = `当前云端备份下载失败：${restoreErrorText(error)}`
+    }
+  } finally {
+    if (previewSequence === restorePreviewSequence) {
+      restoreSafetyBackupDownloading.value = false
+    }
+  }
+}
+
+async function continueRestoreConfirmation() {
+  if (!restoreCanContinue.value) return
+  restoreStage.value = 'confirm'
+  restoreError.value = ''
+  restorePassword.value = ''
+  restoreConfirmation.value = ''
+  await focusRestoreStage('confirm')
+}
+
+async function returnToRestorePreview() {
+  if (restoreApplying.value) return
+  restoreStage.value = 'preview'
+  restorePassword.value = ''
+  restoreConfirmation.value = ''
+  restoreError.value = ''
+  await focusRestoreStage('preview')
+}
+
+async function applyRestore() {
+  if (!restoreCanApply.value) return
+
+  restoreApplying.value = true
+  restoreError.value = ''
+  try {
+    const payload = await applyBackendRestore(restoreBackup.value, {
+      restoreShares: restoreShares.value,
+      planToken: restorePreview.value.planToken,
+      backupReceipt: restoreSafetyBackupReceipt.value,
+      currentPassword: restorePassword.value,
+      confirmation: restoreConfirmation.value
+    })
+    restoreResult.value = payload
+    restorePassword.value = ''
+    restoreConfirmation.value = ''
+    restoreStage.value = 'success'
+    await focusRestoreStage('success')
+  } catch (error) {
+    const needsNewPreview = restorePreviewIsStale(error)
+    restorePassword.value = ''
+    restoreConfirmation.value = ''
+    if (needsNewPreview) {
+      restoreStage.value = 'preview'
+      restoreApplying.value = false
+      await refreshRestorePreview()
+      restoreError.value = restoreErrorText(error)
+    } else {
+      restoreError.value = restoreErrorText(error)
+      await focusRestoreStage('confirm')
+    }
+  } finally {
+    restoreApplying.value = false
+  }
+}
+
+function formatRestoreDifference(value) {
+  const difference = Number(value || 0)
+  if (difference > 0) return `+${difference}`
+  return String(difference)
+}
+
+function formatRestoreExpiry(value) {
+  const date = new Date(value)
+  if (Number.isNaN(date.getTime())) return ''
+  return date.toLocaleTimeString('zh-CN', {
+    hour: '2-digit',
+    minute: '2-digit',
+    second: '2-digit',
+    hour12: false
+  })
+}
+
+function formatRestoreTimestamp(value) {
+  const date = new Date(value)
+  if (Number.isNaN(date.getTime())) return ''
+  return date.toLocaleString('zh-CN', {
+    year: 'numeric',
+    month: '2-digit',
+    day: '2-digit',
+    hour: '2-digit',
+    minute: '2-digit',
+    hour12: false
+  })
 }
 
 async function handleExport() {
@@ -112,9 +509,16 @@ async function handleCloudExport() {
     downloadJson(backup, backup.fileName || fallbackFileName)
 
     const counts = backup.manifest.counts || {}
+    const restoreCompatibility = backup.restoreCompatibility
+    const restoreNotice = restoreCompatibility?.restorable === false
+      ? `\n\n注意：文件已完整导出，但当前第 1 版一键恢复不支持此体量：${restoreCompatibility.reason || '超过恢复限制'}。`
+      : restoreCompatibility?.restorable === true
+        ? '\n\n该文件已通过当前第 1 版一键恢复兼容性检查。'
+        : ''
     alert(
       `NAV 云端数据已导出：书签 ${counts.bookmarks || 0} 条，`
       + `笔记 ${counts.notes || 0} 条，分享 ${counts.shares || 0} 条。`
+      + restoreNotice
     )
   } catch (error) {
     alert(`云端备份导出失败：${error.message}`)
@@ -129,6 +533,7 @@ async function handleImport(event) {
 
   importing.value = true
   try {
+    ensureRestoreSize(file.size)
     const text = await file.text()
     const data = JSON.parse(text)
 
@@ -151,18 +556,18 @@ async function handleImport(event) {
 async function handleMigrateToCloud() {
   if (!shouldShowCloudMigration.value || migrating.value) return
 
-  if (!confirm('确定把当前浏览器里的本地数据迁移到云端数据库吗？\n\n这会用本地数据覆盖当前账号在云端的已有数据。')) {
-    return
-  }
-
   migrating.value = true
+  setRestorePageMessage('')
   try {
-    const backup = await exportData()
-    const summary = await importLocalDataToBackend(backup.data)
-    alert(`迁移成功：书签 ${summary.imported.bookmarks} 条，笔记 ${summary.imported.notes} 条，设置 ${summary.imported.settings} 项。`)
-    await refreshLocalState()
+    const backup = createLocalRestoreBackup(await exportData())
+    ensureRestoreSize(new Blob([JSON.stringify(backup)]).size)
+    await openRestoreFlow(backup, {
+      fileName: '当前浏览器 IndexedDB',
+      source: 'local-browser',
+      restorePublicShares: false
+    })
   } catch (error) {
-    alert(`迁移失败：${error.message}`)
+    setRestorePageMessage(`无法预览本地数据迁移：${restoreErrorText(error)}`)
   } finally {
     migrating.value = false
   }
@@ -206,6 +611,23 @@ onMounted(refreshLocalState)
   <div class="settings-section">
     <h3 class="settings-section__title">数据管理</h3>
 
+    <p
+      v-if="restorePageMessage"
+      :class="[
+        'restore-page-message',
+        `restore-page-message--${restorePageMessageKind}`
+      ]"
+      :role="restorePageMessageKind === 'success' ? 'status' : 'alert'"
+      :aria-live="restorePageMessageKind === 'success' ? 'polite' : 'assertive'"
+    >
+      <Icon
+        :name="restorePageMessageKind === 'success' ? 'circle-check' : 'alert'"
+        :size="18"
+        aria-hidden="true"
+      />
+      <span>{{ restorePageMessage }}</span>
+    </p>
+
     <div class="settings-item">
       <div class="settings-item__info">
         <div class="settings-item__label">本地存储使用</div>
@@ -240,6 +662,40 @@ onMounted(refreshLocalState)
         <button class="btn btn--secondary" :disabled="cloudExporting" @click="handleCloudExport">
           {{ cloudExporting ? '导出中...' : '下载 NAV 数据' }}
         </button>
+      </div>
+    </div>
+
+    <div v-if="shouldShowCloudExport" class="settings-item">
+      <div class="settings-item__info">
+        <div class="settings-item__label">从完整备份恢复云端数据</div>
+        <div class="settings-item__desc">
+          先预览当前数据与备份差异，再用当前登录密码和确认文字执行恢复。
+          恢复采用替换模式，不会合并；公开分享默认不恢复，单个文件最大 16 MB。
+        </div>
+      </div>
+      <div class="settings-item__control">
+        <input
+          id="cloud-restore-file"
+          ref="restoreFileInput"
+          type="file"
+          accept=".json,application/json"
+          hidden
+          :disabled="restorePreviewing || restoreApplying || restoreSafetyBackupDownloading"
+          @change="handleCloudRestoreFile"
+        >
+        <button
+          type="button"
+          class="btn btn--secondary"
+          :disabled="restorePreviewing || restoreApplying || restoreSafetyBackupDownloading"
+          aria-describedby="cloud-restore-description"
+          @click="restoreFileInput?.click()"
+        >
+          <Icon name="upload" :size="18" aria-hidden="true" />
+          选择完整备份
+        </button>
+        <span id="cloud-restore-description" class="visually-hidden">
+          选择 DOMO NAV 云端完整 JSON 备份，最大 16 MB
+        </span>
       </div>
     </div>
 
@@ -292,11 +748,15 @@ onMounted(refreshLocalState)
     <div v-if="shouldShowCloudMigration" class="settings-item">
       <div class="settings-item__info">
         <div class="settings-item__label">迁移本地数据到云端</div>
-        <div class="settings-item__desc">把当前浏览器 IndexedDB 里的书签、便签、设置和自定义搜索引擎导入 PostgreSQL</div>
+        <div class="settings-item__desc">
+          先预览当前浏览器 IndexedDB 与云端数据差异，确认后替换云端数据。
+          本地 IndexedDB 会保留，不会在迁移后清除。
+        </div>
       </div>
       <div class="settings-item__control">
         <button class="btn btn--secondary" :disabled="migrating" @click="handleMigrateToCloud">
-          {{ migrating ? '迁移中...' : '上传到云端' }}
+          <Icon name="database" :size="18" aria-hidden="true" />
+          {{ migrating ? '准备预览中...' : '预览并迁移' }}
         </button>
       </div>
     </div>
@@ -324,6 +784,410 @@ onMounted(refreshLocalState)
         </button>
       </div>
     </div>
+
+    <Modal
+      :show="restoreModalOpen"
+      :title="restoreModalTitle"
+      width="760px"
+      initial-focus-selector="[data-modal-initial-focus]"
+      :close-disabled="restoreApplying"
+      @close="closeRestoreModal"
+    >
+      <div
+        class="restore-dialog"
+        :aria-busy="restorePreviewing || restoreApplying"
+      >
+        <template v-if="restoreStage === 'preview'">
+          <div
+            ref="restorePreviewFocus"
+            class="restore-source-card"
+            data-modal-initial-focus
+            tabindex="-1"
+          >
+            <Icon name="database" :size="22" aria-hidden="true" />
+            <div>
+              <strong>{{ restoreFileName || '待恢复数据' }}</strong>
+              <p>
+                {{ restoreIsCloudBackup ? '完整云端备份' : '当前浏览器 IndexedDB' }}
+                · 替换模式 · 最大 16 MB
+                <template v-if="formatRestoreTimestamp(restoreBackup?.exportedAt)">
+                  · 备份于 {{ formatRestoreTimestamp(restoreBackup.exportedAt) }}
+                </template>
+              </p>
+            </div>
+          </div>
+
+          <div v-if="restorePreviewing" class="restore-loading" role="status" aria-live="polite">
+            <Icon name="refresh" :size="20" aria-hidden="true" />
+            正在生成只读差异预览…
+          </div>
+
+          <p v-if="restoreError" class="restore-feedback restore-feedback--error" role="alert">
+            <Icon name="alert" :size="18" aria-hidden="true" />
+            <span>{{ restoreError }}</span>
+          </p>
+
+          <template v-if="restorePreview">
+            <p class="visually-hidden" role="status" aria-live="polite">
+              差异预览已生成，请检查恢复数量与风险提示。
+            </p>
+            <section class="restore-section" aria-labelledby="restore-difference-title">
+              <div class="restore-section__heading">
+                <div>
+                  <h3 id="restore-difference-title">恢复后的数据变化</h3>
+                  <p>“备份内”是文件原始数量，“恢复后”已反映公开分享开关。</p>
+                </div>
+                <span v-if="formatRestoreExpiry(restorePreview.expiresAt)" class="restore-expiry">
+                  预览有效至 {{ formatRestoreExpiry(restorePreview.expiresAt) }}
+                </span>
+              </div>
+
+              <div class="restore-comparison" role="list" aria-label="云端数据恢复差异">
+                <article
+                  v-for="row in restoreComparisonRows"
+                  :key="row.key"
+                  class="restore-comparison__item"
+                  role="listitem"
+                >
+                  <h4>{{ row.label }}</h4>
+                  <dl>
+                    <div>
+                      <dt>当前</dt>
+                      <dd>{{ row.current }}</dd>
+                    </div>
+                    <div>
+                      <dt>备份内</dt>
+                      <dd>{{ row.backup }}</dd>
+                    </div>
+                    <div>
+                      <dt>恢复后</dt>
+                      <dd>{{ row.incoming }}</dd>
+                    </div>
+                    <div>
+                      <dt>变化</dt>
+                      <dd :class="{ 'restore-count--danger': row.difference < 0 }">
+                        {{ formatRestoreDifference(row.difference) }}
+                      </dd>
+                    </div>
+                  </dl>
+                </article>
+              </div>
+              <div class="restore-media-summary" role="note">
+                <Icon name="image" :size="20" aria-hidden="true" />
+                <p>
+                  当前 {{ previewCount(restorePreview.current, 'mediaAssets') }} 条图片目录记录会全部保留；
+                  备份中的 {{ previewCount(restorePreview.backupCounts, 'mediaAssets') }} 条图片元数据仅用于去重补充，
+                  不按替换差值计算。
+                </p>
+              </div>
+            </section>
+
+            <section
+              v-if="restoreBackupShareCount > 0"
+              class="restore-section restore-share-control"
+              aria-labelledby="restore-share-title"
+            >
+              <div>
+                <h3 id="restore-share-title">公开分享</h3>
+                <p id="restore-share-help">
+                  备份中有 {{ restoreBackupShareCount }} 条公开分享。默认不恢复；启用后，原分享链接可能重新对外可访问。
+                </p>
+              </div>
+              <label
+                class="restore-toggle"
+                :class="{
+                  'restore-toggle--disabled': restorePreviewing
+                    || restoreApplying
+                    || restoreSafetyBackupDownloading
+                }"
+              >
+                <input
+                  v-model="restoreShares"
+                  type="checkbox"
+                  :disabled="restorePreviewing || restoreApplying || restoreSafetyBackupDownloading"
+                  aria-describedby="restore-share-help"
+                  @change="handleRestoreSharesChange"
+                >
+                <span>同时恢复公开分享</span>
+              </label>
+              <p class="restore-share-control__note">
+                切换此项会立即重新预览，并生成新的安全计划。
+              </p>
+            </section>
+
+            <section
+              class="restore-section restore-safety-backup"
+              aria-labelledby="restore-safety-backup-title"
+            >
+              <Icon
+                :name="restoreSafetyBackupDownloaded ? 'circle-check' : 'download'"
+                :size="22"
+                aria-hidden="true"
+              />
+              <div>
+                <h3 id="restore-safety-backup-title">恢复前安全备份</h3>
+                <p id="restore-safety-backup-help">
+                  必须先下载一次当前云端数据，才能进入密码确认。重新预览、切换公开分享或选择其他文件后需要再次下载。
+                  文件可能包含笔记密文和仍有效的公开分享链接，请妥善保存。
+                </p>
+                <button
+                  type="button"
+                  class="btn btn--secondary restore-safety-backup__button"
+                  :disabled="restoreSafetyBackupDownloading || restorePreviewing || restoreBlockingErrors.length"
+                  aria-describedby="restore-safety-backup-help"
+                  @click="downloadRestoreSafetyBackup"
+                >
+                  <Icon
+                    :name="restoreSafetyBackupDownloaded ? 'circle-check' : 'download'"
+                    :size="18"
+                    aria-hidden="true"
+                  />
+                  {{ restoreSafetyBackupDownloading
+                    ? '正在下载当前备份…'
+                    : restoreSafetyBackupDownloaded
+                      ? '已下载当前云端备份'
+                      : '下载当前云端备份' }}
+                </button>
+                <span
+                  v-if="restoreSafetyBackupDownloaded"
+                  class="visually-hidden"
+                  role="status"
+                  aria-live="polite"
+                >
+                  当前云端备份已下载，可以继续身份确认。
+                </span>
+              </div>
+            </section>
+
+            <section class="restore-section" aria-labelledby="restore-risk-title">
+              <h3 id="restore-risk-title">执行前请确认这些影响</h3>
+              <div class="restore-risk-list">
+                <div class="restore-risk-card restore-risk-card--danger">
+                  <Icon name="alert" :size="20" aria-hidden="true" />
+                  <div>
+                    <strong>替换，不是合并</strong>
+                    <p>当前分组、书签、笔记、搜索引擎与普通设置会被备份内容替换。</p>
+                  </div>
+                </div>
+                <div class="restore-risk-card">
+                  <Icon name="shield" :size="20" aria-hidden="true" />
+                  <div>
+                    <strong>敏感服务配置不会从文件覆盖</strong>
+                    <p>
+                      API Key、Telegram Token、服务器 Secret 等仍使用服务器现有配置；
+                      本次忽略 {{ boundedCount(restorePreview.ignoredSettings) }} 项设置。
+                    </p>
+                  </div>
+                </div>
+                <div class="restore-risk-card">
+                  <Icon name="image" :size="20" aria-hidden="true" />
+                  <div>
+                    <strong>图床图片二进制不在备份中</strong>
+                    <p>
+                      仅恢复图片 URL 与元数据，并保留当前 {{ boundedCount(restorePreview.preservedMediaAssets) }} 条图片资产记录。
+                    </p>
+                  </div>
+                </div>
+                <div v-if="boundedCount(restorePreview.encryptedNotes) > 0" class="restore-risk-card">
+                  <Icon name="lock" :size="20" aria-hidden="true" />
+                  <div>
+                    <strong>加密笔记仍需要原密码</strong>
+                    <p>备份含 {{ boundedCount(restorePreview.encryptedNotes) }} 条加密笔记，恢复不会重置其加密密码。</p>
+                  </div>
+                </div>
+              </div>
+            </section>
+
+            <section v-if="restoreWarnings.length" class="restore-section" aria-labelledby="restore-warning-title">
+              <h3 id="restore-warning-title">服务器风险提示</h3>
+              <ul class="restore-message-list">
+                <li v-for="warning in restoreWarnings" :key="warning">
+                  <Icon name="alert" :size="18" aria-hidden="true" />
+                  <span>{{ warning }}</span>
+                </li>
+              </ul>
+            </section>
+
+            <section
+              v-if="restoreBlockingErrors.length"
+              class="restore-section restore-blocking"
+              role="alert"
+              aria-labelledby="restore-blocking-title"
+            >
+              <h3 id="restore-blocking-title">当前不能执行恢复</h3>
+              <ul class="restore-message-list">
+                <li v-for="blockingError in restoreBlockingErrors" :key="blockingError">
+                  <Icon name="circle-x" :size="18" aria-hidden="true" />
+                  <span>{{ blockingError }}</span>
+                </li>
+              </ul>
+            </section>
+          </template>
+        </template>
+
+        <form
+          v-else-if="restoreStage === 'confirm'"
+          id="cloud-restore-confirm-form"
+          class="restore-confirm"
+          @submit.prevent="applyRestore"
+        >
+          <div class="restore-confirm__warning">
+            <Icon name="alert" :size="22" aria-hidden="true" />
+            <div>
+              <strong>此操作会替换云端数据，不会合并</strong>
+              <p>
+                {{ restoreShares ? '公开分享也会按备份恢复。' : '公开分享不会恢复。' }}
+                提交后请等待完成，不要关闭页面。
+              </p>
+            </div>
+          </div>
+
+          <div class="form-group">
+            <label class="form-label" for="cloud-restore-password">当前登录密码</label>
+            <input
+              id="cloud-restore-password"
+              ref="restorePasswordInput"
+              v-model="restorePassword"
+              class="input"
+              type="password"
+              name="current-password"
+              autocomplete="current-password"
+              :disabled="restoreApplying"
+              aria-describedby="cloud-restore-password-help"
+              required
+            >
+            <p id="cloud-restore-password-help" class="restore-field-help">
+              只用于本次身份确认，不会写入备份或保存在浏览器中。
+            </p>
+          </div>
+
+          <div class="form-group">
+            <label class="form-label" for="cloud-restore-confirmation">
+              输入“恢复”确认
+            </label>
+            <input
+              id="cloud-restore-confirmation"
+              v-model="restoreConfirmation"
+              class="input"
+              type="text"
+              name="restore-confirmation"
+              autocomplete="off"
+              maxlength="2"
+              :disabled="restoreApplying"
+              aria-describedby="cloud-restore-confirmation-help"
+              required
+            >
+            <p id="cloud-restore-confirmation-help" class="restore-field-help">
+              必须准确输入中文“恢复”两个字，才能启用最终按钮。
+            </p>
+          </div>
+
+          <p v-if="restoreError" class="restore-feedback restore-feedback--error" role="alert">
+            <Icon name="alert" :size="18" aria-hidden="true" />
+            <span>{{ restoreError }}</span>
+          </p>
+        </form>
+
+        <div
+          v-else
+          ref="restoreSuccessFocus"
+          class="restore-success"
+          role="status"
+          aria-live="polite"
+          tabindex="-1"
+        >
+          <Icon name="circle-check" :size="42" aria-hidden="true" />
+          <h3>{{ restoreIsCloudBackup ? '云端备份恢复完成' : '本地数据迁移完成' }}</h3>
+          <p>服务器已完成原子替换，页面刷新后即可使用新数据。</p>
+          <dl class="restore-result-list">
+            <div v-for="row in restoreResultRows" :key="row.key">
+              <dt>{{ row.label }}</dt>
+              <dd>{{ row.count }}</dd>
+            </div>
+            <div>
+              <dt>忽略设置</dt>
+              <dd>{{ boundedCount(restoreResult?.ignoredSettings) }}</dd>
+            </div>
+            <div>
+              <dt>图片元数据处理</dt>
+              <dd>{{ boundedCount(restoreResult?.imported?.mediaAssets) }}</dd>
+            </div>
+            <div>
+              <dt>现有图片目录</dt>
+              <dd>{{ restoreResult?.preservedMediaAssets ? '已保留' : '未确认' }}</dd>
+            </div>
+          </dl>
+          <p class="restore-result-note">
+            {{ restoreResult?.sharesRestored ? '公开分享已随备份恢复。' : '公开分享未恢复。' }}
+            {{ restoreIsCloudBackup ? '' : '当前浏览器 IndexedDB 仍保留。' }}
+          </p>
+        </div>
+      </div>
+
+      <template #footer>
+        <div class="restore-footer">
+          <template v-if="restoreStage === 'preview'">
+            <button type="button" class="btn btn--secondary" @click="closeRestoreModal">
+              取消
+            </button>
+            <button
+              v-if="restoreError && !restorePreviewing && !restorePreview"
+              type="button"
+              class="btn btn--secondary"
+              data-restore-primary
+              @click="refreshRestorePreview"
+            >
+              <Icon name="refresh" :size="18" aria-hidden="true" />
+              重新预览
+            </button>
+            <button
+              v-else-if="!restoreSafetyBackupDownloaded"
+              type="button"
+              class="btn btn--primary"
+              data-restore-primary
+              :disabled="restorePreviewing || restoreSafetyBackupDownloading || !restorePreview || restoreBlockingErrors.length"
+              @click="downloadRestoreSafetyBackup"
+            >
+              <Icon name="download" :size="18" aria-hidden="true" />
+              {{ restoreSafetyBackupDownloading ? '正在下载…' : '先下载当前云端备份' }}
+            </button>
+            <button
+              v-else
+              type="button"
+              class="btn btn--primary"
+              data-restore-primary
+              :disabled="!restoreCanContinue"
+              @click="continueRestoreConfirmation"
+            >
+              继续身份确认
+            </button>
+          </template>
+          <template v-else-if="restoreStage === 'confirm'">
+            <button
+              type="button"
+              class="btn btn--secondary"
+              :disabled="restoreApplying"
+              @click="returnToRestorePreview"
+            >
+              <Icon name="arrow-left" :size="18" aria-hidden="true" />
+              返回预览
+            </button>
+            <button
+              type="submit"
+              form="cloud-restore-confirm-form"
+              class="btn btn--danger"
+              :disabled="!restoreCanApply"
+            >
+              <Icon name="shield" :size="18" aria-hidden="true" />
+              {{ restoreApplying ? '正在恢复…' : '确认替换云端数据' }}
+            </button>
+          </template>
+          <button v-else type="button" class="btn btn--primary" @click="finishRestore">
+            完成并刷新
+          </button>
+        </div>
+      </template>
+    </Modal>
   </div>
 </template>
 
@@ -343,6 +1207,54 @@ onMounted(refreshLocalState)
   margin-bottom: 16px;
   padding-bottom: 12px;
   border-bottom: 1px solid var(--border-light);
+}
+
+.visually-hidden {
+  position: absolute;
+  width: 1px;
+  height: 1px;
+  padding: 0;
+  margin: -1px;
+  overflow: hidden;
+  clip: rect(0, 0, 0, 0);
+  white-space: nowrap;
+  border: 0;
+}
+
+.restore-page-message {
+  display: flex;
+  align-items: center;
+  gap: 9px;
+  min-height: 44px;
+  margin: 0 0 8px;
+  padding: 10px 14px;
+  color: var(--text-primary);
+  background: var(--bg-secondary);
+  border: 1px solid var(--border-light);
+  border-radius: var(--radius-md);
+}
+
+.restore-page-message > svg {
+  flex: 0 0 auto;
+}
+
+.restore-page-message--success {
+  background: color-mix(in srgb, var(--success-color) 14%, var(--bg-secondary));
+  border: 1px solid color-mix(in srgb, var(--success-color) 38%, var(--border-light));
+}
+
+.restore-page-message--success > svg {
+  color: var(--success-color);
+}
+
+.restore-page-message--error {
+  color: var(--error-color);
+  background: color-mix(in srgb, var(--error-color) 12%, var(--bg-secondary));
+  border-color: color-mix(in srgb, var(--error-color) 40%, var(--border-light));
+}
+
+.restore-page-message--error > svg {
+  color: var(--error-color);
 }
 
 .settings-item {
@@ -411,7 +1323,9 @@ onMounted(refreshLocalState)
 .btn {
   display: inline-flex;
   align-items: center;
+  justify-content: center;
   gap: 6px;
+  min-height: 44px;
   padding: 10px 20px;
   border: none;
   border-radius: var(--radius-md);
@@ -435,6 +1349,15 @@ onMounted(refreshLocalState)
   background: var(--bg-hover);
 }
 
+.btn--primary {
+  background: var(--accent-color);
+  color: var(--accent-text, #fff);
+}
+
+.btn--primary:hover:not(:disabled) {
+  filter: brightness(1.06);
+}
+
 .btn--danger {
   background: var(--error-color);
   color: #fff;
@@ -444,7 +1367,394 @@ onMounted(refreshLocalState)
   opacity: 0.9;
 }
 
+.restore-dialog {
+  color: var(--text-primary);
+}
+
+.restore-source-card,
+.restore-confirm__warning,
+.restore-risk-card,
+.restore-feedback,
+.restore-loading {
+  display: flex;
+  align-items: flex-start;
+  gap: 12px;
+  padding: 14px 16px;
+  border-radius: var(--radius-md);
+}
+
+.restore-source-card {
+  align-items: center;
+  background: var(--bg-secondary);
+  border: 1px solid var(--border-light);
+}
+
+.restore-source-card:focus {
+  outline: 2px solid var(--accent-color);
+  outline-offset: 2px;
+}
+
+.restore-source-card svg,
+.restore-risk-card svg {
+  flex: 0 0 auto;
+  color: var(--accent-color);
+}
+
+.restore-source-card strong,
+.restore-risk-card strong,
+.restore-confirm__warning strong {
+  display: block;
+  font-size: 14px;
+  color: var(--text-primary);
+}
+
+.restore-source-card > div,
+.restore-safety-backup > div {
+  min-width: 0;
+}
+
+.restore-source-card strong {
+  overflow-wrap: anywhere;
+}
+
+.restore-source-card p,
+.restore-risk-card p,
+.restore-confirm__warning p,
+.restore-section__heading p,
+.restore-share-control p,
+.restore-success p {
+  margin: 4px 0 0;
+  color: var(--text-muted);
+  font-size: 13px;
+  line-height: 1.6;
+}
+
+.restore-loading {
+  align-items: center;
+  margin-top: 16px;
+  color: var(--text-secondary);
+  background: var(--bg-secondary);
+}
+
+.restore-loading svg {
+  flex: 0 0 auto;
+  animation: restore-spin 0.9s linear infinite;
+}
+
+.restore-feedback {
+  margin: 16px 0 0;
+  line-height: 1.55;
+}
+
+.restore-feedback svg {
+  flex: 0 0 auto;
+  margin-top: 1px;
+}
+
+.restore-feedback--error {
+  color: var(--error-color);
+  background: color-mix(in srgb, var(--error-color) 12%, var(--bg-secondary));
+  border: 1px solid color-mix(in srgb, var(--error-color) 40%, var(--border-light));
+}
+
+.restore-section {
+  margin-top: 22px;
+}
+
+.restore-section h3,
+.restore-success h3 {
+  margin: 0;
+  color: var(--text-primary);
+  font-size: 15px;
+  font-weight: 650;
+}
+
+.restore-section__heading {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 16px;
+  margin-bottom: 12px;
+}
+
+.restore-expiry {
+  flex: 0 0 auto;
+  padding: 6px 9px;
+  color: var(--text-secondary);
+  background: var(--bg-secondary);
+  border: 1px solid var(--border-light);
+  border-radius: var(--radius-full);
+  font-size: 12px;
+}
+
+.restore-comparison {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 10px;
+}
+
+.restore-comparison__item {
+  padding: 14px;
+  background: var(--bg-secondary);
+  border: 1px solid var(--border-light);
+  border-radius: var(--radius-md);
+}
+
+.restore-comparison__item h4 {
+  margin: 0 0 10px;
+  color: var(--text-primary);
+  font-size: 14px;
+}
+
+.restore-comparison__item dl {
+  display: grid;
+  grid-template-columns: repeat(4, minmax(0, 1fr));
+  gap: 6px;
+  margin: 0;
+}
+
+.restore-comparison__item dl div {
+  min-width: 0;
+}
+
+.restore-comparison__item dt {
+  color: var(--text-muted);
+  font-size: 11px;
+}
+
+.restore-comparison__item dd {
+  margin: 3px 0 0;
+  color: var(--text-primary);
+  font-size: 14px;
+  font-variant-numeric: tabular-nums;
+}
+
+.restore-count--danger {
+  color: var(--error-color) !important;
+}
+
+.restore-share-control {
+  padding: 16px;
+  background: color-mix(in srgb, var(--accent-color) 8%, var(--bg-secondary));
+  border: 1px solid color-mix(in srgb, var(--accent-color) 28%, var(--border-light));
+  border-radius: var(--radius-md);
+}
+
+.restore-toggle {
+  display: inline-flex;
+  align-items: center;
+  gap: 10px;
+  min-height: 44px;
+  margin-top: 10px;
+  padding: 7px 12px;
+  color: var(--text-primary);
+  background: var(--bg-card);
+  border: 1px solid var(--border-light);
+  border-radius: var(--radius-md);
+  font-size: 14px;
+  cursor: pointer;
+}
+
+.restore-toggle:focus-within {
+  outline: 2px solid var(--accent-color);
+  outline-offset: 2px;
+}
+
+.restore-toggle input {
+  width: 20px;
+  height: 20px;
+  margin: 0;
+  accent-color: var(--accent-color);
+}
+
+.restore-toggle--disabled {
+  opacity: 0.65;
+  cursor: not-allowed;
+}
+
+.restore-share-control__note {
+  margin-top: 8px !important;
+}
+
+.restore-safety-backup {
+  display: flex;
+  align-items: flex-start;
+  gap: 12px;
+  padding: 16px;
+  background: color-mix(in srgb, var(--success-color) 9%, var(--bg-secondary));
+  border: 1px solid color-mix(in srgb, var(--success-color) 32%, var(--border-light));
+  border-radius: var(--radius-md);
+}
+
+.restore-safety-backup > svg {
+  flex: 0 0 auto;
+  color: var(--success-color);
+}
+
+.restore-safety-backup p {
+  margin: 4px 0 0;
+  color: var(--text-muted);
+  font-size: 13px;
+  line-height: 1.6;
+}
+
+.restore-safety-backup__button {
+  margin-top: 12px;
+}
+
+.restore-risk-list {
+  display: grid;
+  gap: 10px;
+  margin-top: 12px;
+}
+
+.restore-risk-card {
+  background: var(--bg-secondary);
+  border: 1px solid var(--border-light);
+}
+
+.restore-risk-card--danger {
+  background: color-mix(in srgb, var(--error-color) 9%, var(--bg-secondary));
+  border-color: color-mix(in srgb, var(--error-color) 35%, var(--border-light));
+}
+
+.restore-risk-card--danger svg {
+  color: var(--error-color);
+}
+
+.restore-message-list {
+  display: grid;
+  gap: 8px;
+  margin: 10px 0 0;
+  padding: 0;
+  list-style: none;
+}
+
+.restore-message-list li {
+  display: flex;
+  align-items: flex-start;
+  gap: 9px;
+  padding: 11px 12px;
+  color: var(--text-secondary);
+  background: var(--bg-secondary);
+  border: 1px solid var(--border-light);
+  border-radius: var(--radius-sm);
+  font-size: 13px;
+  line-height: 1.55;
+}
+
+.restore-message-list svg {
+  flex: 0 0 auto;
+  margin-top: 1px;
+  color: var(--warning-color, var(--accent-color));
+}
+
+.restore-blocking {
+  padding: 14px;
+  background: color-mix(in srgb, var(--error-color) 8%, var(--bg-secondary));
+  border: 1px solid color-mix(in srgb, var(--error-color) 36%, var(--border-light));
+  border-radius: var(--radius-md);
+}
+
+.restore-blocking .restore-message-list svg,
+.restore-blocking h3 {
+  color: var(--error-color);
+}
+
+.restore-confirm__warning {
+  margin-bottom: 20px;
+  background: color-mix(in srgb, var(--error-color) 10%, var(--bg-secondary));
+  border: 1px solid color-mix(in srgb, var(--error-color) 38%, var(--border-light));
+}
+
+.restore-confirm__warning > svg {
+  flex: 0 0 auto;
+  color: var(--error-color);
+}
+
+.restore-confirm :deep(.input) {
+  min-height: 44px;
+}
+
+.restore-field-help {
+  margin: 7px 0 0;
+  color: var(--text-muted);
+  font-size: 12px;
+  line-height: 1.55;
+}
+
+.restore-success {
+  padding: 8px 0;
+  text-align: center;
+}
+
+.restore-success:focus {
+  outline: 2px solid var(--accent-color);
+  outline-offset: 2px;
+}
+
+.restore-success > svg {
+  color: var(--success-color);
+}
+
+.restore-success h3 {
+  margin-top: 12px;
+  font-size: 18px;
+}
+
+.restore-result-list {
+  display: grid;
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+  gap: 8px;
+  margin: 20px 0 0;
+}
+
+.restore-result-list div {
+  padding: 12px;
+  background: var(--bg-secondary);
+  border: 1px solid var(--border-light);
+  border-radius: var(--radius-sm);
+}
+
+.restore-result-list dt {
+  color: var(--text-muted);
+  font-size: 12px;
+}
+
+.restore-result-list dd {
+  margin: 4px 0 0;
+  color: var(--text-primary);
+  font-size: 18px;
+  font-weight: 650;
+  font-variant-numeric: tabular-nums;
+}
+
+.restore-result-note {
+  margin-top: 16px !important;
+}
+
+.restore-footer {
+  display: flex;
+  justify-content: flex-end;
+  gap: 10px;
+  width: 100%;
+}
+
+@keyframes restore-spin {
+  to { transform: rotate(360deg); }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .restore-loading svg {
+    animation: none;
+  }
+}
+
 @media (max-width: 640px) {
+  .settings-section {
+    padding: 16px;
+  }
+
   .settings-item {
     flex-direction: column;
     align-items: flex-start;
@@ -464,6 +1774,39 @@ onMounted(refreshLocalState)
   .btn {
     width: 100%;
     justify-content: center;
+  }
+
+  .restore-section__heading {
+    display: block;
+  }
+
+  .restore-expiry {
+    display: inline-flex;
+    margin-top: 8px;
+  }
+
+  .restore-comparison {
+    grid-template-columns: 1fr;
+  }
+
+  .restore-comparison__item {
+    padding: 12px;
+  }
+
+  .restore-toggle {
+    width: 100%;
+  }
+
+  .restore-result-list {
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+  }
+
+  .restore-footer {
+    flex-direction: column;
+  }
+
+  .restore-footer .btn {
+    min-height: 48px;
   }
 }
 </style>

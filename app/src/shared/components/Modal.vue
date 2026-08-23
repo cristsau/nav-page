@@ -20,6 +20,10 @@ const props = defineProps({
   initialFocusSelector: {
     type: String,
     default: ''
+  },
+  closeDisabled: {
+    type: Boolean,
+    default: false
   }
 })
 
@@ -42,6 +46,7 @@ const focusableSelector = [
 ].join(',')
 
 function close() {
+  if (props.closeDisabled) return
   emit('close')
 }
 
@@ -153,7 +158,14 @@ onBeforeUnmount(() => {
         >
           <div class="modal__header">
             <h2 :id="titleId" class="modal__title">{{ title }}</h2>
-            <button ref="closeButton" type="button" class="modal__close" aria-label="关闭弹窗" @click="close">
+            <button
+              ref="closeButton"
+              type="button"
+              class="modal__close"
+              aria-label="关闭弹窗"
+              :disabled="closeDisabled"
+              @click="close"
+            >
               <Icon name="close" :size="18" />
             </button>
           </div>
@@ -228,9 +240,14 @@ onBeforeUnmount(() => {
   transition: all var(--transition-fast);
 }
 
-.modal__close:hover {
+.modal__close:hover:not(:disabled) {
   background: var(--bg-hover);
   color: var(--text-primary);
+}
+
+.modal__close:disabled {
+  opacity: 0.55;
+  cursor: not-allowed;
 }
 
 .modal__body {

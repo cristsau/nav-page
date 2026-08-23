@@ -26,6 +26,7 @@ const FALLBACK_EVENT_TYPES = [
   'auth.session.revoke',
   'auth.account.username.update',
   'auth.account.password.update',
+  'account.data.restore',
   'admin.registration.approve',
   'admin.registration.reject',
   'admin.telegram_config.update',

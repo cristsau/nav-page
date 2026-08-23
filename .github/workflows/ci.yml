@@ -68,3 +68,53 @@ jobs:
 
       - name: Build frontend
         run: npm run build --prefix app
+
+  restore-postgres-integration:
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    env:
+      NODE_ENV: test
+      DATABASE_URL: postgres://nav:nav_password@127.0.0.1:5432/nav_restore_test
+      NAV_RESTORE_INTEGRATION_TEST: "true"
+      NAV_RATE_LIMIT_KEY_SECRET: nav-restore-ci-only-secret-20260823-rotate
+      NAV_LOG_LEVEL: silent
+      CORS_ORIGIN: http://localhost:5174
+      NAV_IMGBED_BASE_URL: https://pic.integration.test
+
+    services:
+      postgres:
+        image: postgres:16-alpine
+        env:
+          POSTGRES_USER: nav
+          POSTGRES_PASSWORD: nav_password
+          POSTGRES_DB: nav_restore_test
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd "pg_isready -U nav -d nav_restore_test"
+          --health-interval 5s
+          --health-timeout 5s
+          --health-retries 10
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v6
+
+      - name: Set up Node.js
+        uses: actions/setup-node@v6
+        with:
+          node-version: 24
+          cache: npm
+          cache-dependency-path: api/package-lock.json
+
+      - name: Install API dependencies
+        run: npm ci --prefix api
+
+      - name: Apply and verify PostgreSQL migrations
+        run: |
+          npm run migrate --prefix api
+          npm run migrate --prefix api
+          npm run verify:migrations --prefix api
+
+      - name: Run isolated data restore exercise
+        run: npm run test:restore:integration --prefix api
