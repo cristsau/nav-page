@@ -91,7 +91,7 @@ jobs:
           sudo install -m 0750 scripts/nav-heartbeat.sh /usr/local/sbin/nav-heartbeat
           sudo install -m 0750 scripts/nav-job-failure-notify.sh /usr/local/sbin/nav-job-failure-notify
           sudo install -m 0644 docs/NAV_BACKUP_RUNBOOK.md /usr/share/doc/domo-nav/NAV_BACKUP_RUNBOOK.md
-          systemd-analyze verify ops/systemd/*.service ops/systemd/*.timer
+          sudo systemd-analyze verify ops/systemd/*.service ops/systemd/*.timer
 
       - name: Exercise production acceptance shell lifecycle
         env:
