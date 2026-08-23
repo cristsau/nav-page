@@ -1,6 +1,6 @@
 # DOMO NAV Status Report
 
-最后更新：2026-08-23
+最后更新：2026-08-24
 
 本页区分 `VERIFIED_LIVE`、`PARTIAL` 和 `UNFINISHED`。仓库中存在脚本或代码，不等于生产
 已经安装、启用或形成灾难恢复闭环；每次发布前仍须重新读取 GitHub、OVH 与双域状态。
@@ -9,7 +9,7 @@
 
 - GitHub：`cristsau/nav-page`（Private），默认分支 `master`。
 - 2026-08-23 最后完成生产验收的 merge SHA：
-  `9b0501389de797c99ec646103780b4b83aa4be56`（PR #32）。当前 `origin/master` 必须现场核验。
+  `25c9c133ad6c34b857cf13c293aa5a89c8ef04d7`（PR #34）。当前 `origin/master` 必须现场核验。
 - 当前生产源码包含的连续 PR：
   - [#28 发布文档校准](https://github.com/cristsau/nav-page/pull/28)
   - [#29 异地备份调度候选](https://github.com/cristsau/nav-page/pull/29)（源码已包含，运行环境仍为
@@ -21,24 +21,26 @@
   - [#27 后台任务可观测性](https://github.com/cristsau/nav-page/pull/27)
 - 最新合并并发布的应用 PR：
   - [#32 维护通知投递与 PostgreSQL 集成门禁](https://github.com/cristsau/nav-page/pull/32)
-- 当前 OVH release：`/opt/nav-stack/releases/20260823-191619-9b05013`。
-- 当前 API 镜像：`nav-ovh-api:9b0501389de797c99ec646103780b4b83aa4be56`。
-- 应用回滚目标：上一 release `/opt/nav-stack/releases/20260822-162146-5a42279`，提交
-  `5a42279e7fba2d9f378ae7e6532f7e1f2464ef6a`；迁移 018 为加法迁移，应用回滚时保留。
+  - [#33 一次性管理员与发布验收门禁](https://github.com/cristsau/nav-page/pull/33)
+  - [#34 主机 CIDR 精确验收修复](https://github.com/cristsau/nav-page/pull/34)
+- 当前 OVH release：`/opt/nav-stack/releases/20260823-233024-25c9c13`。
+- 当前 API 镜像：`nav-ovh-api:25c9c133ad6c34b857cf13c293aa5a89c8ef04d7`。
+- 应用回滚目标：上一 release `/opt/nav-stack/releases/20260823-191619-9b05013`，提交
+  `9b0501389de797c99ec646103780b4b83aa4be56`；迁移 018 为加法迁移，应用回滚时保留。
 - 生产域名：
   - `https://nav.skrskr.net`
   - `https://nav.cristsau.cn`
 - 2026-08-23 只读复核：双域首页与 `/api/health` 均为 200，API/Web/PostgreSQL 健康；
   CLIProxyAPI、Nginx Proxy Manager、Vaultwarden 和 Komari 保持运行。
 
-PR #30 的图片删除重试告警正确性、PR #31 的云端安全恢复，以及 PR #32 的 Telegram 精确
-目标投递与独立 PostgreSQL 16 维护演练，均已进入上述生产 SHA 并完成双域验收。当前状态为
-`VERIFIED_LIVE`。当前仓库分支可能在本文提交后继续前进，不能用本快照替代 Git 现场核验。
+PR #30 的图片删除重试告警正确性、PR #31 的云端安全恢复、PR #32 的 Telegram 精确目标
+投递与独立 PostgreSQL 16 维护演练，以及 PR #33/#34 的一次性管理员发布验收生命周期与
+主机 CIDR 精确校验，均已进入上述生产 SHA 并完成验收。当前状态为 `VERIFIED_LIVE`。当前
+仓库分支可能在本文提交后继续前进，不能用本快照替代 Git 现场核验。
 
-本地候选 `codex/nav-release-acceptance-ephemeral-20260823` 正在补齐不读取真实管理员密码的
-一次性登录态验收生命周期、30 分钟服务端过期保护、固定 canonical 备份锁、强杀恢复、真实
-PostgreSQL 16 账号/备份门禁和发布文档。它尚未推送、合并或发布，状态为
-`LOCAL_DONE / READY_FOR_GITHUB_CI / NOT_DEPLOYED`；当前生产仍是 `9b05013`。
+一次性管理员工具已在首次生产发布中完成 `status=PASS / cleanup=PASS`。临时账号、marker 与
+`/run/nav-release-acceptance.*` 私有目录均清零；真实管理员长期密码没有进入 release，也未被
+该生命周期读取或修改。
 
 ## 当前生产已完成
 
@@ -89,19 +91,23 @@ PostgreSQL 16 账号/备份门禁和发布文档。它尚未推送、合并或�
 
 ## 最新生产发布与恢复证据
 
-- PR #32 分支、PR 与合并后 `master` 的 GitHub Actions 均通过；`test-and-build`、
-  `restore-postgres-integration` 与 `maintenance-postgres-integration` 三项均成功。
+- PR #33 与 #34 已合并；最终 `master` CI `32648707198` 的 `test-and-build`、
+  `release-acceptance-postgres-integration`、`restore-postgres-integration` 与
+  `maintenance-postgres-integration` 四项均成功。
 - 源码归档 SHA-256 在 OVH 解包前核验；API 与 Vite 在隔离构建容器中构建。
 - 发布前 PostgreSQL 备份在无网络临时 PostgreSQL 16 中恢复为 17 张表、17 条迁移；本次
   没有新迁移，新 API 镜像的只读迁移校验通过。
 - 加法迁移 `018_maintenance_observability.sql` 保持已应用并固定写入两条任务状态。
-- 只重建 `nav-api` 与 `nav-web`；PostgreSQL、CLIProxyAPI、NPM、Vaultwarden 和 Komari 未重建，
-  发布验收时重启计数保持 0。
+- 本次只重建 `nav-api`；`nav-web`、PostgreSQL、CLIProxyAPI、NPM、Vaultwarden 和 Komari
+  容器 ID 均保持不变，API 健康且重启计数为 0。
 - 双域通过健康、精确前端、CORS、登录会话、后台状态、缓存和退出验收。
 - 发布后备份同样在无网络临时 PostgreSQL 16 中恢复为 17 张表、17 条迁移。
+- 一次性管理员创建、登录、会话和精确清理通过；发布后临时账号、marker 与运行时私有目录
+  均为 0。
 - 脱敏验收证据保存在当前 OVH release 的受限 `evidence` 目录；文件包括
   `FINAL_ACCEPTANCE.txt`、`BACKUP_RESTORE_ACCEPTANCE.txt` 和
-  `POST_BACKUP_RESTORE_ACCEPTANCE.txt`。
+  `POST_BACKUP_RESTORE_ACCEPTANCE.txt`，以及不含凭据的
+  `ACCEPTANCE_ACCOUNT_LIFECYCLE.txt`。
 
 ## 备份与恢复现状（PARTIAL）
 
@@ -111,7 +117,7 @@ PostgreSQL 16 账号/备份门禁和发布文档。它尚未推送、合并或�
   双 dead-man 心跳、最新备份选择器和只安装不启用的部署脚本；生产配置和现场验收完成前
   状态仍是 `SOURCE_READY / NOT_DEPLOYED`。
 - 2026-08-23 OVH 只读核验确认：未安装 `restic`，没有 NAV/restic systemd unit 或 timer，
-  也没有 `/etc/nav/nav-backup.env`、`/etc/nav/restic.env` 和 `/usr/local/sbin` 稳定入口。
+  也没有 `/etc/nav/nav-backup.env`、`/etc/nav/restic-r2.env` 和 `/usr/local/sbin` 稳定入口。
 - 因此当前没有自动计划、异地加密上传、远端保留清理、备份失败外部报警或定期恢复演练。
 - 图床对象和外层代理配置尚未纳入独立、可在干净环境验证的完整生态恢复。
 

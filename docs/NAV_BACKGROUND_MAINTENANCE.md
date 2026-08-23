@@ -4,10 +4,14 @@ Status on 2026-08-23:
 
 - bounded security-event retention, image-delete retry, persistent job status and
   in-process Telegram failure/recovery alerts: `VERIFIED_LIVE` in production SHA
-  `9b0501389de797c99ec646103780b4b83aa4be56`;
+  `25c9c133ad6c34b857cf13c293aa5a89c8ef04d7`;
 - migration `018` is applied, the two fixed job rows exist, both workers have a
   successful run, and production alerts are enabled after a labelled Telegram
   target test.
+
+The maintenance feature set was first released through PR #32. PR #33/#34 did
+not add a migration; the latest API-only release repeated the PostgreSQL 16
+maintenance gate and dual-domain status acceptance successfully.
 
 This document contains no credentials, private data or real environment values.
 
@@ -152,12 +156,13 @@ the required pattern for later releases:
 8. Confirm health, container restart counts, API logs, dual-domain CORS, image
    library, AI and existing background-worker behavior.
 
-The current verified application rollback is to disable
-`NAV_MAINTENANCE_ALERTS_ENABLED`, restore the previous release
-`/opt/nav-stack/releases/20260822-162146-5a42279` at SHA
-`5a42279e7fba2d9f378ae7e6532f7e1f2464ef6a`, and rebuild only API/Web. Migration
-`018` is additive and may safely remain; do not drop the table or rewrite
-migration history during an incident.
+The current verified application rollback entry is
+`/opt/nav-stack/releases/20260823-233024-25c9c13/rollback-release.sh`; its fixed
+target is `/opt/nav-stack/releases/20260823-191619-9b05013` at SHA
+`9b0501389de797c99ec646103780b4b83aa4be56`. Migration `018` is additive and may
+safely remain; do not drop the table or rewrite migration history during an
+incident. Disabling `NAV_MAINTENANCE_ALERTS_ENABLED` is a separate mitigation
+only when alert delivery itself is faulty, not a default rollback step.
 
 ## Still outside this batch
 

@@ -86,7 +86,8 @@ DOMO NAV 是面向个人与小团队的私有化导航工作台。产品主线�
 
 - 主域名：[https://nav.skrskr.net](https://nav.skrskr.net)
 - 反代域名：[https://nav.cristsau.cn](https://nav.cristsau.cn)
-- 当前已验证提交：`9b0501389de797c99ec646103780b4b83aa4be56`
+- 当前已验证提交：`25c9c133ad6c34b857cf13c293aa5a89c8ef04d7`
+- 当前 release：`/opt/nav-stack/releases/20260823-233024-25c9c13`
 
 生产发布、回滚和外部配置边界见 [DEPLOYMENT.md](./DEPLOYMENT.md)。
 
