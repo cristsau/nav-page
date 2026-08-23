@@ -56,7 +56,7 @@ export const RECORD_MAINTENANCE_FAILURE_SQL = `
         last_failed_at = $3,
         last_duration_ms = $4,
         last_outcome = 'failed',
-        last_result = '{}'::jsonb,
+        last_result = $9::jsonb,
         consecutive_failures = decision.next_failure_count,
         last_error_code = $5,
         alert_open = status.alert_open OR decision.should_notify,
@@ -70,6 +70,15 @@ export const RECORD_MAINTENANCE_FAILURE_SQL = `
     RETURNING status.*, decision.should_notify
   )
   SELECT * FROM updated
+`
+
+export const RECORD_MAINTENANCE_PROGRESS_SQL = `
+  UPDATE maintenance_job_status
+  SET last_started_at = $2,
+      last_duration_ms = $3,
+      last_result = $4::jsonb,
+      updated_at = NOW()
+  WHERE job_name = $1
 `
 
 export const RECORD_MAINTENANCE_NOTIFICATION_SQL = `
@@ -93,7 +102,11 @@ const RESULT_FIELDS = Object.freeze({
     'failed',
     'referenced',
     'notPending',
-    'errors'
+    'errors',
+    'remaining',
+    'eligible',
+    'deferred',
+    'exhausted'
   ]
 })
 
@@ -251,6 +264,18 @@ export function createMaintenanceJobObserver({
   )
 
   return {
+    async deferred({ result, startedAt, durationMs }) {
+      if (result?.skipped) return
+      const started = normalizeTimestamp(startedAt)
+      const summary = summarizeMaintenanceResult(jobName, result)
+      await poolInstance.query(RECORD_MAINTENANCE_PROGRESS_SQL, [
+        jobName,
+        started,
+        normalizeDuration(durationMs),
+        JSON.stringify(summary)
+      ])
+    },
+
     async succeeded({ result, startedAt, finishedAt, durationMs }) {
       if (result?.skipped) return
       const started = normalizeTimestamp(startedAt)
@@ -279,7 +304,7 @@ export function createMaintenanceJobObserver({
       }
     },
 
-    async failed({ error, startedAt, finishedAt, durationMs }) {
+    async failed({ error, result, startedAt, finishedAt, durationMs }) {
       const started = normalizeTimestamp(startedAt)
       const finished = normalizeTimestamp(finishedAt)
       const errorCode = sanitizeMaintenanceErrorCode(error)
@@ -291,7 +316,8 @@ export function createMaintenanceJobObserver({
         errorCode,
         Boolean(alertsEnabled),
         threshold,
-        cooldownSeconds
+        cooldownSeconds,
+        JSON.stringify(summarizeMaintenanceResult(jobName, result))
       ])
       const state = rows[0]
       if (state?.should_notify === true) {

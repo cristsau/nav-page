@@ -5,13 +5,18 @@
 本页区分 `VERIFIED_LIVE`、`PARTIAL` 和 `UNFINISHED`。仓库中存在脚本或代码，不等于生产
 已经安装、启用或形成灾难恢复闭环；每次发布前仍须重新读取 GitHub、OVH 与双域状态。
 
-## 当前生产基线（VERIFIED_LIVE）
+## 当前源码与生产基线
 
 - GitHub：`cristsau/nav-page`（Private），默认分支 `master`。
-- 最新合并并发布 PR：
+- 2026-08-23 当前 GitHub `origin/master`：
+  `3525147298b495ccf63a985698d8e378ea5506b3`（PR #29）。这是源码基线，不是生产版本证明。
+- 最新合并但尚未发布的 PR：
+  - [#28 发布文档校准](https://github.com/cristsau/nav-page/pull/28)
+  - [#29 异地备份调度候选](https://github.com/cristsau/nav-page/pull/29)
+- 最新已合并并发布的应用 PR：
   - [#26 有界后台维护](https://github.com/cristsau/nav-page/pull/26)
   - [#27 后台任务可观测性](https://github.com/cristsau/nav-page/pull/27)
-- 当前 GitHub `master` 与 OVH 应用提交：
+- 最后完成 OVH 双域验收的应用提交（`VERIFIED_LIVE` 快照）：
   `5a42279e7fba2d9f378ae7e6532f7e1f2464ef6a`。
 - 当前 OVH release：`/opt/nav-stack/releases/20260822-162146-5a42279`。
 - 应用回滚基线：`369024f9883a87fb0e1bc05a7665cb2e76437ae2`；迁移 018 为加法迁移，
@@ -21,6 +26,11 @@
   - `https://nav.cristsau.cn`
 - 2026-08-23 只读复核：双域首页与 `/api/health` 均为 200，API/Web/PostgreSQL 健康；
   CLIProxyAPI、Nginx Proxy Manager、Vaultwarden 和 Komari 保持运行。
+
+当前独立源码候选 `codex/nav-media-alert-correctness-20260823` 修复图片删除重试把
+未解决失败误记为成功的问题：本轮失败、异常和重试耗尽记为失败；仅退避或批次剩余只更新
+进度；只有总积压归零才允许清除告警并发送恢复通知。该候选在合并和精确 SHA 发布前均为
+`NOT_DEPLOYED`。
 
 ## 当前生产已完成
 
@@ -69,7 +79,7 @@
   21600 秒，恢复后通知一次。
 - 运行内告警无法报告 OVH 主机、容器、网络或调度器整体离线，仍需主机外 dead-man。
 
-## 最新发布与恢复证据
+## 最新生产发布与恢复证据
 
 - PR #27 分支、PR 与合并后 `master` 的 GitHub Actions 均通过。
 - 源码归档 SHA-256 在 OVH 解包前核验；API 与 Vite 在隔离构建容器中构建。
@@ -102,6 +112,8 @@
 - 安全 JSON 导入导出可用；尚无 Chrome/Edge 书签 HTML、Markdown 批量导入导出与一键
   完整生态恢复。
 - PWA 元数据和主屏幕图标可用；尚无完整 Service Worker、离线缓存和推送。
+- 云端 JSON 恢复仍缺少管理员密码二次确认、只读 dry-run 差异预览和更明确的恢复边界；
+  在这些门禁补齐前，不应把在线导入当作完整灾难恢复工具。
 
 ## 仍未完成
 

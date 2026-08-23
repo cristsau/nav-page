@@ -41,6 +41,45 @@ export const SELECT_MEDIA_DELETE_RETRY_CANDIDATES_SQL = `
   LIMIT $4
 `
 
+export const SELECT_MEDIA_DELETE_RETRY_BACKLOG_SQL = `
+  SELECT
+    COUNT(*)::integer AS remaining,
+    COUNT(*) FILTER (
+      WHERE delete_attempts >= $1
+    )::integer AS exhausted,
+    COUNT(*) FILTER (
+      WHERE delete_attempts < $1
+        AND (
+          last_delete_attempt_at IS NULL
+          OR last_delete_attempt_at <= CURRENT_TIMESTAMP - (
+            LEAST(
+              $3::numeric,
+              $2::numeric * POWER(
+                2,
+                LEAST(GREATEST(delete_attempts - 1, 0), 20)
+              )
+            ) * INTERVAL '1 second'
+          )
+        )
+    )::integer AS eligible,
+    COUNT(*) FILTER (
+      WHERE delete_attempts < $1
+        AND last_delete_attempt_at IS NOT NULL
+        AND last_delete_attempt_at > CURRENT_TIMESTAMP - (
+          LEAST(
+            $3::numeric,
+            $2::numeric * POWER(
+              2,
+              LEAST(GREATEST(delete_attempts - 1, 0), 20)
+            )
+          ) * INTERVAL '1 second'
+        )
+    )::integer AS deferred
+  FROM media_assets
+  WHERE retention = 'auto'
+    AND state IN ('delete_pending', 'delete_failed')
+`
+
 const STARTUP_DELAY_MS = 30_000
 
 async function notifyObserver(observer, method, payload, logger) {
@@ -110,9 +149,31 @@ function emptyResult(overrides = {}) {
     referenced: 0,
     notPending: 0,
     errors: 0,
+    remaining: 0,
+    eligible: 0,
+    deferred: 0,
+    exhausted: 0,
     skipped: null,
     ...overrides
   }
+}
+
+function normalizeBacklogCount(value) {
+  const count = Number(value || 0)
+  return Number.isSafeInteger(count) && count >= 0 ? count : 0
+}
+
+export function mediaDeleteRetryFailureCode(result = {}) {
+  if (normalizeBacklogCount(result.errors) > 0) {
+    return 'MEDIA_DELETE_RETRY_ERROR'
+  }
+  if (normalizeBacklogCount(result.exhausted) > 0) {
+    return 'MEDIA_DELETE_RETRY_EXHAUSTED'
+  }
+  if (normalizeBacklogCount(result.failed) > 0) {
+    return 'MEDIA_DELETE_RETRY_FAILED'
+  }
+  return ''
 }
 
 export async function retryPendingMediaDeletions({
@@ -165,6 +226,20 @@ export async function retryPendingMediaDeletions({
         onError?.(error, candidate)
       }
     }
+
+    const backlogResult = await client.query(
+      SELECT_MEDIA_DELETE_RETRY_BACKLOG_SQL,
+      [
+        validatedPolicy.maxAttempts,
+        validatedPolicy.baseBackoffSeconds,
+        validatedPolicy.maxBackoffSeconds
+      ]
+    )
+    const backlog = backlogResult.rows[0] || {}
+    result.remaining = normalizeBacklogCount(backlog.remaining)
+    result.eligible = normalizeBacklogCount(backlog.eligible)
+    result.deferred = normalizeBacklogCount(backlog.deferred)
+    result.exhausted = normalizeBacklogCount(backlog.exhausted)
 
     return result
   } catch (error) {
@@ -223,14 +298,27 @@ export function startMediaDeleteRetry({
       }))
       .then(async (result) => {
         const finishedAtMs = clock()
-        await notifyObserver(observer, 'succeeded', {
+        const observation = {
           result,
           startedAt: new Date(startedAtMs),
           finishedAt: new Date(finishedAtMs),
           durationMs: Math.max(0, finishedAtMs - startedAtMs)
-        }, logger)
-        if (result?.processed > 0) {
-          const log = result.failed > 0 || result.errors > 0
+        }
+        const failureCode = mediaDeleteRetryFailureCode(result)
+        if (failureCode) {
+          const error = Object.assign(new Error(failureCode), { code: failureCode })
+          await notifyObserver(observer, 'failed', { ...observation, error }, logger)
+        } else if (Number(result?.remaining || 0) > 0) {
+          await notifyObserver(observer, 'deferred', observation, logger)
+        } else {
+          await notifyObserver(observer, 'succeeded', observation, logger)
+        }
+        if (
+          Number(result?.processed || 0) > 0
+          || Number(result?.remaining || 0) > 0
+          || failureCode
+        ) {
+          const log = failureCode
             ? logger?.warn
             : logger?.info
           log?.call(logger, result, 'media delete retry batch finished')
