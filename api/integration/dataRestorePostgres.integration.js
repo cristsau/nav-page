@@ -109,6 +109,7 @@ function mediaFixture(userId, index, namespace = 70) {
     name: `restore-${namespace}-${index}.webp`,
     mime: 'image/webp',
     size: 1024 + index,
+    createdAt: '2026-08-23T00:00:00.000Z',
     source: 'reconciled',
     retention: 'auto',
     state: 'active'
