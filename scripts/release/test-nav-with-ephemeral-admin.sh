@@ -90,7 +90,7 @@ case "$command" in
       marker_count=0
       user_count=0
     fi
-    printf '{"ok":true,"markerCount":%s,"userCount":%s,"databaseName":"nav","databaseOid":"16384","databaseServerAddress":"172.20.0.2","databaseServerPort":5432,"serverVersionNum":"160010"}\n' \
+    printf '{"ok":true,"markerCount":%s,"userCount":%s,"databaseName":"nav","databaseOid":"16384","databaseServerAddress":"172.20.0.2/32","databaseServerPort":5432,"serverVersionNum":"160010"}\n' \
       "$marker_count" "$user_count"
     ;;
   provision)
