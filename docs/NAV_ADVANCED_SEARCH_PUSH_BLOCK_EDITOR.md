@@ -1,11 +1,28 @@
 # NAV 混合搜索、Web Push 与块编辑器
 
 更新时间：2026-08-24
-源码状态：`LOCAL_DONE / READY_FOR_CI / NOT_DEPLOYED`
+源码状态：`VERIFIED_LIVE`（真实设备通知授权为 `USER_ACTION_REQUIRED`）
 
 本批由迁移 `023_hybrid_workspace_search.sql`、`024_web_push.sql` 和
-`025_block_editor.sql` 提供。只有 GitHub Linux CI、PostgreSQL 16 隔离迁移/恢复、OVH
-发布前备份与生产验收全部通过后，才能把状态改为 `VERIFIED_LIVE`。
+`025_block_editor.sql` 提供。PR #37 已合并为 `a9eff0d7888fd29f8888a503a336af86371c3b80`，
+PR #38 已把恢复就绪竞态与 Service Worker 缓存加固合并为
+`788be84c766470d0dce845b282aa246286f77d67`。GitHub Linux CI、PostgreSQL 16 隔离迁移/恢复、
+OVH 发布前后备份和生产验收均已通过。
+
+## 生产验收快照
+
+- OVH release：`/opt/nav-stack/releases/20260824-031310-a9eff0d`。
+- API 镜像：`nav-ovh-api:a9eff0d7888fd29f8888a503a336af86371c3b80`。
+- 最终 master CI：`32689782306`，五个作业全部成功。
+- 数据库迁移 ledger 已精确核对到 `025_block_editor.sql`；发布后备份在隔离 PostgreSQL 16
+  中恢复为 25 张表。
+- 双域健康/CORS、一次性管理员登录与清理、混合检索 `searchMode=hybrid`、块笔记创建和版本、
+  Web Push 配置/公钥、PWA 静态资源与缓存头均通过。
+- `nav-api` 与 `nav-web` 之外的容器未重建；PostgreSQL、CLIProxyAPI、NPM 及其他服务保持原状。
+- 本机没有执行 npm 测试或构建；完整依赖、测试和 Vite 构建由 GitHub CI 与 OVH 完成。
+- Web Push 服务器链已验证，但浏览器权限不能代授权。Chrome/Edge 需在当前设备启用；iPhone/iPad
+  需先添加到主屏幕，再从主屏幕打开并授权通知。只有收到真实设备测试通知后，才能把该项
+  从 `USER_ACTION_REQUIRED` 改为端到端真机通过。
 
 ## 混合站内搜索
 
