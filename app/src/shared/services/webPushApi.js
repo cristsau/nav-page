@@ -3,6 +3,24 @@ import { getPwaRegistration } from './pwa'
 
 const LOCAL_SUBSCRIPTION_ID_KEY = 'domo-nav-web-push-subscription-id'
 
+function stagedWebPushError(error, stage) {
+  const wrapped = new Error(error?.message || 'Web Push operation failed')
+  wrapped.name = error?.name || 'Error'
+  wrapped.status = Number(error?.status || 0)
+  wrapped.code = String(error?.code || '')
+  wrapped.webPushStage = stage
+  wrapped.cause = error
+  return wrapped
+}
+
+async function runWebPushStage(stage, operation) {
+  try {
+    return await operation()
+  } catch (error) {
+    throw stagedWebPushError(error, stage)
+  }
+}
+
 function applicationServerKey(value) {
   const padding = '='.repeat((4 - (value.length % 4)) % 4)
   const base64 = `${value}${padding}`.replace(/-/g, '+').replace(/_/g, '/')
@@ -35,32 +53,93 @@ export function fetchWebPushStatus() {
   return apiRequest('/web-push/status')
 }
 
+export async function inspectCurrentWebPushDevice({ publicKey = '' } = {}) {
+  const capability = webPushBrowserCapability()
+  const result = {
+    ...capability,
+    serviceWorkerReady: false,
+    browserSubscribed: false,
+    applicationServerKeyMatches: null,
+    providerHost: '',
+    localSubscriptionId: currentWebPushSubscriptionId(),
+    errorStage: ''
+  }
+  if (!capability.supported) return result
+
+  let registration
+  try {
+    registration = await getPwaRegistration()
+  } catch {
+    result.errorStage = 'service-worker'
+    return result
+  }
+  if (!registration) {
+    result.errorStage = 'service-worker'
+    return result
+  }
+  result.serviceWorkerReady = true
+
+  let subscription
+  try {
+    subscription = await registration.pushManager.getSubscription()
+  } catch {
+    result.errorStage = 'browser-subscription'
+    return result
+  }
+  if (!subscription) return result
+
+  result.browserSubscribed = true
+  if (publicKey) {
+    result.applicationServerKeyMatches = equalApplicationServerKey(subscription, publicKey)
+  }
+  try {
+    result.providerHost = new URL(subscription.endpoint).hostname
+  } catch {
+    result.providerHost = ''
+  }
+  return result
+}
+
 export async function enableWebPush({ publicKey, deviceLabel }) {
   if (!webPushBrowserCapability().supported) {
     throw new Error('当前浏览器或安装方式不支持后台通知')
   }
-  const permission = await Notification.requestPermission()
-  if (permission !== 'granted') throw new Error('通知权限未获允许')
-  const registration = await getPwaRegistration()
-  if (!registration) throw new Error('Service Worker 尚未就绪')
-  let subscription = await registration.pushManager.getSubscription()
+  const permission = await runWebPushStage(
+    'permission',
+    () => Notification.requestPermission()
+  )
+  if (permission !== 'granted') {
+    throw stagedWebPushError(new Error('通知权限未获允许'), 'permission')
+  }
+  const registration = await runWebPushStage('service-worker', getPwaRegistration)
+  if (!registration) throw stagedWebPushError(new Error('Service Worker 尚未就绪'), 'service-worker')
+  let subscription = await runWebPushStage(
+    'browser-subscription',
+    () => registration.pushManager.getSubscription()
+  )
   if (subscription && !equalApplicationServerKey(subscription, publicKey)) {
-    await subscription.unsubscribe()
+    await runWebPushStage('browser-subscription', () => subscription.unsubscribe())
     subscription = null
   }
   if (!subscription) {
-    subscription = await registration.pushManager.subscribe({
-      userVisibleOnly: true,
-      applicationServerKey: applicationServerKey(publicKey)
-    })
+    subscription = await runWebPushStage(
+      'browser-subscription',
+      () => registration.pushManager.subscribe({
+        userVisibleOnly: true,
+        applicationServerKey: applicationServerKey(publicKey)
+      })
+    )
   }
-  const result = await apiRequest('/web-push/subscriptions', {
-    method: 'POST',
-    body: JSON.stringify({
-      subscription: subscription.toJSON(),
-      deviceLabel
+  const result = await runWebPushStage(
+    'server-registration',
+    () => apiRequest('/web-push/subscriptions', {
+      method: 'POST',
+      body: JSON.stringify({
+        subscription: subscription.toJSON(),
+        deviceLabel
+      })
     })
-  })
+  )
   if (result.subscription?.id) {
     localStorage.setItem(LOCAL_SUBSCRIPTION_ID_KEY, result.subscription.id)
   }
