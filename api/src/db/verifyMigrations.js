@@ -317,7 +317,12 @@ async function verifyProductivityCompletionSchema() {
     ) {
       throw new Error(`${row.conname} definition mismatch`)
     }
-    assertExactSequence(`${row.conname} columns`, row.columns, expected.columns)
+    // PostgreSQL does not guarantee conkey for CHECK constraints. Their exact
+    // column expression is already covered by pg_get_constraintdef above.
+    // Key/FK constraints must still expose an exact, ordered column list.
+    if (expected.type !== 'c') {
+      assertExactSequence(`${row.conname} columns`, row.columns, expected.columns)
+    }
 
     if (expected.type === 'f') {
       if (

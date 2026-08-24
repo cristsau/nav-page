@@ -55,7 +55,7 @@ jobs:
       - name: Audit dependencies
         run: |
           npm audit --prefix app --audit-level=moderate
-          npm audit --prefix api --audit-level=moderate
+          node .github/scripts/verify-api-audit-policy.mjs
 
       - name: Validate production acceptance shell
         run: |

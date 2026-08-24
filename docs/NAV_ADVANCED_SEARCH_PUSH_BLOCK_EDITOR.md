@@ -36,6 +36,17 @@ NAV_EMBEDDING_SCHEDULER_BATCH_SIZE=24
 启用语义搜索前必须在精确发布镜像中执行 `npm run prewarm:embeddings --prefix api`，确认固定
 revision 可下载、可加载并生成有效向量；失败时不得启用语义开关。
 
+### 依赖审计边界
+
+本地向量模型运行时当前通过 `@huggingface/transformers@4.2.0` 引入
+`onnxruntime-node@1.24.3`、`sharp@0.34.5` 与 `adm-zip@0.5.18`。截至本候选版，
+npm 对 `sharp` 和 `adm-zip` 各报告一项上游暂无修复的高等级公告。NAV 不把用户上传的
+图片或压缩包交给该运行时，模型仓库与 revision 固定，模型缓存只由发布预热任务写入。
+
+CI 不会全局忽略告警：`.github/scripts/verify-api-audit-policy.mjs` 仅允许这两个公告、上述
+四个精确包版本及其唯一传递链。新增公告、包版本漂移、无法追溯的传递依赖或其他中高危
+问题都会继续阻断发布。上游提供修复版本后，应移除例外并升级锁文件。
+
 ## 页面关闭后的 Web Push
 
 - 浏览器在用户主动授权后生成 Push subscription；VAPID 私钥只从 release-local、只读 Secret
