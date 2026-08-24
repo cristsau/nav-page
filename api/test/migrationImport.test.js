@@ -67,7 +67,10 @@ test('legacy import is blocked and apply requires preview, password and a locked
   assert.match(source, /assessBackendExportRestoreCompatibility/)
   assert.match(source, /currentPassword: '\\u0000'\.repeat\(DATA_RESTORE_MAX_PASSWORD_LENGTH\)/)
   assert.match(source, /requestBytes > DATA_RESTORE_BODY_LIMIT/)
-  assert.match(source, /if \(!restoreCompatibility\.restorable\)[\s\S]*?restore_safety_backup_incompatible/)
+  assert.match(
+    source,
+    /if \(!restoreCompatibility\.restorable && !restoreCompatibility\.streamRestorable\)[\s\S]*?restore_safety_backup_incompatible/
+  )
   assert.match(source, /if \(!blockingErrors\.length\) \{[\s\S]*?createDataRestorePreviewToken/)
   assert.match(source, /SET LOCAL statement_timeout = '60s'/)
   assert.match(source, /status = 'approved'[\s\S]*?FROM sessions[\s\S]*?expires_at > NOW\(\)[\s\S]*?FOR UPDATE/)

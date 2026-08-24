@@ -35,6 +35,7 @@ declare -a scripts=(
   nav-restore-rehearsal.sh
   nav-restore-latest.sh
   nav-restore-cloud-latest.sh
+  nav-disaster-restore.sh
   nav-heartbeat.sh
   nav-job-failure-notify.sh
 )
@@ -63,6 +64,7 @@ install -d -o root -g root -m 0700 \
   /var/backups/nav-cloud-restore \
   /var/backups/nav-restic-evidence \
   /var/backups/nav-rehearsal-reports
+  /var/backups/nav-disaster-rollback
 install -d -o root -g root -m 0755 /usr/share/doc/domo-nav
 
 for name in "${scripts[@]}"; do

@@ -1,7 +1,12 @@
 import { isBackendAuthEnabled } from '@/shared/services/authApi'
-import { apiRequest as request } from '@/shared/services/apiClient'
+import {
+  apiFileRequest,
+  apiRequest as request
+} from '@/shared/services/apiClient'
 
 export const DATA_RESTORE_MAX_FILE_BYTES = 16 * 1024 * 1024
+export const DATA_RESTORE_MAX_STREAM_FILE_BYTES = 128 * 1024 * 1024
+export const DATA_RESTORE_STREAM_CONTENT_TYPE = 'application/x-domo-nav-backup-ndjson'
 
 const REQUIRED_RESTORE_COLLECTIONS = Object.freeze([
   'groups',
@@ -41,6 +46,11 @@ function restoreRequestBody(payload) {
   return body
 }
 
+function restorePayload(backupOrUpload) {
+  const uploadId = String(backupOrUpload?.uploadId || '').trim()
+  return uploadId ? { uploadId } : { backup: backupOrUpload }
+}
+
 export function createCloudRestoreBackup(backup) {
   const data = requireBackupData(backup)
   if (
@@ -76,11 +86,11 @@ export function createLocalRestoreBackup(backup) {
   }
 }
 
-export async function previewBackendRestore(backup, {
+export async function previewBackendRestore(backupOrUpload, {
   restoreShares = false
 } = {}) {
   const body = restoreRequestBody({
-    backup,
+    ...restorePayload(backupOrUpload),
     mode: 'replace',
     restoreShares: restoreShares === true
   })
@@ -91,7 +101,7 @@ export async function previewBackendRestore(backup, {
   })
 }
 
-export async function applyBackendRestore(backup, {
+export async function applyBackendRestore(backupOrUpload, {
   restoreShares = false,
   planToken,
   backupReceipt,
@@ -99,7 +109,7 @@ export async function applyBackendRestore(backup, {
   confirmation
 } = {}) {
   const body = restoreRequestBody({
-    backup,
+    ...restorePayload(backupOrUpload),
     mode: 'replace',
     restoreShares: restoreShares === true,
     planToken: String(planToken || ''),
@@ -118,6 +128,28 @@ export async function exportBackendData() {
   return request('/migration/export-cloud', {
     method: 'GET',
     cache: 'no-store'
+  })
+}
+
+export async function exportBackendDataStream() {
+  return apiFileRequest('/migration/export-cloud-stream', {
+    method: 'GET',
+    cache: 'no-store'
+  })
+}
+
+export async function uploadBackendRestoreStream(file) {
+  if (!(file instanceof Blob)) throw new TypeError('流式恢复文件无效')
+  if (file.size > DATA_RESTORE_MAX_STREAM_FILE_BYTES) {
+    throw new Error('流式恢复文件不能超过 128 MB')
+  }
+  return request('/migration/restore/stream-upload', {
+    method: 'POST',
+    cache: 'no-store',
+    headers: {
+      'Content-Type': DATA_RESTORE_STREAM_CONTENT_TYPE
+    },
+    body: file
   })
 }
 

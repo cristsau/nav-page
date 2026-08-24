@@ -16,6 +16,7 @@ const scriptFiles = [
   'scripts/nav-restore-rehearsal.sh',
   'scripts/nav-restore-latest.sh',
   'scripts/nav-restore-cloud-latest.sh',
+  'scripts/nav-disaster-restore.sh',
   'scripts/nav-heartbeat.sh',
   'scripts/nav-job-failure-notify.sh',
   'scripts/install-nav-backup-systemd.sh'
@@ -141,9 +142,121 @@ test('cloud restore is double-gated, uses the bounded backup root, and restores 
   assert.doesNotMatch(offsiteExample, /cloudflarestorage\.com|[0-9a-f]{32,}/i)
 })
 
+test('complete disaster restore is independently gated and captures rollback before mutation', async () => {
+  const restore = await read('scripts/nav-disaster-restore.sh')
+  const example = await read('scripts/nav-backup.env.example')
+  const verification = restore.indexOf('complete backup verification')
+  const applyGate = restore.indexOf('is_true "$NAV_ENABLE_DISASTER_RESTORE"', verification)
+  const rollbackDatabase = restore.indexOf('database-before.dump')
+  const stop = restore.indexOf('application and proxy stop')
+  const databaseRestore = restore.indexOf('PostgreSQL restore')
+  const imageRestore = restore.indexOf('image object restore')
+
+  assert.ok(verification >= 0 && applyGate > verification)
+  assert.ok(rollbackDatabase >= 0 && rollbackDatabase < stop)
+  assert.ok(stop < databaseRestore && databaseRestore < imageRestore)
+  assert.match(restore, /for component in database release image_objects outer_proxy/)
+  assert.match(restore, /--replace-existing requires NAV_ENABLE_DESTRUCTIVE_DR_RESTORE=true/)
+  assert.match(restore, /--sync-images requires NAV_ENABLE_IMAGE_OBJECT_SYNC=true/)
+  assert.match(restore, /pre-restore image-object rollback verification failed/)
+  assert.match(restore, /--clean --if-exists --single-transaction --exit-on-error/)
+  assert.match(restore, /restore_path_atomically/)
+  assert.match(restore, /NAV_DR_DATABASE_SERVICE/)
+  assert.match(restore, /compose_up[\s\S]*\$NAV_DR_DATABASE_SERVICE/)
+  assert.match(restore, /complete disaster restore passed/)
+  assert.doesNotMatch(restore, /rm\s+-rf/)
+  assert.doesNotMatch(restore, /\beval\b/)
+  assert.match(example, /^NAV_ENABLE_DISASTER_RESTORE=false$/m)
+  assert.match(example, /^NAV_ENABLE_DESTRUCTIVE_DR_RESTORE=false$/m)
+  assert.match(example, /^NAV_ENABLE_IMAGE_OBJECT_SYNC=false$/m)
+  assert.match(example, /^NAV_DR_DATABASE_SERVICE=nav-postgres$/m)
+})
+
+test('complete disaster restore validates a full backup without mutating the host', { skip: !hasBash }, async () => {
+  const tempRoot = await mkdtemp(path.join(tmpdir(), 'nav-disaster-plan-test-'))
+  const backupRoot = path.join(tempRoot, 'backups')
+  const backup = path.join(backupRoot, 'nav-20260824T000000Z-test')
+  const configPath = path.join(tempRoot, 'nav-backup.env')
+  const verifierPath = path.join(tempRoot, 'restore-verifier')
+  const calledPath = path.join(tempRoot, 'verifier-called.txt')
+
+  for (const directory of [
+    'database',
+    'release',
+    'frontend',
+    'image-objects',
+    'proxy',
+    'metadata'
+  ]) await mkdir(path.join(backup, directory), { recursive: true })
+
+  await Promise.all([
+    writeFile(path.join(backup, 'database/nav.dump'), 'postgres-dump-placeholder'),
+    writeFile(path.join(backup, 'proxy/npm-database.sqlite'), 'sqlite-placeholder'),
+    writeFile(path.join(backup, 'metadata/image-objects-local.tsv'), ''),
+    writeFile(path.join(backup, 'metadata/inventory.tsv'), 'source\tbackup_path\n'),
+    writeFile(path.join(backup, 'metadata/disaster-components.tsv'), [
+      'component\tstatus\tdetail',
+      'database\tcomplete\ttest',
+      'release\tcomplete\ttest',
+      'image_objects\tcomplete\ttest',
+      'outer_proxy\tcomplete\ttest',
+      ''
+    ].join('\n')),
+    writeFile(configPath, [
+      `NAV_BACKUP_ROOT=${backupRoot}`,
+      `NAV_RESTORE_SCRIPT=${verifierPath}`,
+      ''
+    ].join('\n')),
+    writeFile(verifierPath, [
+      '#!/usr/bin/env bash',
+      'set -Eeuo pipefail',
+      'printf "%s\\n" "$@" > "$NAV_TEST_VERIFIER_CALLED"',
+      ''
+    ].join('\n'))
+  ])
+  await chmod(configPath, 0o600)
+  await chmod(verifierPath, 0o700)
+
+  const result = spawnSync('bash', [
+    path.join(root, 'scripts/nav-disaster-restore.sh'),
+    '--config', configPath,
+    '--backup', backup
+  ], {
+    encoding: 'utf8',
+    env: {
+      ...process.env,
+      CI: 'true',
+      NODE_ENV: 'test',
+      NAV_DISASTER_RESTORE_TEST: 'true',
+      NAV_TEST_VERIFIER_CALLED: calledPath
+    }
+  })
+
+  assert.equal(result.status, 0, result.stderr)
+  assert.match(result.stderr, /plan only; --apply was not supplied/)
+  assert.match(await readFile(calledPath, 'utf8'), /--backup/)
+})
+
+test('canonical backup captures release, image objects and an online NPM SQLite snapshot', async () => {
+  const backup = await read('scripts/nav-backup.sh')
+  const releaseCopy = backup.indexOf('release source copy')
+  const imageCopy = backup.indexOf('image object copy')
+  const finalization = backup.indexOf('checksums and finalization')
+
+  assert.ok(releaseCopy >= 0 && imageCopy > releaseCopy && finalization > imageCopy)
+  assert.match(backup, /sqlite3 .*\.backup/)
+  assert.match(backup, /PRAGMA quick_check/)
+  assert.match(backup, /image-objects-remote\.tsv/)
+  assert.match(backup, /image-objects-local\.tsv/)
+  assert.match(backup, /image_objects\\tcomplete/)
+  assert.match(backup, /outer_proxy\\tcomplete/)
+  assert.doesNotMatch(backup, /NAV_IMAGE_RCLONE_CONFIG.*safe_copy_path/)
+})
+
 test('installer deploys units but cannot enable or start them', async () => {
   const installer = await read('scripts/install-nav-backup-systemd.sh')
   assert.match(installer, /nav-restore-cloud-latest\.sh/)
+  assert.match(installer, /nav-disaster-restore\.sh/)
   assert.match(installer, /\/var\/backups\/nav-cloud-restore/)
   assert.match(installer, /systemctl daemon-reload/)
   assert.doesNotMatch(installer, /systemctl\s+(?:enable|start|restart|reload)\b/)

@@ -206,7 +206,7 @@ test('frontend wires autosave, versions, dynamic commands and privacy-safe PWA s
   assert.match(editor, /beforeunload/)
   assert.match(editor, /initialEncrypted\.value !== Boolean\(formData\.value\.encrypted\)/)
   assert.match(editor, /onBeforeRouteLeave\(async \(\) =>/)
-  assert.match(editor, /await runAutosave\(\)[\s\S]*currentSnapshot\(\) === initialSnapshot\.value/)
+  assert.match(editor, /await runAutosave\(\)[\s\S]*currentDirtySnapshot\(\) === initialSnapshot\.value/)
   assert.match(editor, /!props\.note\?\._unlocked/)
   assert.match(editor, /保存中|已自动保存|自动保存失败/)
   assert.match(whisper, /NoteVersionHistory/)

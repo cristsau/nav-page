@@ -1,5 +1,9 @@
-const CACHE_VERSION = 'domonav-shell-v2'
+const CACHE_VERSION = 'domonav-shell-v3'
+const OFFLINE_SYNC_DB = 'NavPageOfflineSyncDB'
+const OFFLINE_SYNC_STORE = 'mutations'
+const OFFLINE_SYNC_TAG = 'domo-nav-offline-sync'
 const SHELL_ASSETS = [
+  '/',
   '/offline.html',
   '/manifest.webmanifest',
   '/domo-logo.png',
@@ -8,8 +12,24 @@ const SHELL_ASSETS = [
   '/icons/apple-touch-icon-180-v1.png'
 ]
 
+async function cacheApplicationShell() {
+  const cache = await caches.open(CACHE_VERSION)
+  await cache.addAll(SHELL_ASSETS)
+  const manifestResponse = await fetch('/.vite/manifest.json', { cache: 'no-store' })
+  if (!manifestResponse.ok) throw new Error('DOMO NAV build manifest is unavailable')
+  const manifest = await manifestResponse.json()
+  const assets = new Set()
+  for (const entry of Object.values(manifest || {})) {
+    for (const path of [entry?.file, ...(entry?.css || []), ...(entry?.assets || [])]) {
+      if (path) assets.add(`/${String(path).replace(/^\/+/, '')}`)
+    }
+  }
+  if (!assets.size) throw new Error('DOMO NAV build manifest is empty')
+  await cache.addAll([...assets])
+}
+
 self.addEventListener('install', (event) => {
-  event.waitUntil(caches.open(CACHE_VERSION).then((cache) => cache.addAll(SHELL_ASSETS)))
+  event.waitUntil(cacheApplicationShell())
 })
 
 self.addEventListener('activate', (event) => {
@@ -66,6 +86,95 @@ self.addEventListener('notificationclick', (event) => {
   )
 })
 
+function openOfflineSyncDb() {
+  return new Promise((resolve, reject) => {
+    const request = indexedDB.open(OFFLINE_SYNC_DB)
+    request.onerror = () => reject(request.error)
+    request.onsuccess = () => resolve(request.result)
+  })
+}
+
+function idbRequest(request) {
+  return new Promise((resolve, reject) => {
+    request.onerror = () => reject(request.error)
+    request.onsuccess = () => resolve(request.result)
+  })
+}
+
+async function readPendingOfflineMutations(database, userId) {
+  if (!database.objectStoreNames.contains(OFFLINE_SYNC_STORE)) return []
+  const transaction = database.transaction(OFFLINE_SYNC_STORE, 'readonly')
+  const records = await idbRequest(transaction.objectStore(OFFLINE_SYNC_STORE).getAll())
+  return records
+    .filter((record) => record.userId === userId && ['pending', 'retry'].includes(record.state))
+    .sort((left, right) => String(left.createdAt).localeCompare(String(right.createdAt)))
+    .slice(0, 100)
+}
+
+async function applyOfflineMutationResults(database, results) {
+  if (!results.length) return
+  const transaction = database.transaction(OFFLINE_SYNC_STORE, 'readwrite')
+  const store = transaction.objectStore(OFFLINE_SYNC_STORE)
+  for (const result of results) {
+    if (result.status >= 200 && result.status < 300) {
+      store.delete(result.operationId)
+      continue
+    }
+    const existing = await idbRequest(store.get(result.operationId))
+    if (!existing) continue
+    store.put({
+      ...existing,
+      state: result.status === 409 ? 'conflict' : 'failed',
+      error: String(result.error || '后台同步失败').slice(0, 500),
+      serverPayload: result,
+      updatedAt: new Date().toISOString()
+    })
+  }
+  await new Promise((resolve, reject) => {
+    transaction.oncomplete = resolve
+    transaction.onerror = () => reject(transaction.error)
+    transaction.onabort = () => reject(transaction.error)
+  })
+}
+
+async function flushOfflineMutationsInWorker() {
+  const sessionResponse = await fetch('/api/auth/session', {
+    credentials: 'include',
+    headers: { Accept: 'application/json' }
+  })
+  if (!sessionResponse.ok) return
+  const session = await sessionResponse.json()
+  const userId = String(session.user?.id || '')
+  if (!userId) return
+  const database = await openOfflineSyncDb()
+  try {
+    const records = await readPendingOfflineMutations(database, userId)
+    if (!records.length) return
+    const response = await fetch('/api/collaboration/sync/mutations', {
+      method: 'POST',
+      credentials: 'include',
+      headers: {
+        Accept: 'application/json',
+        'Content-Type': 'application/json'
+      },
+      body: JSON.stringify({
+        mutations: records.map(({ operationId, kind, payload }) => ({ operationId, kind, payload }))
+      })
+    })
+    if (!response.ok) throw new Error(`Offline sync failed: ${response.status}`)
+    const payload = await response.json()
+    await applyOfflineMutationResults(database, payload.results || [])
+  } finally {
+    database.close()
+  }
+}
+
+self.addEventListener('sync', (event) => {
+  if (event.tag === OFFLINE_SYNC_TAG) {
+    event.waitUntil(flushOfflineMutationsInWorker())
+  }
+})
+
 function isPrivateRequest(url) {
   return (
     url.pathname.startsWith('/api/')
@@ -82,9 +191,23 @@ self.addEventListener('fetch', (event) => {
 
   if (request.mode === 'navigate') {
     event.respondWith(
-      fetch(request).catch(async () => (
-        (await caches.match('/offline.html')) || Response.error()
-      ))
+      (async () => {
+        try {
+          const response = await fetch(request)
+          if (response.ok) {
+            const copy = response.clone()
+            void caches.open(CACHE_VERSION).then((cache) => cache.put(request, copy))
+          }
+          return response
+        } catch {
+          return (
+            (await caches.match(request))
+            || (await caches.match('/'))
+            || (await caches.match('/offline.html'))
+            || Response.error()
+          )
+        }
+      })()
     )
     return
   }

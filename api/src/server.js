@@ -18,6 +18,7 @@ import { startNoteReminderGeneration } from './lib/noteReminderScheduler.js'
 import { startSearchEmbeddingScheduler } from './lib/searchEmbeddingScheduler.js'
 import { startWebPushScheduler } from './lib/webPushScheduler.js'
 import { sendMaintenanceJobNotificationToAdmins } from './lib/telegram.js'
+import { attachCollaborationWebSocket } from './lib/collaborationWebSocket.js'
 import {
   recoverExpiredReleaseAcceptanceAccounts,
   startReleaseAcceptanceAccountRecovery
@@ -34,6 +35,7 @@ async function main() {
   await ensureAdminUser()
 
   const app = createApp()
+  const stopCollaborationWebSocket = attachCollaborationWebSocket(app.server, app.log)
   let stopSecurityEventRetention = async () => {}
   let stopMediaDeleteRetry = async () => {}
   let stopAiUsageRetention = async () => {}
@@ -71,7 +73,8 @@ async function main() {
       stopBookmarkHealthScheduler(),
       stopSearchEmbeddingScheduler(),
       stopWebPushScheduler(),
-      stopReleaseAcceptanceRecovery()
+      stopReleaseAcceptanceRecovery(),
+      stopCollaborationWebSocket()
     ])
     await app.close()
     await pool.end()
@@ -233,7 +236,8 @@ async function main() {
       stopBookmarkHealthScheduler(),
       stopSearchEmbeddingScheduler(),
       stopWebPushScheduler(),
-      stopReleaseAcceptanceRecovery()
+      stopReleaseAcceptanceRecovery(),
+      stopCollaborationWebSocket()
     ])
     await app.close()
     throw error

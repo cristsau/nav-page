@@ -36,7 +36,10 @@ test('settings restore flow requires preview, safety download and exact confirma
   const migrateSource = source.slice(migrateStart, migrateEnd)
 
   assert.ok(fileSizeCheck >= 0 && fileRead > fileSizeCheck, 'file size must be checked before reading')
-  assert.match(source, /accept="\.json,application\/json"/)
+  assert.match(
+    source,
+    /accept="\.json,\.ndjson,application\/json,application\/x-domo-nav-backup-ndjson"/
+  )
   assert.match(source, /new Blob\(\[JSON\.stringify\(data\)\]/)
   assert.doesNotMatch(source, /JSON\.stringify\(data, null, 2\)/)
   assert.match(source, /createCloudRestoreBackup\(JSON\.parse\(text\)\)/)
