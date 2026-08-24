@@ -2,8 +2,8 @@ import { spawnSync } from 'node:child_process'
 import { readFileSync } from 'node:fs'
 
 const allowedAdvisories = new Set([
-  'GHSA-f88m-g3jw-g9cj',
-  'GHSA-xcpc-8h2w-3j85'
+  'GHSA-F88M-G3JW-G9CJ',
+  'GHSA-XCPC-8H2W-3J85'
 ])
 
 const allowedPackages = new Map([

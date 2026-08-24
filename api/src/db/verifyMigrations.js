@@ -215,18 +215,18 @@ async function verifyProductivityCompletionSchema() {
         END AS referenced_table,
         ARRAY(
           SELECT attribute.attname
-          FROM unnest(constraint_row.conkey) WITH ORDINALITY AS key(attnum, ordinal)
+          FROM generate_subscripts(constraint_row.conkey, 1) AS key(ordinal)
           JOIN pg_attribute AS attribute
             ON attribute.attrelid = constraint_row.conrelid
-           AND attribute.attnum = key.attnum
+           AND attribute.attnum = constraint_row.conkey[key.ordinal]
           ORDER BY key.ordinal
         ) AS columns,
         ARRAY(
           SELECT attribute.attname
-          FROM unnest(constraint_row.confkey) WITH ORDINALITY AS key(attnum, ordinal)
+          FROM generate_subscripts(constraint_row.confkey, 1) AS key(ordinal)
           JOIN pg_attribute AS attribute
             ON attribute.attrelid = constraint_row.confrelid
-           AND attribute.attnum = key.attnum
+           AND attribute.attnum = constraint_row.confkey[key.ordinal]
           ORDER BY key.ordinal
         ) AS referenced_columns,
         pg_get_constraintdef(constraint_row.oid, FALSE) AS definition
