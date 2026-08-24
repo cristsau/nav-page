@@ -1309,12 +1309,13 @@ async function verifyCollaborationOfflineSchema() {
     ['nav_notify_note_sync_event']
   )
   const notifyDefinition = String(notifyFunctions.rows[0]?.definition || '')
+  const normalizedNotifyDefinition = notifyDefinition.replace(/\s+/g, ' ')
   if (
-    !/pg_notify\('nav_note_sync_events'/.test(notifyDefinition)
-    || !/eventId/.test(notifyDefinition)
-    || !/eventKind/.test(notifyDefinition)
-    || !/comment\.upsert/.test(notifyDefinition)
-    || !/member\.delete/.test(notifyDefinition)
+    !/(?:pg_catalog\.)?pg_notify\s*\(\s*'nav_note_sync_events'/i.test(normalizedNotifyDefinition)
+    || !/eventId/.test(normalizedNotifyDefinition)
+    || !/eventKind/.test(normalizedNotifyDefinition)
+    || !/comment\.upsert/.test(normalizedNotifyDefinition)
+    || !/member\.delete/.test(normalizedNotifyDefinition)
   ) {
     throw new Error('collaboration realtime notification function definition mismatch')
   }
