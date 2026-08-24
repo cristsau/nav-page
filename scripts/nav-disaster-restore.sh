@@ -90,9 +90,9 @@ assert_safe_file() {
 
 split_list() {
   local value="$1"
-  local -n target="$2"
+  local -n output_ref="$2"
   # shellcheck disable=SC2034
-  IFS=';' read -r -a target <<< "$value"
+  IFS=';' read -r -a output_ref <<< "$value"
 }
 
 container_exists() {
