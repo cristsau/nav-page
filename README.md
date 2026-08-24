@@ -29,7 +29,7 @@ DOMO NAV 是面向个人与小团队的私有化导航工作台。它把导航�
 - 定时失效链接检查候选、集中异常清单、单条/批量复查与后台运行状态
 - Notion 式单用户块编辑器、未加密笔记自动保存、并发冲突保护和有界版本历史（最近 50 个版本）
 - 安全 JSON 导出，以及带预览、当前密码复验和状态签名的替换式恢复候选
-- Yjs/CRDT 多人正文协作、角色权限、选区/块评论和近实时评论刷新
+- Yjs/CRDT 多人正文协作、角色权限、选区/块评论和 PostgreSQL 事件驱动的实时评论刷新
 - 已访问工作区的完整离线编辑、幂等 outbox、Yjs IndexedDB 持久化及跨设备增量同步
 - 128 MiB NDJSON 流式上传恢复、250 条批处理和 6,500 条 PostgreSQL 16 集成演练
 - 图床对象、Nginx Proxy Manager 与外层代理配置纳入完整备份/双门禁一键灾难恢复候选
@@ -91,5 +91,6 @@ PostgreSQL 迁移校验、API 测试与 Vite 生产构建由
 13. [2026-08-24 本地功能完成候选与外部验收边界](./docs/NAV_LOCAL_FEATURE_COMPLETION_20260824.md)
 14. [BM25/本地向量、Web Push 与单用户块编辑器](./docs/NAV_ADVANCED_SEARCH_PUSH_BLOCK_EDITOR.md)
 15. [多人协作、离线同步、整套灾难恢复与流式恢复](./docs/NAV_COLLABORATION_OFFLINE_DR_STREAMING.md)
+16. [实时评论事件流](./docs/NAV_REALTIME_COMMENTS_20260824.md)
 
 继续开发或发布前，应重新核对 GitHub、当前工作区和实时生产状态；仓库文档不是生产写入授权。

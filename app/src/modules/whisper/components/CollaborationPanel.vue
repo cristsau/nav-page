@@ -11,6 +11,7 @@ import {
   updateComment,
   updateCollaborator
 } from '@/shared/services/collaborationApi'
+import { subscribeToCollaborationEvents } from '@/shared/services/collaborationEvents'
 import { getCurrentUserId } from '@/shared/db/database'
 
 const props = defineProps({
@@ -31,8 +32,11 @@ const commentBody = ref('')
 const showResolved = ref(false)
 const editingCommentId = ref('')
 const editingCommentBody = ref('')
+const realtimeStatus = ref('idle')
 let refreshTimer = null
 let loadPromise = null
+let stopRealtimeEvents = null
+let realtimeRefreshPending = false
 
 const accessRole = computed(() => props.note?.accessRole || 'owner')
 const currentUserId = computed(() => String(getCurrentUserId() || ''))
@@ -41,6 +45,14 @@ const canComment = computed(() => ['owner', 'editor', 'commenter'].includes(acce
 const visibleComments = computed(() => comments.value.filter((comment) => (
   showResolved.value || comment.status !== 'resolved'
 )))
+const realtimeLabel = computed(() => ({
+  connected: '实时已连接',
+  connecting: '正在连接',
+  reconnecting: '正在重连',
+  offline: '离线模式',
+  unsupported: '低频刷新',
+  'access-changed': '权限已变更'
+}[realtimeStatus.value] || '准备连接'))
 
 function canEditComment(comment) {
   return canComment.value && (
@@ -89,8 +101,29 @@ function refreshLiveComments() {
     || !navigator.onLine
     || working.value
     || editingCommentId.value
-  ) return
+  ) {
+    realtimeRefreshPending = true
+    return
+  }
+  realtimeRefreshPending = false
   load({ silent: true })
+}
+
+function handleRealtimeEvent(event) {
+  if (!['comment.upsert', 'comment.delete', 'member.upsert', 'member.delete', 'note.delete'].includes(event.eventKind)) return
+  if (event.eventKind === 'note.delete') setMessage('这篇协作笔记已被删除')
+  refreshLiveComments()
+}
+
+function connectRealtimeEvents() {
+  stopRealtimeEvents?.()
+  stopRealtimeEvents = null
+  realtimeStatus.value = 'idle'
+  if (!props.note?.id || props.note.encrypted) return
+  stopRealtimeEvents = subscribeToCollaborationEvents(props.note.id, {
+    onEvent: handleRealtimeEvent,
+    onStatus: (status) => { realtimeStatus.value = status }
+  })
 }
 
 async function invite() {
@@ -210,10 +243,24 @@ async function removeCommentItem(comment) {
   }
 }
 
-watch(() => props.note?.id, () => load())
+watch(
+  [working, editingCommentId],
+  ([isWorking, editingId]) => {
+    if (!isWorking && !editingId && realtimeRefreshPending) refreshLiveComments()
+  }
+)
+watch(
+  [() => props.note?.id, () => props.note?.encrypted],
+  () => {
+    load()
+    connectRealtimeEvents()
+  },
+  { immediate: true }
+)
 onMounted(() => {
-  load()
-  refreshTimer = window.setInterval(refreshLiveComments, 4_000)
+  refreshTimer = window.setInterval(() => {
+    if (realtimeStatus.value !== 'connected') refreshLiveComments()
+  }, 30_000)
   window.addEventListener('focus', refreshLiveComments)
   window.addEventListener('domo-nav:offline-sync', refreshLiveComments)
   document.addEventListener('visibilitychange', refreshLiveComments)
@@ -221,6 +268,8 @@ onMounted(() => {
 onBeforeUnmount(() => {
   if (refreshTimer) window.clearInterval(refreshTimer)
   refreshTimer = null
+  stopRealtimeEvents?.()
+  stopRealtimeEvents = null
   window.removeEventListener('focus', refreshLiveComments)
   window.removeEventListener('domo-nav:offline-sync', refreshLiveComments)
   document.removeEventListener('visibilitychange', refreshLiveComments)
@@ -269,6 +318,9 @@ onBeforeUnmount(() => {
 
       <div class="collaboration__comments-header">
         <strong>评论 {{ comments.length }}</strong>
+        <span class="collaboration__realtime" :class="`is-${realtimeStatus}`" aria-live="polite">
+          <span aria-hidden="true"></span>{{ realtimeLabel }}
+        </span>
         <label><input v-model="showResolved" type="checkbox"> 显示已解决</label>
       </div>
       <div v-if="visibleComments.length" class="collaboration__comments">
@@ -330,8 +382,13 @@ onBeforeUnmount(() => {
 .collaboration__member select { color: var(--text-secondary); background: transparent; border: 0; }
 .collaboration__member button { width: 32px; height: 32px; color: var(--text-muted); background: transparent; border: 0; border-radius: 8px; }
 .collaboration__avatar { display: grid; width: 28px; height: 28px; place-items: center; border-radius: 9px; background: var(--accent-bg); color: var(--accent-color); font-size: 11px; font-weight: 700; }
-.collaboration__comments-header { margin-top: 18px; padding-top: 14px; border-top: 1px solid var(--border-light); color: var(--text-secondary); font-size: 12px; }
+.collaboration__comments-header { flex-wrap: wrap; margin-top: 18px; padding-top: 14px; border-top: 1px solid var(--border-light); color: var(--text-secondary); font-size: 12px; }
 .collaboration__comments-header label { display: flex; align-items: center; gap: 6px; }
+.collaboration__realtime { display: inline-flex; align-items: center; gap: 5px; color: var(--text-muted); font-size: 11px; font-weight: 550; }
+.collaboration__realtime > span { width: 7px; height: 7px; border-radius: 999px; background: var(--warning-color, #c7924c); }
+.collaboration__realtime.is-connected > span { background: var(--success-color, #66a36c); }
+.collaboration__realtime.is-offline > span,
+.collaboration__realtime.is-access-changed > span { background: var(--danger-color, #c66); }
 .collaboration__comments { display: grid; gap: 9px; margin-top: 10px; }
 .collaboration__comment { padding: 12px; border-radius: 12px; background: var(--bg-card); }
 .collaboration__comment.is-resolved { opacity: 0.68; }

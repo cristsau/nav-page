@@ -35,7 +35,7 @@ async function main() {
   await ensureAdminUser()
 
   const app = createApp()
-  const stopCollaborationWebSocket = attachCollaborationWebSocket(app.server, app.log)
+  const stopCollaborationWebSocket = await attachCollaborationWebSocket(app.server, app.log)
   let stopSecurityEventRetention = async () => {}
   let stopMediaDeleteRetry = async () => {}
   let stopAiUsageRetention = async () => {}
