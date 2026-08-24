@@ -21,6 +21,10 @@ test('OVH nginx gives only Vite assets immutable caching', async () => {
     nginx.indexOf('location = /manifest.webmanifest'),
     nginx.indexOf('location = /service-worker.js')
   )
+  const serviceWorker = nginx.slice(
+    nginx.indexOf('location = /sw.js'),
+    nginx.indexOf('location = / {')
+  )
   const api = nginx.slice(
     nginx.indexOf('location ^~ /api/'),
     nginx.indexOf('location ^~ /share/')
@@ -30,6 +34,8 @@ test('OVH nginx gives only Vite assets immutable caching', async () => {
   assert.match(assets, /public, max-age=31536000, immutable/)
   assert.doesNotMatch(manifest, /immutable/)
   assert.match(manifest, /no-cache, must-revalidate/)
+  assert.match(serviceWorker, /try_files \$uri =404;/)
+  assert.match(serviceWorker, /no-cache, must-revalidate/)
   assert.match(nginx, /location = \/index\.html \{[\s\S]*no-cache, must-revalidate/)
   assert.match(api, /proxy_no_cache 1;/)
   assert.match(api, /proxy_cache_bypass 1;/)

@@ -111,6 +111,17 @@ test('restore rehearsal shares the canonical backup lock before reading a backup
   assert.match(restore, /exec 9>>"\$NAV_RESTORE_LOCK_FILE"/)
 })
 
+test('isolated restore waits for the final PostgreSQL postmaster', async () => {
+  const restore = await read('scripts/nav-restore-rehearsal.sh')
+
+  assert.match(restore, /pg_isready -U nav_rehearsal -d nav_rehearsal/)
+  assert.match(restore, /cat \/proc\/1\/comm/)
+  assert.match(restore, /final postmaster did not become ready/)
+  assert.ok(
+    restore.indexOf('cat /proc/1/comm') < restore.indexOf('isolated database restore')
+  )
+})
+
 test('cloud restore is double-gated, uses the bounded backup root, and restores an exact snapshot id', async () => {
   const cloudRestore = await read('scripts/nav-restore-cloud-latest.sh')
   const example = await read('scripts/nav-backup.env.example')

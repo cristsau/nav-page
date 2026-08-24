@@ -531,14 +531,16 @@ docker run -d \
 ready=false
 for ((attempt=1; attempt<=NAV_RESTORE_READY_ATTEMPTS; attempt++)); do
   if docker exec "$REHEARSAL_CONTAINER" \
-    pg_isready -U nav_rehearsal -d nav_rehearsal >/dev/null 2>&1; then
+    pg_isready -U nav_rehearsal -d nav_rehearsal >/dev/null 2>&1 \
+    && docker exec "$REHEARSAL_CONTAINER" \
+      sh -ceu '[ "$(cat /proc/1/comm)" = postgres ]' >/dev/null 2>&1; then
     ready=true
     break
   fi
   sleep "$NAV_RESTORE_READY_INTERVAL_SECONDS"
 done
-"$ready" || fatal "$EX_TEMPFAIL" "isolated PostgreSQL did not become ready"
-report "isolated PostgreSQL is ready"
+"$ready" || fatal "$EX_TEMPFAIL" "isolated PostgreSQL final postmaster did not become ready"
+report "isolated PostgreSQL final postmaster is ready"
 
 CURRENT_STAGE="isolated database restore"
 if ! docker exec -i "$REHEARSAL_CONTAINER" \
