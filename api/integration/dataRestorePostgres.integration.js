@@ -439,10 +439,12 @@ async function seedBaseline() {
   )
   await pool.query(
     `
-      INSERT INTO note_reminders (id, user_id, note_id, due_at_snapshot)
+      INSERT INTO note_reminders (
+        id, user_id, note_id, due_at_snapshot, reminder_at_snapshot
+      )
       VALUES
-        ($1, $2, $3, NOW() + INTERVAL '1 day'),
-        ($4, $5, $6, NOW() + INTERVAL '2 days')
+        ($1, $2, $3, NOW() + INTERVAL '1 day', NOW() + INTERVAL '1 day'),
+        ($4, $5, $6, NOW() + INTERVAL '2 days', NOW() + INTERVAL '2 days')
     `,
     [
       fixtureUuid(23, 1), USER_A_ID, BASELINE_A_NOTE_ID,
@@ -925,8 +927,12 @@ test('preview blocks all three malformed cross-account cascade relationships and
   )
   await pool.query(
     `
-      INSERT INTO note_reminders (id, user_id, note_id, due_at_snapshot)
-      VALUES ($1, $2, $3, NOW() + INTERVAL '3 days')
+      INSERT INTO note_reminders (
+        id, user_id, note_id, due_at_snapshot, reminder_at_snapshot
+      )
+      VALUES (
+        $1, $2, $3, NOW() + INTERVAL '3 days', NOW() + INTERVAL '3 days'
+      )
     `,
     [fixtureUuid(43, 1), USER_B_ID, BASELINE_A_NOTE_ID]
   )
