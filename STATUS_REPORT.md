@@ -6,34 +6,32 @@
 和 `UNFINISHED`。仓库中存在脚本或代码，不等于生产
 已经安装、启用或形成灾难恢复闭环；每次发布前仍须重新读取 GitHub、OVH 与双域状态。
 
-## 2026-08-24 本地功能候选
+## 2026-08-24 功能与生产状态
 
-- 状态：`LOCAL_DONE / READY_FOR_CI / NOT_DEPLOYED`。
-- 本地分支 `codex/nav-feature-completion-20260824` 基于 `origin/master` 的 `818c2b3`，包含
-  通用异地存储后填模板、Passkey、统一搜索/带来源助理、AI 用量、提前提醒、定时链接检查、
-  Chrome/Edge 与 Markdown 导入导出、命令面板补全、PWA 离线外壳，以及笔记自动保存和
-  50 个版本历史。
-- 新增迁移为 `019` 至 `022`；Passkey 与三个新增维护任务默认关闭，异地存储未配置。
-- 本地组合依赖无关测试 76 通过、7 跳过、0 失败；63 个 JavaScript 与 18 个 Vue 脚本语法
-  检查通过。没有执行 npm 安装、Vite 构建、PostgreSQL 迁移、推送、PR 或生产发布。
-- 完整范围、开关和下一道门禁见
-  [`docs/NAV_LOCAL_FEATURE_COMPLETION_20260824.md`](./docs/NAV_LOCAL_FEATURE_COMPLETION_20260824.md)。
-
-## 2026-08-24 高级搜索、离线推送与块编辑候选
-
-- 状态：`LOCAL_DONE / READY_FOR_CI / NOT_DEPLOYED`。
-- 分支 `codex/nav-semantic-push-block-editor-20260824` 新增迁移 023–025：本地中文 BM25、固定
-  revision 多语言向量、页面关闭后的标准 Web Push/VAPID，以及 Tiptap 单用户块编辑器。
-- VAPID 私钥使用 release-local 只读文件，语义模型使用 OVH Docker volume；两者都不进入 Git。
-- 加密笔记不进入搜索索引，Push 不暴露加密标题/正文，块 JSON 加密仍只在浏览器完成。
-- 完整边界、开关、回滚与真机验收见
+- 状态：`VERIFIED_LIVE`，真实设备通知授权除外。
+- PR [#37](https://github.com/cristsau/nav-page/pull/37) 已把迁移 `019` 至 `025`、Passkey 源码、
+  统一搜索/带来源助理、AI 用量、提前提醒、定时链接检查、Chrome/Edge 与 Markdown 导入导出、
+  PWA 离线外壳、自动保存/50 个版本，以及本地中文 BM25、固定 revision 多语言向量、标准
+  Web Push/VAPID 和 Tiptap 单用户块编辑器合并到 `a9eff0d`。
+- PR [#38](https://github.com/cristsau/nav-page/pull/38) 已把 Service Worker 明确 no-cache 与
+  PostgreSQL 16 恢复就绪竞态修复合并到 `788be84`；合并后 master CI `32689782306` 五项全绿。
+- OVH 当前应用 release 为 `/opt/nav-stack/releases/20260824-031310-a9eff0d`，API 镜像固定为
+  `nav-ovh-api:a9eff0d7888fd29f8888a503a336af86371c3b80`。PR #38 的 Nginx 修复已在该 release
+  内同步生效；恢复工具源码已修复，主机全局工具更新留待独立维护授权。
+- 语义模型缓存使用 OVH Docker volume；VAPID 私钥使用 release-local 只读 Secret。两者均不
+  进入 Git、镜像、前端、日志或本文。
+- 加密笔记不进入派生搜索索引，Push 不暴露加密标题/正文，块 JSON 加密仍只在浏览器完成。
+- Web Push 服务端、订阅接口和测试链已通过；最终“页面关闭仍收到通知”必须由用户在每台
+  Chrome/Edge 设备授权，iPhone/iPad 必须先添加到主屏幕后授权，因此标记为 `USER_ACTION_REQUIRED`。
+- 完整边界、回滚与真机验收见
   [`docs/NAV_ADVANCED_SEARCH_PUSH_BLOCK_EDITOR.md`](./docs/NAV_ADVANCED_SEARCH_PUSH_BLOCK_EDITOR.md)。
 
 ## 当前源码与生产基线
 
 - GitHub：`cristsau/nav-page`（Private），默认分支 `master`。
-- 2026-08-23 最后完成生产验收的 merge SHA：
-  `25c9c133ad6c34b857cf13c293aa5a89c8ef04d7`（PR #34）。当前 `origin/master` 必须现场核验。
+- 2026-08-24 当前 GitHub master：`788be84c766470d0dce845b282aa246286f77d67`。
+- 当前生产 API 应用 SHA：`a9eff0d7888fd29f8888a503a336af86371c3b80`；release-local Nginx
+  已包含随后合并的 PR #38 缓存修复。
 - 当前生产源码包含的连续 PR：
   - [#28 发布文档校准](https://github.com/cristsau/nav-page/pull/28)
   - [#29 异地备份调度候选](https://github.com/cristsau/nav-page/pull/29)（源码已包含，运行环境仍为
@@ -47,14 +45,16 @@
   - [#32 维护通知投递与 PostgreSQL 集成门禁](https://github.com/cristsau/nav-page/pull/32)
   - [#33 一次性管理员与发布验收门禁](https://github.com/cristsau/nav-page/pull/33)
   - [#34 主机 CIDR 精确验收修复](https://github.com/cristsau/nav-page/pull/34)
-- 当前 OVH release：`/opt/nav-stack/releases/20260823-233024-25c9c13`。
-- 当前 API 镜像：`nav-ovh-api:25c9c133ad6c34b857cf13c293aa5a89c8ef04d7`。
-- 应用回滚目标：上一 release `/opt/nav-stack/releases/20260823-191619-9b05013`，提交
-  `9b0501389de797c99ec646103780b4b83aa4be56`；迁移 018 为加法迁移，应用回滚时保留。
+  - [#37 高级搜索、Web Push 与块编辑器](https://github.com/cristsau/nav-page/pull/37)
+  - [#38 恢复就绪与 PWA 缓存加固](https://github.com/cristsau/nav-page/pull/38)
+- 当前 OVH release：`/opt/nav-stack/releases/20260824-031310-a9eff0d`。
+- 当前 API 镜像：`nav-ovh-api:a9eff0d7888fd29f8888a503a336af86371c3b80`。
+- 应用回滚目标：发布前 release `/opt/nav-stack/releases/20260823-233024-25c9c13`，提交
+  `25c9c133ad6c34b857cf13c293aa5a89c8ef04d7`；迁移 019–025 为加法迁移，应用回滚时保留。
 - 生产域名：
   - `https://nav.skrskr.net`
   - `https://nav.cristsau.cn`
-- 2026-08-23 只读复核：双域首页与 `/api/health` 均为 200，API/Web/PostgreSQL 健康；
+- 2026-08-24 发布后复核：双域首页与 `/api/health` 均为 200，API/Web/PostgreSQL 健康；
   CLIProxyAPI、Nginx Proxy Manager、Vaultwarden 和 Komari 保持运行。
 
 PR #30 的图片删除重试告警正确性、PR #31 的云端安全恢复、PR #32 的 Telegram 精确目标
@@ -99,8 +99,8 @@ PR #30 的图片删除重试告警正确性、PR #31 的云端安全恢复、PR 
 - CLI Proxy Responses API、动态 `/v1/models` 目录、最多六个候选、“自动最新”、推理强度和
   内置联网搜索；密钥仅由服务端 owner-only Secret 提供。
 - 注册审批、Telegram 通知/同步、用户名与密码修改、会话查看/撤销、一次性恢复码和密码恢复。
-- Passkey/WebAuthn 的迁移、API、登录页与账号安全页源码已完成；固定 RP ID/Origin，默认关闭，
-  尚未执行生产迁移、启用或真实设备验收，因此不计入已验证生产能力。
+- Passkey/WebAuthn 的迁移、API、登录页与账号安全页已发布；固定 RP ID/Origin，默认关闭，
+  尚未启用或完成真实设备验收，因此不计入已验证生产能力。
 - 登录、注册、恢复、已认证写操作和 AI 使用 PostgreSQL 原子共享限流。
 - 安全审计保存最小化结构化字段和带密钥摘要，支持筛选、分页、CSV/JSON 导出和受控删除。
 - 分层审计保留：常规成功 90 天、拒绝/失败 180 天、恢复/账号/管理员敏感操作 365 天。
@@ -117,23 +117,22 @@ PR #30 的图片删除重试告警正确性、PR #31 的云端安全恢复、PR 
 
 ## 最新生产发布与恢复证据
 
-- PR #33 与 #34 已合并；最终 `master` CI `32648707198` 的 `test-and-build`、
-  `release-acceptance-postgres-integration`、`restore-postgres-integration` 与
-  `maintenance-postgres-integration` 四项均成功。
-- 源码归档 SHA-256 在 OVH 解包前核验；API 与 Vite 在隔离构建容器中构建。
-- 发布前 PostgreSQL 备份在无网络临时 PostgreSQL 16 中恢复为 17 张表、17 条迁移；本次
-  没有新迁移，新 API 镜像的只读迁移校验通过。
-- 加法迁移 `018_maintenance_observability.sql` 保持已应用并固定写入两条任务状态。
-- 本次只重建 `nav-api`；`nav-web`、PostgreSQL、CLIProxyAPI、NPM、Vaultwarden 和 Komari
-  容器 ID 均保持不变，API 健康且重启计数为 0。
-- 双域通过健康、精确前端、CORS、登录会话、后台状态、缓存和退出验收。
-- 发布后备份同样在无网络临时 PostgreSQL 16 中恢复为 17 张表、17 条迁移。
-- 一次性管理员创建、登录、会话和精确清理通过；发布后临时账号、marker 与运行时私有目录
-  均为 0。
-- 脱敏验收证据保存在当前 OVH release 的受限 `evidence` 目录；文件包括
-  `FINAL_ACCEPTANCE.txt`、`BACKUP_RESTORE_ACCEPTANCE.txt` 和
-  `POST_BACKUP_RESTORE_ACCEPTANCE.txt`，以及不含凭据的
-  `ACCEPTANCE_ACCOUNT_LIFECYCLE.txt`。
+- PR #37 与 #38 已合并；`a9eff0d` master CI `32685311488` 和最终 `788be84` master CI
+  `32689782306` 的 `test-and-build`、`restore-postgres-integration`、
+  `maintenance-postgres-integration`、`advanced-features-postgres-integration` 与
+  `release-acceptance-postgres-integration` 五项均成功。
+- 源码归档 SHA-256 `f97ea74b0d48d478c5d3983d4337ed23afe613628b1ae6a033af6a33d023e90d`
+  在 OVH 解包前核验；API 与 Vite 均在 OVH 隔离构建环境完成，本机没有运行 npm 测试或构建。
+- 发布前 canonical 备份完成 manifest 校验，并使用稳定 PostgreSQL 主进程门禁在隔离
+  PostgreSQL 16 中恢复通过；由此发现并修复了临时初始化 postmaster 的就绪竞态。
+- 迁移 `019` 至 `025` 已连续应用；发布后备份在隔离 PostgreSQL 16 中恢复为 25 张表并精确
+  核对迁移 ledger 到 `025_block_editor.sql`。
+- 本次只重建 `nav-api` 与 `nav-web`；PostgreSQL、CLIProxyAPI、NPM、Vaultwarden、Komari
+  及其他非目标容器 ID 保持不变，API/Web 重启计数均为 0。
+- 双域通过健康、CORS、登录会话、混合搜索、块保存/版本、Web Push 服务端状态、缓存、
+  Service Worker、退出和一次性管理员自动清理验收。
+- 脱敏验收证据保存在当前 OVH release 的受限 `evidence` 目录，主要高级功能证据为
+  `ACCEPTANCE_ADVANCED_FEATURES.txt`；不在仓库复制凭据、Cookie、Secret 或备份正文。
 
 ## 备份与恢复现状（PARTIAL）
 
@@ -147,16 +146,15 @@ PR #30 的图片删除重试告警正确性、PR #31 的云端安全恢复、PR 
 - 因此当前没有自动计划、异地加密上传、远端保留清理、备份失败外部报警或定期恢复演练。
 - 图床对象和外层代理配置尚未纳入独立、可在干净环境验证的完整生态恢复。
 
-## 生产仍为部分完成（本地候选已补源码）
+## 生产仍为部分完成
 
-- 生产到期提醒仍只在打开 NAV 时同步；迁移 024 本地候选已增加页面关闭后的标准 Web Push，
-  尚待 CI、VAPID Secret 安装、发布和逐设备真机授权。
-- 生产链接检查仍由用户手动触发；本地候选已增加默认关闭的有界定时检查、集中异常清单和
-  单条/批量复查。
-- 生产命令面板尚不能切换主题或 AI 模型；本地候选已补齐实际主题与服务端发现模型。
-- 生产安全 JSON 导入导出可用；本地候选已增加 Chrome/Edge 书签 HTML 和 Markdown 原子
-  批量导入导出，但完整生态恢复仍不含图床对象与外层代理。
-- 生产 PWA 只有元数据和主屏图标；本地候选已增加隐私安全的离线外壳、显式更新与 Web Push。
+- 页面关闭后的标准 Web Push、VAPID、提醒调度和 PWA Service Worker 已启用；浏览器通知权限
+  必须由用户逐设备授权，尚未观察到真实 Chrome/Edge/iPhone 的最终通知到达证据。
+- 有界定时链接检查、提前提醒、Passkey 与 AI 用量清理源码/迁移已上线，但是否启用取决于各自
+  生产开关；Passkey 尚未完成真实设备注册与登录验收。
+- 生产安全 JSON、Chrome/Edge 书签 HTML 和 Markdown 导入导出已进入发布版本，但完整生态
+  恢复仍不含图床对象与外层代理。
+- PWA 离线说明壳、显式更新与 Web Push 已上线；iPhone/iPad 必须从主屏幕安装入口授权通知。
 - 云端 JSON 恢复的密码二次确认、只读差异预览和替换边界已随 PR #32 发布；图床对象、
   外层代理和超过 5,000 条记录的分片/流式恢复仍不在该能力内。
 
@@ -164,12 +162,11 @@ PR #30 的图片删除重试告警正确性、PR #31 的云端安全恢复、PR 
 
 1. 在用户选定免费存储后，为 OVH 填写通用异地备份 Secret，并验收首次快照、远端保留、
    定期隔离恢复、失败报警与外部 dead-man。
-2. 将本地候选送入 GitHub Linux CI 和 PostgreSQL 16 隔离迁移/恢复门禁；通过后再决定 PR 与发布。
-3. 发布后保持 Passkey、提前提醒、链接检查和 AI 用量清理默认关闭，完成双域/真机验收后逐项启用。
-4. 将迁移 023 的中文 BM25/本地向量、迁移 024 的 Web Push 与迁移 025 的单用户块编辑器
-   送入 CI、隔离 PostgreSQL 16 门禁并完成 OVH 发布。
-5. 发布后由用户在真实 Chrome/Edge/iPhone 主屏应用中逐设备授权并验证“页面关闭仍送达”；
-   多人协作、Yjs/CRDT 与扩展商店上架继续暂缓。
+2. 由用户在真实 Chrome/Edge/iPhone 主屏应用中逐设备授权并验证“页面关闭仍送达”。
+3. 按需逐项启用并真机验收 Passkey、定时链接检查与 AI 用量清理；保持最小批次和独立回滚。
+4. 在单独授权的主机维护中，将已合并的恢复就绪修复更新到主机全局恢复工具；当前 release
+   已使用稳定就绪门禁完成隔离恢复，本项不影响在线应用功能。
+5. 扩展商店开发者账号、签名、提交与审核，以及多人协作、Yjs/CRDT 继续暂缓。
 
 ## 仍建议用户手工验收
 

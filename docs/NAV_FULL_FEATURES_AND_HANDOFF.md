@@ -8,13 +8,22 @@
 
 - GitHub 仓库：`cristsau/nav-page`，应保持 **Private**。
 - 主分支：`master`。
-- 2026-08-24 本机另有 `LOCAL_DONE / READY_FOR_CI / NOT_DEPLOYED` 候选分支
-  `codex/nav-feature-completion-20260824`，基于 `origin/master` 的 `818c2b3`，包含迁移
-  `019` 至 `022`。它尚未推送、创建 PR、运行 GitHub CI 或发布；详细边界见
-  `docs/NAV_LOCAL_FEATURE_COMPLETION_20260824.md`。
-- 2026-08-23 最后完成 OVH 双域验收的生产应用 SHA 为
-  `25c9c133ad6c34b857cf13c293aa5a89c8ef04d7`（PR #34 合并点）。本工具分支以该 SHA 为基线；
-  当前 `origin/master` 与生产仍须在下一次任务分别实时核验。
+- 2026-08-24 当前 master 为 `788be84c766470d0dce845b282aa246286f77d67`（PR #38）。
+- 当前 OVH release：`/opt/nav-stack/releases/20260824-031310-a9eff0d`；API 应用提交与镜像固定为
+  `a9eff0d7888fd29f8888a503a336af86371c3b80`。PR #38 的 Service Worker no-cache 修复已在
+  release-local Nginx 中生效，恢复就绪竞态修复已进入 master 源码。
+- PR #37 已把迁移 `019` 至 `025` 及 Passkey、统一搜索/助理、AI 用量、提前提醒、链接检查、
+  浏览器/Markdown 导入导出、PWA、自动保存/版本、本地 BM25/向量、Web Push 和 Tiptap
+  单用户块编辑器合并并发布。
+- PR #38 合并后的 master CI `32689782306` 五项全绿，包括 GitHub Linux API/Vite、恢复、维护、
+  高级功能和一次性管理员/canonical backup PostgreSQL 16 集成门禁。
+- 生产前后备份均完成 manifest 校验和隔离 PostgreSQL 16 恢复；发布后精确核对 25 张表与
+  migration ledger 到 `025_block_editor.sql`。
+- 高级功能一次性管理员验收完成 `status=PASS / cleanup=PASS`；临时账号、marker 与会话凭据
+  均清零，真实管理员长期密码未读取或修改。
+- 混合搜索与块编辑器为 `VERIFIED_LIVE`。Web Push 的服务端、VAPID、订阅和测试链已验证，
+  但浏览器通知权限必须逐设备授权，真实关闭页面后的 Chrome/Edge/iPhone 到达仍是
+  `USER_ACTION_REQUIRED`。
 - PR #26 已把安全审计分层保留与导出、图片删除失败后台退避重试、日志脱敏与容器日志限额合入并发布；迁移 017 已执行，两个后台任务已逐项启用并完成双域验收。
 - 主题对比度、弹窗无障碍、Session single-flight/内存复用、统一 401、路由进度与骨架、缓存/真实 IP/canonical、六分类设置页、统一导航、紧凑搜索、横向书签卡和图片库/时光视觉收敛均已进入上述生产 SHA。
 - PR #27 已发布迁移 018、后台任务持久状态、管理员状态界面、连续失败阈值/冷却和
@@ -34,6 +43,8 @@
 - 账户修改、审计删除和 AI 配置来源切换已通过 GitHub CI、生产前备份与隔离恢复演练，并已发布到 OVH。
 - 图床双 Token 生产配置与 release-local Secret 只读挂载已经发布并验收；Token 值不进入 Git、文档或浏览器。
 - 灾难重建时确认的 OVH 数据边界为 `1` 个用户、`0` 个导航分组、`0` 个书签、`0` 条笔记；这是迁移时证据，不是当前实时业务计数。Oracle 旧数据库仍未恢复。不要把“应用已恢复”误写成“Oracle 个人数据已恢复”。
+- 扩展商店开发者账号、签名、提交与审核继续暂缓；异地存储等待用户选定免费供应商后再填
+  Secret，当前不得猜测或代填。
 
 ## 2. 产品定位
 
@@ -96,8 +107,8 @@ DOMO NAV 是一个面向个人与小团队的私有化工作台。核心句是�
 - 撤销单个会话、其他设备会话或全部会话
 - 一次性恢复码：生成、轮换、复制和下载
 - 使用恢复码重设密码；恢复成功后撤销全部会话并移除现有 Passkey
-- Passkey/WebAuthn 源码：唯一 RP ID `nav.skrskr.net`、官方验证器、短期一次性挑战、
-  密码复验、登录防枚举、审计和双域说明；默认关闭，等待生产迁移与真实设备验收
+- Passkey/WebAuthn：唯一 RP ID `nav.skrskr.net`、官方验证器、短期一次性挑战、
+  密码复验、登录防枚举、审计和双域说明；源码与迁移已发布，默认关闭，等待真实设备验收
 - 安全审计：登录、退出、恢复、会话撤销和管理员操作
 - 审计仅展示截断 HMAC 指纹，不展示原始 IP 或 User-Agent
 - 按当前筛选导出 CSV/JSON；单次最多 10,000 条，导出行为也会写入审计
@@ -146,10 +157,10 @@ DOMO NAV 是一个面向个人与小团队的私有化工作台。核心句是�
 
 当前边界：
 
-- 本地候选已完成数字 ID、中文子串、可选 `pg_trgm` 错字容错、带来源单轮资料助理，以及
-  不保存问答内容的 AI 用量/可选成本面板
-- 迁移 023 候选进一步加入本地中文 tokenizer/BM25 与固定 revision 多语言向量 embedding；
-  加密笔记不进入派生索引，模型失效时自动降级 BM25，尚待 CI 与生产发布验收
+- 数字 ID、中文子串、可选 `pg_trgm` 错字容错、带来源单轮资料助理，以及不保存问答内容的
+  AI 用量/可选成本面板已进入生产版本。
+- 迁移 023 的本地中文 tokenizer/BM25 与固定 revision 多语言向量 embedding 已上线；
+  加密笔记不进入派生索引，模型失效时自动降级 BM25。
 
 ### 4.4 备忘录、日记与笔记
 
@@ -168,8 +179,9 @@ DOMO NAV 是一个面向个人与小团队的私有化工作台。核心句是�
 
 当前边界：
 
-- 本地候选已完成提前提醒、自动保存、并发保护和 50 版本历史；迁移 024 候选增加页面关闭后的
-  Web Push/VAPID，迁移 025 候选增加 Tiptap 单用户 Notion 式块编辑器
+- 提前提醒、自动保存、并发保护、50 版本历史、迁移 024 的 Web Push/VAPID 与迁移 025 的
+  Tiptap 单用户 Notion 式块编辑器已经上线。
+- 服务端 Push 链已验证；每台浏览器仍需用户授权，iPhone/iPad 需从主屏幕入口打开后授权。
 - 多人实时协作、评论和 Yjs/CRDT 仍不在当前产品范围
 
 ### 4.5 图片与图床
@@ -236,8 +248,8 @@ DOMO NAV 是一个面向个人与小团队的私有化工作台。核心句是�
 - 响应式手机/平板布局
 - 触屏书签操作菜单
 
-当前已发布生产边界仍须按状态页现场核验。本地候选已有隐私安全的 Service Worker 离线说明壳、
-显式更新及标准 Web Push；通知需用户逐设备授权，iPhone/iPad 需从主屏幕安装入口启用。
+当前已发布生产边界仍须按状态页现场核验。隐私安全的 Service Worker 离线说明壳、显式更新及
+标准 Web Push 已上线；通知需用户逐设备授权，iPhone/iPad 需从主屏幕安装入口启用。
 
 ### 4.9 设置
 
@@ -323,7 +335,7 @@ DOMO NAV 是一个面向个人与小团队的私有化工作台。核心句是�
 
 行为：仅管理员可用并禁止缓存；返回安全审计清理和图片删除重试的启用状态、间隔、最近成功/失败、耗时、白名单计数、连续失败和通知投递状态。不会返回异常正文、URL、图片名、Token 或 Telegram 配置。
 
-### 2026-08-24 本地候选 API（尚未发布）
+### 2026-08-24 已发布 API
 
 - Passkey：`/api/auth/passkeys/config`、`/api/auth/passkeys`、登记 options/verify、登录
   options/verify 与按 ID 删除。
@@ -333,8 +345,11 @@ DOMO NAV 是一个面向个人与小团队的私有化工作台。核心句是�
 - 原子批量导入：`POST /api/imports/bookmarks`、`POST /api/imports/notes`。
 - 笔记版本：`GET /api/notes/:noteId/versions`、
   `POST /api/notes/:noteId/versions/:versionId/restore`。
+- Web Push：状态、公钥、订阅、取消订阅与测试通知 API。
+- 高级搜索沿用 `GET /api/workspace/search`，响应标明 `searchMode` 与 `semanticStatus`。
 
-这些入口都必须经过当前认证、限流和不缓存边界；存在于本地源码不代表生产可调用。
+这些入口已经进入生产版本，仍必须经过当前认证、限流和不缓存边界；是否可用还取决于对应
+生产开关和用户权限，不能因为路由存在就绕过开关。
 
 ### AI 配置来源
 
@@ -392,16 +407,16 @@ AI 配置仍保存在当前用户的 `appConfig.search.providers.chatgpt` 中：
    - `docs/NAV_SECURITY_CONTROLS.md`
    - `docs/NAV_BACKUP_RUNBOOK.md`
    - `docs/NAV_PRODUCTION_RELEASE_ACCEPTANCE.md`
-6. 只读确认 PR #34、`origin/master` 和实时生产；本文记录的 `25c9c13…` 只是 2026-08-23
-   源码与生产验收快照，不能代替当前核验。
+   - `docs/NAV_RELEASE_20260824_ADVANCED_FEATURES.md`
+6. 只读确认 PR #38、`origin/master` 和实时生产；本文记录的 `788be84…` 与 `a9eff0d…` 只是
+   2026-08-24 源码/生产验收快照，不能代替当前核验。
 7. 完整 npm 安装、依赖审计、API 测试与 Vite 构建优先交给 GitHub Actions；个人电脑默认只做源码、静态和差异检查。
 8. 只有 CI 通过、PR 合并、生产前备份与恢复门禁通过并取得明确发布授权后，才能发布。
 
 ## 8. 本轮验收清单
 
-以下历史勾选项只证明截至 2026-08-23 的生产版本。它们不能继承给 2026-08-24 的迁移
-`019` 至 `022` 本地候选；该候选当前只完成依赖无关测试、语法和差异检查，GitHub CI、Vite
-构建、PostgreSQL 16 隔离迁移/恢复与真机验收仍未执行。
+以下勾选项证明截至 2026-08-24 本次发布的源码、CI 与服务器侧验收。浏览器通知权限、
+Passkey 和手机触控仍需真实设备人工确认，不能由服务器验收代替。
 
 ### 代码/CI
 
@@ -411,7 +426,7 @@ AI 配置仍保存在当前用户的 `appConfig.search.providers.chatgpt` 中：
 - [x] GitHub Actions API 全测通过
 - [x] Vite 生产构建通过
 - [x] 依赖审计结果已审阅；`nanoid` lock 条目已升级到无该高危公告的 `3.3.18`
-- [x] PR `#18` 至 `#34` 已按独立批次合并，最新 `master` CI 通过
+- [x] PR `#18` 至 `#38` 已按独立批次合并，最新 `master` CI 通过
 - [x] PR `#26/#27` 的分支、PR 与合并后 `master` CI 均通过
 - [x] PR `#28/#29` 已合并且 GitHub CI 通过；异地备份仍为源码候选，尚未安装到 OVH
 - [x] PR `#30/#31` 已合并且 GitHub CI 与独立 PostgreSQL 16 恢复演练通过，并随 PR #32 发布
@@ -420,14 +435,13 @@ AI 配置仍保存在当前用户的 `appConfig.search.providers.chatgpt` 中：
   PostgreSQL 16、恢复与维护 PostgreSQL 集成门禁全部通过
 - [x] PR `#26/#27` 新增差异未发现 Token、API Key 或真实 `.env`
 
-### 2026-08-24 本地候选（尚未 CI/发布）
+### 2026-08-24 高级功能发布
 
-- [x] 组合依赖无关测试通过（76 通过、7 个 Bash 门禁在 Windows 跳过、0 失败）
-- [x] 变更 JavaScript 语法检查 63/63、Vue 脚本语法检查 18/18、`git diff --check`
-- [ ] GitHub Linux 完整依赖、API、Shell 与 Vite 构建
-- [ ] PostgreSQL 16 隔离执行迁移 `019` 至 `022`、`verifyMigrations.js` 与恢复演练
-- [ ] Chrome/Edge/iPhone 的 Passkey、导入、通知、PWA、触屏与双域验收
-- [ ] PR、合并、生产备份、新 release、默认关闭发布与逐项启用
+- [x] GitHub Linux 完整依赖、API、Shell、Vite 构建与依赖审计
+- [x] PostgreSQL 16 隔离执行迁移 `019` 至 `025`、`verifyMigrations.js` 与恢复演练
+- [x] 中文 BM25/本地向量、块笔记、版本、Web Push 配置和一次性管理员生命周期验收
+- [x] PR #37/#38 合并，生产前后备份、独立 release、双域发布与非目标容器不变验收
+- [ ] Chrome/Edge/iPhone 的通知到达、Passkey、PWA 主屏与触屏真机验收
 
 ### UI、性能与无障碍（已发布并验收）
 
@@ -466,7 +480,7 @@ AI 配置仍保存在当前用户的 `appConfig.search.providers.chatgpt` 中：
 
 ### 生产发布
 
-以下勾选项是 `25c9c13…` 已上线版本的带日期验收，不代表下一次发布时的实时状态：
+以下勾选项是上一生产版本 `25c9c13…` 的历史验收，保留用于追溯，不代表当前实时状态：
 
 - [x] 锁定精确 Git merge SHA：`25c9c133ad6c34b857cf13c293aa5a89c8ef04d7`
 - [x] 发布前 PostgreSQL 压缩备份与配置副本完成
@@ -484,25 +498,25 @@ AI 配置仍保存在当前用户的 `appConfig.search.providers.chatgpt` 中：
 
 ### 生产发布证据
 
-- OVH 发布目录：`/opt/nav-stack/releases/20260823-233024-25c9c13`
-- 本次 `nav-web` 未重建；双域继续复验的前端 `index.html` SHA-256：
-  `2c21947bd73fae227534ba15645106f87954db32be9a122843a2e934f5a4c8c4`
+- OVH 发布目录：`/opt/nav-stack/releases/20260824-031310-a9eff0d`
+- API 镜像：`nav-ovh-api:a9eff0d7888fd29f8888a503a336af86371c3b80`
+- GitHub master：`788be84c766470d0dce845b282aa246286f77d67`；最终 CI `32689782306`
 - 精确源码归档和 PostgreSQL 备份哈希保存在该 release 的受限 evidence 中，不在交接文档复制正文
 - 生产前门禁、切换、登录态、Telegram 目标、告警启用和发布后恢复证据保存在 release 的受限 `evidence` 中
-- 仅应用回滚脚本：`/opt/nav-stack/releases/20260823-233024-25c9c13/rollback-release.sh`；固定目标为
-  `/opt/nav-stack/releases/20260823-191619-9b05013`
+- 当前受限回滚脚本：`/opt/nav-stack/releases/20260824-031310-a9eff0d/rollback-release.sh`，固定目标
+  为发布前 release `/opt/nav-stack/releases/20260823-233024-25c9c13`，只重建 API/Web；
+  `019` 至 `025` 为加法迁移，应用回滚保留迁移，严禁用旧整库覆盖发布后写入。
 - 不在本文保存备份正文、凭据、Cookie 或 Secret；哈希只用于完整性核对。
 - 后续发布登录态验收使用随机一次性管理员和自动清理；工具与硬中断边界见
   `docs/NAV_PRODUCTION_RELEASE_ACCEPTANCE.md`，不再依赖真实管理员的 release 明文密码。
 
 ## 9. 后续优先级
 
-1. 让 `codex/nav-feature-completion-20260824` 通过 GitHub Linux CI、PostgreSQL 16 隔离迁移/恢复
-   和 Chrome/Edge/iPhone 真机验收；当前为 `LOCAL_DONE / READY_FOR_CI / NOT_DEPLOYED`。
-2. 发布后保持 Passkey、提前提醒、链接检查和 AI 用量清理默认关闭，再逐项小批量启用。
+1. 用户在真实 Chrome/Edge 与 iPhone/iPad 主屏应用逐设备授权通知，并发送测试通知确认页面关闭后到达。
+2. 保持 Passkey、定时链接检查和 AI 用量清理按独立开关小批量启用，再做真实设备/生产验收。
 3. 用户选定免费存储后填写通用异地备份配置，完成首次快照、恢复演练、失败报警和外部 dead-man。
-4. 完成中文 BM25/本地向量、Web Push/VAPID 与单用户块编辑器的 CI、生产发布和真机通知验收；
-   多人协作继续独立评估。
+4. 在单独授权的主机维护中更新主机全局恢复工具；源代码和当前 release 的稳定恢复门禁已修复。
+5. 扩展商店开发者账号、签名、提交和审核暂缓；多人协作、评论与 Yjs/CRDT 继续独立评估。
 
 ## 10. 可直接交给家里 Codex 的提示词
 
@@ -512,19 +526,18 @@ docs/NAV_FULL_FEATURES_AND_HANDOFF.md，然后只读核对 Git 当前分支、
 origin/master、未提交内容、GitHub PR/CI 和实时生产状态。不要从历史工作树拼接代码，
 不要读取或输出任何 Secret、密码、Token、Cookie、私钥或真实 .env。
 
-截至 2026-08-23，账户与审计控制、AI 配置、图床双 Token、主题/无障碍、Session、
-缓存/代理、设置/导航、视觉收敛、迁移 017/018、两个后台任务状态、云端安全恢复和运行内
-Telegram 失败/恢复告警，以及一次性管理员发布验收生命周期已经发布到 OVH SHA 25c9c13。
-2026-08-24 另有一个基于 origin/master 818c2b3 的本地候选分支
-codex/nav-feature-completion-20260824，包含迁移 019-022、Passkey、统一搜索/带来源助理、
-AI 用量、提前提醒、定时链接检查、书签 HTML/Markdown 导入、PWA 离线外壳、自动保存和
-版本历史；状态是 LOCAL_DONE / READY_FOR_CI / NOT_DEPLOYED。先确认该分支或等价提交是否
-已经安全带到当前电脑，不能从状态文字推断它已推送、合并或上线。
+截至 2026-08-24，当前 GitHub master 是 788be84c766470d0dce845b282aa246286f77d67；
+OVH release 是 /opt/nav-stack/releases/20260824-031310-a9eff0d，API 应用 SHA 是
+a9eff0d7888fd29f8888a503a336af86371c3b80。迁移 019-025、Passkey 源码、统一搜索/带来源助理、
+AI 用量、提前提醒、定时链接检查、书签 HTML/Markdown 导入、PWA、自动保存/版本、本地
+BM25/固定 revision 向量、Web Push/VAPID 和 Tiptap 单用户块编辑器已合并并发布。
+最终 master CI 32689782306 五项全绿；生产前后备份、隔离 PostgreSQL 16 恢复、双域、一次性
+管理员、混合搜索、块编辑和 Push 服务端链已通过。真实设备通知授权和 Passkey 仍需人工验收。
 
 当前 GitHub master 和生产可能已继续前进；先只读核对 origin/master、实时生产 SHA、
 双域、容器健康、备份和当前数据库边界；不要推断 Oracle 旧个人数据已恢复。当前首要生产
-任务是先让上述本地候选经过 GitHub CI、PostgreSQL 16 隔离迁移/恢复与真机验收。异地存储
-由我找到免费供应商后再填写通用配置，当前不要猜测或代填凭据。新改动仍须先经 GitHub CI
+任务是先做真实设备通知/Passkey 验收。异地存储由我找到免费供应商后再填写通用配置，当前
+不要猜测或代填凭据。扩展商店上架暂缓。新改动仍须先经 GitHub CI
 和 PR 门禁；生产登录态
 验收不得读取真实管理员长期密码，应使用一次性管理员全生命周期工具。
 下一项工作必须单独列出影响、备份、回滚、验收和排除项，并等待我明确授权。任何

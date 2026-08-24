@@ -1,24 +1,23 @@
 # DOMO NAV Deployment Guide
 
-## 当前线上部署（2026-08-23 只读基线）
+## 当前线上部署（2026-08-24 验收快照）
 
 - 域名：[https://nav.skrskr.net](https://nav.skrskr.net)
 - 反代域名：[https://nav.cristsau.cn](https://nav.cristsau.cn)
 - 承载服务器：OVH `ovh-US`；Oracle-JP 不再是当前生产承载
 - 外层入口：Nginx Proxy Manager → `nav-web` → `nav-api`
-- 当前 release：`/opt/nav-stack/releases/20260823-233024-25c9c13`
-- 当前应用提交：`25c9c133ad6c34b857cf13c293aa5a89c8ef04d7`
+- 当前 release：`/opt/nav-stack/releases/20260824-031310-a9eff0d`
+- 当前 API 应用提交：`a9eff0d7888fd29f8888a503a336af86371c3b80`
+- 当前 GitHub master：`788be84c766470d0dce845b282aa246286f77d67`；PR #38 的 Nginx
+  no-cache 修复已在上述 release 中生效，恢复就绪修复已进入源码。
 - 前端容器静态目录：`/usr/share/nginx/html`
 - 前端配置挂载：`/etc/nginx/conf.d/default.conf`
 - 后端服务：`nav-api`
 - 数据库服务：`nav-postgres`
-- API 镜像：`nav-ovh-api:25c9c133ad6c34b857cf13c293aa5a89c8ef04d7`
-- 本次为 API-only 发布；`nav-web` 容器和静态内容未重建。双域继续验收的前端
-  `index.html` SHA-256 为：
-  `2c21947bd73fae227534ba15645106f87954db32be9a122843a2e934f5a4c8c4`
-- 发布证据：当前 release 的 `evidence/FINAL_ACCEPTANCE.txt`、
-  `evidence/BACKUP_RESTORE_ACCEPTANCE.txt`、`evidence/POST_BACKUP_RESTORE_ACCEPTANCE.txt` 与
-  `evidence/ACCEPTANCE_ACCOUNT_LIFECYCLE.txt`
+- API 镜像：`nav-ovh-api:a9eff0d7888fd29f8888a503a336af86371c3b80`
+- 本次只重建 `nav-api` 和 `nav-web`；PostgreSQL、CLIProxyAPI、NPM 与其他服务未重建。
+- 发布证据：当前 release 的发布前后备份、隔离恢复与
+  `evidence/ACCEPTANCE_ADVANCED_FEATURES.txt`。证据目录不保存到 Git，也不在文档复制凭据。
 
 以上是带日期的验收快照，不是下一次发布的免检依据。发布前仍须重新核对 release、镜像、
 Compose、容器挂载、代理链、备份和双域状态。
@@ -32,7 +31,8 @@ Compose、容器挂载、代理链、备份和双域状态。
 
 还不是最终商业交付版。会话撤销、账号恢复、动态 AI 模型目录、Responses API、数据导出、
 命令面板、导航维护、到期提醒、图片库、数据库共享限流、统一审计、分层保留、图片删除重试、
-后台状态和运行内失败/恢复告警已经上线。Passkey 源码已完成但默认关闭、尚未生产验收；
+后台状态、运行内失败/恢复告警、中文 BM25/本地向量、Web Push 服务端链和单用户块编辑器
+已经上线。Passkey 源码与迁移已发布但默认关闭、尚未完成真实设备验收；
 自动异地加密备份、主机外失联监测、
 多环境部署和客户自部署文档仍未收口。
 
@@ -216,8 +216,8 @@ Session、API 启动恢复与 60 秒恢复扫描共同阻止强杀后遗留管�
 release 中复制一份无门禁的直接 `pg_dump`。硬中断恢复、私有凭据目录、数据库 marker、
 证据脱敏和最终零残留门禁见
 [`docs/NAV_PRODUCTION_RELEASE_ACCEPTANCE.md`](./docs/NAV_PRODUCTION_RELEASE_ACCEPTANCE.md)。
-该生命周期已在 `25c9c13` 首次生产发布中完成 `status=PASS / cleanup=PASS`；后续发布仍须
-针对新的精确 merge SHA 重新执行，不能沿用本次结论。
+该生命周期已在 `a9eff0d` 本次生产发布中重新完成 `status=PASS / cleanup=PASS`；后续发布
+仍须针对新的精确 merge SHA 重新执行，不能沿用本次结论。
 
 前端独立 release 使用 `umask 077` 保护源码和证据，但发布到 Nginx live 目录时必须显式
 把目录安装为 `0755`、静态文件安装为 `0644`，不能用 `cp -a` 把构建目录的 `0600` 权限
@@ -354,16 +354,16 @@ location ^~ /share/ {
 
 ## 回滚
 
-当前生产应用回滚入口：
+当前 production release 内的受限回滚脚本为：
 
 ```bash
-sudo /opt/nav-stack/releases/20260823-233024-25c9c13/rollback-release.sh
+sudo /opt/nav-stack/releases/20260824-031310-a9eff0d/rollback-release.sh
 ```
 
-该脚本的已验证目标是上一 release
-`/opt/nav-stack/releases/20260823-191619-9b05013`，提交
-`9b0501389de797c99ec646103780b4b83aa4be56`。执行前仍须重新核对当前 release、容器和脚本
-内容；回滚只恢复应用版本，保留已经应用的加法迁移，不得用旧整库覆盖发布后的用户写入。
+脚本权限为 `0700 root:root`，固定目标为发布前 release
+`/opt/nav-stack/releases/20260823-233024-25c9c13`，只重建 `nav-api`/`nav-web`，并在切换前核对
+目标镜像、release 输入与发布锁。执行前仍须重新核对当前 release、容器和脚本哈希。回滚只恢复
+应用版本，保留已经应用的 `019` 至 `025` 加法迁移；不得用旧整库覆盖发布后的用户写入。
 
 `/opt/nav-releases/20260812-061103-0a11f1f26bd8e87e39888a56a538a0b12bcf3c04/rollback-frontend.sh`
 只属于 2026-08-12 纯前端热修的历史记录，禁止用于当前生产。只有明确的数据损坏事故才评估
