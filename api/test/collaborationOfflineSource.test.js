@@ -27,12 +27,12 @@ test('browser collaboration preserves an offline CRDT and refreshes comments acr
   assert.match(editor, /new WebsocketProvider/)
   assert.match(editor, /Collaboration\.configure\(\{ document: ydoc, field: 'default' \}\)/)
   assert.match(editor, /离线编辑，联网后合并/)
-  assert.match(panel, /setInterval\(refreshLiveComments, 4_000\)/)
+  assert.match(panel, /window\.setInterval\(refreshLiveComments, 4_000\)/)
   assert.match(panel, /domo-nav:offline-sync/)
   assert.match(panel, /canEditComment/)
   assert.match(panel, /canDeleteComment/)
   assert.match(nginx, /proxy_set_header Upgrade \$http_upgrade/)
-  assert.match(nginx, /proxy_set_header Connection \$connection_upgrade/)
+  assert.match(nginx, /proxy_set_header Connection \$nav_connection_upgrade/)
 })
 
 test('offline workspace is restart-safe and keeps private API responses out of the shell cache', async () => {
@@ -66,5 +66,5 @@ test('large restore upload is line-streamed into PostgreSQL staging before apply
   assert.match(route, /DATA_RESTORE_STREAM_BATCH_SIZE/)
   assert.match(migration, /CREATE TABLE IF NOT EXISTS data_restore_stream_uploads/)
   assert.match(migration, /CREATE TABLE IF NOT EXISTS data_restore_stream_records/)
-  assert.match(ui, /uploadRestoreStream/)
+  assert.match(ui, /uploadBackendRestoreStream/)
 })

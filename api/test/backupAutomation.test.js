@@ -146,7 +146,7 @@ test('complete disaster restore is independently gated and captures rollback bef
   const restore = await read('scripts/nav-disaster-restore.sh')
   const example = await read('scripts/nav-backup.env.example')
   const verification = restore.indexOf('complete backup verification')
-  const applyGate = restore.indexOf('NAV_ENABLE_DISASTER_RESTORE')
+  const applyGate = restore.indexOf('is_true "$NAV_ENABLE_DISASTER_RESTORE"', verification)
   const rollbackDatabase = restore.indexOf('database-before.dump')
   const stop = restore.indexOf('application and proxy stop')
   const databaseRestore = restore.indexOf('PostgreSQL restore')
