@@ -69,6 +69,7 @@ jobs:
             scripts/nav-restore-rehearsal.sh \
             scripts/nav-restore-latest.sh \
             scripts/nav-restore-cloud-latest.sh \
+            scripts/nav-disaster-restore.sh \
             scripts/nav-heartbeat.sh \
             scripts/nav-job-failure-notify.sh \
             scripts/install-nav-backup-systemd.sh
@@ -77,6 +78,7 @@ jobs:
             scripts/nav-restore-rehearsal.sh \
             scripts/nav-restore-latest.sh \
             scripts/nav-restore-cloud-latest.sh \
+            scripts/nav-disaster-restore.sh \
             scripts/nav-heartbeat.sh \
             scripts/nav-job-failure-notify.sh \
             scripts/install-nav-backup-systemd.sh
@@ -88,6 +90,7 @@ jobs:
           sudo install -m 0750 scripts/nav-restore-rehearsal.sh /usr/local/sbin/nav-restore-rehearsal
           sudo install -m 0750 scripts/nav-restore-latest.sh /usr/local/sbin/nav-restore-latest
           sudo install -m 0750 scripts/nav-restore-cloud-latest.sh /usr/local/sbin/nav-restore-cloud-latest
+          sudo install -m 0750 scripts/nav-disaster-restore.sh /usr/local/sbin/nav-disaster-restore
           sudo install -m 0750 scripts/nav-heartbeat.sh /usr/local/sbin/nav-heartbeat
           sudo install -m 0750 scripts/nav-job-failure-notify.sh /usr/local/sbin/nav-job-failure-notify
           sudo install -m 0644 docs/NAV_BACKUP_RUNBOOK.md /usr/share/doc/domo-nav/NAV_BACKUP_RUNBOOK.md
@@ -269,6 +272,56 @@ jobs:
 
       - name: Run hybrid search, Web Push and block editor PostgreSQL exercise
         run: npm run test:advanced:integration --prefix api
+
+  collaboration-postgres-integration:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    env:
+      NODE_ENV: test
+      DATABASE_URL: postgres://nav:nav_password@127.0.0.1:5432/nav_collaboration_test
+      NAV_COLLABORATION_INTEGRATION_TEST: "true"
+      NAV_RATE_LIMIT_KEY_SECRET: nav-collaboration-ci-only-secret-20260824
+      NAV_LOG_LEVEL: silent
+      CORS_ORIGIN: http://localhost:5174
+      NAV_IMGBED_BASE_URL: https://pic.integration.test
+
+    services:
+      postgres:
+        image: postgres:16-alpine
+        env:
+          POSTGRES_USER: nav
+          POSTGRES_PASSWORD: nav_password
+          POSTGRES_DB: nav_collaboration_test
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd "pg_isready -U nav -d nav_collaboration_test"
+          --health-interval 5s
+          --health-timeout 5s
+          --health-retries 10
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v6
+
+      - name: Set up Node.js
+        uses: actions/setup-node@v6
+        with:
+          node-version: 24
+          cache: npm
+          cache-dependency-path: api/package-lock.json
+
+      - name: Install API dependencies
+        run: npm ci --prefix api
+
+      - name: Apply and verify PostgreSQL migrations
+        run: |
+          npm run migrate --prefix api
+          npm run migrate --prefix api
+          npm run verify:migrations --prefix api
+
+      - name: Run collaboration and offline-sync PostgreSQL exercise
+        run: npm run test:collaboration:integration --prefix api
 
   release-acceptance-postgres-integration:
     runs-on: ubuntu-latest

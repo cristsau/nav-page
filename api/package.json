@@ -13,10 +13,13 @@
     "test:restore:integration": "node --test --test-concurrency=1 integration/dataRestorePostgres.integration.js",
     "test:maintenance:integration": "node --test --test-concurrency=1 integration/maintenancePostgres.integration.js",
     "test:advanced:integration": "node --test --test-concurrency=1 integration/advancedFeaturesPostgres.integration.js",
+    "test:collaboration:integration": "node --test --test-concurrency=1 integration/collaborationOfflinePostgres.integration.js",
     "test:release-acceptance:integration": "node --test --test-concurrency=1 integration/releaseAcceptancePostgres.integration.js",
     "test:backup-gate:integration": "node --test --test-concurrency=1 integration/backupGatePostgres.integration.js"
   },
   "dependencies": {
+    "@tiptap/y-tiptap": "3.0.9",
+    "@y/websocket-server": "0.1.1",
     "@fastify/cookie": "^11.0.2",
     "@fastify/cors": "^11.1.0",
     "@huggingface/transformers": "4.2.0",
@@ -24,6 +27,8 @@
     "fastify": "^5.6.1",
     "fastify-plugin": "^5.0.1",
     "pg": "^8.16.3",
-    "web-push": "3.6.7"
+    "web-push": "3.6.7",
+    "ws": "8.21.3",
+    "yjs": "13.6.32"
   }
 }

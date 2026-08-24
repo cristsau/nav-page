@@ -1,5 +1,7 @@
 <script setup>
-import { computed, onBeforeUnmount, ref, watch } from 'vue'
+import { computed, onBeforeUnmount, onMounted, ref, watch } from 'vue'
+import Collaboration from '@tiptap/extension-collaboration'
+import CollaborationCaret from '@tiptap/extension-collaboration-caret'
 import { DragHandle } from '@tiptap/extension-drag-handle-vue-3'
 import Highlight from '@tiptap/extension-highlight'
 import Image from '@tiptap/extension-image'
@@ -12,7 +14,11 @@ import TextAlign from '@tiptap/extension-text-align'
 import Underline from '@tiptap/extension-underline'
 import StarterKit from '@tiptap/starter-kit'
 import { EditorContent, useEditor } from '@tiptap/vue-3'
+import { IndexeddbPersistence } from 'y-indexeddb'
+import { WebsocketProvider } from 'y-websocket'
+import * as Y from 'yjs'
 import Icon from '@/shared/components/Icon.vue'
+import { useAuth } from '@/shared/composables/useAuth'
 import {
   EMPTY_TIPTAP_DOCUMENT,
   isTiptapDocument,
@@ -25,11 +31,39 @@ const props = defineProps({
   modelValue: { type: Object, default: null },
   plainText: { type: String, default: '' },
   disabled: { type: Boolean, default: false },
-  allowImages: { type: Boolean, default: true }
+  allowImages: { type: Boolean, default: true },
+  noteId: { type: String, default: '' },
+  realtime: { type: Boolean, default: false }
 })
-const emit = defineEmits(['update:modelValue', 'update:text', 'update:imageUrls', 'request-image'])
+const emit = defineEmits(['update:modelValue', 'update:text', 'update:imageUrls', 'request-image', 'selection-change', 'collaboration-status'])
+const { currentUser } = useAuth()
 const slashOpen = ref(false)
 const slashIndex = ref(0)
+const collaborationStatus = ref(props.realtime ? 'loading' : 'disabled')
+const collaborationEnabled = Boolean(props.realtime && props.noteId)
+const ydoc = collaborationEnabled ? new Y.Doc() : null
+const indexeddbProvider = collaborationEnabled
+  ? new IndexeddbPersistence(`domo-nav-note-${props.noteId}`, ydoc)
+  : null
+const websocketProvider = collaborationEnabled
+  ? new WebsocketProvider(
+      `${window.location.protocol === 'https:' ? 'wss:' : 'ws:'}//${window.location.host}/api/collaboration/ws`,
+      props.noteId,
+      ydoc,
+      { connect: false }
+    )
+  : null
+
+function collaborationUser() {
+  const userId = String(currentUser.value?.id || props.noteId || 'collaborator')
+  let hash = 0
+  for (const character of userId) hash = ((hash << 5) - hash + character.charCodeAt(0)) | 0
+  const palette = ['#5e6ad2', '#3e8d7c', '#b46b55', '#8a63a8', '#b1843f', '#4f7ba8']
+  return {
+    name: String(currentUser.value?.username || '协作者').slice(0, 80),
+    color: palette[Math.abs(hash) % palette.length]
+  }
+}
 
 function initialContent() {
   if (isTiptapDocument(props.modelValue)) return props.modelValue
@@ -47,10 +81,13 @@ function safeWebUrl(value) {
 }
 
 const editor = useEditor({
-  content: initialContent(),
+  content: collaborationEnabled ? undefined : initialContent(),
   editable: !props.disabled,
   extensions: [
-    StarterKit.configure({ heading: { levels: [1, 2, 3] } }),
+    StarterKit.configure({
+      heading: { levels: [1, 2, 3] },
+      ...(collaborationEnabled ? { undoRedo: false } : {})
+    }),
     Underline,
     Highlight.configure({ multicolor: false }),
     Link.configure({
@@ -67,7 +104,14 @@ const editor = useEditor({
     Placeholder.configure({
       placeholder: '输入 / 选择内容块，或直接开始写作…',
       showOnlyCurrent: true
-    })
+    }),
+    ...(collaborationEnabled ? [
+      Collaboration.configure({ document: ydoc, field: 'default' }),
+      CollaborationCaret.configure({
+        provider: websocketProvider,
+        user: collaborationUser()
+      })
+    ] : [])
   ],
   editorProps: {
     attributes: {
@@ -90,6 +134,14 @@ const editor = useEditor({
     emit('update:modelValue', document)
     emit('update:text', currentEditor.getText({ blockSeparator: '\n' }))
     emit('update:imageUrls', tiptapDocumentImageUrls(document))
+  },
+  onSelectionUpdate: ({ editor: currentEditor }) => {
+    const selection = currentEditor.state.selection
+    emit('selection-change', selection.empty ? null : {
+      from: selection.from,
+      to: selection.to,
+      text: currentEditor.state.doc.textBetween(selection.from, selection.to, ' ').slice(0, 500)
+    })
   }
 })
 
@@ -97,6 +149,7 @@ watch(() => props.disabled, (disabled) => editor.value?.setEditable(!disabled))
 watch(
   () => props.modelValue,
   (value) => {
+    if (collaborationEnabled) return
     if (!editor.value || !isTiptapDocument(value)) return
     if (JSON.stringify(editor.value.getJSON()) !== JSON.stringify(value)) {
       editor.value.commands.setContent(value, { emitUpdate: false })
@@ -197,17 +250,67 @@ defineExpose({
   focus: () => editor.value?.commands.focus(),
   getJSON: () => editor.value?.getJSON() || EMPTY_TIPTAP_DOCUMENT,
   getText: () => editor.value?.getText({ blockSeparator: '\n' }) || '',
+  getSelection: () => {
+    const selection = editor.value?.state?.selection
+    if (!selection || selection.empty) return null
+    return {
+      from: selection.from,
+      to: selection.to,
+      text: editor.value.state.doc.textBetween(selection.from, selection.to, ' ').slice(0, 500)
+    }
+  },
   insertImage,
   removeImage,
   insertText,
   replaceText
 })
 
-onBeforeUnmount(() => editor.value?.destroy())
+function setCollaborationStatus(status) {
+  collaborationStatus.value = status
+  emit('collaboration-status', status)
+}
+
+onMounted(async () => {
+  if (!collaborationEnabled) return
+  websocketProvider.on('status', ({ status }) => {
+    setCollaborationStatus(status === 'connected' ? 'connected' : 'offline')
+  })
+  websocketProvider.on('sync', (synced) => {
+    if (!synced || !editor.value) return
+    const config = ydoc.getMap('config')
+    const fragment = ydoc.getXmlFragment('default')
+    if (!config.get('initialContentLoaded')) {
+      if (fragment.length === 0) editor.value.commands.setContent(initialContent())
+      config.set('initialContentLoaded', true)
+    }
+    setCollaborationStatus('synced')
+  })
+  try {
+    await indexeddbProvider.whenSynced
+    if (!ydoc.getMap('config').get('initialContentLoaded') && ydoc.getXmlFragment('default').length > 0) {
+      ydoc.getMap('config').set('initialContentLoaded', true)
+    }
+    setCollaborationStatus(navigator.onLine ? 'connecting' : 'offline')
+    websocketProvider.connect()
+  } catch {
+    setCollaborationStatus('offline')
+  }
+})
+
+onBeforeUnmount(() => {
+  websocketProvider?.destroy()
+  indexeddbProvider?.destroy()
+  editor.value?.destroy()
+  ydoc?.destroy()
+})
 </script>
 
 <template>
   <div class="block-editor" :class="{ 'is-disabled': disabled }">
+    <div v-if="collaborationEnabled" class="block-editor__collaboration" role="status">
+      <span :class="`is-${collaborationStatus}`" aria-hidden="true" />
+      {{ collaborationStatus === 'synced' || collaborationStatus === 'connected' ? '实时协作已连接' : collaborationStatus === 'offline' ? '离线编辑，联网后合并' : '正在连接协作服务' }}
+    </div>
     <div v-if="editor" class="block-editor__toolbar" role="toolbar" aria-label="内容格式">
       <label class="block-editor__select">
         <span class="sr-only">内容块类型</span>
@@ -279,6 +382,13 @@ onBeforeUnmount(() => editor.value?.destroy())
 <style scoped>
 .sr-only { position: absolute; width: 1px; height: 1px; padding: 0; overflow: hidden; clip: rect(0, 0, 0, 0); white-space: nowrap; border: 0; }
 .block-editor { overflow: hidden; background: var(--bg-secondary); border: 1px solid var(--border-light); border-radius: 16px; }
+.block-editor__collaboration { display: flex; min-height: 34px; padding: 7px 12px; align-items: center; gap: 7px; color: var(--text-muted); background: color-mix(in srgb, var(--bg-card) 82%, transparent); border-bottom: 1px solid var(--border-light); font-size: 11px; }
+.block-editor__collaboration > span { width: 7px; height: 7px; border-radius: 999px; background: var(--warning-color, #c7924c); }
+.block-editor__collaboration > span.is-synced,
+.block-editor__collaboration > span.is-connected { background: var(--success-color, #66a36c); }
+.block-editor__collaboration > span.is-connecting,
+.block-editor__collaboration > span.is-loading { background: var(--accent-color); animation: collaboration-pulse 1s ease-in-out infinite; }
+@keyframes collaboration-pulse { 50% { opacity: .35; transform: scale(.75); } }
 .block-editor:focus-within { border-color: color-mix(in srgb, var(--accent-color) 70%, var(--border-light)); box-shadow: 0 0 0 3px color-mix(in srgb, var(--accent-color) 14%, transparent); }
 .block-editor__toolbar { display: flex; min-height: 48px; padding: 5px 7px; align-items: center; gap: 3px; overflow-x: auto; background: color-mix(in srgb, var(--bg-card) 76%, transparent); border-bottom: 1px solid var(--border-light); scrollbar-width: thin; }
 .block-editor__toolbar button,

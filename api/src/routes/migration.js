@@ -1,3 +1,6 @@
+import { createHash } from 'node:crypto'
+import { once } from 'node:events'
+import { StringDecoder } from 'node:string_decoder'
 import { config } from '../config.js'
 import { withTransaction } from '../db/index.js'
 import { verifyPassword } from '../lib/auth.js'
@@ -51,6 +54,19 @@ import {
 const BACKUP_SCHEMA = 'domo-nav-backup'
 const BACKUP_VERSION = 1
 const DATA_RESTORE_BODY_LIMIT = 16 * 1024 * 1024
+const DATA_RESTORE_STREAM_BODY_LIMIT = 128 * 1024 * 1024
+const DATA_RESTORE_STREAM_LINE_LIMIT = 2 * 1024 * 1024
+const DATA_RESTORE_STREAM_BATCH_SIZE = 250
+const DATA_RESTORE_STREAM_CONTENT_TYPE = 'application/x-domo-nav-backup-ndjson'
+const DATA_RESTORE_STREAM_COLLECTIONS = Object.freeze([
+  'groups',
+  'bookmarks',
+  'notes',
+  'customEngines',
+  'shares',
+  'settings',
+  'mediaAssets'
+])
 const DATA_RESTORE_MAX_PASSWORD_LENGTH = 1024
 const DATA_RESTORE_MAX_TOKEN_LENGTH = 256
 const DATA_RESTORE_CONFIRMATION = '恢复'
@@ -953,6 +969,97 @@ function createBackendExportFileName(exportedAt) {
   return `domo-nav-cloud-backup-${timestamp}.json`
 }
 
+function createBackendStreamExportFileName(exportedAt) {
+  return createBackendExportFileName(exportedAt).replace(/\.json$/i, '.ndjson')
+}
+
+function streamBackupHeader(backup) {
+  return {
+    schema: backup.schema,
+    version: backup.version,
+    exportedAt: backup.exportedAt || null,
+    manifest: backup.manifest
+  }
+}
+
+function streamUploadError(message, statusCode = 400) {
+  const error = new Error(message)
+  error.statusCode = statusCode
+  error.code = 'invalid_restore_stream'
+  return error
+}
+
+async function insertRestoreStreamBatch(client, uploadId, batch) {
+  if (!batch.length) return
+  await client.query(
+    `
+      INSERT INTO data_restore_stream_records (upload_id, collection, ordinal, record)
+      SELECT $1, incoming.collection, incoming.ordinal, incoming.record
+      FROM jsonb_to_recordset($2::jsonb)
+        AS incoming(collection text, ordinal bigint, record jsonb)
+    `,
+    [uploadId, JSON.stringify(batch)]
+  )
+  batch.length = 0
+}
+
+async function loadRestoreStreamBackup(client, uploadId, userId, sessionId, {
+  lock = false,
+  allowApplied = false
+} = {}) {
+  const normalizedId = String(uploadId || '').trim()
+  if (!normalizedId || normalizedId.length > 64) throw streamUploadError('流式恢复任务 ID 无效')
+  const { rows: uploadRows } = await client.query(
+    `
+      SELECT *
+      FROM data_restore_stream_uploads
+      WHERE id = $1
+        AND user_id = $2
+        AND session_id = $3
+        AND expires_at > NOW()
+        AND status = ANY($4::text[])
+      LIMIT 1
+      ${lock ? 'FOR UPDATE' : ''}
+    `,
+    [normalizedId, userId, sessionId, allowApplied ? ['ready', 'applied'] : ['ready']]
+  )
+  if (!uploadRows.length) throw streamUploadError('流式恢复任务不存在、已过期或不属于当前会话', 404)
+  const data = Object.fromEntries(DATA_RESTORE_STREAM_COLLECTIONS.map((name) => [name, []]))
+  const { rows } = await client.query(
+    `
+      SELECT collection, record
+      FROM data_restore_stream_records
+      WHERE upload_id = $1
+      ORDER BY collection, ordinal
+    `,
+    [normalizedId]
+  )
+  for (const row of rows) data[row.collection].push(row.record)
+  const header = uploadRows[0].backup_header || {}
+  return {
+    upload: uploadRows[0],
+    backup: {
+      source: 'cloud-backup',
+      schema: header.schema,
+      version: header.version,
+      exportedAt: header.exportedAt || null,
+      manifest: header.manifest,
+      data
+    }
+  }
+}
+
+async function resolveRestoreBackup(request, { lock = false } = {}) {
+  if (!request.body?.uploadId) return { backup: request.body?.backup, upload: null }
+  return withTransaction(async (client) => loadRestoreStreamBackup(
+    client,
+    request.body.uploadId,
+    request.currentUser.id,
+    request.session.id,
+    { lock }
+  ))
+}
+
 export async function buildBackendExport(client, userId, {
   exportedAt = new Date().toISOString()
 } = {}) {
@@ -1148,31 +1255,250 @@ function assessBackendExportRestoreCompatibility(backup, { userId } = {}) {
     if (requestBytes > DATA_RESTORE_BODY_LIMIT) {
       return {
         restorable: false,
+        streamRestorable: true,
         payloadBytes,
         requestBytes,
         limitBytes: DATA_RESTORE_BODY_LIMIT,
-        reason: '当前完整备份超过第 1 版一键恢复请求上限'
+        streamLimitBytes: DATA_RESTORE_STREAM_BODY_LIMIT,
+        reason: '当前完整备份超过 JSON 恢复上限，请使用流式恢复'
       }
     }
     return {
       restorable: true,
+      streamRestorable: true,
       payloadBytes,
       requestBytes,
       limitBytes: DATA_RESTORE_BODY_LIMIT,
+      streamLimitBytes: DATA_RESTORE_STREAM_BODY_LIMIT,
       reason: ''
     }
   } catch (error) {
     return {
       restorable: false,
+      streamRestorable: false,
       payloadBytes: null,
       requestBytes: null,
       limitBytes: DATA_RESTORE_BODY_LIMIT,
+      streamLimitBytes: DATA_RESTORE_STREAM_BODY_LIMIT,
       reason: String(error?.message || '当前完整备份不符合第 1 版恢复约束')
     }
   }
 }
 
 export default async function migrationRoutes(fastify) {
+  fastify.addContentTypeParser(
+    DATA_RESTORE_STREAM_CONTENT_TYPE,
+    (request, payload, done) => done(null, payload)
+  )
+
+  fastify.get('/migration/export-cloud-stream', async (request, reply) => {
+    await fastify.requireAuth(request, reply)
+
+    const backup = await withTransaction(async (client) => {
+      await client.query('SET TRANSACTION ISOLATION LEVEL REPEATABLE READ READ ONLY')
+      return buildBackendExport(client, request.currentUser.id)
+    })
+
+    reply.header('Cache-Control', 'no-store, max-age=0')
+    reply.header('Pragma', 'no-cache')
+    reply.header('Surrogate-Control', 'no-store')
+    reply.header('X-Content-Type-Options', 'nosniff')
+    reply.header('Content-Type', `${DATA_RESTORE_STREAM_CONTENT_TYPE}; charset=utf-8`)
+    reply.header(
+      'Content-Disposition',
+      `attachment; filename="${createBackendStreamExportFileName(backup.exportedAt)}"`
+    )
+    reply.hijack()
+
+    const writeLine = async (value) => {
+      if (!reply.raw.write(`${JSON.stringify(value)}\n`, 'utf8')) {
+        await once(reply.raw, 'drain')
+      }
+    }
+
+    try {
+      await writeLine({ type: 'header', backup: streamBackupHeader(backup) })
+      for (const collection of DATA_RESTORE_STREAM_COLLECTIONS) {
+        for (const record of backup.data?.[collection] || []) {
+          await writeLine({ type: 'record', collection, record })
+        }
+      }
+      reply.raw.end()
+    } catch (error) {
+      request.log.error(error, 'streaming cloud export failed')
+      reply.raw.destroy(error)
+    }
+  })
+
+  fastify.post('/migration/restore/stream-upload', {
+    bodyLimit: DATA_RESTORE_STREAM_BODY_LIMIT
+  }, async (request, reply) => {
+    await fastify.requireAuth(request, reply)
+    setRestoreNoStoreHeaders(reply)
+
+    const rateLimitError = await enforceDataRestoreRateLimit(request, reply, {
+      secret: config.rateLimitKeySecret
+    })
+    if (rateLimitError) return rateLimitError
+
+    if (!request.body || typeof request.body[Symbol.asyncIterator] !== 'function') {
+      reply.code(400)
+      return {
+        error: '请使用 NDJSON 流式备份上传',
+        code: 'invalid_restore_stream'
+      }
+    }
+
+    try {
+      const result = await withTransaction(async (client) => {
+        await client.query('DELETE FROM data_restore_stream_uploads WHERE expires_at <= NOW()')
+        const uploadResult = await client.query(
+          `
+            INSERT INTO data_restore_stream_uploads (user_id, session_id)
+            VALUES ($1, $2)
+            RETURNING id, expires_at
+          `,
+          [request.currentUser.id, request.session.id]
+        )
+        const uploadId = uploadResult.rows[0].id
+        const expiresAt = uploadResult.rows[0].expires_at
+        const decoder = new StringDecoder('utf8')
+        const digest = createHash('sha256')
+        const ordinals = Object.fromEntries(
+          DATA_RESTORE_STREAM_COLLECTIONS.map((collection) => [collection, 0])
+        )
+        const batch = []
+        let pending = ''
+        let totalBytes = 0
+        let header = null
+
+        const processLine = async (rawLine) => {
+          const line = rawLine.endsWith('\r') ? rawLine.slice(0, -1) : rawLine
+          if (!line.trim()) return
+          if (Buffer.byteLength(line, 'utf8') > DATA_RESTORE_STREAM_LINE_LIMIT) {
+            throw streamUploadError('流式恢复文件中的单行超过 2 MiB 上限')
+          }
+
+          let entry
+          try {
+            entry = JSON.parse(line)
+          } catch {
+            throw streamUploadError('流式恢复文件包含无效 JSON 行')
+          }
+          if (!entry || Array.isArray(entry) || typeof entry !== 'object') {
+            throw streamUploadError('流式恢复记录必须是 JSON 对象')
+          }
+
+          if (!header) {
+            if (
+              entry.type !== 'header'
+              || !entry.backup
+              || Array.isArray(entry.backup)
+              || typeof entry.backup !== 'object'
+              || Object.prototype.hasOwnProperty.call(entry.backup, 'data')
+            ) {
+              throw streamUploadError('流式恢复文件缺少合法的首行备份头')
+            }
+            header = entry.backup
+            return
+          }
+
+          if (
+            entry.type !== 'record'
+            || !DATA_RESTORE_STREAM_COLLECTIONS.includes(entry.collection)
+            || !entry.record
+            || Array.isArray(entry.record)
+            || typeof entry.record !== 'object'
+          ) {
+            throw streamUploadError('流式恢复文件包含无效记录')
+          }
+          const ordinal = ordinals[entry.collection]
+          ordinals[entry.collection] += 1
+          batch.push({
+            collection: entry.collection,
+            ordinal,
+            record: entry.record
+          })
+          if (batch.length >= DATA_RESTORE_STREAM_BATCH_SIZE) {
+            await insertRestoreStreamBatch(client, uploadId, batch)
+          }
+        }
+
+        for await (const incomingChunk of request.body) {
+          const chunk = Buffer.isBuffer(incomingChunk)
+            ? incomingChunk
+            : Buffer.from(incomingChunk)
+          totalBytes += chunk.length
+          if (totalBytes > DATA_RESTORE_STREAM_BODY_LIMIT) {
+            throw streamUploadError('流式恢复文件超过 128 MiB 上限', 413)
+          }
+          digest.update(chunk)
+          pending += decoder.write(chunk)
+          let newlineIndex = pending.indexOf('\n')
+          while (newlineIndex >= 0) {
+            const line = pending.slice(0, newlineIndex)
+            pending = pending.slice(newlineIndex + 1)
+            await processLine(line)
+            newlineIndex = pending.indexOf('\n')
+          }
+          if (Buffer.byteLength(pending, 'utf8') > DATA_RESTORE_STREAM_LINE_LIMIT) {
+            throw streamUploadError('流式恢复文件中的单行超过 2 MiB 上限')
+          }
+        }
+        pending += decoder.end()
+        if (pending) await processLine(pending)
+        await insertRestoreStreamBatch(client, uploadId, batch)
+        if (!header) throw streamUploadError('流式恢复文件为空')
+
+        const counts = {
+          ...ordinals,
+          totalRecords: Object.values(ordinals).reduce((sum, count) => sum + count, 0)
+        }
+        await client.query(
+          `
+            UPDATE data_restore_stream_uploads
+            SET status = 'ready',
+                backup_header = $2::jsonb,
+                counts = $3::jsonb,
+                payload_sha256 = $4,
+                payload_bytes = $5
+            WHERE id = $1
+          `,
+          [uploadId, JSON.stringify(header), JSON.stringify(counts), digest.digest('hex'), totalBytes]
+        )
+
+        const staged = await loadRestoreStreamBackup(
+          client,
+          uploadId,
+          request.currentUser.id,
+          request.session.id
+        )
+        const prepared = prepareDataRestore(staged.backup, {
+          restoreShares: true,
+          userId: request.currentUser.id
+        })
+        return {
+          uploadId,
+          expiresAt,
+          exportedAt: staged.backup.exportedAt,
+          counts: prepared.restore.backupCounts,
+          totalRecords: prepared.restore.counts.totalRecords,
+          payloadBytes: totalBytes,
+          payloadSha256: staged.upload.payload_sha256
+        }
+      })
+
+      return { ok: true, ...result }
+    } catch (error) {
+      request.log.warn({ err: error }, 'streaming restore upload rejected')
+      reply.code(Number(error?.statusCode) || 400)
+      return {
+        error: String(error?.message || '流式恢复文件无效'),
+        code: String(error?.code || 'invalid_restore_stream')
+      }
+    }
+  })
+
   fastify.get('/migration/export-cloud', async (request, reply) => {
     await fastify.requireAuth(request, reply)
 
@@ -1220,7 +1546,7 @@ export default async function migrationRoutes(fastify) {
       snapshot.backup,
       { userId: request.currentUser.id }
     )
-    if (!restoreCompatibility.restorable) {
+    if (!restoreCompatibility.restorable && !restoreCompatibility.streamRestorable) {
       reply.code(409)
       return {
         error: `当前云端备份已完整生成，但不能用于第 1 版一键恢复：${restoreCompatibility.reason}`,
@@ -1272,7 +1598,8 @@ export default async function migrationRoutes(fastify) {
 
     let prepared
     try {
-      prepared = prepareDataRestore(request.body?.backup, {
+      const resolved = await resolveRestoreBackup(request)
+      prepared = prepareDataRestore(resolved.backup, {
         restoreShares: request.body?.restoreShares,
         userId: request.currentUser.id
       })
@@ -1372,7 +1699,8 @@ export default async function migrationRoutes(fastify) {
 
     let prepared
     try {
-      prepared = prepareDataRestore(request.body?.backup, {
+      const resolved = await resolveRestoreBackup(request)
+      prepared = prepareDataRestore(resolved.backup, {
         restoreShares: request.body?.restoreShares,
         userId: request.currentUser.id
       })
@@ -1964,6 +2292,26 @@ export default async function migrationRoutes(fastify) {
       return {
         error: failure.error,
         code: failure.code
+      }
+    }
+
+    if (request.body?.uploadId) {
+      try {
+        await withTransaction(async (client) => {
+          await client.query(
+            `
+              UPDATE data_restore_stream_uploads
+              SET status = 'applied', expires_at = LEAST(expires_at, NOW() + INTERVAL '5 minutes')
+              WHERE id = $1
+                AND user_id = $2
+                AND session_id = $3
+                AND status = 'ready'
+            `,
+            [request.body.uploadId, request.currentUser.id, request.session.id]
+          )
+        })
+      } catch (error) {
+        request.log.warn({ err: error }, 'failed to retire applied restore stream')
       }
     }
 

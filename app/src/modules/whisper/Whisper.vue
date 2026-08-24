@@ -4,6 +4,17 @@ import { useRoute } from 'vue-router'
 import { getCurrentUserId, getNotes as getLocalNotes, addNote as addLocalNote, updateNote as updateLocalNote, deleteNote as deleteLocalNote, toggleNotePin as toggleLocalNotePin, getSetting as getLocalSetting, setSetting as setLocalSetting } from '@/shared/db/database'
 import { fetchBackendSetting, saveBackendSetting, shouldUseBackendSettings } from '@/shared/services/settingsApi'
 import { createBackendNote, deleteBackendNote, fetchBackendNotes, shouldUseBackendNotes, toggleBackendNotePin, updateBackendNote } from '@/shared/services/notesApi'
+import { updateCollaborativeNoteMetadata } from '@/shared/services/collaborationApi'
+import {
+  deleteNoteOffline,
+  getCachedWorkspaceNotes,
+  installOfflineSyncLifecycle,
+  offlineSyncSummary,
+  onOfflineSyncState,
+  saveCollaborativeNoteMetadataOffline,
+  saveNoteOffline,
+  synchronizeOfflineWorkspace
+} from '@/shared/services/offlineWorkspace'
 import { COMMAND_ACTION_EVENT } from '@/shared/composables/useCommandPalette'
 import { useNoteReminders } from '@/shared/composables/useNoteReminders'
 import Icon from '@/shared/components/Icon.vue'
@@ -27,8 +38,11 @@ const notes = ref([])
 const loading = ref(true)
 const savingNote = ref(false)
 const status = ref({ message: '', type: '' })
+const offlineSync = ref({ state: 'idle', pending: 0, conflicts: 0, failed: 0 })
 const showReminderCenter = ref(false)
 let statusTimer = null
+let removeOfflineLifecycle = () => {}
+let removeOfflineListener = () => {}
 
 const {
   reminders,
@@ -94,20 +108,35 @@ async function setSetting(key, value) {
 }
 
 async function getNotes() {
-  return shouldUseBackendNotes()
-    ? fetchBackendNotes()
-    : getLocalNotes()
+  if (!shouldUseBackendNotes()) return getLocalNotes()
+  const cached = await getCachedWorkspaceNotes()
+  if (cached.length) return cached
+  return fetchBackendNotes()
 }
 
 async function addNote(note) {
-  return shouldUseBackendNotes()
-    ? createBackendNote(note)
-    : addLocalNote(note)
+  if (!shouldUseBackendNotes()) return addLocalNote(note)
+  if (!navigator.onLine) return saveNoteOffline(note)
+  try {
+    return await createBackendNote(note)
+  } catch (error) {
+    if (error?.status) throw error
+    return saveNoteOffline(note)
+  }
 }
 
 async function updateNote(id, updates) {
   if (shouldUseBackendNotes()) {
-    return updateBackendNote(id, updates, { includeCleanup: true })
+    const existing = notes.value.find((note) => note.id === id) || editingNote.value
+    if (!navigator.onLine) {
+      return { note: await saveNoteOffline(updates, existing), mediaCleanup: [] }
+    }
+    try {
+      return await updateBackendNote(id, updates, { includeCleanup: true })
+    } catch (error) {
+      if (error?.status) throw error
+      return { note: await saveNoteOffline(updates, existing), mediaCleanup: [] }
+    }
   }
   await updateLocalNote(id, updates)
   return { note: null, mediaCleanup: [] }
@@ -115,16 +144,34 @@ async function updateNote(id, updates) {
 
 async function deleteNote(id) {
   if (shouldUseBackendNotes()) {
-    return deleteBackendNote(id, { includeCleanup: true })
+    const existing = notes.value.find((note) => note.id === id)
+    if (!navigator.onLine) {
+      await deleteNoteOffline(existing)
+      return { mediaCleanup: [] }
+    }
+    try {
+      return await deleteBackendNote(id, { includeCleanup: true })
+    } catch (error) {
+      if (error?.status) throw error
+      await deleteNoteOffline(existing)
+      return { mediaCleanup: [] }
+    }
   }
   await deleteLocalNote(id)
   return { mediaCleanup: [] }
 }
 
 async function toggleNotePin(id) {
-  return shouldUseBackendNotes()
-    ? toggleBackendNotePin(id)
-    : toggleLocalNotePin(id)
+  if (!shouldUseBackendNotes()) return toggleLocalNotePin(id)
+  const existing = notes.value.find((note) => note.id === id)
+  if (!existing) return null
+  if (!navigator.onLine) return saveNoteOffline({ pinned: !existing.pinned }, existing)
+  try {
+    return await toggleBackendNotePin(id)
+  } catch (error) {
+    if (error?.status) throw error
+    return saveNoteOffline({ pinned: !existing.pinned }, existing)
+  }
 }
 
 // 背景图样式
@@ -184,6 +231,16 @@ const noteStats = computed(() => ({
   diaries: notes.value.filter((note) => note.type === 'diary').length
 }))
 
+const offlineSyncLabel = computed(() => {
+  if (!shouldUseBackendNotes()) return ''
+  if (offlineSync.value.conflicts) return `${offlineSync.value.conflicts} 条修改待处理`
+  if (offlineSync.value.failed) return `${offlineSync.value.failed} 条修改失败`
+  if (offlineSync.value.pending) return `${offlineSync.value.pending} 条修改待同步`
+  if (offlineSync.value.state === 'syncing') return '正在同步'
+  if (offlineSync.value.state === 'offline' || !navigator.onLine) return '离线编辑中'
+  return '已跨设备同步'
+})
+
 // 置顶的备忘录
 const pinnedMemos = computed(() => {
   return filteredNotes.value.filter(n => n.type === 'memo' && n.pinned)
@@ -228,11 +285,24 @@ const unpinnedMemos = computed(() => {
 // 加载数据
 async function loadNotes() {
   loading.value = true
+  let hasCachedNotes = false
   try {
     notes.value = await getNotes()
+    hasCachedNotes = notes.value.length > 0
+    if (shouldUseBackendNotes()) {
+      try {
+        notes.value = await synchronizeOfflineWorkspace()
+      } catch (error) {
+        if (!hasCachedNotes) throw error
+        offlineSync.value = {
+          ...offlineSync.value,
+          state: 'offline'
+        }
+      }
+    }
   } catch (e) {
     console.error('Failed to load notes:', e)
-    alert('加载笔记失败，请刷新页面后重试。')
+    if (!hasCachedNotes) alert('加载笔记失败，请刷新页面后重试。')
   } finally {
     loading.value = false
   }
@@ -364,7 +434,30 @@ async function handleSaveNote(data) {
   try {
     let mutationResult = null
     if (editingNote.value?.id) {
-      mutationResult = await updateNote(editingNote.value.id, data)
+      if (data.collaborationMode) {
+        const metadata = { ...data }
+        for (const key of ['collaborationMode', 'content', 'contentJson', 'contentFormat', 'revision']) {
+          delete metadata[key]
+        }
+        if (navigator.onLine) {
+          try {
+            mutationResult = await updateCollaborativeNoteMetadata(editingNote.value.id, metadata)
+          } catch (error) {
+            if (error?.status) throw error
+            mutationResult = {
+              note: await saveCollaborativeNoteMetadataOffline(metadata, editingNote.value),
+              offline: true
+            }
+          }
+        } else {
+          mutationResult = {
+            note: await saveCollaborativeNoteMetadataOffline(metadata, editingNote.value),
+            offline: true
+          }
+        }
+      } else {
+        mutationResult = await updateNote(editingNote.value.id, data)
+      }
     } else {
       await addNote(data)
     }
@@ -586,6 +679,18 @@ onMounted(async () => {
   document.addEventListener('pointerdown', handleCreateMenuPointerDown)
   window.addEventListener('keydown', handleCreateMenuKeydown)
   window.addEventListener('domonav:open-reminders', openReminderCenter)
+  removeOfflineLifecycle = installOfflineSyncLifecycle()
+  removeOfflineListener = onOfflineSyncState(async (detail) => {
+    offlineSync.value = {
+      ...offlineSync.value,
+      ...detail,
+      ...(await offlineSyncSummary())
+    }
+    if (detail?.state === 'synced' && shouldUseBackendNotes()) {
+      const cached = await getCachedWorkspaceNotes()
+      if (cached.length) notes.value = cached
+    }
+  })
 
   await loadNotes()
   await refreshReminders()
@@ -621,6 +726,8 @@ onBeforeUnmount(() => {
   document.removeEventListener('pointerdown', handleCreateMenuPointerDown)
   window.removeEventListener('keydown', handleCreateMenuKeydown)
   window.removeEventListener('domonav:open-reminders', openReminderCenter)
+  removeOfflineLifecycle()
+  removeOfflineListener()
 })
 </script>
 
@@ -635,6 +742,15 @@ onBeforeUnmount(() => {
             <span class="header__title-full" aria-hidden="true">日记与备忘录</span>
             <span class="header__title-compact" aria-hidden="true">时光</span>
           </h1>
+          <div
+            v-if="offlineSyncLabel"
+            class="offline-sync-state"
+            :class="`is-${offlineSync.state}`"
+            role="status"
+          >
+            <span aria-hidden="true" />
+            {{ offlineSyncLabel }}
+          </div>
         </div>
       </div>
       <div class="header__actions">
@@ -1024,6 +1140,37 @@ onBeforeUnmount(() => {
 
 .header__title-compact {
   display: none;
+}
+
+.offline-sync-state {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  margin-top: 4px;
+  color: var(--text-muted);
+  font-size: 11px;
+}
+
+.offline-sync-state > span {
+  width: 7px;
+  height: 7px;
+  border-radius: 999px;
+  background: var(--success-color, #66a36c);
+}
+
+.offline-sync-state.is-offline > span,
+.offline-sync-state.is-pending > span,
+.offline-sync-state.is-attention > span {
+  background: var(--warning-color, #c7924c);
+}
+
+.offline-sync-state.is-syncing > span {
+  background: var(--accent-color);
+  animation: offline-sync-pulse 1s ease-in-out infinite;
+}
+
+@keyframes offline-sync-pulse {
+  50% { opacity: 0.35; transform: scale(0.75); }
 }
 
 .header__eyebrow {

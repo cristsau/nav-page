@@ -13,6 +13,7 @@ import {
 } from '@/shared/services/notesApi'
 import Icon from '@/shared/components/Icon.vue'
 import NoteAiPanel from './NoteAiPanel.vue'
+import CollaborationPanel from './CollaborationPanel.vue'
 import BlockEditor from './BlockEditor.vue'
 import {
   plainTextToTiptapDocument,
@@ -78,6 +79,9 @@ const imageMessage = ref('')
 const imageMessageType = ref('')
 const autosaveStatus = ref('idle')
 const autosaveMessage = ref('')
+const editorSelection = ref(null)
+const collaborationStatus = ref('disabled')
+const collaborationActivated = ref(false)
 const initialEncrypted = ref(false)
 let autosaveTimer = null
 let autosaveSequence = 0
@@ -86,6 +90,21 @@ let embeddedImageUrls = new Set()
 
 // 是否编辑模式
 const isEdit = computed(() => !!props.note?.id)
+const accessRole = computed(() => props.note?.accessRole || 'owner')
+const collaborationReadOnly = computed(() => (
+  isEdit.value && ['viewer', 'commenter'].includes(accessRole.value)
+))
+const realtimeEnabled = computed(() => (
+  isEdit.value
+  && shouldUseBackendNotes()
+  && !formData.value.encrypted
+  && (collaborationActivated.value || Boolean(props.note?.collaborative) || accessRole.value !== 'owner')
+  && ['owner', 'editor'].includes(accessRole.value)
+))
+const canManageImages = computed(() => (
+  !realtimeEnabled.value || accessRole.value === 'owner'
+))
+const formDisabled = computed(() => props.saving || collaborationReadOnly.value)
 
 // 标题
 const modalTitle = computed(() => {
@@ -124,6 +143,25 @@ function currentSnapshot() {
   })
 }
 
+function currentMetadataSnapshot() {
+  return JSON.stringify({
+    type: formData.value.type,
+    title: formData.value.title,
+    encrypted: formData.value.encrypted,
+    tags: formData.value.tags,
+    entryDate: formData.value.entryDate,
+    mood: formData.value.mood,
+    dueAt: formData.value.dueAt,
+    completed: formData.value.completed,
+    remindBeforeMinutes: formData.value.remindBeforeMinutes,
+    attachments: formData.value.attachments
+  })
+}
+
+function currentDirtySnapshot() {
+  return realtimeEnabled.value ? currentMetadataSnapshot() : currentSnapshot()
+}
+
 // 监听显示状态，初始化表单
 watch(() => props.show, async (val) => {
   if (val) {
@@ -159,9 +197,11 @@ watch(() => props.show, async (val) => {
     tagMessageType.value = ''
     imageMessage.value = ''
     imageMessageType.value = ''
+    collaborationActivated.value = Boolean(props.note?.collaborative)
     autosaveStatus.value = props.note?.id && !props.note.encrypted ? 'saved' : 'idle'
     autosaveMessage.value = ''
-    initialSnapshot.value = currentSnapshot()
+    collaborationStatus.value = realtimeEnabled.value ? 'loading' : 'disabled'
+    initialSnapshot.value = currentDirtySnapshot()
     await nextTick()
     initializingForm = false
     titleInputRef.value?.focus()
@@ -234,6 +274,7 @@ async function runAutosave() {
   if (
     !props.show
     || !isEdit.value
+    || realtimeEnabled.value
     || formData.value.encrypted
     || initialEncrypted.value !== Boolean(formData.value.encrypted)
     || props.saving
@@ -246,7 +287,7 @@ async function runAutosave() {
     return
   }
 
-  const savedSnapshot = currentSnapshot()
+  const savedSnapshot = currentDirtySnapshot()
   if (savedSnapshot === initialSnapshot.value) return
   const sequence = ++autosaveSequence
   autosaveStatus.value = 'saving'
@@ -255,8 +296,8 @@ async function runAutosave() {
     const updated = await props.autosaveHandler(buildPlainPayload())
     if (sequence !== autosaveSequence || !props.show) return
     if (updated?.revision) formData.value.revision = Number(updated.revision)
-    if (currentSnapshot() === savedSnapshot) {
-      initialSnapshot.value = currentSnapshot()
+    if (currentDirtySnapshot() === savedSnapshot) {
+      initialSnapshot.value = currentDirtySnapshot()
       autosaveStatus.value = 'saved'
       autosaveMessage.value = '已自动保存'
     } else {
@@ -279,11 +320,12 @@ watch(formData, () => {
     initializingForm
     || !props.show
     || !isEdit.value
+    || realtimeEnabled.value
     || formData.value.encrypted
     || initialEncrypted.value !== Boolean(formData.value.encrypted)
     || typeof props.autosaveHandler !== 'function'
   ) return
-  if (currentSnapshot() === initialSnapshot.value) return
+  if (currentDirtySnapshot() === initialSnapshot.value) return
   autosaveStatus.value = 'pending'
   autosaveMessage.value = '修改将在片刻后自动保存'
   clearAutosaveTimer()
@@ -291,7 +333,7 @@ watch(formData, () => {
 }, { deep: true })
 
 function handleBeforeUnload(event) {
-  if (!props.show || currentSnapshot() === initialSnapshot.value) return
+  if (!props.show || currentDirtySnapshot() === initialSnapshot.value) return
   event.preventDefault()
   event.returnValue = ''
 }
@@ -304,10 +346,11 @@ onBeforeUnmount(() => {
 })
 
 onBeforeRouteLeave(async () => {
-  if (!props.show || currentSnapshot() === initialSnapshot.value) return true
+  if (!props.show || currentDirtySnapshot() === initialSnapshot.value) return true
 
   if (
     isEdit.value
+    && !realtimeEnabled.value
     && !formData.value.encrypted
     && initialEncrypted.value === Boolean(formData.value.encrypted)
     && !props.saving
@@ -316,7 +359,7 @@ onBeforeRouteLeave(async () => {
   ) {
     clearAutosaveTimer()
     await runAutosave()
-    if (currentSnapshot() === initialSnapshot.value) return true
+    if (currentDirtySnapshot() === initialSnapshot.value) return true
   }
 
   return window.confirm('尚有未保存的修改，离开此页面会丢失这些修改。确定离开吗？')
@@ -423,6 +466,11 @@ function formatImageSize(bytes) {
 }
 
 function chooseImages() {
+  if (!canManageImages.value) {
+    imageMessage.value = '协作笔记图片仅由笔记所有者管理，避免跨账号图床归属与删除冲突。'
+    imageMessageType.value = 'error'
+    return
+  }
   if (formData.value.encrypted) {
     imageMessage.value = '加密笔记暂不支持公开图床图片，避免正文加密但图片仍可公开访问。'
     imageMessageType.value = 'error'
@@ -528,7 +576,7 @@ function handleEncryptionToggle() {
 
 // 提交表单
 async function handleSubmit() {
-  if (props.saving || uploadingImage.value || autosaveStatus.value === 'saving') return
+  if (formDisabled.value || uploadingImage.value || autosaveStatus.value === 'saving') return
 
   let content = formData.value.content
   let contentJson = formData.value.contentJson
@@ -588,13 +636,14 @@ async function handleSubmit() {
       : 0,
     completed: formData.value.type === 'memo' && formData.value.completed,
     attachments: [...formData.value.attachments],
-    revision: Number(formData.value.revision || 1)
+    revision: Number(formData.value.revision || 1),
+    collaborationMode: realtimeEnabled.value
   })
 }
 
 function close() {
   if (uploadingImage.value || autosaveStatus.value === 'saving') return
-  if (!props.saving && initialSnapshot.value && currentSnapshot() !== initialSnapshot.value) {
+  if (!props.saving && initialSnapshot.value && currentDirtySnapshot() !== initialSnapshot.value) {
     if (!confirm('尚有未保存的修改，确定关闭吗？')) return
   }
   emit('close')
@@ -628,12 +677,12 @@ function close() {
       <!-- 类型选择 -->
       <div class="editor__type">
         <label class="type-option" :class="{ 'is-active': formData.type === 'memo' }">
-          <input v-model="formData.type" type="radio" value="memo" :disabled="saving">
+          <input v-model="formData.type" type="radio" value="memo" :disabled="formDisabled">
           <span class="type-option__icon"><Icon name="list" :size="24" /></span>
           <span class="type-option__label">备忘录</span>
         </label>
         <label class="type-option" :class="{ 'is-active': formData.type === 'diary' }">
-          <input v-model="formData.type" type="radio" value="diary" :disabled="saving">
+          <input v-model="formData.type" type="radio" value="diary" :disabled="formDisabled">
           <span class="type-option__icon"><Icon name="book" :size="24" /></span>
           <span class="type-option__label">日记</span>
         </label>
@@ -647,18 +696,18 @@ function close() {
           type="text"
           class="input"
           placeholder="标题"
-          :disabled="saving"
+          :disabled="formDisabled"
         >
       </div>
 
       <div v-if="formData.type === 'diary'" class="form-row">
         <label class="form-group form-group--grow">
           <span class="form-label">日记日期</span>
-          <input v-model="formData.entryDate" type="date" class="input" :disabled="saving">
+          <input v-model="formData.entryDate" type="date" class="input" :disabled="formDisabled">
         </label>
         <label class="form-group form-group--grow">
           <span class="form-label">心情</span>
-          <select v-model="formData.mood" class="input" :disabled="saving">
+          <select v-model="formData.mood" class="input" :disabled="formDisabled">
             <option value="">未记录</option>
             <option value="平静">平静</option>
             <option value="开心">开心</option>
@@ -672,11 +721,11 @@ function close() {
       <div v-else class="form-row">
         <label class="form-group form-group--grow">
           <span class="form-label">截止时间（可选）</span>
-          <input v-model="formData.dueAt" type="datetime-local" class="input" :disabled="saving">
+          <input v-model="formData.dueAt" type="datetime-local" class="input" :disabled="formDisabled">
         </label>
         <label v-if="formData.dueAt" class="form-group form-group--grow">
           <span class="form-label">提前提醒</span>
-          <select v-model.number="formData.remindBeforeMinutes" class="input" :disabled="saving">
+          <select v-model.number="formData.remindBeforeMinutes" class="input" :disabled="formDisabled">
             <option :value="0">到期时</option>
             <option :value="10">提前 10 分钟</option>
             <option :value="30">提前 30 分钟</option>
@@ -686,7 +735,7 @@ function close() {
           </select>
         </label>
         <label v-if="isEdit" class="checkbox-label checkbox-label--status">
-          <input v-model="formData.completed" type="checkbox" :disabled="saving">
+          <input v-model="formData.completed" type="checkbox" :disabled="formDisabled">
           <span class="checkbox-custom"></span>
           <span>标记为已完成</span>
         </label>
@@ -695,14 +744,19 @@ function close() {
       <!-- 块内容 -->
       <div class="form-group">
         <BlockEditor
+          :key="`${note?.id || 'new'}:${realtimeEnabled ? 'collaboration' : 'single'}`"
           ref="blockEditorRef"
           v-model="formData.contentJson"
           :plain-text="formData.content"
-          :disabled="saving"
-          :allow-images="!formData.encrypted"
+          :disabled="formDisabled"
+          :allow-images="!formData.encrypted && canManageImages"
+          :note-id="note?.id || ''"
+          :realtime="realtimeEnabled"
           @update:text="formData.content = $event"
           @update:image-urls="syncEmbeddedImages"
           @request-image="chooseImages"
+          @selection-change="editorSelection = $event"
+          @collaboration-status="collaborationStatus = $event"
         />
         <div class="editor__counter">{{ contentCount }} 字</div>
       </div>
@@ -716,7 +770,7 @@ function close() {
           <button
             type="button"
             class="btn btn--secondary image-uploader__button"
-            :disabled="saving || uploadingImage || formData.encrypted || formData.attachments.length >= MAX_NOTE_IMAGES"
+            :disabled="formDisabled || uploadingImage || formData.encrypted || !canManageImages || formData.attachments.length >= MAX_NOTE_IMAGES"
             @click="chooseImages"
           >
             <span v-if="uploadingImage" class="button-spinner" aria-hidden="true"></span>
@@ -729,7 +783,7 @@ function close() {
             type="file"
             accept="image/jpeg,image/png,image/webp,image/gif"
             multiple
-            :disabled="saving || uploadingImage || formData.encrypted"
+            :disabled="formDisabled || uploadingImage || formData.encrypted || !canManageImages"
             @change="handleImageUpload"
           >
         </div>
@@ -751,7 +805,7 @@ function close() {
               type="button"
               class="image-uploader__remove"
               :aria-label="`从笔记移除 ${image.name || `图片 ${index + 1}`}`"
-              :disabled="saving || uploadingImage"
+              :disabled="formDisabled || uploadingImage || !canManageImages"
               @click="removeImage(index)"
             >
               <Icon name="trash" :size="14" />
@@ -779,10 +833,18 @@ function close() {
         :tags="formData.tags"
         :encrypted="formData.encrypted"
         :auto-open="Boolean(note?._openAi)"
-        :disabled="saving"
+        :disabled="formDisabled"
         @insert="insertAiText"
         @replace="replaceAiText"
         @apply-tags="applyAiTags"
+      />
+
+      <CollaborationPanel
+        v-if="isEdit && note?.id"
+        :note="note"
+        :selection="editorSelection"
+        :disabled="saving"
+        @collaboration-enabled="collaborationActivated = true"
       />
 
       <!-- 标签 -->
@@ -795,7 +857,7 @@ function close() {
                 type="button"
                 class="tag__remove"
                 :aria-label="`移除标签 ${tag}`"
-                :disabled="saving"
+                :disabled="formDisabled"
                 @click="removeTag(index)"
               >
                 <Icon name="close" :size="12" />
@@ -807,7 +869,7 @@ function close() {
             type="text"
             class="input tags-input__field"
             placeholder="添加标签（回车添加）"
-            :disabled="saving"
+            :disabled="formDisabled"
             @keydown.enter.prevent="addTag"
           >
         </div>
@@ -827,7 +889,7 @@ function close() {
           <input
             v-model="formData.encrypted"
             type="checkbox"
-            :disabled="saving || uploadingImage"
+            :disabled="formDisabled || uploadingImage"
             @change="handleEncryptionToggle"
           >
           <span class="checkbox-custom"></span>
@@ -843,7 +905,7 @@ function close() {
             type="password"
             class="input"
             placeholder="设置密码"
-            :disabled="saving"
+            :disabled="formDisabled"
           >
         </div>
         <div class="form-group">
@@ -852,21 +914,24 @@ function close() {
             type="password"
             class="input"
             placeholder="确认密码"
-            :disabled="saving"
+            :disabled="formDisabled"
           >
         </div>
       </template>
 
       <!-- 底部操作 -->
       <div class="editor__footer">
-        <p v-if="isEdit && !formData.encrypted" class="editor__autosave" :class="`is-${autosaveStatus}`" aria-live="polite">
-          {{ autosaveMessage || '编辑内容会自动保存，并保留最近 50 个版本' }}
+        <p v-if="realtimeEnabled" class="editor__autosave" :class="`is-${collaborationStatus}`" aria-live="polite">
+          正文实时保存并跨设备合并；标题、标签、提醒与图片请点“保存”确认。
+        </p>
+        <p v-else-if="isEdit && !formData.encrypted" class="editor__autosave" :class="`is-${autosaveStatus}`" aria-live="polite">
+          {{ collaborationReadOnly ? '当前权限为只读；仍可在协作区查看或发表评论。' : (autosaveMessage || '编辑内容会自动保存，并保留最近 50 个版本') }}
         </p>
         <p v-else-if="isEdit && formData.encrypted" class="editor__autosave">
           加密笔记需手动保存
         </p>
         <button type="button" class="btn btn--secondary" :disabled="saving || autosaveStatus === 'saving'" @click="close">取消</button>
-        <button type="button" class="btn btn--primary" :disabled="saving || autosaveStatus === 'saving'" @click="handleSubmit">
+        <button v-if="!collaborationReadOnly" type="button" class="btn btn--primary" :disabled="formDisabled || autosaveStatus === 'saving'" @click="handleSubmit">
           <span v-if="saving" class="button-spinner" aria-hidden="true"></span>
           {{ saving ? '保存中' : (isEdit ? '保存' : '创建') }}
         </button>

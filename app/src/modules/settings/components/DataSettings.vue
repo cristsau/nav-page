@@ -10,10 +10,12 @@ import {
   createCloudRestoreBackup,
   createLocalRestoreBackup,
   DATA_RESTORE_MAX_FILE_BYTES,
-  exportBackendData,
+  DATA_RESTORE_MAX_STREAM_FILE_BYTES,
+  exportBackendDataStream,
   exportBackendRestoreSafetyBackup,
   previewBackendRestore,
-  shouldUseBackendMigration
+  shouldUseBackendMigration,
+  uploadBackendRestoreStream
 } from '@/shared/services/migrationApi'
 
 const { resetConfig } = useConfig()
@@ -64,6 +66,7 @@ const shouldShowCloudMigration = computed(() =>
 )
 const shouldShowCloudExport = computed(() => shouldUseBackendMigration())
 const restoreIsCloudBackup = computed(() => restoreSource.value === 'cloud-backup')
+const restoreIsStream = computed(() => Boolean(restoreBackup.value?.uploadId))
 const restoreModalTitle = computed(() => {
   if (restoreStage.value === 'success') {
     return restoreIsCloudBackup.value ? '云端数据已恢复' : '本地数据已迁移'
@@ -167,6 +170,17 @@ function downloadJson(data, fileName) {
   const blob = new Blob([JSON.stringify(data)], {
     type: 'application/json'
   })
+  const url = URL.createObjectURL(blob)
+  const anchor = document.createElement('a')
+  anchor.href = url
+  anchor.download = fileName
+  document.body.appendChild(anchor)
+  anchor.click()
+  anchor.remove()
+  window.setTimeout(() => URL.revokeObjectURL(url), 0)
+}
+
+function downloadBlob(blob, fileName) {
   const url = URL.createObjectURL(blob)
   const anchor = document.createElement('a')
   anchor.href = url
@@ -324,9 +338,29 @@ async function handleCloudRestoreFile(event) {
 
   setRestorePageMessage('')
   try {
-    ensureRestoreSize(file.size)
-    const text = await file.text()
-    const backup = createCloudRestoreBackup(JSON.parse(text))
+    const isStream = /\.ndjson$/i.test(file.name)
+      || file.type === 'application/x-domo-nav-backup-ndjson'
+    let backup
+    if (isStream) {
+      if (boundedCount(file.size) > DATA_RESTORE_MAX_STREAM_FILE_BYTES) {
+        throw new Error(
+          `流式备份不能超过 ${formatSize(DATA_RESTORE_MAX_STREAM_FILE_BYTES)}`
+        )
+      }
+      const uploaded = await uploadBackendRestoreStream(file)
+      if (!uploaded?.uploadId) throw new Error('服务器未返回流式恢复任务')
+      backup = {
+        uploadId: uploaded.uploadId,
+        exportedAt: uploaded.exportedAt || null,
+        streamed: true,
+        counts: uploaded.counts || {},
+        payloadBytes: boundedCount(uploaded.payloadBytes)
+      }
+    } else {
+      ensureRestoreSize(file.size)
+      const text = await file.text()
+      backup = createCloudRestoreBackup(JSON.parse(text))
+    }
     await openRestoreFlow(backup, {
       fileName: file.name,
       source: 'cloud-backup',
@@ -494,33 +528,12 @@ async function handleCloudExport() {
 
   cloudExporting.value = true
   try {
-    const backup = await exportBackendData()
-    if (
-      backup?.schema !== 'domo-nav-backup'
-      || backup?.version !== 1
-      || !backup?.manifest
-      || !backup?.data
-    ) {
-      throw new Error('服务器返回的备份格式无效')
-    }
-
+    const result = await exportBackendDataStream()
     const fallbackFileName = (
-      `domo-nav-cloud-backup-${new Date().toISOString().slice(0, 10)}.json`
+      `domo-nav-cloud-backup-${new Date().toISOString().slice(0, 10)}.ndjson`
     )
-    downloadJson(backup, backup.fileName || fallbackFileName)
-
-    const counts = backup.manifest.counts || {}
-    const restoreCompatibility = backup.restoreCompatibility
-    const restoreNotice = restoreCompatibility?.restorable === false
-      ? `\n\n注意：文件已完整导出，但当前第 1 版一键恢复不支持此体量：${restoreCompatibility.reason || '超过恢复限制'}。`
-      : restoreCompatibility?.restorable === true
-        ? '\n\n该文件已通过当前第 1 版一键恢复兼容性检查。'
-        : ''
-    alert(
-      `NAV 云端数据已导出：书签 ${counts.bookmarks || 0} 条，`
-      + `笔记 ${counts.notes || 0} 条，分享 ${counts.shares || 0} 条。`
-      + restoreNotice
-    )
+    downloadBlob(result.blob, result.filename || fallbackFileName)
+    alert('NAV 云端流式备份已完整导出，可直接用于超过 5,000 条记录的恢复。')
   } catch (error) {
     alert(`云端备份导出失败：${error.message}`)
   } finally {
@@ -672,7 +685,8 @@ onMounted(refreshLocalState)
         <div class="settings-item__label">从完整备份恢复云端数据</div>
         <div class="settings-item__desc">
           先预览当前数据与备份差异，再用当前登录密码和确认文字执行恢复。
-          恢复采用替换模式，不会合并；公开分享默认不恢复，单个文件最大 16 MB。
+          恢复采用替换模式，不会合并；公开分享默认不恢复。
+          JSON 最大 16 MB，NDJSON 流式备份最大 128 MB。
         </div>
       </div>
       <div class="settings-item__control">
@@ -680,7 +694,7 @@ onMounted(refreshLocalState)
           id="cloud-restore-file"
           ref="restoreFileInput"
           type="file"
-          accept=".json,application/json"
+          accept=".json,.ndjson,application/json,application/x-domo-nav-backup-ndjson"
           hidden
           :disabled="restorePreviewing || restoreApplying || restoreSafetyBackupDownloading"
           @change="handleCloudRestoreFile"
@@ -696,7 +710,7 @@ onMounted(refreshLocalState)
           选择完整备份
         </button>
         <span id="cloud-restore-description" class="visually-hidden">
-          选择 DOMO NAV 云端完整 JSON 备份，最大 16 MB
+          选择 DOMO NAV 云端 JSON 备份（最大 16 MB）或 NDJSON 流式备份（最大 128 MB）
         </span>
       </div>
     </div>
@@ -811,7 +825,7 @@ onMounted(refreshLocalState)
               <strong>{{ restoreFileName || '待恢复数据' }}</strong>
               <p>
                 {{ restoreIsCloudBackup ? '完整云端备份' : '当前浏览器 IndexedDB' }}
-                · 替换模式 · 最大 16 MB
+                · 替换模式 · {{ restoreIsStream ? '流式暂存 128 MB' : 'JSON 16 MB' }}
                 <template v-if="formatRestoreTimestamp(restoreBackup?.exportedAt)">
                   · 备份于 {{ formatRestoreTimestamp(restoreBackup.exportedAt) }}
                 </template>

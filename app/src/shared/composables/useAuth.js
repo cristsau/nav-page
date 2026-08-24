@@ -59,6 +59,8 @@ const registrationHistory = ref([])
 const initialized = ref(false)
 const AUTH_SYNC_CHANNEL = 'domo-nav-auth-v1'
 const AUTH_SYNC_STORAGE_KEY = 'domo-nav-auth-sync-v1'
+const OFFLINE_SESSION_STORAGE_KEY = 'domo-nav-offline-session-v1'
+const OFFLINE_SESSION_MAX_AGE_MS = 30 * 24 * 60 * 60 * 1000
 
 let authChannel = null
 let authLifecycleStarted = false
@@ -67,8 +69,49 @@ let storageListener = null
 let visibilityListener = null
 let unauthorizedRedirectPending = false
 
+function readOfflineSession() {
+  if (typeof window === 'undefined') return null
+  try {
+    const stored = JSON.parse(window.localStorage?.getItem(OFFLINE_SESSION_STORAGE_KEY) || 'null')
+    const validatedAt = Number(stored?.validatedAt || 0)
+    if (
+      !stored?.user?.id
+      || !validatedAt
+      || Date.now() - validatedAt > OFFLINE_SESSION_MAX_AGE_MS
+    ) return null
+    return stored
+  } catch {
+    return null
+  }
+}
+
+function writeOfflineSession(user) {
+  if (typeof window === 'undefined') return
+  try {
+    if (!user) {
+      window.localStorage?.removeItem(OFFLINE_SESSION_STORAGE_KEY)
+      return
+    }
+    const existing = readOfflineSession()
+    window.localStorage?.setItem(OFFLINE_SESSION_STORAGE_KEY, JSON.stringify({
+      validatedAt: user.offlineSession
+        ? Number(existing?.validatedAt || Date.now())
+        : Date.now(),
+      user: {
+        id: String(user.id),
+        username: String(user.username || ''),
+        role: String(user.role || 'user'),
+        status: String(user.status || 'approved')
+      }
+    }))
+  } catch {
+    // Offline access remains best-effort when browser storage is unavailable.
+  }
+}
+
 function commitCurrentSession(user) {
   currentUser.value = user || null
+  writeOfflineSession(currentUser.value)
   if (currentUser.value) return
 
   pendingRequests.value = []
@@ -78,7 +121,18 @@ function commitCurrentSession(user) {
 
 async function resolveCurrentSession() {
   if (isBackendAuthEnabled()) {
-    return fetchBackendSession()
+    try {
+      return await fetchBackendSession()
+    } catch (error) {
+      if (Number(error?.status) === 401) throw error
+      const cached = readOfflineSession()
+      if (!cached?.user) throw error
+      return {
+        ...cached.user,
+        offlineSession: true,
+        offlineValidatedAt: cached.validatedAt
+      }
+    }
   }
 
   await bootstrapSystem()

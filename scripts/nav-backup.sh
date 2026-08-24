@@ -310,8 +310,14 @@ source "$CONFIG_FILE"
 : "${NAV_NGINX_PATHS:=}"
 : "${NAV_ENV_PATHS:=}"
 : "${NAV_EXTRA_CONFIG_PATHS:=}"
+: "${NAV_OUTER_PROXY_PATHS:=}"
 : "${NAV_RUNTIME_CONTAINERS:=nav-api;nav-postgres}"
 : "${NAV_REQUIRE_ALL_INPUTS:=true}"
+: "${NAV_ENABLE_IMAGE_OBJECT_BACKUP:=false}"
+: "${NAV_IMAGE_RCLONE_CONFIG:=/etc/nav/imgbed-rclone.conf}"
+: "${NAV_IMAGE_RCLONE_REMOTE:=}"
+: "${NAV_ENABLE_OUTER_PROXY_BACKUP:=false}"
+: "${NAV_NPM_SQLITE_PATH:=}"
 : "${NAV_ENABLE_LOCAL_PRUNE:=false}"
 : "${NAV_LOCAL_KEEP_DAYS:=30}"
 : "${NAV_LOCAL_KEEP_COUNT:=14}"
@@ -345,6 +351,18 @@ fi
 [[ "$NAV_DB_NAME" =~ ^[A-Za-z_][A-Za-z0-9_]*$ ]] || fatal "$EX_CONFIG" "invalid NAV_DB_NAME"
 [[ "$NAV_DB_USER" =~ ^[A-Za-z_][A-Za-z0-9_]*$ ]] || fatal "$EX_CONFIG" "invalid NAV_DB_USER"
 [[ "$NAV_RESTIC_TAG" =~ ^[A-Za-z0-9_.-]+$ ]] || fatal "$EX_CONFIG" "invalid NAV_RESTIC_TAG"
+if is_true "$NAV_ENABLE_IMAGE_OBJECT_BACKUP"; then
+  [[ "$NAV_IMAGE_RCLONE_CONFIG" == /* ]] \
+    || fatal "$EX_CONFIG" "NAV_IMAGE_RCLONE_CONFIG must be absolute"
+  [[ -n "$NAV_IMAGE_RCLONE_REMOTE" && "$NAV_IMAGE_RCLONE_REMOTE" != *$'\n'* && "$NAV_IMAGE_RCLONE_REMOTE" != *$'\r'* ]] \
+    || fatal "$EX_CONFIG" "NAV_IMAGE_RCLONE_REMOTE must name one rclone remote path"
+fi
+if is_true "$NAV_ENABLE_OUTER_PROXY_BACKUP"; then
+  [[ "$NAV_NPM_SQLITE_PATH" == /* ]] \
+    || fatal "$EX_CONFIG" "NAV_NPM_SQLITE_PATH must be absolute when outer proxy backup is enabled"
+  [[ -n "$NAV_OUTER_PROXY_PATHS" ]] \
+    || fatal "$EX_CONFIG" "NAV_OUTER_PROXY_PATHS is required when outer proxy backup is enabled"
+fi
 
 require_uint NAV_LOCAL_KEEP_DAYS "$NAV_LOCAL_KEEP_DAYS"
 require_uint NAV_LOCAL_KEEP_COUNT "$NAV_LOCAL_KEEP_COUNT"
@@ -364,10 +382,17 @@ require_uint NAV_RESTIC_KEEP_MONTHLY "$NAV_RESTIC_KEEP_MONTHLY"
   && fatal "$EX_CONFIG" "--forget-cloud requires --cloud-upload and NAV_ENABLE_RESTIC_FORGET=true"
 
 CURRENT_STAGE="dependency checks"
-for command_name in stat realpath flock find sort sha256sum cp mv mktemp awk install xargs sed grep cmp readlink python3; do
+for command_name in stat realpath flock find sort sha256sum cp mv mktemp awk install xargs sed grep cmp readlink python3 wc; do
   command -v "$command_name" >/dev/null 2>&1 \
     || fatal "$EX_UNAVAILABLE" "required command is unavailable: $command_name"
 done
+if is_true "$NAV_ENABLE_IMAGE_OBJECT_BACKUP"; then
+  command -v rclone >/dev/null 2>&1 || fatal "$EX_UNAVAILABLE" "rclone is required for image-object backup"
+  assert_safe_settings_file "$NAV_IMAGE_RCLONE_CONFIG" 600
+fi
+if is_true "$NAV_ENABLE_OUTER_PROXY_BACKUP"; then
+  command -v sqlite3 >/dev/null 2>&1 || fatal "$EX_UNAVAILABLE" "sqlite3 is required for outer-proxy backup"
+fi
 
 if ! "$DRY_RUN"; then
   command -v docker >/dev/null 2>&1 || fatal "$EX_UNAVAILABLE" "docker is required"
@@ -420,12 +445,18 @@ validate_path_list "Compose" "$NAV_COMPOSE_PATHS"
 validate_path_list "Nginx" "$NAV_NGINX_PATHS"
 validate_path_list "environment" "$NAV_ENV_PATHS"
 validate_path_list "extra configuration" "$NAV_EXTRA_CONFIG_PATHS"
+validate_path_list "outer proxy" "$NAV_OUTER_PROXY_PATHS"
+if is_true "$NAV_ENABLE_OUTER_PROXY_BACKUP"; then
+  validate_input_path "$NAV_NPM_SQLITE_PATH" "NPM SQLite database"
+fi
 
 if "$DRY_RUN"; then
   log "dry-run plan"
   log "backup root: $NAV_BACKUP_ROOT"
   log "database: container=$NAV_DB_CONTAINER database=$NAV_DB_NAME user=$NAV_DB_USER"
   log "frontend: $NAV_FRONTEND_DIR"
+  log "image objects configured: $(is_true "$NAV_ENABLE_IMAGE_OBJECT_BACKUP" && echo true || echo false)"
+  log "outer proxy configured: $(is_true "$NAV_ENABLE_OUTER_PROXY_BACKUP" && echo true || echo false)"
   log "cloud upload requested/configured: $REQUEST_CLOUD_UPLOAD/$(is_true "$NAV_ENABLE_CLOUD_UPLOAD" && echo true || echo false)"
   log "local prune requested/configured: $REQUEST_LOCAL_PRUNE/$(is_true "$NAV_ENABLE_LOCAL_PRUNE" && echo true || echo false)"
   log "cloud forget requested/configured: $REQUEST_CLOUD_FORGET/$(is_true "$NAV_ENABLE_RESTIC_FORGET" && echo true || echo false)"
@@ -499,10 +530,14 @@ chmod 0700 "$STAGING_DIR"
 install -d -m 0700 \
   "$STAGING_DIR/database" \
   "$STAGING_DIR/frontend" \
+  "$STAGING_DIR/release" \
+  "$STAGING_DIR/image-objects" \
   "$STAGING_DIR/config/compose" \
   "$STAGING_DIR/config/nginx" \
   "$STAGING_DIR/config/environment" \
   "$STAGING_DIR/config/extra" \
+  "$STAGING_DIR/config/proxy" \
+  "$STAGING_DIR/proxy" \
   "$STAGING_DIR/metadata" \
   "$STAGING_DIR/attachments"
 
@@ -710,12 +745,70 @@ cp -a -- "$frontend_real"/. "$STAGING_DIR/frontend/"
 chmod -R go-rwx -- "$STAGING_DIR/frontend"
 printf '%s\t%s\n' "$frontend_real" "frontend/" >> "$inventory_file"
 
+CURRENT_STAGE="release source copy"
+project_real="$(realpath -e -- "$NAV_PROJECT_DIR")"
+[[ "$project_real" != "/" ]] || fatal "$EX_CONFIG" "project path must not be the filesystem root"
+[[ "$project_real" != "$backup_root_real" && "$project_real" != "$backup_root_real"/* ]] \
+  || fatal "$EX_CONFIG" "project path must not be inside the backup root"
+cp -a -- "$project_real"/. "$STAGING_DIR/release/"
+chmod -R go-rwx -- "$STAGING_DIR/release"
+printf '%s\t%s\n' "$project_real" "release/" >> "$inventory_file"
+
 CURRENT_STAGE="configuration copy"
 copy_path_list "compose" "$NAV_COMPOSE_PATHS"
 copy_path_list "nginx" "$NAV_NGINX_PATHS"
 copy_path_list "environment" "$NAV_ENV_PATHS"
 copy_path_list "extra" "$NAV_EXTRA_CONFIG_PATHS"
 safe_copy_path "$CONFIG_FILE" "extra"
+
+printf 'component\tstatus\tdetail\n' > "$STAGING_DIR/metadata/disaster-components.tsv"
+
+if is_true "$NAV_ENABLE_OUTER_PROXY_BACKUP"; then
+  CURRENT_STAGE="outer proxy configuration copy"
+  copy_path_list "proxy" "$NAV_OUTER_PROXY_PATHS"
+  npm_sqlite_real="$(realpath -e -- "$NAV_NPM_SQLITE_PATH")"
+  [[ -f "$npm_sqlite_real" && ! -L "$npm_sqlite_real" ]] \
+    || fatal "$EX_CONFIG" "NPM SQLite database must be a regular non-symlink file"
+  sqlite3 "$npm_sqlite_real" ".backup '$STAGING_DIR/proxy/npm-database.sqlite'" \
+    || fatal "$EX_SOFTWARE" "NPM SQLite online backup failed"
+  [[ "$(sqlite3 "$STAGING_DIR/proxy/npm-database.sqlite" 'PRAGMA quick_check;')" == "ok" ]] \
+    || fatal "$EX_SOFTWARE" "NPM SQLite backup failed integrity validation"
+  printf '%s\n' "$npm_sqlite_real" > "$STAGING_DIR/proxy/npm-database.target"
+  chmod -R go-rwx -- "$STAGING_DIR/proxy"
+  printf 'outer_proxy\tcomplete\tconfiguration_and_sqlite\n' \
+    >> "$STAGING_DIR/metadata/disaster-components.tsv"
+else
+  printf 'outer_proxy\tnot_configured\tset_NAV_ENABLE_OUTER_PROXY_BACKUP\n' \
+    >> "$STAGING_DIR/metadata/disaster-components.tsv"
+fi
+
+if is_true "$NAV_ENABLE_IMAGE_OBJECT_BACKUP"; then
+  CURRENT_STAGE="image object copy"
+  rclone --config "$NAV_IMAGE_RCLONE_CONFIG" copy \
+    "$NAV_IMAGE_RCLONE_REMOTE" "$STAGING_DIR/image-objects" \
+    --metadata --checkers 8 --transfers 4 \
+    || fatal "$EX_SOFTWARE" "image-object copy failed"
+  rclone --config "$NAV_IMAGE_RCLONE_CONFIG" lsf \
+    "$NAV_IMAGE_RCLONE_REMOTE" --recursive --files-only --format sp --separator $'\t' \
+    | sort > "$STAGING_DIR/metadata/image-objects-remote.tsv"
+  find -P "$STAGING_DIR/image-objects" -type f -printf '%s\t%P\n' \
+    | sort > "$STAGING_DIR/metadata/image-objects-local.tsv"
+  cmp -s \
+    "$STAGING_DIR/metadata/image-objects-remote.tsv" \
+    "$STAGING_DIR/metadata/image-objects-local.tsv" \
+    || fatal "$EX_SOFTWARE" "image-object path/size inventory differs after copy"
+  image_object_count="$(wc -l < "$STAGING_DIR/metadata/image-objects-local.tsv")"
+  printf 'image_objects\tcomplete\t%s_objects\n' "$image_object_count" \
+    >> "$STAGING_DIR/metadata/disaster-components.tsv"
+else
+  printf 'image_objects\tnot_configured\tset_NAV_ENABLE_IMAGE_OBJECT_BACKUP\n' \
+    >> "$STAGING_DIR/metadata/disaster-components.tsv"
+fi
+
+printf 'database\tcomplete\tpostgresql_custom_dump\n' \
+  >> "$STAGING_DIR/metadata/disaster-components.tsv"
+printf 'release\tcomplete\tsource_and_frontend\n' \
+  >> "$STAGING_DIR/metadata/disaster-components.tsv"
 
 CURRENT_STAGE="runtime and image inventory"
 runtime_file="$STAGING_DIR/metadata/runtime.tsv"

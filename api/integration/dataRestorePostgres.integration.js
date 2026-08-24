@@ -10,6 +10,7 @@ const CORRECT_PASSWORD = 'Correct Horse Battery Staple 2026!'
 const WRONG_PASSWORD = 'This password is deliberately wrong'
 const RESTORE_CONFIRMATION = '恢复'
 const RESTORE_BODY_LIMIT = 16 * 1024 * 1024
+const RESTORE_STREAM_CONTENT_TYPE = 'application/x-domo-nav-backup-ndjson'
 const RESTORE_TOKEN_TTL_MS = 10 * 60 * 1000
 const RESTORE_LOCK_TABLES = Object.freeze([
   'custom_search_engines',
@@ -323,6 +324,44 @@ function maximumWorkloadBackup(userId = USER_A_ID) {
   return backup
 }
 
+function streamingWorkloadBackup(userId = USER_A_ID) {
+  const baseline = maximumWorkloadBackup(userId)
+  const extraBookmarks = Array.from({ length: 1500 }, (_, index) => ({
+    id: fixtureUuid(107, index + 1),
+    groupId: baseline.data.groups[index % baseline.data.groups.length].id,
+    title: `Streaming bookmark ${index + 1}`,
+    url: `https://example.test/streaming-bookmarks/${index + 1}`,
+    favicon: '',
+    description: '',
+    tags: [],
+    order: baseline.data.bookmarks.length + index
+  }))
+  const backup = backupEnvelope({
+    ...baseline.data,
+    bookmarks: [...baseline.data.bookmarks, ...extraBookmarks]
+  })
+  assert.equal(backup.manifest.counts.totalRecords, 6500)
+  return backup
+}
+
+function streamBackupPayload(backup) {
+  const header = {
+    schema: backup.schema,
+    version: backup.version,
+    exportedAt: backup.exportedAt,
+    manifest: backup.manifest
+  }
+  const lines = [JSON.stringify({ type: 'header', backup: header })]
+  for (const collection of [
+    'groups', 'bookmarks', 'notes', 'customEngines', 'shares', 'settings', 'mediaAssets'
+  ]) {
+    for (const record of backup.data[collection]) {
+      lines.push(JSON.stringify({ type: 'record', collection, record }))
+    }
+  }
+  return `${lines.join('\n')}\n`
+}
+
 async function dropFailureInjectionTrigger() {
   await pool.query('DROP TRIGGER IF EXISTS nav_restore_test_fail_success_audit ON security_events')
   await pool.query('DROP FUNCTION IF EXISTS nav_restore_test_fail_success_audit()')
@@ -476,13 +515,14 @@ async function seedBaseline() {
   await insertMediaAsset(USER_B_ID, 1, 26)
 }
 
-async function apiRequest(method, url, session, payload) {
+async function apiRequest(method, url, session, payload, headers = {}) {
   const request = {
     method,
     url: `/api${url}`,
     headers: {
       cookie: session.cookie,
-      origin: TEST_ORIGIN
+      origin: TEST_ORIGIN,
+      ...headers
     }
   }
   if (payload !== undefined) request.payload = payload
@@ -491,7 +531,7 @@ async function apiRequest(method, url, session, payload) {
 
 async function previewRestore(session, backup, { restoreShares = true } = {}) {
   const response = await apiRequest('POST', '/migration/restore/preview', session, {
-    backup,
+    ...(backup?.uploadId ? { uploadId: backup.uploadId } : { backup }),
     mode: 'replace',
     restoreShares
   })
@@ -520,7 +560,7 @@ function restoreApplyPayload(backup, {
   restoreShares = true
 }) {
   return {
-    backup,
+    ...(backup?.uploadId ? { uploadId: backup.uploadId } : { backup }),
     mode: 'replace',
     restoreShares,
     planToken,
@@ -528,6 +568,25 @@ function restoreApplyPayload(backup, {
     currentPassword,
     confirmation: RESTORE_CONFIRMATION
   }
+}
+
+async function uploadRestoreStream(session, backup) {
+  const payload = streamBackupPayload(backup)
+  const response = await apiRequest(
+    'POST',
+    '/migration/restore/stream-upload',
+    session,
+    payload,
+    { 'content-type': RESTORE_STREAM_CONTENT_TYPE }
+  )
+  assert.equal(response.statusCode, 200, response.body)
+  const body = json(response)
+  assert.equal(body.ok, true)
+  assert.ok(body.uploadId)
+  assert.equal(body.totalRecords, backup.manifest.counts.totalRecords)
+  assert.equal(body.payloadBytes, Buffer.byteLength(payload, 'utf8'))
+  assert.match(body.payloadSha256, /^[0-9a-f]{64}$/)
+  return body
 }
 
 async function applyRestore(session, backup, artifacts, options = {}) {
@@ -1087,5 +1146,70 @@ test('the exact 5000-record workload is restored under an observed table lock la
     observedLockDurationMs: Math.round(lock.durationMs),
     heldLockSamples: lock.heldSamples,
     observedLockRelations: lock.observedRelations
+  }))
+})
+
+test('a 6500-record NDJSON backup is staged in batches and restored without a JSON request body', async (t) => {
+  await seedBaseline()
+  const session = await seedSession(USER_A_ID)
+  await seedSession(USER_B_ID)
+  const userBBefore = await snapshotUser(USER_B_ID)
+  const backup = streamingWorkloadBackup()
+
+  const uploaded = await uploadRestoreStream(session, backup)
+  const stagedCounts = await pool.query(
+    `
+      SELECT collection, COUNT(*)::integer AS count
+      FROM data_restore_stream_records
+      WHERE upload_id = $1
+      GROUP BY collection
+      ORDER BY collection
+    `,
+    [uploaded.uploadId]
+  )
+  assert.equal(
+    stagedCounts.rows.reduce((total, row) => total + row.count, 0),
+    6500
+  )
+
+  const reference = { uploadId: uploaded.uploadId }
+  const artifacts = await restoreArtifacts(session, reference, { restoreShares: true })
+  const startedAt = performance.now()
+  const response = await applyRestore(session, reference, artifacts, { restoreShares: true })
+  const requestDurationMs = performance.now() - startedAt
+
+  assert.equal(response.statusCode, 200, response.body)
+  const body = json(response)
+  assert.equal(body.ok, true)
+  assert.deepEqual(body.imported, {
+    groups: 200,
+    bookmarks: 3500,
+    notes: 1000,
+    customEngines: 100,
+    shares: 1000,
+    settings: 3,
+    mediaAssets: 697
+  })
+  assert.equal(
+    (await pool.query(
+      'SELECT status FROM data_restore_stream_uploads WHERE id = $1',
+      [uploaded.uploadId]
+    )).rows[0].status,
+    'applied'
+  )
+  assert.deepEqual(await countUserRows(USER_A_ID), {
+    groups: 200,
+    bookmarks: 3500,
+    notes: 1000,
+    shares: 1000,
+    engines: 100,
+    settings: 4,
+    media: 698
+  })
+  assert.deepEqual(await snapshotUser(USER_B_ID), userBBefore)
+  t.diagnostic(JSON.stringify({
+    records: backup.manifest.counts.totalRecords,
+    payloadBytes: uploaded.payloadBytes,
+    requestDurationMs: Math.round(requestDurationMs)
   }))
 })

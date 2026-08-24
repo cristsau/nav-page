@@ -24,18 +24,18 @@ const REQUIRED_COLLECTIONS = Object.freeze([
 const OPTIONAL_COLLECTIONS = Object.freeze(['mediaAssets'])
 
 const COLLECTION_LIMITS = Object.freeze({
-  groups: 200,
-  bookmarks: 2_000,
-  notes: 1_000,
-  customEngines: 100,
-  shares: 1_000,
-  settings: 100,
-  mediaAssets: 2_000
+  groups: 2_000,
+  bookmarks: 10_000,
+  notes: 5_000,
+  customEngines: 1_000,
+  shares: 5_000,
+  settings: 500,
+  mediaAssets: 10_000
 })
 
-const MAX_TOTAL_RECORDS = 5_000
-const MAX_ATTACHMENTS = 2_000
-const MAX_RESTORE_WORK_UNITS = 8_000
+const MAX_TOTAL_RECORDS = 25_000
+const MAX_ATTACHMENTS = 20_000
+const MAX_RESTORE_WORK_UNITS = 60_000
 const CLOUD_BACKUP_SCHEMA = 'domo-nav-backup'
 const CLOUD_BACKUP_VERSION = 1
 const TOKEN_VERSION = 'v1'

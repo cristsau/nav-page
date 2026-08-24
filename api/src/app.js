@@ -13,6 +13,7 @@ import aiSearchRoutes from './routes/aiSearch.js'
 import aiUsageRoutes from './routes/aiUsage.js'
 import authRoutes from './routes/auth.js'
 import assistantRoutes from './routes/assistant.js'
+import collaborationRoutes from './routes/collaboration.js'
 import customSearchEngineRoutes from './routes/customSearchEngines.js'
 import migrationRoutes from './routes/migration.js'
 import maintenanceRoutes from './routes/maintenance.js'
@@ -22,6 +23,7 @@ import noteAiRoutes from './routes/noteAi.js'
 import noteImagesRoutes from './routes/noteImages.js'
 import noteReminderRoutes from './routes/noteReminders.js'
 import notesRoutes from './routes/notes.js'
+import offlineSyncRoutes from './routes/offlineSync.js'
 import passkeyRoutes from './routes/passkeys.js'
 import publicSharePageRoutes from './routes/publicSharePage.js'
 import productivityImportRoutes from './routes/productivityImports.js'
@@ -132,6 +134,7 @@ export function createApp() {
   app.register(aiSearchRoutes, { prefix: '/api' })
   app.register(aiUsageRoutes, { prefix: '/api' })
   app.register(authRoutes, { prefix: '/api' })
+  app.register(collaborationRoutes, { prefix: '/api' })
   app.register(customSearchEngineRoutes, { prefix: '/api' })
   app.register(migrationRoutes, { prefix: '/api' })
   app.register(maintenanceRoutes, { prefix: '/api' })
@@ -141,6 +144,7 @@ export function createApp() {
   app.register(noteImagesRoutes, { prefix: '/api' })
   app.register(noteReminderRoutes, { prefix: '/api' })
   app.register(notesRoutes, { prefix: '/api' })
+  app.register(offlineSyncRoutes, { prefix: '/api' })
   app.register(passkeyRoutes, { prefix: '/api' })
   app.register(productivityImportRoutes, { prefix: '/api' })
   app.register(settingsRoutes, { prefix: '/api' })

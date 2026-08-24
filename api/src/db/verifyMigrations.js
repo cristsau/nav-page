@@ -1156,6 +1156,217 @@ async function verifyBlockEditorSchema() {
   }
 }
 
+async function verifyCollaborationOfflineSchema() {
+  const expectedColumns = new Map([
+    ['note_collaborators', [
+      'note_id', 'user_id', 'role', 'invited_by', 'created_at', 'updated_at'
+    ]],
+    ['note_comments', [
+      'id', 'note_id', 'user_id', 'parent_id', 'block_id', 'selection', 'body',
+      'status', 'resolved_by', 'resolved_at', 'edited_at', 'created_at', 'updated_at'
+    ]],
+    ['note_crdt_documents', [
+      'note_id', 'state', 'state_vector', 'update_count', 'compacted_through', 'updated_at'
+    ]],
+    ['note_crdt_updates', [
+      'id', 'note_id', 'actor_user_id', 'update', 'update_hash', 'created_at'
+    ]],
+    ['note_sync_events', [
+      'id', 'note_id', 'actor_user_id', 'event_kind', 'entity_id', 'revision',
+      'audience_user_ids', 'payload', 'created_at'
+    ]],
+    ['offline_mutation_receipts', [
+      'user_id', 'operation_id', 'mutation_kind', 'request_hash', 'response_status',
+      'response_payload', 'created_at', 'expires_at'
+    ]],
+    ['note_sync_devices', [
+      'user_id', 'device_id', 'label', 'last_cursor', 'last_sync_at', 'created_at', 'updated_at'
+    ]]
+  ])
+  const tableNames = [...expectedColumns.keys()]
+  const columns = await query(
+    `
+      SELECT table_name, column_name
+      FROM information_schema.columns
+      WHERE table_schema = current_schema()
+        AND table_name = ANY($1::text[])
+    `,
+    [tableNames]
+  )
+  for (const [tableName, names] of expectedColumns) {
+    assertExactSet(
+      `${tableName} columns`,
+      columns.rows
+        .filter((row) => row.table_name === tableName)
+        .map((row) => row.column_name),
+      names
+    )
+  }
+
+  const expectedConstraints = [
+    'note_collaborators_role_check',
+    'note_comments_body_check',
+    'note_comments_selection_object_check',
+    'note_comments_status_check',
+    'note_comments_resolution_state_check',
+    'note_crdt_documents_update_count_check',
+    'note_crdt_documents_compacted_through_check',
+    'note_crdt_updates_payload_check',
+    'note_crdt_updates_hash_check',
+    'note_crdt_updates_note_hash_key',
+    'note_sync_events_kind_check',
+    'note_sync_events_audience_check',
+    'note_sync_events_payload_object_check',
+    'offline_mutation_receipts_request_hash_check',
+    'offline_mutation_receipts_response_status_check',
+    'offline_mutation_receipts_expiry_check',
+    'note_sync_devices_cursor_check'
+  ]
+  const constraints = await query(
+    `
+      SELECT conname, convalidated
+      FROM pg_constraint
+      WHERE conname = ANY($1::text[])
+    `,
+    [expectedConstraints]
+  )
+  assertExactSet(
+    'collaboration/offline constraints',
+    constraints.rows.map((row) => row.conname),
+    expectedConstraints
+  )
+  if (constraints.rows.some((row) => row.convalidated !== true)) {
+    throw new Error('collaboration/offline constraints must be validated')
+  }
+
+  const expectedIndexes = [
+    'idx_note_collaborators_user_note',
+    'idx_note_comments_note_created',
+    'idx_note_comments_note_open',
+    'idx_note_crdt_updates_note_id',
+    'idx_note_sync_events_audience_id',
+    'idx_note_sync_events_created',
+    'idx_offline_mutation_receipts_expiry'
+  ]
+  const indexes = await query(
+    `
+      SELECT indexname
+      FROM pg_indexes
+      WHERE schemaname = current_schema()
+        AND indexname = ANY($1::text[])
+    `,
+    [expectedIndexes]
+  )
+  assertExactSet(
+    'collaboration/offline indexes',
+    indexes.rows.map((row) => row.indexname),
+    expectedIndexes
+  )
+
+  const expectedTriggers = [
+    'trg_note_collaborators_validate_target',
+    'trg_note_collaborators_sync_event',
+    'trg_note_comments_validate_target',
+    'trg_note_comments_sync_event',
+    'trg_note_crdt_documents_validate_target',
+    'trg_note_crdt_updates_validate_target',
+    'trg_notes_sync_event_upsert',
+    'trg_notes_sync_event_delete'
+  ]
+  const triggers = await query(
+    `
+      SELECT tgname
+      FROM pg_trigger
+      WHERE NOT tgisinternal
+        AND tgname = ANY($1::text[])
+    `,
+    [expectedTriggers]
+  )
+  assertExactSet(
+    'collaboration/offline triggers',
+    triggers.rows.map((row) => row.tgname),
+    expectedTriggers
+  )
+}
+
+async function verifyStreamingDataRestoreSchema() {
+  const expectedColumns = new Map([
+    ['data_restore_stream_uploads', [
+      'id', 'user_id', 'session_id', 'status', 'backup_header', 'counts',
+      'payload_sha256', 'payload_bytes', 'created_at', 'expires_at'
+    ]],
+    ['data_restore_stream_records', [
+      'upload_id', 'collection', 'ordinal', 'record'
+    ]]
+  ])
+  const columns = await query(
+    `
+      SELECT table_name, column_name
+      FROM information_schema.columns
+      WHERE table_schema = current_schema()
+        AND table_name = ANY($1::text[])
+    `,
+    [[...expectedColumns.keys()]]
+  )
+  for (const [tableName, names] of expectedColumns) {
+    assertExactSet(
+      `${tableName} columns`,
+      columns.rows
+        .filter((row) => row.table_name === tableName)
+        .map((row) => row.column_name),
+      names
+    )
+  }
+
+  const expectedConstraints = [
+    'data_restore_stream_uploads_status_check',
+    'data_restore_stream_uploads_header_check',
+    'data_restore_stream_uploads_counts_check',
+    'data_restore_stream_uploads_digest_check',
+    'data_restore_stream_uploads_bytes_check',
+    'data_restore_stream_uploads_expiry_check',
+    'data_restore_stream_records_collection_check',
+    'data_restore_stream_records_ordinal_check',
+    'data_restore_stream_records_record_check'
+  ]
+  const constraints = await query(
+    `
+      SELECT conname, convalidated
+      FROM pg_constraint
+      WHERE conname = ANY($1::text[])
+    `,
+    [expectedConstraints]
+  )
+  assertExactSet(
+    'streaming data restore constraints',
+    constraints.rows.map((row) => row.conname),
+    expectedConstraints
+  )
+  if (constraints.rows.some((row) => row.convalidated !== true)) {
+    throw new Error('streaming data restore constraints must be validated')
+  }
+
+  const expectedIndexes = [
+    'idx_data_restore_stream_uploads_expiry',
+    'idx_data_restore_stream_uploads_user_session',
+    'idx_data_restore_stream_records_upload_order'
+  ]
+  const indexes = await query(
+    `
+      SELECT indexname
+      FROM pg_indexes
+      WHERE schemaname = current_schema()
+        AND indexname = ANY($1::text[])
+    `,
+    [expectedIndexes]
+  )
+  assertExactSet(
+    'streaming data restore indexes',
+    indexes.rows.map((row) => row.indexname),
+    expectedIndexes
+  )
+}
+
 async function verifyAiUsageSchema() {
   const expectedColumns = [
     'usage_date',
@@ -1241,6 +1452,8 @@ async function main() {
   await verifyHybridWorkspaceSearchSchema()
   await verifyWebPushSchema()
   await verifyBlockEditorSchema()
+  await verifyCollaborationOfflineSchema()
+  await verifyStreamingDataRestoreSchema()
   await verifyAiUsageSchema()
   console.log('migration schema verification complete')
 }
