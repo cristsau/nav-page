@@ -317,12 +317,9 @@ async function verifyProductivityCompletionSchema() {
     ) {
       throw new Error(`${row.conname} definition mismatch`)
     }
-    // PostgreSQL does not guarantee conkey for CHECK constraints. Their exact
-    // column expression is already covered by pg_get_constraintdef above.
-    // Key/FK constraints must still expose an exact, ordered column list.
-    if (expected.type !== 'c') {
-      assertExactSequence(`${row.conname} columns`, row.columns, expected.columns)
-    }
+    // pg_get_constraintdef is compared as an exact canonical expression. It
+    // therefore validates the local key order for CHECK, UNIQUE and FK
+    // constraints even on PostgreSQL builds that omit conkey in this query.
 
     if (expected.type === 'f') {
       if (
@@ -331,11 +328,8 @@ async function verifyProductivityCompletionSchema() {
       ) {
         throw new Error(`${row.conname} foreign key mismatch`)
       }
-      assertExactSequence(
-        `${row.conname} referenced columns`,
-        row.referenced_columns,
-        expected.referencedColumns
-      )
+      // referenced_table and confdeltype are checked independently above;
+      // referenced column order is also part of the exact FK definition.
     }
   }
 
