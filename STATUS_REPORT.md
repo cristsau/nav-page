@@ -6,6 +6,17 @@
 和 `UNFINISHED`。仓库中存在脚本或代码，不等于生产
 已经安装、启用或形成灾难恢复闭环；每次发布前仍须重新读取 GitHub、OVH 与双域状态。
 
+## 2026-08-24 Web Push 当前设备登记修复候选
+
+- 状态：`LOCAL_DONE / READY_FOR_CI / NOT_DEPLOYED`。
+- 用户现场表现为通知权限已经 `granted`，测试按钮仍禁用；生产只读检查确认
+  `web_push_subscriptions` 为 0 行，因此浏览器权限已完成，但 Push subscription/服务器登记未完成。
+- 本分支把启用过程拆成系统权限、浏览器订阅、服务器登记三步，成功后自动向当前设备发送测试
+  通知；测试按钮不再回退到其他设备，并提供脱敏的分步错误信息。
+- 无依赖定向验证为 4 项通过、0 失败；完整构建、全量 CI、PR、发布和真机通知到达尚未执行。
+- 详细证据与上线门禁见
+  [`docs/NAV_WEB_PUSH_DEVICE_REGISTRATION_FIX.md`](./docs/NAV_WEB_PUSH_DEVICE_REGISTRATION_FIX.md)。
+
 ## 2026-08-24 功能与生产状态
 
 - 状态：`VERIFIED_LIVE`，真实设备通知授权除外。
@@ -143,9 +154,11 @@ PR #30 的图片删除重试告警正确性、PR #31 的云端安全恢复、PR 
 - 仓库已补充三组默认不启用的 systemd 调度模板、独立 `OnFailure` 通知、只在成功后发送的
   双 dead-man 心跳、最新备份选择器和只安装不启用的部署脚本；生产配置和现场验收完成前
   状态仍是 `SOURCE_READY / NOT_DEPLOYED`。
-- 2026-08-23 OVH 只读核验确认：未安装 `restic`，没有 NAV/restic systemd unit 或 timer，
-  也没有 `/etc/nav/nav-backup.env`、`/etc/nav/restic-offsite.env` 和 `/usr/local/sbin` 稳定入口。
-- 因此当前没有自动计划、异地加密上传、远端保留清理、备份失败外部报警或定期恢复演练。
+- 2026-08-24 OVH 只读复核确认：三组 NAV 备份/保留/恢复 service 与 timer 模板已经安装，但
+  timer 全部为 `disabled`；`restic`、`/etc/nav/nav-backup.env` 与
+  `/etc/nav/restic-offsite.env` 仍不存在。主机全局恢复工具存在，但哈希与仓库当前修复版不同。
+- 因此当前仍没有自动异地加密上传、远端保留清理、备份失败外部报警或定期恢复演练；现状是
+  “调度骨架已安装、未配置、未启用”，不能写成已形成异地灾备。
 - 图床对象和外层代理配置尚未纳入独立、可在干净环境验证的完整生态恢复。
 
 ## 生产仍为部分完成
