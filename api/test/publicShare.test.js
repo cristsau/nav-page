@@ -44,6 +44,8 @@ test('public note DTO exposes only reader-facing fields', () => {
   assert.deepEqual(note, {
     title: '部署摘要',
     content: '服务名称：nav-api',
+    contentFormat: 'plain',
+    contentJson: null,
     tags: ['部署', '状态'],
     attachments: [
       {
@@ -179,6 +181,7 @@ test('public share view is an article without internal type, count or decrypt UI
 
   assert.match(source, /<article[^>]+class="share-article"/)
   assert.match(source, /<CopyableNoteContent/)
+  assert.match(source, /<BlockContent/)
   assert.match(source, /noindex, noarchive, nofollow/)
   assert.match(source, /link\[rel="canonical"\]/)
   assert.match(source, /resolvePublicAppOrigin/)

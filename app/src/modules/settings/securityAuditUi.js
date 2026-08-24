@@ -4,6 +4,9 @@ const EVENT_TYPE_LABELS = Object.freeze({
   'auth.recovery': '账号恢复',
   'auth.recovery_codes.rotate': '轮换恢复码',
   'auth.session.revoke': '撤销登录会话',
+  'auth.passkey.register': '登记 Passkey',
+  'auth.passkey.login': 'Passkey 登录',
+  'auth.passkey.delete': '删除 Passkey',
   'auth.account.username.update': '修改用户名',
   'auth.account.password.update': '修改密码',
   'account.data.restore': '恢复云端数据',
@@ -26,6 +29,7 @@ const RESOURCE_TYPE_LABELS = Object.freeze({
   registration: '注册申请',
   registration_request: '注册申请',
   recovery_code: '恢复码',
+  passkey: 'Passkey',
   security_event: '安全审计记录',
   account_data: '账号数据',
   telegram_config: 'Telegram 配置'

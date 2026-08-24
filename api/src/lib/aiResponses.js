@@ -1,8 +1,8 @@
 export const DEFAULT_OPENAI_ENDPOINT = 'https://api.openai.com/v1/responses'
 export const DEFAULT_OPENAI_MODEL = 'gpt-5.6-terra'
 
-const RESPONSE_API_MODES = new Set(['responses', 'chat-completions'])
-const REASONING_EFFORTS = new Set([
+export const RESPONSE_API_MODES = Object.freeze(['responses', 'chat-completions'])
+export const REASONING_EFFORTS = Object.freeze([
   'none',
   'minimal',
   'low',
@@ -12,6 +12,8 @@ const REASONING_EFFORTS = new Set([
   'max',
   'ultra'
 ])
+const RESPONSE_API_MODE_VALUES = new Set(RESPONSE_API_MODES)
+const REASONING_EFFORT_VALUES = new Set(REASONING_EFFORTS)
 const MODEL_ID_CONTROL_PATTERN = /[\p{Cc}\p{Cf}]/u
 const MAX_MODEL_ID_LENGTH = 256
 
@@ -33,10 +35,26 @@ export function normalizeAiModelId(value, fallback = DEFAULT_OPENAI_MODEL) {
   return model
 }
 
+export function normalizeConfiguredChatApiMode(value, fallback = 'responses') {
+  const normalized = normalizeText(value || fallback).toLowerCase()
+  if (!RESPONSE_API_MODE_VALUES.has(normalized)) {
+    throw new Error('API 格式无效，请选择 Responses API 或 Chat Completions')
+  }
+  return normalized
+}
+
+export function normalizeReasoningEffort(value, fallback = 'low') {
+  const normalized = normalizeText(value || fallback).toLowerCase()
+  if (!REASONING_EFFORT_VALUES.has(normalized)) {
+    throw new Error('推理强度无效，请从页面提供的选项中选择')
+  }
+  return normalized
+}
+
 export function resolveChatApiMode(provider = {}, endpoint = '') {
   const configuredMode = normalizeText(provider.apiMode).toLowerCase()
-  if (RESPONSE_API_MODES.has(configuredMode)) {
-    return configuredMode
+  if (configuredMode) {
+    return normalizeConfiguredChatApiMode(configuredMode)
   }
 
   if (normalizeText(endpoint).includes('/responses')) {
@@ -155,6 +173,7 @@ export function buildChatRequest(provider, queryText, systemPrompt, safetyIdenti
   const endpoint = resolveChatEndpoint(provider)
   const apiMode = resolveChatApiMode(provider, endpoint)
   const model = normalizeAiModelId(provider.model)
+  const effort = normalizeReasoningEffort(provider.reasoningEffort, 'low')
 
   if (apiMode === 'chat-completions') {
     return {
@@ -173,7 +192,6 @@ export function buildChatRequest(provider, queryText, systemPrompt, safetyIdenti
     }
   }
 
-  const effort = normalizeText(provider.reasoningEffort, 'low').toLowerCase()
   const body = {
     model,
     instructions: systemPrompt,
@@ -185,9 +203,7 @@ export function buildChatRequest(provider, queryText, systemPrompt, safetyIdenti
     }
   }
 
-  if (REASONING_EFFORTS.has(effort)) {
-    body.reasoning = { effort }
-  }
+  body.reasoning = { effort }
 
   if (provider.webSearchEnabled !== false) {
     body.tools = [{ type: 'web_search' }]

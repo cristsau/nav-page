@@ -46,6 +46,9 @@ services:
       - /home/web/html/nav:/var/www/nav:ro
       - "${NAV_SECRETS_DIR:?set NAV_SECRETS_DIR to the release-local secrets directory}/cliproxy-api-key:/run/secrets/nav/cli-proxy-api-key:ro"
       - "${NAV_SECRETS_DIR:?set NAV_SECRETS_DIR to the release-local secrets directory}/imgbed-library-token:/run/secrets/nav/imgbed-library-token:ro"
+      - "${NAV_SECRETS_DIR:?set NAV_SECRETS_DIR to the release-local secrets directory}/web-push-vapid-private-key:/run/secrets/nav/web-push-vapid-private-key:ro"
+      - nav-model-cache:/var/cache/nav-models
 
 volumes:
   nav-postgres-data:
+  nav-model-cache:

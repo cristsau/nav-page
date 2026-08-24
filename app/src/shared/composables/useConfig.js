@@ -492,7 +492,7 @@ export function useConfig(options = {}) {
     updateConfig('style.colorScheme', schemeId)
     syncStyleConfig()
     applyStyleConfig()
-    await persistConfigNow()
+    return persistConfigNow()
   }
 
   async function applyCurrentConfigNow() {

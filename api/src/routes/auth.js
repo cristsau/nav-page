@@ -882,6 +882,10 @@ export default async function authRoutes(fastify) {
         'DELETE FROM sessions WHERE user_id = $1',
         [match.user_id]
       )
+      const removedPasskeys = await client.query(
+        'DELETE FROM webauthn_credentials WHERE user_id = $1',
+        [match.user_id]
+      )
 
       await recordSecurityEvent({
         client,
@@ -891,11 +895,14 @@ export default async function authRoutes(fastify) {
         subjectUserId: match.user_id,
         resourceType: 'account',
         resourceId: match.user_id,
-        affectedCount: revokedSessions.rowCount || 0
+        affectedCount:
+          (revokedSessions.rowCount || 0)
+          + (removedPasskeys.rowCount || 0)
       })
 
       return {
-        userId: match.user_id
+        userId: match.user_id,
+        removedPasskeyCount: removedPasskeys.rowCount || 0
       }
     })
 
@@ -915,7 +922,8 @@ export default async function authRoutes(fastify) {
 
     return {
       ok: true,
-      message: 'Password updated. Sign in again with the new password.'
+      message: 'Password updated. Sign in again with the new password.',
+      removedPasskeyCount: recovered.removedPasskeyCount
     }
   })
 

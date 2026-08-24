@@ -43,6 +43,8 @@ test('encrypted reminder DTOs expose no note body and use a generic title', () =
     'title',
     'encrypted',
     'dueAt',
+    'reminderAt',
+    'remindBeforeMinutes',
     'triggeredAt',
     'readAt'
   ])
@@ -85,13 +87,16 @@ test('GET reminder transaction synchronizes due memos before returning unread st
   assert.equal(result.reminders[0].title, 'renew certificate')
   assert.equal(result.unreadCount, 1)
   assert.match(result.serverNow, /^\d{4}-\d{2}-\d{2}T/)
-  assert.equal(calls.length, 4)
-  assert.match(calls[0].sql, /DELETE FROM note_reminders/i)
-  assert.match(calls[1].sql, /ON CONFLICT \(note_id, due_at_snapshot\) DO NOTHING/i)
-  assert.match(calls[1].sql, /note\.completed = FALSE/i)
-  assert.match(calls[1].sql, /note\.due_at <= NOW\(\)/i)
-  assert.match(calls[2].sql, /LIMIT \$2/i)
-  assert.match(calls[3].sql, /reminder\.read_at IS NULL/i)
+  assert.equal(calls.length, 5)
+  assert.match(calls[0].sql, /FROM notes[\s\S]*ORDER BY id ASC[\s\S]*FOR UPDATE/i)
+  assert.match(calls[1].sql, /DELETE FROM note_reminders/i)
+  assert.match(calls[1].sql, /remind_before_minutes IS DISTINCT FROM reminder\.remind_before_minutes_snapshot/i)
+  assert.match(calls[2].sql, /ON CONFLICT \(note_id, due_at_snapshot\) DO NOTHING/i)
+  assert.match(calls[2].sql, /note\.completed = FALSE/i)
+  assert.match(calls[2].sql, /remind_before_minutes \* INTERVAL '1 minute'\) <= NOW\(\)/i)
+  assert.match(calls[3].sql, /LIMIT \$2/i)
+  assert.match(calls[4].sql, /reminder\.read_at IS NULL/i)
+  assert.match(calls[4].sql, /reminder_at_snapshot/i)
 })
 
 test('migration and routes persist read state, isolate users, and reject malformed reminder ids', async () => {
@@ -114,16 +119,25 @@ test('migration and routes persist read state, isolate users, and reject malform
   assert.match(notesRoute, /DELETE FROM note_reminders[\s\S]*WHERE note_id = \$1/)
 })
 
-test('first reminder phase does not use Telegram, Web Push, or browser Notification APIs', async () => {
+test('browser notifications remain explicit opt-in and add authenticated Web Push delivery', async () => {
   const files = await Promise.all([
     readSource('../src/lib/noteReminders.js'),
     readSource('../src/routes/noteReminders.js'),
     readSource('../../app/src/shared/composables/useNoteReminders.js'),
-    readSource('../../app/src/modules/whisper/components/ReminderCenter.vue')
+    readSource('../../app/src/modules/whisper/components/ReminderCenter.vue'),
+    readSource('../../app/src/shared/services/webPushApi.js'),
+    readSource('../../app/public/sw.js'),
+    readSource('../src/routes/webPush.js')
   ])
   const source = files.join('\n')
 
-  assert.doesNotMatch(source, /\bNotification\b|PushManager|serviceWorker|showNotification/)
+  assert.match(source, /Notification\.requestPermission\(\)/)
+  assert.match(source, /notificationPermission/)
+  assert.match(source, /registration\.showNotification\(title, options\)/)
+  assert.match(source, /pushManager\.subscribe/)
+  assert.match(source, /addEventListener\('push'/)
+  assert.match(source, /fastify\.requireAuth/)
+  assert.match(source, /web_push_subscriptions/)
   assert.doesNotMatch(source, /telegram|sendMessage/i)
-  assert.match(source, /关闭页面后不会发送系统通知/)
+  assert.match(source, /网页关闭后仍可送达|关闭网页后也能收到/)
 })

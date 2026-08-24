@@ -70,6 +70,27 @@ export async function searchBackendNotes(query) {
   return payload.notes || []
 }
 
+export async function fetchBackendNoteVersions(noteId) {
+  const payload = await request(`/notes/${encodeURIComponent(noteId)}/versions`, {
+    method: 'GET'
+  })
+  return {
+    currentRevision: Number(payload.currentRevision || 1),
+    versions: payload.versions || []
+  }
+}
+
+export async function restoreBackendNoteVersion(noteId, versionId) {
+  const payload = await request(
+    `/notes/${encodeURIComponent(noteId)}/versions/${encodeURIComponent(versionId)}/restore`,
+    {
+      method: 'POST',
+      body: JSON.stringify({})
+    }
+  )
+  return payload.note
+}
+
 export async function fetchBackendShareByCode(code) {
   const response = await fetch(`${API_BASE_URL}/shares/${encodeURIComponent(code)}`, {
     method: 'GET',

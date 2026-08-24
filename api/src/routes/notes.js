@@ -19,6 +19,20 @@ import {
   mapPublicShare,
   mapShare
 } from '../lib/notes.js'
+import {
+  archiveNoteVersion,
+  isNoteVersionId,
+  mapNoteVersion,
+  pruneNoteVersions
+} from '../lib/noteVersions.js'
+import {
+  assertTiptapImagesAttached,
+  normalizeContentFormat,
+  normalizeEncryptedRichDocument,
+  plainTextToTiptapDocument,
+  sanitizeTiptapDocument,
+  tiptapDocumentText
+} from '../lib/noteRichContent.js'
 
 function normalizeText(value, fallback = '') {
   return String(value ?? fallback).trim()
@@ -28,6 +42,62 @@ function normalizeTags(value) {
   return Array.isArray(value)
     ? value.map((item) => String(item || '').trim()).filter(Boolean)
     : []
+}
+
+function resolveRichContentFields({ body, existing = null, encrypted }) {
+  const contentFormat = normalizeContentFormat(
+    body?.contentFormat,
+    existing?.content_format || 'plain'
+  )
+  const rawContent = body?.content === undefined
+    ? String(existing?.content || '')
+    : String(body.content || '')
+
+  if (contentFormat !== 'tiptap-json') {
+    return {
+      content: rawContent,
+      contentFormat: 'plain',
+      contentJson: null,
+      contentJsonEncrypted: null
+    }
+  }
+
+  if (encrypted) {
+    const contentJsonEncrypted = normalizeEncryptedRichDocument(
+      body?.contentJsonEncrypted,
+      existing?.content_json_encrypted || null
+    )
+    if (!contentJsonEncrypted) {
+      throw new TypeError('Encrypted rich notes require contentJsonEncrypted')
+    }
+    return {
+      content: rawContent,
+      contentFormat,
+      contentJson: null,
+      contentJsonEncrypted
+    }
+  }
+
+  const sourceDocument = body?.contentJson === undefined
+    ? (existing?.content_json || plainTextToTiptapDocument(rawContent))
+    : body.contentJson
+  const contentJson = sanitizeTiptapDocument(sourceDocument, {
+    allowedImageOrigin: getImgBedOrigin(config.imgBedBaseUrl)
+  })
+  return {
+    content: tiptapDocumentText(contentJson),
+    contentFormat,
+    contentJson,
+    contentJsonEncrypted: null
+  }
+}
+
+function invalidRichContentResponse(reply, error) {
+  reply.code(400)
+  return {
+    error: error?.message || 'Rich note content is invalid',
+    code: 'invalid_rich_content'
+  }
 }
 
 function normalizeExpireAt(value) {
@@ -134,11 +204,30 @@ export function resolveNoteDueAt(type, value, fallback = null) {
     : { valid: true, value: null }
 }
 
+export function normalizeRemindBeforeMinutes(value, fallback = 0) {
+  if (value === undefined) {
+    return { valid: true, value: Number(fallback || 0) }
+  }
+  const parsed = Number(value)
+  if (!Number.isSafeInteger(parsed) || parsed < 0 || parsed > 43_200) {
+    return { valid: false, value: 0 }
+  }
+  return { valid: true, value: parsed }
+}
+
 function invalidDueAtResponse(reply) {
   reply.code(400)
   return {
     error: 'dueAt must be a valid ISO 8601 timestamp with timezone',
     code: 'invalid_due_at'
+  }
+}
+
+function invalidRemindBeforeResponse(reply) {
+  reply.code(400)
+  return {
+    error: 'remindBeforeMinutes must be an integer from 0 to 43200',
+    code: 'invalid_remind_before_minutes'
   }
 }
 
@@ -370,8 +459,19 @@ export default async function notesRoutes(fastify) {
 
     const type = normalizeNoteType(request.body?.type)
     const title = normalizeText(request.body?.title)
-    const content = String(request.body?.content || '')
     const encrypted = Boolean(request.body?.encrypted)
+    let richContent
+    try {
+      richContent = resolveRichContentFields({ body: request.body, encrypted })
+    } catch (error) {
+      return invalidRichContentResponse(reply, error)
+    }
+    const {
+      content,
+      contentFormat,
+      contentJson,
+      contentJsonEncrypted
+    } = richContent
     const passwordHash = normalizeText(request.body?.password)
     const pinned = Boolean(request.body?.pinned)
     const tags = normalizeTags(request.body?.tags)
@@ -380,12 +480,19 @@ export default async function notesRoutes(fastify) {
       maxBytes: config.imgBedMaxImageBytes,
       strict: true
     })
+    if (contentJson) assertTiptapImagesAttached(contentJson, attachments)
     const entryDate = type === 'diary'
       ? normalizeDateOnly(request.body?.entryDate, new Date().toISOString().slice(0, 10))
       : null
     const mood = type === 'diary' ? normalizeText(request.body?.mood).slice(0, 40) : ''
     const dueAtResult = resolveNoteDueAt(type, request.body?.dueAt)
     const dueAt = dueAtResult.value
+    const remindBeforeResult = normalizeRemindBeforeMinutes(
+      request.body?.remindBeforeMinutes
+    )
+    const remindBeforeMinutes = type === 'memo' && dueAt
+      ? remindBeforeResult.value
+      : 0
     const completed = type === 'memo' && Boolean(request.body?.completed)
 
     if (!title) {
@@ -395,6 +502,9 @@ export default async function notesRoutes(fastify) {
 
     if (!dueAtResult.valid) {
       return invalidDueAtResponse(reply)
+    }
+    if (!remindBeforeResult.valid) {
+      return invalidRemindBeforeResponse(reply)
     }
 
     if (encrypted && !passwordHash) {
@@ -418,6 +528,9 @@ export default async function notesRoutes(fastify) {
             type,
             title,
             content,
+            content_format,
+            content_json,
+            content_json_encrypted,
             encrypted,
             password_hash,
             pinned,
@@ -426,8 +539,12 @@ export default async function notesRoutes(fastify) {
             entry_date,
             mood,
             due_at,
+            remind_before_minutes,
             completed
-          ) VALUES ($1, $2, $3, $4, $5, $6, $7, $8::jsonb, $9::jsonb, $10, $11, $12, $13)
+          ) VALUES (
+            $1, $2, $3, $4, $5, $6::jsonb, $7, $8, $9, $10,
+            $11::jsonb, $12::jsonb, $13, $14, $15, $16, $17
+          )
           RETURNING *
         `,
         [
@@ -435,6 +552,9 @@ export default async function notesRoutes(fastify) {
           type,
           title,
           content,
+          contentFormat,
+          contentJson ? JSON.stringify(contentJson) : null,
+          contentJsonEncrypted,
           encrypted,
           passwordHash,
           pinned,
@@ -443,6 +563,7 @@ export default async function notesRoutes(fastify) {
           entryDate,
           mood,
           dueAt,
+          remindBeforeMinutes,
           completed
         ]
       )
@@ -462,8 +583,23 @@ export default async function notesRoutes(fastify) {
 
     const type = normalizeNoteType(request.body?.type, existing.type)
     const title = normalizeText(request.body?.title, existing.title) || existing.title
-    const content = request.body?.content === undefined ? existing.content : String(request.body.content || '')
     const encrypted = request.body?.encrypted === undefined ? existing.encrypted : Boolean(request.body.encrypted)
+    let richContent
+    try {
+      richContent = resolveRichContentFields({
+        body: request.body,
+        existing,
+        encrypted
+      })
+    } catch (error) {
+      return invalidRichContentResponse(reply, error)
+    }
+    const {
+      content,
+      contentFormat,
+      contentJson,
+      contentJsonEncrypted
+    } = richContent
     let passwordHash = request.body?.password === undefined
       ? existing.password_hash
       : normalizeText(request.body.password)
@@ -478,6 +614,7 @@ export default async function notesRoutes(fastify) {
           maxBytes: config.imgBedMaxImageBytes,
           strict: true
         })
+    if (contentJson) assertTiptapImagesAttached(contentJson, attachments)
     const entryDate = type === 'diary'
       ? normalizeDateOnly(request.body?.entryDate, existing.entry_date || new Date().toISOString().slice(0, 10))
       : null
@@ -486,12 +623,39 @@ export default async function notesRoutes(fastify) {
       : ''
     const dueAtResult = resolveNoteDueAt(type, request.body?.dueAt, existing.due_at)
     const dueAt = dueAtResult.value
+    const remindBeforeResult = normalizeRemindBeforeMinutes(
+      request.body?.remindBeforeMinutes,
+      existing.remind_before_minutes
+    )
+    const remindBeforeMinutes = type === 'memo' && dueAt
+      ? remindBeforeResult.value
+      : 0
+    const expectedRevision = request.body?.revision === undefined
+      ? null
+      : Number(request.body.revision)
     const completed = type === 'memo'
       ? (request.body?.completed === undefined ? existing.completed : Boolean(request.body.completed))
       : false
 
     if (!dueAtResult.valid) {
       return invalidDueAtResponse(reply)
+    }
+    if (!remindBeforeResult.valid) {
+      return invalidRemindBeforeResponse(reply)
+    }
+    if (
+      expectedRevision !== null
+      && (!Number.isSafeInteger(expectedRevision) || expectedRevision < 1)
+    ) {
+      reply.code(400)
+      return { error: 'revision must be a positive integer', code: 'invalid_revision' }
+    }
+    if (expectedRevision !== null && expectedRevision !== Number(existing.revision || 1)) {
+      reply.code(409)
+      return {
+        error: 'Note changed in another session; reload and retry',
+        code: 'stale_note'
+      }
     }
 
     if (!encrypted) {
@@ -508,7 +672,7 @@ export default async function notesRoutes(fastify) {
       outcome = await withTransaction(async (client) => {
         const lockedNote = await client.query(
           `
-            SELECT updated_at::text AS updated_at_version
+            SELECT *, updated_at::text AS updated_at_version
             FROM notes
             WHERE id = $1
               AND user_id = $2
@@ -519,12 +683,18 @@ export default async function notesRoutes(fastify) {
         if (
           !lockedNote.rows.length
           || lockedNote.rows[0].updated_at_version !== existing.updated_at_version
+          || (
+            expectedRevision !== null
+            && Number(lockedNote.rows[0].revision || 1) !== expectedRevision
+          )
         ) {
           const error = new Error('Note changed in another session; reload and retry')
           error.code = 'stale_note'
           error.statusCode = 409
           throw error
         }
+
+        await archiveNoteVersion(client, lockedNote.rows[0])
 
         const mediaSync = await syncNoteMediaReferences(
           client,
@@ -540,19 +710,25 @@ export default async function notesRoutes(fastify) {
             SET type = $3,
                 title = $4,
                 content = $5,
-                encrypted = $6,
-                password_hash = $7,
-                pinned = $8,
-                tags = $9::jsonb,
-                attachments = $10::jsonb,
-                entry_date = $11,
-                mood = $12,
-                due_at = $13,
-                completed = $14,
+                content_format = $6,
+                content_json = $7::jsonb,
+                content_json_encrypted = $8,
+                encrypted = $9,
+                password_hash = $10,
+                pinned = $11,
+                tags = $12::jsonb,
+                attachments = $13::jsonb,
+                entry_date = $14,
+                mood = $15,
+                due_at = $16,
+                remind_before_minutes = $17,
+                completed = $18,
+                revision = revision + 1,
                 updated_at = NOW()
             WHERE id = $1
               AND user_id = $2
-              AND updated_at = $15::timestamptz
+              AND updated_at = $19::timestamptz
+              AND revision = $20::integer
             RETURNING *
           `,
           [
@@ -561,6 +737,9 @@ export default async function notesRoutes(fastify) {
             type,
             title,
             content,
+            contentFormat,
+            contentJson ? JSON.stringify(contentJson) : null,
+            contentJsonEncrypted,
             encrypted,
             passwordHash,
             pinned,
@@ -569,8 +748,10 @@ export default async function notesRoutes(fastify) {
             entryDate,
             mood,
             dueAt,
+            remindBeforeMinutes,
             completed,
-            existing.updated_at_version
+            existing.updated_at_version,
+            Number(existing.revision || 1)
           ]
         )
 
@@ -585,6 +766,7 @@ export default async function notesRoutes(fastify) {
           type !== 'memo'
           || completed
           || !timestampsMatch(existing.due_at, dueAt)
+          || Number(existing.remind_before_minutes || 0) !== remindBeforeMinutes
         )
 
         if (scheduleChanged) {
@@ -598,10 +780,22 @@ export default async function notesRoutes(fastify) {
           )
         }
 
+        if (encrypted || Boolean(lockedNote.rows[0].encrypted)) {
+          await client.query(
+            'DELETE FROM note_shares WHERE note_id = $1 AND user_id = $2',
+            [request.params.noteId, request.currentUser.id]
+          )
+        }
+
         const cleanupIds = await markUnreferencedAutoAssetsForDeletion(
           client,
           request.currentUser.id,
           mediaSync.removed
+        )
+        await pruneNoteVersions(
+          client,
+          request.currentUser.id,
+          request.params.noteId
         )
         return { note: result.rows[0], cleanupIds }
       })
@@ -621,6 +815,177 @@ export default async function notesRoutes(fastify) {
       outcome.cleanupIds
     )
     return { note: mapNote(outcome.note), mediaCleanup }
+  })
+
+  fastify.get('/notes/:noteId/versions', async (request, reply) => {
+    await fastify.requireAuth(request, reply)
+
+    const note = await requireOwnedNote(
+      request.currentUser.id,
+      request.params.noteId,
+      reply
+    )
+    if (!note) {
+      return { error: 'Note not found' }
+    }
+
+    const { rows } = await query(
+      `
+        SELECT *
+        FROM note_versions
+        WHERE user_id = $1
+          AND note_id = $2
+        ORDER BY revision DESC, created_at DESC, id DESC
+        LIMIT 50
+      `,
+      [request.currentUser.id, request.params.noteId]
+    )
+
+    return {
+      currentRevision: Number(note.revision || 1),
+      versions: rows.map(mapNoteVersion)
+    }
+  })
+
+  fastify.post('/notes/:noteId/versions/:versionId/restore', async (request, reply) => {
+    await fastify.requireAuth(request, reply)
+
+    if (!isNoteVersionId(request.params.versionId)) {
+      reply.code(400)
+      return { error: 'Invalid version id', code: 'invalid_note_version_id' }
+    }
+
+    let restored
+    try {
+      restored = await withTransaction(async (client) => {
+        const currentResult = await client.query(
+          `
+            SELECT *
+            FROM notes
+            WHERE id = $1
+              AND user_id = $2
+            FOR UPDATE
+          `,
+          [request.params.noteId, request.currentUser.id]
+        )
+        if (!currentResult.rows.length) return null
+
+        const versionResult = await client.query(
+          `
+            SELECT *
+            FROM note_versions
+            WHERE id = $1
+              AND note_id = $2
+              AND user_id = $3
+            LIMIT 1
+          `,
+          [
+            request.params.versionId,
+            request.params.noteId,
+            request.currentUser.id
+          ]
+        )
+        if (!versionResult.rows.length) {
+          const error = new Error('Note version not found')
+          error.code = 'note_version_not_found'
+          error.statusCode = 404
+          throw error
+        }
+
+        const current = currentResult.rows[0]
+        const version = versionResult.rows[0]
+        const currentAttachments = normalizeNoteAttachments(
+          current.attachments,
+          { maxBytes: Number.MAX_SAFE_INTEGER }
+        )
+        if (version.encrypted && currentAttachments.length) {
+          const error = new Error('Remove current images before restoring an encrypted version')
+          error.code = 'encrypted_version_has_current_attachments'
+          error.statusCode = 409
+          throw error
+        }
+
+        await archiveNoteVersion(client, current)
+        const result = await client.query(
+          `
+            UPDATE notes
+            SET type = $3,
+                title = $4,
+                content = $5,
+                content_format = $6,
+                content_json = $7::jsonb,
+                content_json_encrypted = $8,
+                encrypted = $9,
+                password_hash = $10,
+                pinned = $11,
+                tags = $12::jsonb,
+                entry_date = $13,
+                mood = $14,
+                due_at = $15,
+                remind_before_minutes = $16,
+                completed = $17,
+                revision = revision + 1,
+                updated_at = NOW()
+            WHERE id = $1
+              AND user_id = $2
+            RETURNING *
+          `,
+          [
+            request.params.noteId,
+            request.currentUser.id,
+            version.type,
+            version.title,
+            version.content,
+            version.content_format || 'plain',
+            version.content_json ? JSON.stringify(version.content_json) : null,
+            version.content_json_encrypted || null,
+            Boolean(version.encrypted),
+            String(version.password_hash || ''),
+            Boolean(version.pinned),
+            JSON.stringify(Array.isArray(version.tags) ? version.tags : []),
+            version.entry_date || null,
+            String(version.mood || ''),
+            version.due_at || null,
+            Number(version.remind_before_minutes || 0),
+            Boolean(version.completed)
+          ]
+        )
+
+        await client.query(
+          'DELETE FROM note_reminders WHERE note_id = $1 AND user_id = $2',
+          [request.params.noteId, request.currentUser.id]
+        )
+        // Restoring content must never silently reactivate an old bearer URL.
+        // A fresh public share requires an explicit action after the restore.
+        await client.query(
+          'DELETE FROM note_shares WHERE note_id = $1 AND user_id = $2',
+          [request.params.noteId, request.currentUser.id]
+        )
+        await pruneNoteVersions(
+          client,
+          request.currentUser.id,
+          request.params.noteId
+        )
+        return result.rows[0]
+      })
+    } catch (error) {
+      if (error?.code === 'note_version_not_found') {
+        reply.code(404)
+        return { error: error.message, code: error.code }
+      }
+      if (error?.code === 'encrypted_version_has_current_attachments') {
+        reply.code(409)
+        return { error: error.message, code: error.code }
+      }
+      throw error
+    }
+
+    if (!restored) {
+      reply.code(404)
+      return { error: 'Note not found' }
+    }
+
+    return { note: mapNote(restored) }
   })
 
   fastify.delete('/notes/:noteId', async (request, reply) => {
@@ -803,6 +1168,8 @@ export default async function notesRoutes(fastify) {
           SELECT
             n.title,
             n.content,
+            n.content_format,
+            n.content_json,
             n.tags,
             n.attachments,
             n.entry_date

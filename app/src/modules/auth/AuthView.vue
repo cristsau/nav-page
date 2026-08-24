@@ -1,6 +1,7 @@
 <script setup>
 import { computed, onBeforeUnmount, onMounted, ref } from 'vue'
 import { useRoute } from 'vue-router'
+import Icon from '@/shared/components/Icon.vue'
 import { useAuth } from '@/shared/composables/useAuth'
 
 const route = useRoute()
@@ -8,6 +9,9 @@ const {
   backendAuthEnabled,
   initAuth,
   login,
+  loginWithPasskey,
+  browserSupportsPasskeys,
+  getPasskeyConfig,
   recoverAccount,
   register
 } = useAuth()
@@ -17,6 +21,13 @@ const recoveryMode = ref(false)
 const loading = ref(false)
 const errorMessage = ref('')
 const successMessage = ref('')
+const passkeyConfig = ref({
+  enabled: false,
+  canonicalOrigin: '',
+  rpId: '',
+  passwordOnlyAliasMessage: ''
+})
+const passkeyBrowserSupported = ref(false)
 
 const loginForm = ref({
   username: '',
@@ -50,11 +61,43 @@ const redirectTarget = computed(() => {
   }
 })
 
+const currentOrigin = computed(() => (
+  typeof window === 'undefined' ? '' : window.location.origin
+))
+const onCanonicalPasskeyOrigin = computed(() => (
+  Boolean(passkeyConfig.value.canonicalOrigin)
+  && currentOrigin.value === passkeyConfig.value.canonicalOrigin
+))
+const passkeyAvailable = computed(() => (
+  backendAuthEnabled.value
+  && passkeyConfig.value.enabled
+  && onCanonicalPasskeyOrigin.value
+  && passkeyBrowserSupported.value
+))
+const passkeyAliasNotice = computed(() => (
+  backendAuthEnabled.value
+  && passkeyConfig.value.enabled
+  && !onCanonicalPasskeyOrigin.value
+))
+
+async function loadPasskeyAvailability() {
+  if (!backendAuthEnabled.value) return
+  passkeyBrowserSupported.value = browserSupportsPasskeys()
+  try {
+    passkeyConfig.value = await getPasskeyConfig()
+  } catch {
+    passkeyConfig.value.enabled = false
+  }
+}
+
 onMounted(async () => {
   if (String(route.query.passwordChanged || '') === '1') {
     successMessage.value = '密码已修改，所有设备均已退出。请使用新密码重新登录。'
   }
-  await initAuth()
+  await Promise.all([
+    initAuth(),
+    loadPasskeyAvailability()
+  ])
 })
 
 onBeforeUnmount(clearRecoverySecrets)
@@ -69,6 +112,28 @@ async function handleLogin() {
     window.location.assign(String(redirectTarget.value))
   } catch (error) {
     errorMessage.value = error.message || '登录失败，请稍后再试。'
+  } finally {
+    loading.value = false
+  }
+}
+
+async function handlePasskeyLogin() {
+  const username = loginForm.value.username.trim()
+  if (!username) {
+    errorMessage.value = '请先输入用户名，再使用 Passkey 登录。'
+    return
+  }
+
+  loading.value = true
+  errorMessage.value = ''
+  successMessage.value = ''
+  try {
+    await loginWithPasskey(username)
+    window.location.assign(String(redirectTarget.value))
+  } catch (error) {
+    errorMessage.value = error?.name === 'NotAllowedError'
+      ? 'Passkey 验证已取消或超时，请重新尝试。'
+      : '无法使用这个 Passkey 登录，请确认用户名和 Passkey 后重试。'
   } finally {
     loading.value = false
   }
@@ -157,7 +222,7 @@ async function handleRecovery() {
     }
     recoveryMode.value = false
     activeTab.value = 'login'
-    successMessage.value = '密码已重设，所有设备均已退出。请使用新密码重新登录。'
+    successMessage.value = '密码已重设，所有设备均已退出，已有 Passkey 也已移除。请使用新密码重新登录。'
   } catch (error) {
     errorMessage.value = getRecoveryErrorMessage(error)
   } finally {
@@ -251,7 +316,7 @@ async function handleRegister() {
       >
         <label class="auth-field">
           <span>用户名</span>
-          <input v-model="loginForm.username" type="text" autocomplete="username">
+          <input v-model="loginForm.username" type="text" autocomplete="username webauthn">
         </label>
         <label class="auth-field">
           <span>密码</span>
@@ -260,6 +325,29 @@ async function handleRegister() {
         <button class="auth-submit" type="submit" :disabled="loading">
           {{ loading ? '登录中...' : '登录' }}
         </button>
+        <div v-if="passkeyAvailable" class="auth-divider" aria-hidden="true">
+          <span>或</span>
+        </div>
+        <button
+          v-if="passkeyAvailable"
+          class="auth-passkey"
+          type="button"
+          :disabled="loading"
+          @click="handlePasskeyLogin"
+        >
+          <Icon name="key" :size="18" />
+          {{ loading ? '验证中...' : '使用 Passkey 登录' }}
+        </button>
+        <p v-else-if="passkeyAliasNotice" class="auth-passkey-notice">
+          当前域名只支持密码登录。Passkey 请前往
+          <a :href="passkeyConfig.canonicalOrigin">{{ passkeyConfig.canonicalOrigin }}</a>。
+        </p>
+        <p
+          v-else-if="passkeyConfig.enabled && onCanonicalPasskeyOrigin && !passkeyBrowserSupported"
+          class="auth-passkey-notice"
+        >
+          当前浏览器不支持 Passkey，请使用密码登录或更换浏览器。
+        </p>
         <button
           v-if="backendAuthEnabled"
           class="auth-link"
@@ -497,6 +585,62 @@ async function handleRegister() {
 .auth-submit:disabled {
   opacity: 0.7;
   cursor: wait;
+}
+
+.auth-divider {
+  display: grid;
+  grid-template-columns: 1fr auto 1fr;
+  align-items: center;
+  gap: 10px;
+  color: var(--text-muted);
+  font-size: 12px;
+}
+
+.auth-divider::before,
+.auth-divider::after {
+  height: 1px;
+  content: '';
+  background: var(--border-light);
+}
+
+.auth-passkey {
+  min-height: 48px;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  gap: 9px;
+  border: 1px solid var(--border-color);
+  border-radius: 16px;
+  background: var(--bg-secondary);
+  color: var(--text-primary);
+  font: inherit;
+  font-weight: 600;
+  cursor: pointer;
+}
+
+.auth-passkey:hover:not(:disabled) {
+  border-color: var(--accent-color);
+  background: var(--accent-bg);
+}
+
+.auth-passkey:disabled {
+  opacity: 0.65;
+  cursor: wait;
+}
+
+.auth-passkey-notice {
+  margin: 0;
+  padding: 11px 13px;
+  border: 1px solid var(--border-light);
+  border-radius: 14px;
+  background: var(--bg-secondary);
+  color: var(--text-secondary);
+  font-size: 12px;
+  line-height: 1.6;
+}
+
+.auth-passkey-notice a {
+  color: var(--accent-color);
 }
 
 .auth-link {

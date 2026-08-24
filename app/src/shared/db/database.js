@@ -757,7 +757,11 @@ export async function addNote(note) {
         : '',
       mood: note.type === 'diary' ? String(note.mood || '') : '',
       dueAt: note.type === 'memo' ? (note.dueAt || null) : null,
+      remindBeforeMinutes: note.type === 'memo' && note.dueAt
+        ? Math.min(43200, Math.max(0, Number(note.remindBeforeMinutes || 0)))
+        : 0,
       completed: note.type === 'memo' && Boolean(note.completed),
+      revision: 1,
       attachments: Array.isArray(note.attachments) ? [...note.attachments] : [],
       createdAt: now,
       updatedAt: now
@@ -769,8 +773,11 @@ export async function addNote(note) {
 
 export async function updateNote(id, updates) {
   const db = requireUserDb()
+  const existing = await db.notes.get(id)
+  if (!existing) throw new Error('笔记不存在')
   await db.notes.update(id, {
     ...updates,
+    revision: Number(existing.revision || 1) + 1,
     updatedAt: getTimestamp()
   })
 }

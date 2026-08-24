@@ -2,8 +2,32 @@
 
 最后更新：2026-08-24
 
-本页区分 `VERIFIED_LIVE`、`PARTIAL` 和 `UNFINISHED`。仓库中存在脚本或代码，不等于生产
+本页区分 `VERIFIED_LIVE`、`LOCAL_DONE`、`READY_FOR_CI`、`PARTIAL`、`USER_CONFIG_LATER`
+和 `UNFINISHED`。仓库中存在脚本或代码，不等于生产
 已经安装、启用或形成灾难恢复闭环；每次发布前仍须重新读取 GitHub、OVH 与双域状态。
+
+## 2026-08-24 本地功能候选
+
+- 状态：`LOCAL_DONE / READY_FOR_CI / NOT_DEPLOYED`。
+- 本地分支 `codex/nav-feature-completion-20260824` 基于 `origin/master` 的 `818c2b3`，包含
+  通用异地存储后填模板、Passkey、统一搜索/带来源助理、AI 用量、提前提醒、定时链接检查、
+  Chrome/Edge 与 Markdown 导入导出、命令面板补全、PWA 离线外壳，以及笔记自动保存和
+  50 个版本历史。
+- 新增迁移为 `019` 至 `022`；Passkey 与三个新增维护任务默认关闭，异地存储未配置。
+- 本地组合依赖无关测试 76 通过、7 跳过、0 失败；63 个 JavaScript 与 18 个 Vue 脚本语法
+  检查通过。没有执行 npm 安装、Vite 构建、PostgreSQL 迁移、推送、PR 或生产发布。
+- 完整范围、开关和下一道门禁见
+  [`docs/NAV_LOCAL_FEATURE_COMPLETION_20260824.md`](./docs/NAV_LOCAL_FEATURE_COMPLETION_20260824.md)。
+
+## 2026-08-24 高级搜索、离线推送与块编辑候选
+
+- 状态：`LOCAL_DONE / READY_FOR_CI / NOT_DEPLOYED`。
+- 分支 `codex/nav-semantic-push-block-editor-20260824` 新增迁移 023–025：本地中文 BM25、固定
+  revision 多语言向量、页面关闭后的标准 Web Push/VAPID，以及 Tiptap 单用户块编辑器。
+- VAPID 私钥使用 release-local 只读文件，语义模型使用 OVH Docker volume；两者都不进入 Git。
+- 加密笔记不进入搜索索引，Push 不暴露加密标题/正文，块 JSON 加密仍只在浏览器完成。
+- 完整边界、开关、回滚与真机验收见
+  [`docs/NAV_ADVANCED_SEARCH_PUSH_BLOCK_EDITOR.md`](./docs/NAV_ADVANCED_SEARCH_PUSH_BLOCK_EDITOR.md)。
 
 ## 当前源码与生产基线
 
@@ -75,6 +99,8 @@ PR #30 的图片删除重试告警正确性、PR #31 的云端安全恢复、PR 
 - CLI Proxy Responses API、动态 `/v1/models` 目录、最多六个候选、“自动最新”、推理强度和
   内置联网搜索；密钥仅由服务端 owner-only Secret 提供。
 - 注册审批、Telegram 通知/同步、用户名与密码修改、会话查看/撤销、一次性恢复码和密码恢复。
+- Passkey/WebAuthn 的迁移、API、登录页与账号安全页源码已完成；固定 RP ID/Origin，默认关闭，
+  尚未执行生产迁移、启用或真实设备验收，因此不计入已验证生产能力。
 - 登录、注册、恢复、已认证写操作和 AI 使用 PostgreSQL 原子共享限流。
 - 安全审计保存最小化结构化字段和带密钥摘要，支持筛选、分页、CSV/JSON 导出和受控删除。
 - 分层审计保留：常规成功 90 天、拒绝/失败 180 天、恢复/账号/管理员敏感操作 365 天。
@@ -117,29 +143,33 @@ PR #30 的图片删除重试告警正确性、PR #31 的云端安全恢复、PR 
   双 dead-man 心跳、最新备份选择器和只安装不启用的部署脚本；生产配置和现场验收完成前
   状态仍是 `SOURCE_READY / NOT_DEPLOYED`。
 - 2026-08-23 OVH 只读核验确认：未安装 `restic`，没有 NAV/restic systemd unit 或 timer，
-  也没有 `/etc/nav/nav-backup.env`、`/etc/nav/restic-r2.env` 和 `/usr/local/sbin` 稳定入口。
+  也没有 `/etc/nav/nav-backup.env`、`/etc/nav/restic-offsite.env` 和 `/usr/local/sbin` 稳定入口。
 - 因此当前没有自动计划、异地加密上传、远端保留清理、备份失败外部报警或定期恢复演练。
 - 图床对象和外层代理配置尚未纳入独立、可在干净环境验证的完整生态恢复。
 
-## 其他部分完成
+## 生产仍为部分完成（本地候选已补源码）
 
-- 到期提醒只在打开 NAV 时同步；没有提前、离线、系统推送或 Web Push。
-- 链接检查由用户手动触发；没有后台定时扫描、集中失效清单和自动复查。
-- 命令面板覆盖主要页面、创建和搜索；尚不能直接切换主题或 AI 模型。
-- 安全 JSON 导入导出可用；尚无 Chrome/Edge 书签 HTML、Markdown 批量导入导出与一键
-  完整生态恢复。
-- PWA 元数据和主屏幕图标可用；尚无完整 Service Worker、离线缓存和推送。
+- 生产到期提醒仍只在打开 NAV 时同步；迁移 024 本地候选已增加页面关闭后的标准 Web Push，
+  尚待 CI、VAPID Secret 安装、发布和逐设备真机授权。
+- 生产链接检查仍由用户手动触发；本地候选已增加默认关闭的有界定时检查、集中异常清单和
+  单条/批量复查。
+- 生产命令面板尚不能切换主题或 AI 模型；本地候选已补齐实际主题与服务端发现模型。
+- 生产安全 JSON 导入导出可用；本地候选已增加 Chrome/Edge 书签 HTML 和 Markdown 原子
+  批量导入导出，但完整生态恢复仍不含图床对象与外层代理。
+- 生产 PWA 只有元数据和主屏图标；本地候选已增加隐私安全的离线外壳、显式更新与 Web Push。
 - 云端 JSON 恢复的密码二次确认、只读差异预览和替换边界已随 PR #32 发布；图床对象、
   外层代理和超过 5,000 条记录的分片/流式恢复仍不在该能力内。
 
 ## 仍未完成
 
-1. 为 OVH 配置并验收自动异地加密备份、远端保留策略、定期隔离恢复、失败报警与外部 dead-man。
-2. 唯一 RP ID 决策后的 Passkey/WebAuthn。
-3. 提前/离线提醒与定时失效链接检查。
-4. PostgreSQL 中文 BM25、错别字模糊匹配、向量语义检索和带来源的个人数据助理。
-5. AI 用量/成本面板。
-6. 最后再评估块编辑器、自动保存和版本历史的大重构。
+1. 在用户选定免费存储后，为 OVH 填写通用异地备份 Secret，并验收首次快照、远端保留、
+   定期隔离恢复、失败报警与外部 dead-man。
+2. 将本地候选送入 GitHub Linux CI 和 PostgreSQL 16 隔离迁移/恢复门禁；通过后再决定 PR 与发布。
+3. 发布后保持 Passkey、提前提醒、链接检查和 AI 用量清理默认关闭，完成双域/真机验收后逐项启用。
+4. 将迁移 023 的中文 BM25/本地向量、迁移 024 的 Web Push 与迁移 025 的单用户块编辑器
+   送入 CI、隔离 PostgreSQL 16 门禁并完成 OVH 发布。
+5. 发布后由用户在真实 Chrome/Edge/iPhone 主屏应用中逐设备授权并验证“页面关闭仍送达”；
+   多人协作、Yjs/CRDT 与扩展商店上架继续暂缓。
 
 ## 仍建议用户手工验收
 

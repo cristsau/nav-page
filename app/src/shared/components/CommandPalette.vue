@@ -1,6 +1,8 @@
 <script setup>
 import { computed, nextTick, onBeforeUnmount, ref, watch } from 'vue'
 import Icon from '@/shared/components/Icon.vue'
+import { colorSchemes } from '@/shared/composables/useConfig'
+import { fetchBackendChatModels } from '@/shared/services/aiSearchApi'
 
 const props = defineProps({
   show: {
@@ -15,10 +17,13 @@ const panelRef = ref(null)
 const searchInputRef = ref(null)
 const query = ref('')
 const activeIndex = ref(0)
+const discoveredModels = ref([])
+const latestModel = ref('')
+const modelCatalogLoading = ref(false)
 let previousBodyOverflow = ''
 let bodyScrollLocked = false
 
-const commands = [
+const baseCommands = [
   {
     id: 'go-navigation',
     group: '页面',
@@ -107,12 +112,59 @@ const commands = [
   }
 ]
 
+const themeCommands = computed(() => Object.entries(colorSchemes)
+  .filter(([schemeId]) => schemeId !== 'custom')
+  .map(([schemeId, scheme]) => ({
+    id: `theme-${schemeId}`,
+    group: '切换主题',
+    label: `切换为${scheme.name}主题`,
+    description: scheme.description || '应用内置配色方案',
+    keywords: `主题 配色 外观 theme ${schemeId} ${scheme.name}`,
+    icon: 'palette',
+    action: 'set-theme',
+    value: schemeId
+  })))
+
+const modelCommands = computed(() => {
+  if (!discoveredModels.value.length) return []
+  return [
+    {
+      id: 'model-latest',
+      group: '切换 AI 模型',
+      label: `自动使用最新模型${latestModel.value ? `（${latestModel.value}）` : ''}`,
+      description: '以后模型目录更新时自动跟随最新模型',
+      keywords: 'AI 模型 自动 最新 model latest',
+      icon: 'sparkles',
+      action: 'set-ai-model',
+      mode: 'latest',
+      value: latestModel.value
+    },
+    ...discoveredModels.value.map((model) => ({
+      id: `model-${model.id}`,
+      group: '切换 AI 模型',
+      label: `固定使用 ${model.label || model.id}`,
+      description: model.description || 'CLI Proxy 当前发现模型',
+      keywords: `AI 模型 固定 model ${model.id} ${model.label || ''}`,
+      icon: 'sparkles',
+      action: 'set-ai-model',
+      mode: 'pinned',
+      value: model.id
+    }))
+  ]
+})
+
+const commands = computed(() => [
+  ...baseCommands,
+  ...themeCommands.value,
+  ...modelCommands.value
+])
+
 const normalizedQuery = computed(() => query.value.trim().toLocaleLowerCase('zh-CN'))
 const filteredCommands = computed(() => {
-  if (!normalizedQuery.value) return commands
+  if (!normalizedQuery.value) return commands.value
 
   const terms = normalizedQuery.value.split(/\s+/).filter(Boolean)
-  return commands.filter((command) => {
+  return commands.value.filter((command) => {
     const haystack = [
       command.label,
       command.description,
@@ -141,6 +193,23 @@ const commandGroups = computed(() => {
 
 const activeCommand = computed(() => filteredCommands.value[activeIndex.value] || null)
 
+async function refreshDiscoveredModels() {
+  if (modelCatalogLoading.value) return
+  modelCatalogLoading.value = true
+  try {
+    const catalog = await fetchBackendChatModels()
+    discoveredModels.value = Array.isArray(catalog.models)
+      ? catalog.models.slice(0, 6)
+      : []
+    latestModel.value = String(catalog.latestModel || discoveredModels.value[0]?.id || '').trim()
+  } catch {
+    discoveredModels.value = []
+    latestModel.value = ''
+  } finally {
+    modelCatalogLoading.value = false
+  }
+}
+
 watch(() => props.show, async (show) => {
   if (show) {
     if (!bodyScrollLocked) {
@@ -150,6 +219,7 @@ watch(() => props.show, async (show) => {
     }
     query.value = ''
     activeIndex.value = 0
+    void refreshDiscoveredModels()
     await nextTick()
     searchInputRef.value?.focus()
     return

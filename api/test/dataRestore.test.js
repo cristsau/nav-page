@@ -282,6 +282,50 @@ test('restore validation rejects malformed scalar fields before apply', () => {
   )
 })
 
+test('restore validates rich note format, privacy state and document structure', () => {
+  const richDocument = {
+    type: 'doc',
+    content: [{
+      type: 'heading',
+      attrs: { level: 2 },
+      content: [{ type: 'text', text: '恢复演练' }]
+    }]
+  }
+  const accepted = validateDataRestoreRequest(restoreRequest({
+    data: {
+      ...restoreRequest().data,
+      notes: [{
+        id: NOTE_ID,
+        encrypted: false,
+        contentFormat: 'tiptap-json',
+        contentJson: richDocument,
+        contentJsonEncrypted: null,
+        remindBeforeMinutes: 30,
+        revision: 7
+      }]
+    }
+  }))
+  assert.deepEqual(accepted.data.notes[0].contentJson, richDocument)
+
+  for (const [note, pattern] of [
+    [{ id: NOTE_ID, contentFormat: 'plain', contentJson: richDocument }, /纯文本笔记不能包含块内容/],
+    [{ id: NOTE_ID, encrypted: false, contentFormat: 'tiptap-json', contentJson: null }, /contentJson must be a Tiptap document/],
+    [{ id: NOTE_ID, encrypted: true, contentFormat: 'tiptap-json', contentJson: richDocument, contentJsonEncrypted: 'cipher' }, /不能包含明文块内容/],
+    [{ id: NOTE_ID, encrypted: true, contentFormat: 'tiptap-json', contentJsonEncrypted: '' }, /缺少加密块内容/],
+    [{ id: NOTE_ID, encrypted: false, contentFormat: 'tiptap-json', contentJson: richDocument, contentJsonEncrypted: 'cipher' }, /不能包含加密块内容/],
+    [{ id: NOTE_ID, encrypted: false, contentFormat: 'tiptap-json', contentJson: { type: 'doc', content: [{ type: 'text', text: 'orphan' }] } }, /not allowed inside doc/],
+    [{ id: NOTE_ID, remindBeforeMinutes: 43_201 }, /提醒提前分钟/],
+    [{ id: NOTE_ID, revision: 0 }, /笔记版本号/]
+  ]) {
+    assert.throws(
+      () => validateDataRestoreRequest(restoreRequest({
+        data: { ...restoreRequest().data, notes: [note] }
+      })),
+      pattern
+    )
+  }
+})
+
 test('restore validation rejects ambiguous media URL and upstream identities', () => {
   const media = (id, url, upstreamId) => ({ id, url, upstreamId })
   assert.throws(

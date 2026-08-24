@@ -39,6 +39,14 @@ import {
   recordSecurityEvent,
   recordSecurityEventBestEffort
 } from '../lib/securityEvents.js'
+import {
+  assertTiptapImagesAttached,
+  normalizeContentFormat,
+  normalizeEncryptedRichDocument,
+  plainTextToTiptapDocument,
+  sanitizeTiptapDocument,
+  tiptapDocumentText
+} from '../lib/noteRichContent.js'
 
 const BACKUP_SCHEMA = 'domo-nav-backup'
 const BACKUP_VERSION = 1
@@ -363,7 +371,36 @@ function prepareDataRestore(backup, { restoreShares, userId } = {}) {
     for (const attachment of attachments) {
       assertMediaBelongsToUser(userId, { url: attachment.url })
     }
-    return { ...note, attachments }
+    const encrypted = Boolean(note?.encrypted)
+    let contentFormat = normalizeContentFormat(note?.contentFormat, 'plain')
+    let content = String(note?.content || '')
+    let contentJson = null
+    let contentJsonEncrypted = null
+    if (contentFormat === 'tiptap-json') {
+      if (encrypted) {
+        contentJsonEncrypted = normalizeEncryptedRichDocument(note?.contentJsonEncrypted)
+        if (!contentJsonEncrypted) contentFormat = 'plain'
+      } else {
+        contentJson = sanitizeTiptapDocument(
+          note?.contentJson || plainTextToTiptapDocument(content),
+          { allowedImageOrigin: getImgBedOrigin(config.imgBedBaseUrl) }
+        )
+        assertTiptapImagesAttached(contentJson, attachments)
+        content = tiptapDocumentText(contentJson)
+      }
+    }
+    return {
+      ...note,
+      content,
+      contentFormat,
+      contentJson,
+      contentJsonEncrypted,
+      remindBeforeMinutes: note?.type === 'memo' && note?.dueAt
+        ? Number(note?.remindBeforeMinutes || 0)
+        : 0,
+      revision: Number(note?.revision || 1),
+      attachments
+    }
   })
   const referencedMediaUrls = new Set(
     normalizedNotes.flatMap((note) => note.attachments.map((attachment) => attachment.url))
@@ -841,6 +878,11 @@ function mapBackendExportNote(record) {
     type: record.type === 'diary' ? 'diary' : 'memo',
     title: record.title,
     content: record.content || '',
+    contentFormat: record.content_format || 'plain',
+    contentJson: record.encrypted ? null : cloneJson(record.content_json),
+    contentJsonEncrypted: record.encrypted
+      ? String(record.content_json_encrypted || '')
+      : null,
     encrypted: Boolean(record.encrypted),
     password: '',
     pinned: Boolean(record.pinned),
@@ -851,7 +893,11 @@ function mapBackendExportNote(record) {
     entryDate: record.type === 'diary' ? toDateOnly(record.entry_date) : null,
     mood: record.type === 'diary' ? String(record.mood || '') : '',
     dueAt: record.type === 'memo' ? toTimestamp(record.due_at) : null,
+    remindBeforeMinutes: record.type === 'memo'
+      ? Number(record.remind_before_minutes || 0)
+      : 0,
     completed: record.type === 'memo' && Boolean(record.completed),
+    revision: Number(record.revision || 1),
     createdAt: toTimestamp(record.created_at),
     updatedAt: toTimestamp(record.updated_at)
   }
@@ -1666,6 +1712,9 @@ export default async function migrationRoutes(fastify) {
                 type,
                 title,
                 content,
+                content_format,
+                content_json,
+                content_json_encrypted,
                 encrypted,
                 password_hash,
                 pinned,
@@ -1674,7 +1723,9 @@ export default async function migrationRoutes(fastify) {
                 entry_date,
                 mood,
                 due_at,
+                remind_before_minutes,
                 completed,
+                revision,
                 created_at,
                 updated_at
               ) VALUES (
@@ -1685,16 +1736,21 @@ export default async function migrationRoutes(fastify) {
                 $5,
                 $6,
                 $7,
-                $8,
+                $8::jsonb,
                 $9,
-                $10::jsonb,
-                $11::jsonb,
+                $10,
+                $11,
                 $12,
-                $13,
-                $14,
+                $13::jsonb,
+                $14::jsonb,
                 $15,
-                COALESCE($16, NOW()),
-                COALESCE($17, NOW())
+                $16,
+                $17,
+                $18,
+                $19,
+                $20,
+                COALESCE($21, NOW()),
+                COALESCE($22, NOW())
               )
             `,
             [
@@ -1704,6 +1760,9 @@ export default async function migrationRoutes(fastify) {
               note.type === 'diary' ? 'diary' : 'memo',
               String(note.title || 'Untitled'),
               String(note.content || ''),
+              note.contentFormat || 'plain',
+              note.contentJson ? JSON.stringify(note.contentJson) : null,
+              note.contentJsonEncrypted || null,
               Boolean(note.encrypted),
               String(note.password || ''),
               Boolean(note.pinned),
@@ -1712,7 +1771,9 @@ export default async function migrationRoutes(fastify) {
               note.type === 'diary' ? toDateOnly(note.entryDate) : null,
               note.type === 'diary' ? String(note.mood || '').slice(0, 40) : '',
               note.type === 'memo' ? toTimestamp(note.dueAt) : null,
+              note.type === 'memo' ? Number(note.remindBeforeMinutes || 0) : 0,
               note.type === 'memo' && Boolean(note.completed),
+              Number(note.revision || 1),
               toTimestamp(note.createdAt),
               toTimestamp(note.updatedAt)
             ]

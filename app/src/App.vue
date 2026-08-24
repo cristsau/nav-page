@@ -1,5 +1,5 @@
 <script setup>
-import { computed, nextTick, onBeforeUnmount, onMounted, watch } from 'vue'
+import { computed, nextTick, onBeforeUnmount, onMounted, ref, watch } from 'vue'
 import { useRoute, useRouter } from 'vue-router'
 import { useTheme } from '@/shared/composables/useTheme'
 import { applyStyleConfig, useConfig } from '@/shared/composables/useConfig'
@@ -19,6 +19,8 @@ const appShellEnabled = computed(() => (
   !route.meta.public
   && route.meta.appShell !== false
 ))
+const commandStatus = ref({ message: '', type: '' })
+let commandStatusTimer = null
 
 const {
   isOpen: commandPaletteOpen,
@@ -28,7 +30,12 @@ const {
 } = useCommandPalette()
 
 const { isDark } = useTheme({ defer: publicShell })
-const { config } = useConfig({ defer: publicShell })
+const {
+  config,
+  updateConfig,
+  setColorScheme,
+  persistConfigNow
+} = useConfig({ defer: publicShell })
 
 const PUBLIC_SHELL_TOKENS = {
   '--bg-primary': '#f7f3ee',
@@ -132,9 +139,32 @@ function handleGlobalCommandPaletteKeydown(event) {
 }
 
 async function handleCommandExecute(command) {
-  if (!command?.path) return
+  if (!command) return
+
+  if (command.action === 'set-theme' && command.value) {
+    await closeCommandPalette({ restoreFocus: true })
+    const persisted = await setColorScheme(command.value)
+    setCommandStatus(
+      persisted ? '主题已切换并保存' : '主题已切换，但保存失败；刷新后可能恢复原设置',
+      persisted ? 'success' : 'error'
+    )
+    return
+  }
+
+  if (command.action === 'set-ai-model' && command.value) {
+    await closeCommandPalette({ restoreFocus: true })
+    updateConfig('search.providers.chatgpt.modelMode', command.mode === 'pinned' ? 'pinned' : 'latest')
+    updateConfig('search.providers.chatgpt.model', command.value)
+    const persisted = await persistConfigNow()
+    setCommandStatus(
+      persisted ? 'AI 模型设置已保存' : 'AI 模型已临时切换，但保存失败；刷新后可能恢复原设置',
+      persisted ? 'success' : 'error'
+    )
+    return
+  }
 
   await closeCommandPalette({ restoreFocus: false })
+  if (!command.path) return
   await router.push(command.path)
 
   if (!command.action || route.path !== command.path) return
@@ -145,11 +175,21 @@ async function handleCommandExecute(command) {
   })
 }
 
+function setCommandStatus(message, type = 'success') {
+  commandStatus.value = { message, type }
+  if (commandStatusTimer) window.clearTimeout(commandStatusTimer)
+  commandStatusTimer = window.setTimeout(() => {
+    commandStatus.value = { message: '', type: '' }
+    commandStatusTimer = null
+  }, 3600)
+}
+
 onMounted(() => {
   window.addEventListener('keydown', handleGlobalCommandPaletteKeydown, true)
 })
 
 onBeforeUnmount(() => {
+  if (commandStatusTimer) window.clearTimeout(commandStatusTimer)
   window.removeEventListener('keydown', handleGlobalCommandPaletteKeydown, true)
   closeCommandPalette({ restoreFocus: false })
   leavePublicShell({ reapply: false })
@@ -207,6 +247,15 @@ const bgStyle = computed(() => {
       @close="closeCommandPalette()"
       @execute="handleCommandExecute"
     />
+    <p
+      v-if="commandStatus.message"
+      class="command-status"
+      :class="`is-${commandStatus.type}`"
+      role="status"
+      aria-live="polite"
+    >
+      {{ commandStatus.message }}
+    </p>
   </div>
 </template>
 
@@ -286,6 +335,25 @@ const bgStyle = computed(() => {
   border: 1px solid var(--border-light);
   border-radius: 7px;
 }
+
+.command-status {
+  position: fixed;
+  right: max(18px, env(safe-area-inset-right));
+  bottom: max(76px, calc(env(safe-area-inset-bottom) + 76px));
+  z-index: 690;
+  max-width: min(420px, calc(100vw - 36px));
+  margin: 0;
+  padding: 12px 15px;
+  color: var(--text-primary);
+  background: var(--bg-card);
+  border: 1px solid var(--success-color);
+  border-radius: 13px;
+  box-shadow: var(--shadow-lg);
+  font-size: 0.78rem;
+  line-height: 1.55;
+}
+
+.command-status.is-error { border-color: var(--error-color); }
 
 @media (max-width: 640px), (pointer: coarse) {
   .command-launcher {

@@ -1,5 +1,10 @@
 import { CURRENT_USER_STORAGE_KEY } from '@/shared/db/database'
 import { apiRequest as request } from '@/shared/services/apiClient'
+import {
+  browserSupportsWebAuthn,
+  startAuthentication,
+  startRegistration
+} from '@simplewebauthn/browser'
 
 const AUTH_MODE = import.meta.env.VITE_AUTH_MODE || 'local'
 
@@ -36,6 +41,72 @@ export async function loginWithBackend(username, password) {
 
   setCurrentUserId(payload.user?.id || null)
   return payload.user
+}
+
+export function browserSupportsBackendPasskeys() {
+  return browserSupportsWebAuthn()
+}
+
+export async function fetchBackendPasskeyConfig() {
+  return request('/auth/passkeys/config', {
+    method: 'GET',
+    cache: 'no-store'
+  })
+}
+
+export async function loginWithBackendPasskey(username) {
+  const ceremony = await request('/auth/passkeys/login/options', {
+    method: 'POST',
+    expectedUnauthorized: true,
+    body: JSON.stringify({ username })
+  })
+  const response = await startAuthentication({
+    optionsJSON: ceremony.options
+  })
+  const result = await request('/auth/passkeys/login/verify', {
+    method: 'POST',
+    expectedUnauthorized: true,
+    body: JSON.stringify({
+      challengeId: ceremony.challengeId,
+      response
+    })
+  })
+  setCurrentUserId(result.user?.id || null)
+  return result.user
+}
+
+export async function fetchBackendPasskeys() {
+  const result = await request('/auth/passkeys', {
+    method: 'GET',
+    cache: 'no-store'
+  })
+  return Array.isArray(result.passkeys) ? result.passkeys : []
+}
+
+export async function registerBackendPasskey(payload) {
+  const ceremony = await request('/auth/passkeys/register/options', {
+    method: 'POST',
+    body: JSON.stringify(payload)
+  })
+  const response = await startRegistration({
+    optionsJSON: ceremony.options
+  })
+  const result = await request('/auth/passkeys/register/verify', {
+    method: 'POST',
+    body: JSON.stringify({
+      challengeId: ceremony.challengeId,
+      displayName: ceremony.displayName,
+      response
+    })
+  })
+  return result.passkey
+}
+
+export async function deleteBackendPasskey(passkeyId, currentPassword) {
+  return request(`/auth/passkeys/${encodeURIComponent(passkeyId)}`, {
+    method: 'DELETE',
+    body: JSON.stringify({ currentPassword })
+  })
 }
 
 export async function logoutWithBackend() {

@@ -10,7 +10,9 @@ import { isTrustedProxyAddress } from './lib/requestRateLimit.js'
 import authPlugin from './plugins/auth.js'
 import adminTelegramRoutes from './routes/adminTelegram.js'
 import aiSearchRoutes from './routes/aiSearch.js'
+import aiUsageRoutes from './routes/aiUsage.js'
 import authRoutes from './routes/auth.js'
+import assistantRoutes from './routes/assistant.js'
 import customSearchEngineRoutes from './routes/customSearchEngines.js'
 import migrationRoutes from './routes/migration.js'
 import maintenanceRoutes from './routes/maintenance.js'
@@ -20,9 +22,13 @@ import noteAiRoutes from './routes/noteAi.js'
 import noteImagesRoutes from './routes/noteImages.js'
 import noteReminderRoutes from './routes/noteReminders.js'
 import notesRoutes from './routes/notes.js'
+import passkeyRoutes from './routes/passkeys.js'
 import publicSharePageRoutes from './routes/publicSharePage.js'
+import productivityImportRoutes from './routes/productivityImports.js'
 import securityEventRoutes from './routes/securityEvents.js'
 import settingsRoutes from './routes/settings.js'
+import workspaceRoutes from './routes/workspace.js'
+import webPushRoutes from './routes/webPush.js'
 
 function stripBodylessDeleteJsonContentType(request) {
   if (String(request.raw.method || '').toUpperCase() !== 'DELETE') {
@@ -66,6 +72,11 @@ export function createApp() {
           'req.body.planToken',
           'req.body.backupReceipt',
           'req.body.backup',
+          'req.body.response',
+          'req.body.subscription.endpoint',
+          'req.body.subscription.keys.p256dh',
+          'req.body.subscription.keys.auth',
+          'req.body.query',
           'res.headers["set-cookie"]',
           'authorization',
           'cookie',
@@ -115,9 +126,11 @@ export function createApp() {
   }))
 
   app.register(publicSharePageRoutes)
+  app.register(assistantRoutes, { prefix: '/api' })
   app.register(securityEventRoutes, { prefix: '/api' })
   app.register(adminTelegramRoutes, { prefix: '/api' })
   app.register(aiSearchRoutes, { prefix: '/api' })
+  app.register(aiUsageRoutes, { prefix: '/api' })
   app.register(authRoutes, { prefix: '/api' })
   app.register(customSearchEngineRoutes, { prefix: '/api' })
   app.register(migrationRoutes, { prefix: '/api' })
@@ -128,7 +141,11 @@ export function createApp() {
   app.register(noteImagesRoutes, { prefix: '/api' })
   app.register(noteReminderRoutes, { prefix: '/api' })
   app.register(notesRoutes, { prefix: '/api' })
+  app.register(passkeyRoutes, { prefix: '/api' })
+  app.register(productivityImportRoutes, { prefix: '/api' })
   app.register(settingsRoutes, { prefix: '/api' })
+  app.register(workspaceRoutes, { prefix: '/api' })
+  app.register(webPushRoutes, { prefix: '/api' })
 
   app.setErrorHandler((error, request, reply) => {
     const statusCode = Number.isInteger(error.statusCode) && error.statusCode >= 400

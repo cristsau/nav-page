@@ -156,6 +156,17 @@ function maintenanceResultSummary(job) {
       `异常 ${Number(result.errors || 0)} 项`
     ].join('，') + '。'
   }
+  if (job?.name === 'note_reminder_generation') {
+    return `上次生成 ${Number(result.generated || 0)} 条提前提醒。`
+  }
+  if (job?.name === 'bookmark_health_check') {
+    return [
+      `上次检查 ${Number(result.checked || 0)} 个书签`,
+      `失效 ${Number(result.broken || 0)} 个`,
+      `待复核 ${Number(result.suspect || 0)} 个`,
+      `受安全策略限制 ${Number(result.unsupported || 0)} 个`
+    ].join('，') + '。'
+  }
   return '尚无运行结果。'
 }
 

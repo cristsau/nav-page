@@ -114,6 +114,7 @@ test('restore rehearsal shares the canonical backup lock before reading a backup
 test('cloud restore is double-gated, uses the bounded backup root, and restores an exact snapshot id', async () => {
   const cloudRestore = await read('scripts/nav-restore-cloud-latest.sh')
   const example = await read('scripts/nav-backup.env.example')
+  const offsiteExample = await read('scripts/restic-offsite.env.example')
 
   assert.match(cloudRestore, /--cloud-restore is mandatory/)
   assert.match(cloudRestore, /NAV_ENABLE_CLOUD_RESTORE_REHEARSAL=true/)
@@ -123,6 +124,10 @@ test('cloud restore is double-gated, uses the bounded backup root, and restores 
   assert.match(example, /^NAV_ENABLE_CLOUD_RESTORE_REHEARSAL=false$/m)
   assert.match(example, /^NAV_CLOUD_RESTORE_ROOT=\/var\/backups\/nav-cloud-restore$/m)
   assert.match(example, /^NAV_RESTIC_CACHE_DIR=\/var\/cache\/nav-restic$/m)
+  assert.match(example, /^NAV_RESTIC_ENV_FILE=\/etc\/nav\/restic-offsite\.env$/m)
+  assert.match(offsiteExample, /^RESTIC_REPOSITORY=s3:https:\/\/REPLACE_WITH_S3_ENDPOINT\//m)
+  assert.match(offsiteExample, /^RESTIC_PASSWORD_FILE=\/etc\/nav\/restic-password$/m)
+  assert.doesNotMatch(offsiteExample, /cloudflarestorage\.com|[0-9a-f]{32,}/i)
 })
 
 test('installer deploys units but cannot enable or start them', async () => {

@@ -22,6 +22,7 @@ import {
   resolveConfiguredChatApiMode
 } from '@/shared/config/aiModels'
 import { normalizeEngineMonogram } from '@/shared/utils/unifiedSearch'
+import AiUsagePanel from '@/modules/settings/components/AiUsagePanel.vue'
 
 const {
   config,
@@ -897,6 +898,14 @@ async function handleProviderTest(provider) {
       >
         {{ providerMessages.chatgpt }}
       </div>
+    </div>
+
+    <div class="settings-item settings-item--stack">
+      <div class="settings-item__info">
+        <div class="settings-item__label">AI 用量与成本</div>
+        <div class="settings-item__desc">查看 7、30 或 90 天聚合数据；成本没有已核验单价时明确显示未知。</div>
+      </div>
+      <AiUsagePanel />
     </div>
 
     <div class="settings-item settings-item--stack">

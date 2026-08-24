@@ -59,6 +59,14 @@ export const config = {
     process.env.AUTH_LOGIN_RATE_LIMIT_WINDOW_SECONDS,
     900
   ),
+  authPasskeyRateLimitMax: normalizePositiveInteger(
+    process.env.AUTH_PASSKEY_RATE_LIMIT_MAX,
+    30
+  ),
+  authPasskeyRateLimitWindowSeconds: normalizePositiveInteger(
+    process.env.AUTH_PASSKEY_RATE_LIMIT_WINDOW_SECONDS,
+    900
+  ),
   authRegisterRateLimitMax: normalizePositiveInteger(
     process.env.AUTH_REGISTER_RATE_LIMIT_MAX,
     5
@@ -134,6 +142,34 @@ export const config = {
     process.env.NAV_MEDIA_DELETE_RETRY_MAX_BACKOFF_SECONDS,
     86_400
   ),
+  noteReminderSchedulerEnabled:
+    process.env.NAV_NOTE_REMINDER_SCHEDULER_ENABLED === 'true',
+  noteReminderSchedulerIntervalSeconds: normalizePositiveInteger(
+    process.env.NAV_NOTE_REMINDER_SCHEDULER_INTERVAL_SECONDS,
+    60
+  ),
+  noteReminderSchedulerBatchSize: normalizePositiveInteger(
+    process.env.NAV_NOTE_REMINDER_SCHEDULER_BATCH_SIZE,
+    500
+  ),
+  bookmarkHealthSchedulerEnabled:
+    process.env.NAV_BOOKMARK_HEALTH_SCHEDULER_ENABLED === 'true',
+  bookmarkHealthSchedulerIntervalSeconds: normalizePositiveInteger(
+    process.env.NAV_BOOKMARK_HEALTH_SCHEDULER_INTERVAL_SECONDS,
+    3_600
+  ),
+  bookmarkHealthSchedulerBatchSize: normalizePositiveInteger(
+    process.env.NAV_BOOKMARK_HEALTH_SCHEDULER_BATCH_SIZE,
+    20
+  ),
+  bookmarkHealthSchedulerStaleHours: normalizePositiveInteger(
+    process.env.NAV_BOOKMARK_HEALTH_SCHEDULER_STALE_HOURS,
+    168
+  ),
+  bookmarkHealthSchedulerConcurrency: normalizePositiveInteger(
+    process.env.NAV_BOOKMARK_HEALTH_SCHEDULER_CONCURRENCY,
+    4
+  ),
   maintenanceAlertsEnabled:
     process.env.NAV_MAINTENANCE_ALERTS_ENABLED === 'true',
   maintenanceAlertFailureThreshold: normalizePositiveInteger(
@@ -144,9 +180,85 @@ export const config = {
     process.env.NAV_MAINTENANCE_ALERT_COOLDOWN_SECONDS,
     21_600
   ),
+  aiUsageRetentionEnabled:
+    process.env.NAV_AI_USAGE_RETENTION_ENABLED === 'true',
+  aiUsageRetentionDays: normalizePositiveInteger(
+    process.env.NAV_AI_USAGE_RETENTION_DAYS,
+    400
+  ),
+  aiUsageRetentionIntervalSeconds: normalizePositiveInteger(
+    process.env.NAV_AI_USAGE_RETENTION_INTERVAL_SECONDS,
+    86_400
+  ),
+  aiUsageRetentionBatchSize: normalizePositiveInteger(
+    process.env.NAV_AI_USAGE_RETENTION_BATCH_SIZE,
+    500
+  ),
+  aiUsageRetentionMaxBatchesPerRun: normalizePositiveInteger(
+    process.env.NAV_AI_USAGE_RETENTION_MAX_BATCHES_PER_RUN,
+    20
+  ),
+  hybridSearchEnabled: process.env.NAV_HYBRID_SEARCH_ENABLED !== 'false',
+  semanticSearchEnabled: process.env.NAV_SEMANTIC_SEARCH_ENABLED === 'true',
+  embeddingModel: String(
+    process.env.NAV_EMBEDDING_MODEL
+      || 'Xenova/paraphrase-multilingual-MiniLM-L12-v2'
+  ).trim(),
+  embeddingModelRevision: String(
+    process.env.NAV_EMBEDDING_MODEL_REVISION
+      || '2c4055b12046f11709e9df2c122e59ffbdc2f900'
+  ).trim(),
+  embeddingCacheDir: path.resolve(
+    String(process.env.NAV_EMBEDDING_CACHE_DIR || '/var/cache/nav-models').trim()
+  ),
+  embeddingSchedulerEnabled:
+    process.env.NAV_EMBEDDING_SCHEDULER_ENABLED === 'true',
+  embeddingSchedulerIntervalSeconds: normalizePositiveInteger(
+    process.env.NAV_EMBEDDING_SCHEDULER_INTERVAL_SECONDS,
+    300
+  ),
+  embeddingSchedulerBatchSize: normalizePositiveInteger(
+    process.env.NAV_EMBEDDING_SCHEDULER_BATCH_SIZE,
+    24
+  ),
+  webPushEnabled: process.env.NAV_WEB_PUSH_ENABLED === 'true',
+  webPushVapidSubject: String(
+    process.env.NAV_WEB_PUSH_VAPID_SUBJECT || 'https://nav.skrskr.net'
+  ).trim(),
+  webPushVapidPublicKey: String(
+    process.env.NAV_WEB_PUSH_VAPID_PUBLIC_KEY || ''
+  ).trim(),
+  webPushVapidPrivateKeyFile: String(
+    process.env.NAV_WEB_PUSH_VAPID_PRIVATE_KEY_FILE || ''
+  ).trim(),
+  webPushAllowedEndpointHosts: String(
+    process.env.NAV_WEB_PUSH_ALLOWED_ENDPOINT_HOSTS
+      || 'fcm.googleapis.com,push.services.mozilla.com,updates.push.services.mozilla.com,web.push.apple.com,notify.windows.com'
+  ).split(',').map((value) => value.trim().toLowerCase()).filter(Boolean),
+  webPushSchedulerEnabled:
+    process.env.NAV_WEB_PUSH_SCHEDULER_ENABLED === 'true',
+  webPushSchedulerIntervalSeconds: normalizePositiveInteger(
+    process.env.NAV_WEB_PUSH_SCHEDULER_INTERVAL_SECONDS,
+    60
+  ),
+  webPushSchedulerBatchSize: normalizePositiveInteger(
+    process.env.NAV_WEB_PUSH_SCHEDULER_BATCH_SIZE,
+    100
+  ),
+  webPushMaxAttempts: normalizePositiveInteger(
+    process.env.NAV_WEB_PUSH_MAX_ATTEMPTS,
+    6
+  ),
+  aiPriceCatalogJson: String(
+    process.env.NAV_AI_PRICE_CATALOG_JSON || ''
+  ).trim(),
   trustedProxyAddresses: normalizeTrustedProxyAddresses(
     process.env.TRUSTED_PROXY_ADDRESSES
   ),
+  webauthnEnabled: process.env.NAV_WEBAUTHN_ENABLED === 'true',
+  webauthnRpId: 'nav.skrskr.net',
+  webauthnOrigin: 'https://nav.skrskr.net',
+  webauthnRpName: 'DOMO NAV',
   corsOrigin: process.env.CORS_ORIGIN || 'http://localhost:5174',
   allowPrivateAiEndpoints: process.env.ALLOW_PRIVATE_AI_ENDPOINTS === 'true',
   allowInsecureAiEndpoints: process.env.ALLOW_INSECURE_AI_ENDPOINTS === 'true',

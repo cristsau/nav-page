@@ -3,6 +3,7 @@ import { nextTick, onBeforeUnmount, ref, watch } from 'vue'
 import Icon from '@/shared/components/Icon.vue'
 import CopyableNoteContent from './CopyableNoteContent.vue'
 import CopyableValue from './CopyableValue.vue'
+import BlockContent from './BlockContent.vue'
 
 const props = defineProps({
   show: {
@@ -19,7 +20,7 @@ const props = defineProps({
   }
 })
 
-const emit = defineEmits(['close', 'edit', 'ai', 'copyId', 'copyExtract', 'copyValue'])
+const emit = defineEmits(['close', 'edit', 'ai', 'history', 'copyId', 'copyExtract', 'copyValue'])
 const dialogRef = ref(null)
 let previouslyFocusedElement = null
 
@@ -204,7 +205,12 @@ onBeforeUnmount(restorePreviousFocus)
             <Icon name="copy" :size="13" />
             悬停高亮可复制单项，行尾按钮复制字段值或整行
           </div>
-          <CopyableNoteContent :content="note.content" @copy="forwardCopy" />
+          <BlockContent
+            v-if="note.contentFormat === 'tiptap-json' && note.contentJson"
+            :document="note.contentJson"
+            :plain-text="note.content"
+          />
+          <CopyableNoteContent v-else :content="note.content" @copy="forwardCopy" />
           <div v-if="note.attachments?.length" class="preview-card__images" aria-label="笔记图片">
             <a
               v-for="(image, index) in note.attachments"
@@ -233,6 +239,9 @@ onBeforeUnmount(restorePreviousFocus)
         </button>
         <button type="button" class="btn btn--secondary" @click="emit('ai', note)">
           <Icon name="sparkles" :size="16" /> AI 编辑
+        </button>
+        <button type="button" class="btn btn--secondary" @click="emit('history', note)">
+          <Icon name="clock" :size="16" /> 版本历史
         </button>
         <button type="button" class="btn btn--primary" @click="emit('edit', note)">
           <Icon name="edit" :size="16" /> 编辑

@@ -2,6 +2,7 @@
 import { computed, nextTick, onMounted, ref, shallowRef } from 'vue'
 import Icon from '@/shared/components/Icon.vue'
 import Modal from '@/shared/components/Modal.vue'
+import ProductivityPortability from './ProductivityPortability.vue'
 import { clearAllData, exportData, getLocalDataSummary, importData } from '@/shared/db/database'
 import { useConfig } from '@/shared/composables/useConfig'
 import {
@@ -610,6 +611,7 @@ onMounted(refreshLocalState)
 <template>
   <div class="settings-section">
     <h3 class="settings-section__title">数据管理</h3>
+    <ProductivityPortability />
 
     <p
       v-if="restorePageMessage"

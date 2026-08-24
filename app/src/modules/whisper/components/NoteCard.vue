@@ -2,6 +2,11 @@
 import { computed, ref, watch } from 'vue'
 import Icon from '@/shared/components/Icon.vue'
 import { decrypt } from '@/shared/utils/crypto'
+import {
+  isTiptapDocument,
+  plainTextToTiptapDocument,
+  sanitizeTiptapDocumentForClient
+} from '@/shared/utils/noteRichContent'
 
 const props = defineProps({
   note: {
@@ -25,6 +30,11 @@ const emit = defineEmits([
 const showPasswordModal = ref(false)
 const password = ref('')
 const decryptedContent = ref(props.note._unlocked ? String(props.note.content || '') : '')
+const decryptedContentJson = ref(
+  props.note._unlocked
+    ? (props.note.contentJson || plainTextToTiptapDocument(props.note.content))
+    : null
+)
 const decryptError = ref(false)
 const unlockAction = ref('preview')
 const unlocked = ref(Boolean(props.note._unlocked))
@@ -59,6 +69,9 @@ watch(
   () => {
     unlocked.value = Boolean(props.note._unlocked)
     decryptedContent.value = props.note._unlocked ? String(props.note.content || '') : ''
+    decryptedContentJson.value = props.note._unlocked
+      ? (props.note.contentJson || plainTextToTiptapDocument(props.note.content))
+      : null
     password.value = ''
     decryptError.value = false
   }
@@ -107,7 +120,12 @@ function formatDueAt(value) {
 
 function unlockedNote() {
   return unlocked.value
-    ? { ...props.note, content: decryptedContent.value, _unlocked: true }
+    ? {
+        ...props.note,
+        content: decryptedContent.value,
+        contentJson: decryptedContentJson.value,
+        _unlocked: true
+      }
     : props.note
 }
 
@@ -132,12 +150,32 @@ async function handleDecrypt() {
 
   const result = await decrypt(props.note.content, password.value)
   if (result !== null) {
+    let richDocument = plainTextToTiptapDocument(result)
+    if (props.note.contentJsonEncrypted) {
+      const richResult = await decrypt(props.note.contentJsonEncrypted, password.value)
+      if (richResult !== null) {
+        try {
+          const parsed = JSON.parse(richResult)
+          if (isTiptapDocument(parsed)) {
+            richDocument = sanitizeTiptapDocumentForClient(parsed) || richDocument
+          }
+        } catch {
+          // The plaintext body remains recoverable even if an older rich payload is invalid.
+        }
+      }
+    }
     decryptedContent.value = result
+    decryptedContentJson.value = richDocument
     unlocked.value = true
     showPasswordModal.value = false
     decryptError.value = false
     password.value = ''
-    emit(unlockAction.value, { ...props.note, content: result, _unlocked: true })
+    emit(unlockAction.value, {
+      ...props.note,
+      content: result,
+      contentJson: richDocument,
+      _unlocked: true
+    })
   } else {
     decryptError.value = true
   }

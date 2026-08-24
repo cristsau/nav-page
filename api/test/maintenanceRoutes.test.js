@@ -14,6 +14,8 @@ test('admin maintenance status route is private, admin-only and exposes no secre
   assert.match(route, /FROM maintenance_job_status/)
   assert.match(route, /consecutiveFailures/)
   assert.match(route, /lastNotificationStatus/)
+  assert.match(route, /NOTE_REMINDER_GENERATION/)
+  assert.match(route, /BOOKMARK_HEALTH_CHECK/)
   assert.doesNotMatch(route, /botToken|adminChatId|exception_message|stack/)
   assert.match(service, /\/admin\/maintenance\/status/)
   assert.match(service, /cache: 'no-store'/)

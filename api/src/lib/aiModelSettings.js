@@ -1,4 +1,8 @@
-import { normalizeAiModelId } from './aiResponses.js'
+import {
+  normalizeAiModelId,
+  normalizeConfiguredChatApiMode,
+  normalizeReasoningEffort
+} from './aiResponses.js'
 import { AI_MODEL_MODES } from './aiProviderConfig.js'
 
 const MODEL_PROVIDER_IDS = Object.freeze(['chatgpt'])
@@ -23,10 +27,14 @@ export function validateAppConfigModelIds(config = {}) {
     }
 
     const model = String(provider.model ?? '').trim()
-    if (!model) {
-      continue
+    if (model) {
+      normalizeAiModelId(model, '')
     }
 
-    normalizeAiModelId(model, '')
+    const apiMode = String(provider.apiMode ?? '').trim()
+    if (apiMode) normalizeConfiguredChatApiMode(apiMode)
+
+    const reasoningEffort = String(provider.reasoningEffort ?? '').trim()
+    if (reasoningEffort) normalizeReasoningEffort(reasoningEffort)
   }
 }

@@ -5,6 +5,7 @@ import { useConfig } from '@/shared/composables/useConfig'
 import Icon from '@/shared/components/Icon.vue'
 import { searchWorkspace } from '@/shared/services/unifiedSearchApi'
 import { createHighlightedSegments } from '@/shared/utils/unifiedSearch'
+import { queryWorkspaceAssistant } from '@/shared/services/assistantApi'
 
 const router = useRouter()
 const {
@@ -25,6 +26,7 @@ const searchError = ref('')
 const searchResult = ref(null)
 const copied = ref(false)
 const isLocalSearching = ref(false)
+const isAssistantSearching = ref(false)
 const localSearchError = ref('')
 const showLocalResults = ref(false)
 const activeResultIndex = ref(-1)
@@ -38,6 +40,7 @@ const localSearchResult = ref({
 
 let localSearchTimer = null
 let localSearchSequence = 0
+let assistantSearchSequence = 0
 
 const currentEngine = computed(() => getSearchEngine())
 const allEngines = computed(() => getQuickAccessSearchEngines())
@@ -85,6 +88,8 @@ onBeforeUnmount(() => {
 
 watch(query, (value) => {
   clearTimeout(localSearchTimer)
+  assistantSearchSequence += 1
+  isAssistantSearching.value = false
   activeResultIndex.value = -1
   localSearchError.value = ''
   searchResult.value = null
@@ -256,6 +261,43 @@ function closeResultPanel() {
   copied.value = false
 }
 
+async function handleAssistantQuery() {
+  const trimmed = query.value.trim()
+  if (!trimmed || isAssistantSearching.value) return
+
+  isAssistantSearching.value = true
+  searchError.value = ''
+  searchResult.value = null
+  showLocalResults.value = false
+  const sequence = ++assistantSearchSequence
+
+  try {
+    const result = await queryWorkspaceAssistant(trimmed)
+    if (sequence !== assistantSearchSequence) return
+    searchResult.value = {
+      ...result,
+      label: result.mode === 'retrieval' ? '个人资料检索' : '个人资料助理',
+      items: (result.sources || []).map((source) => ({
+        ...source,
+        source: source.sourceId,
+        description: source.excerpt,
+        url: source.href
+      }))
+    }
+  } catch (error) {
+    if (sequence !== assistantSearchSequence) return
+    searchError.value = error.message || '个人资料助理暂时不可用'
+  } finally {
+    if (sequence === assistantSearchSequence) {
+      isAssistantSearching.value = false
+    }
+  }
+}
+
+function sourceTarget(item) {
+  return String(item?.url || '').startsWith('/') ? '_self' : '_blank'
+}
+
 function openExternalResult() {
   if (!searchResult.value?.externalUrl) return
   window.open(searchResult.value.externalUrl, '_blank', 'noopener,noreferrer')
@@ -360,14 +402,25 @@ async function copyAnswer() {
             <template v-else>找到 {{ localSearchResult.total }} 项内容</template>
           </div>
         </div>
-        <button
-          class="workspace-results__close"
-          type="button"
-          aria-label="关闭站内搜索结果"
-          @click="showLocalResults = false"
-        >
-          <Icon name="close" :size="17" />
-        </button>
+        <div class="workspace-results__header-actions">
+          <button
+            class="workspace-results__assistant"
+            type="button"
+            :disabled="isAssistantSearching"
+            @click="handleAssistantQuery"
+          >
+            <Icon name="sparkles" :size="16" />
+            {{ isAssistantSearching ? '整理中' : '问助理' }}
+          </button>
+          <button
+            class="workspace-results__close"
+            type="button"
+            aria-label="关闭站内搜索结果"
+            @click="showLocalResults = false"
+          >
+            <Icon name="close" :size="17" />
+          </button>
+        </div>
       </header>
 
       <div v-if="isLocalSearching" class="workspace-results__loading">
@@ -430,6 +483,9 @@ async function copyAnswer() {
                     </template>
                   </span>
                   <span v-if="item.subtitle" class="workspace-result-item__meta">{{ item.subtitle }}</span>
+                  <span v-if="item.matchReasons?.length" class="workspace-result-item__reason">
+                    {{ item.matchReasons.join(' · ') }}
+                  </span>
                 </span>
                 <Icon :name="item.kind === 'bookmark' ? 'external-link' : 'note'" :size="17" />
               </button>
@@ -453,7 +509,7 @@ async function copyAnswer() {
       </footer>
     </section>
 
-    <div v-if="isSearching || searchError || searchResult" class="search-result-panel">
+    <div v-if="isSearching || isAssistantSearching || searchError || searchResult" class="search-result-panel">
       <div class="search-result-panel__header">
         <div>
           <div class="search-result-panel__title">
@@ -469,8 +525,8 @@ async function copyAnswer() {
         </button>
       </div>
 
-      <div v-if="isSearching" class="search-result-panel__state">
-        正在请求 AI 搜索结果...
+      <div v-if="isSearching || isAssistantSearching" class="search-result-panel__state">
+        {{ isAssistantSearching ? '正在检索个人资料并整理来源...' : '正在请求 AI 搜索结果...' }}
       </div>
 
       <div v-else-if="searchError" class="search-result-panel__state search-result-panel__state--error">
@@ -485,7 +541,7 @@ async function copyAnswer() {
         <div v-if="searchResult.items?.length" class="search-result-sources">
           <div class="search-result-sources__title">
             <Icon name="external-link" :size="15" />
-            {{ searchResult.mode === 'answer' ? '引用来源' : '搜索结果' }}
+            {{ searchResult.sources ? '站内来源' : (searchResult.mode === 'answer' ? '引用来源' : '搜索结果') }}
           </div>
           <div class="search-result-list">
             <a
@@ -493,7 +549,7 @@ async function copyAnswer() {
               :key="item.url || index"
               class="search-result-item"
               :href="item.url"
-              target="_blank"
+              :target="sourceTarget(item)"
               rel="noopener noreferrer"
             >
               <div class="search-result-item__source">{{ item.source || '搜索结果' }}</div>
@@ -775,9 +831,37 @@ async function copyAnswer() {
   font-weight: 650;
 }
 
+.workspace-results__header-actions {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+}
+
+.workspace-results__assistant {
+  min-height: 44px;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  gap: 6px;
+  padding: 0 11px;
+  border: 1px solid color-mix(in srgb, var(--accent-color) 24%, var(--border-light));
+  border-radius: 11px;
+  background: var(--accent-bg);
+  color: var(--accent-color);
+  cursor: pointer;
+  font: inherit;
+  font-size: 11px;
+  font-weight: 650;
+}
+
+.workspace-results__assistant:disabled {
+  cursor: wait;
+  opacity: 0.62;
+}
+
 .workspace-results__close {
-  width: 34px;
-  height: 34px;
+  width: 44px;
+  height: 44px;
   display: grid;
   place-items: center;
   border: 1px solid transparent;
@@ -894,7 +978,8 @@ async function copyAnswer() {
 
 .workspace-result-item__title,
 .workspace-result-item__snippet,
-.workspace-result-item__meta {
+.workspace-result-item__meta,
+.workspace-result-item__reason {
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
@@ -912,6 +997,11 @@ async function copyAnswer() {
 
 .workspace-result-item__meta {
   color: var(--text-muted);
+  font-size: 10px;
+}
+
+.workspace-result-item__reason {
+  color: var(--accent-color);
   font-size: 10px;
 }
 

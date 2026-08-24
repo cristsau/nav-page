@@ -13,6 +13,10 @@ const PUBLIC_AUTH_LIMITS = Object.freeze({
     limit: config.authLoginRateLimitMax,
     windowMs: config.authLoginRateLimitWindowSeconds * 1000
   }),
+  passkey: () => ({
+    limit: config.authPasskeyRateLimitMax,
+    windowMs: config.authPasskeyRateLimitWindowSeconds * 1000
+  }),
   register: () => ({
     limit: config.authRegisterRateLimitMax,
     windowMs: config.authRegisterRateLimitWindowSeconds * 1000
