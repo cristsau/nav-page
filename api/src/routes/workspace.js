@@ -1,9 +1,9 @@
 import {
   normalizeWorkspaceSearchQuery,
-  searchWorkspaceForUser,
   WORKSPACE_SEARCH_QUERY_MAX_LENGTH
 } from '../lib/workspaceSearch.js'
-import { query } from '../db/index.js'
+import { searchWorkspaceHybridForUser } from '../lib/hybridWorkspaceSearch.js'
+import { pool, query } from '../db/index.js'
 
 export default async function workspaceRoutes(fastify) {
   fastify.get('/workspace/search', async (request, reply) => {
@@ -19,22 +19,13 @@ export default async function workspaceRoutes(fastify) {
     }
 
     const normalized = normalizeWorkspaceSearchQuery(rawQuery)
-    if (!normalized) {
-      return {
-        query: '',
-        results: [],
-        bookmarks: [],
-        notes: [],
-        total: 0,
-        fuzzyEnabled: false
-      }
-    }
-
-    return searchWorkspaceForUser({
+    return searchWorkspaceHybridForUser({
       userId: request.currentUser.id,
       search: normalized,
       limit: request.query?.limit,
-      queryFn: query
+      poolInstance: pool,
+      queryFn: query,
+      logger: request.log
     })
   })
 }

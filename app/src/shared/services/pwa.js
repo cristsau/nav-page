@@ -60,6 +60,16 @@ export async function registerPwa() {
   }
 }
 
+export async function getPwaRegistration() {
+  if (registration) return registration
+  await registerPwa()
+  if (registration) return registration
+  if (state.supported && globalThis.isSecureContext) {
+    return navigator.serviceWorker.ready
+  }
+  return null
+}
+
 export async function checkPwaUpdate() {
   if (!registration) return false
   await registration.update()

@@ -28,6 +28,7 @@ import productivityImportRoutes from './routes/productivityImports.js'
 import securityEventRoutes from './routes/securityEvents.js'
 import settingsRoutes from './routes/settings.js'
 import workspaceRoutes from './routes/workspace.js'
+import webPushRoutes from './routes/webPush.js'
 
 function stripBodylessDeleteJsonContentType(request) {
   if (String(request.raw.method || '').toUpperCase() !== 'DELETE') {
@@ -72,6 +73,9 @@ export function createApp() {
           'req.body.backupReceipt',
           'req.body.backup',
           'req.body.response',
+          'req.body.subscription.endpoint',
+          'req.body.subscription.keys.p256dh',
+          'req.body.subscription.keys.auth',
           'req.body.query',
           'res.headers["set-cookie"]',
           'authorization',
@@ -141,6 +145,7 @@ export function createApp() {
   app.register(productivityImportRoutes, { prefix: '/api' })
   app.register(settingsRoutes, { prefix: '/api' })
   app.register(workspaceRoutes, { prefix: '/api' })
+  app.register(webPushRoutes, { prefix: '/api' })
 
   app.setErrorHandler((error, request, reply) => {
     const statusCode = Number.isInteger(error.statusCode) && error.statusCode >= 400

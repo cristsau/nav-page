@@ -25,6 +25,14 @@ import {
   mapNoteVersion,
   pruneNoteVersions
 } from '../lib/noteVersions.js'
+import {
+  assertTiptapImagesAttached,
+  normalizeContentFormat,
+  normalizeEncryptedRichDocument,
+  plainTextToTiptapDocument,
+  sanitizeTiptapDocument,
+  tiptapDocumentText
+} from '../lib/noteRichContent.js'
 
 function normalizeText(value, fallback = '') {
   return String(value ?? fallback).trim()
@@ -34,6 +42,62 @@ function normalizeTags(value) {
   return Array.isArray(value)
     ? value.map((item) => String(item || '').trim()).filter(Boolean)
     : []
+}
+
+function resolveRichContentFields({ body, existing = null, encrypted }) {
+  const contentFormat = normalizeContentFormat(
+    body?.contentFormat,
+    existing?.content_format || 'plain'
+  )
+  const rawContent = body?.content === undefined
+    ? String(existing?.content || '')
+    : String(body.content || '')
+
+  if (contentFormat !== 'tiptap-json') {
+    return {
+      content: rawContent,
+      contentFormat: 'plain',
+      contentJson: null,
+      contentJsonEncrypted: null
+    }
+  }
+
+  if (encrypted) {
+    const contentJsonEncrypted = normalizeEncryptedRichDocument(
+      body?.contentJsonEncrypted,
+      existing?.content_json_encrypted || null
+    )
+    if (!contentJsonEncrypted) {
+      throw new TypeError('Encrypted rich notes require contentJsonEncrypted')
+    }
+    return {
+      content: rawContent,
+      contentFormat,
+      contentJson: null,
+      contentJsonEncrypted
+    }
+  }
+
+  const sourceDocument = body?.contentJson === undefined
+    ? (existing?.content_json || plainTextToTiptapDocument(rawContent))
+    : body.contentJson
+  const contentJson = sanitizeTiptapDocument(sourceDocument, {
+    allowedImageOrigin: getImgBedOrigin(config.imgBedBaseUrl)
+  })
+  return {
+    content: tiptapDocumentText(contentJson),
+    contentFormat,
+    contentJson,
+    contentJsonEncrypted: null
+  }
+}
+
+function invalidRichContentResponse(reply, error) {
+  reply.code(400)
+  return {
+    error: error?.message || 'Rich note content is invalid',
+    code: 'invalid_rich_content'
+  }
 }
 
 function normalizeExpireAt(value) {
@@ -395,8 +459,19 @@ export default async function notesRoutes(fastify) {
 
     const type = normalizeNoteType(request.body?.type)
     const title = normalizeText(request.body?.title)
-    const content = String(request.body?.content || '')
     const encrypted = Boolean(request.body?.encrypted)
+    let richContent
+    try {
+      richContent = resolveRichContentFields({ body: request.body, encrypted })
+    } catch (error) {
+      return invalidRichContentResponse(reply, error)
+    }
+    const {
+      content,
+      contentFormat,
+      contentJson,
+      contentJsonEncrypted
+    } = richContent
     const passwordHash = normalizeText(request.body?.password)
     const pinned = Boolean(request.body?.pinned)
     const tags = normalizeTags(request.body?.tags)
@@ -405,6 +480,7 @@ export default async function notesRoutes(fastify) {
       maxBytes: config.imgBedMaxImageBytes,
       strict: true
     })
+    if (contentJson) assertTiptapImagesAttached(contentJson, attachments)
     const entryDate = type === 'diary'
       ? normalizeDateOnly(request.body?.entryDate, new Date().toISOString().slice(0, 10))
       : null
@@ -452,6 +528,9 @@ export default async function notesRoutes(fastify) {
             type,
             title,
             content,
+            content_format,
+            content_json,
+            content_json_encrypted,
             encrypted,
             password_hash,
             pinned,
@@ -462,7 +541,10 @@ export default async function notesRoutes(fastify) {
             due_at,
             remind_before_minutes,
             completed
-          ) VALUES ($1, $2, $3, $4, $5, $6, $7, $8::jsonb, $9::jsonb, $10, $11, $12, $13, $14)
+          ) VALUES (
+            $1, $2, $3, $4, $5, $6::jsonb, $7, $8, $9, $10,
+            $11::jsonb, $12::jsonb, $13, $14, $15, $16, $17
+          )
           RETURNING *
         `,
         [
@@ -470,6 +552,9 @@ export default async function notesRoutes(fastify) {
           type,
           title,
           content,
+          contentFormat,
+          contentJson ? JSON.stringify(contentJson) : null,
+          contentJsonEncrypted,
           encrypted,
           passwordHash,
           pinned,
@@ -498,8 +583,23 @@ export default async function notesRoutes(fastify) {
 
     const type = normalizeNoteType(request.body?.type, existing.type)
     const title = normalizeText(request.body?.title, existing.title) || existing.title
-    const content = request.body?.content === undefined ? existing.content : String(request.body.content || '')
     const encrypted = request.body?.encrypted === undefined ? existing.encrypted : Boolean(request.body.encrypted)
+    let richContent
+    try {
+      richContent = resolveRichContentFields({
+        body: request.body,
+        existing,
+        encrypted
+      })
+    } catch (error) {
+      return invalidRichContentResponse(reply, error)
+    }
+    const {
+      content,
+      contentFormat,
+      contentJson,
+      contentJsonEncrypted
+    } = richContent
     let passwordHash = request.body?.password === undefined
       ? existing.password_hash
       : normalizeText(request.body.password)
@@ -514,6 +614,7 @@ export default async function notesRoutes(fastify) {
           maxBytes: config.imgBedMaxImageBytes,
           strict: true
         })
+    if (contentJson) assertTiptapImagesAttached(contentJson, attachments)
     const entryDate = type === 'diary'
       ? normalizeDateOnly(request.body?.entryDate, existing.entry_date || new Date().toISOString().slice(0, 10))
       : null
@@ -609,22 +710,25 @@ export default async function notesRoutes(fastify) {
             SET type = $3,
                 title = $4,
                 content = $5,
-                encrypted = $6,
-                password_hash = $7,
-                pinned = $8,
-                tags = $9::jsonb,
-                attachments = $10::jsonb,
-                entry_date = $11,
-                mood = $12,
-                due_at = $13,
-                remind_before_minutes = $14,
-                completed = $15,
+                content_format = $6,
+                content_json = $7::jsonb,
+                content_json_encrypted = $8,
+                encrypted = $9,
+                password_hash = $10,
+                pinned = $11,
+                tags = $12::jsonb,
+                attachments = $13::jsonb,
+                entry_date = $14,
+                mood = $15,
+                due_at = $16,
+                remind_before_minutes = $17,
+                completed = $18,
                 revision = revision + 1,
                 updated_at = NOW()
             WHERE id = $1
               AND user_id = $2
-              AND updated_at = $16::timestamptz
-              AND revision = $17::integer
+              AND updated_at = $19::timestamptz
+              AND revision = $20::integer
             RETURNING *
           `,
           [
@@ -633,6 +737,9 @@ export default async function notesRoutes(fastify) {
             type,
             title,
             content,
+            contentFormat,
+            contentJson ? JSON.stringify(contentJson) : null,
+            contentJsonEncrypted,
             encrypted,
             passwordHash,
             pinned,
@@ -805,15 +912,18 @@ export default async function notesRoutes(fastify) {
             SET type = $3,
                 title = $4,
                 content = $5,
-                encrypted = $6,
-                password_hash = $7,
-                pinned = $8,
-                tags = $9::jsonb,
-                entry_date = $10,
-                mood = $11,
-                due_at = $12,
-                remind_before_minutes = $13,
-                completed = $14,
+                content_format = $6,
+                content_json = $7::jsonb,
+                content_json_encrypted = $8,
+                encrypted = $9,
+                password_hash = $10,
+                pinned = $11,
+                tags = $12::jsonb,
+                entry_date = $13,
+                mood = $14,
+                due_at = $15,
+                remind_before_minutes = $16,
+                completed = $17,
                 revision = revision + 1,
                 updated_at = NOW()
             WHERE id = $1
@@ -826,6 +936,9 @@ export default async function notesRoutes(fastify) {
             version.type,
             version.title,
             version.content,
+            version.content_format || 'plain',
+            version.content_json ? JSON.stringify(version.content_json) : null,
+            version.content_json_encrypted || null,
             Boolean(version.encrypted),
             String(version.password_hash || ''),
             Boolean(version.pinned),
@@ -1055,6 +1168,8 @@ export default async function notesRoutes(fastify) {
           SELECT
             n.title,
             n.content,
+            n.content_format,
+            n.content_json,
             n.tags,
             n.attachments,
             n.entry_date

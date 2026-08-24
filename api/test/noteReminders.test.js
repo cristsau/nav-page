@@ -119,19 +119,25 @@ test('migration and routes persist read state, isolate users, and reject malform
   assert.match(notesRoute, /DELETE FROM note_reminders[\s\S]*WHERE note_id = \$1/)
 })
 
-test('browser notifications are explicit opt-in, prefer the service worker and keep Web Push disabled', async () => {
+test('browser notifications remain explicit opt-in and add authenticated Web Push delivery', async () => {
   const files = await Promise.all([
     readSource('../src/lib/noteReminders.js'),
     readSource('../src/routes/noteReminders.js'),
     readSource('../../app/src/shared/composables/useNoteReminders.js'),
-    readSource('../../app/src/modules/whisper/components/ReminderCenter.vue')
+    readSource('../../app/src/modules/whisper/components/ReminderCenter.vue'),
+    readSource('../../app/src/shared/services/webPushApi.js'),
+    readSource('../../app/public/sw.js'),
+    readSource('../src/routes/webPush.js')
   ])
   const source = files.join('\n')
 
   assert.match(source, /Notification\.requestPermission\(\)/)
   assert.match(source, /notificationPermission/)
   assert.match(source, /registration\.showNotification\(title, options\)/)
-  assert.doesNotMatch(source, /PushManager|pushsubscriptionchange|addEventListener\('push'/)
+  assert.match(source, /pushManager\.subscribe/)
+  assert.match(source, /addEventListener\('push'/)
+  assert.match(source, /fastify\.requireAuth/)
+  assert.match(source, /web_push_subscriptions/)
   assert.doesNotMatch(source, /telegram|sendMessage/i)
-  assert.match(source, /网页完全关闭时仍不会后台推送/)
+  assert.match(source, /网页关闭后仍可送达|关闭网页后也能收到/)
 })

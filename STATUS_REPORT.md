@@ -19,6 +19,16 @@
 - 完整范围、开关和下一道门禁见
   [`docs/NAV_LOCAL_FEATURE_COMPLETION_20260824.md`](./docs/NAV_LOCAL_FEATURE_COMPLETION_20260824.md)。
 
+## 2026-08-24 高级搜索、离线推送与块编辑候选
+
+- 状态：`LOCAL_DONE / READY_FOR_CI / NOT_DEPLOYED`。
+- 分支 `codex/nav-semantic-push-block-editor-20260824` 新增迁移 023–025：本地中文 BM25、固定
+  revision 多语言向量、页面关闭后的标准 Web Push/VAPID，以及 Tiptap 单用户块编辑器。
+- VAPID 私钥使用 release-local 只读文件，语义模型使用 OVH Docker volume；两者都不进入 Git。
+- 加密笔记不进入搜索索引，Push 不暴露加密标题/正文，块 JSON 加密仍只在浏览器完成。
+- 完整边界、开关、回滚与真机验收见
+  [`docs/NAV_ADVANCED_SEARCH_PUSH_BLOCK_EDITOR.md`](./docs/NAV_ADVANCED_SEARCH_PUSH_BLOCK_EDITOR.md)。
+
 ## 当前源码与生产基线
 
 - GitHub：`cristsau/nav-page`（Private），默认分支 `master`。
@@ -139,15 +149,14 @@ PR #30 的图片删除重试告警正确性、PR #31 的云端安全恢复、PR 
 
 ## 生产仍为部分完成（本地候选已补源码）
 
-- 生产到期提醒仍只在打开 NAV 时同步；本地候选已增加提前提醒和浏览器通知，但网页关闭后的
-  Web Push 仍未实现。
+- 生产到期提醒仍只在打开 NAV 时同步；迁移 024 本地候选已增加页面关闭后的标准 Web Push，
+  尚待 CI、VAPID Secret 安装、发布和逐设备真机授权。
 - 生产链接检查仍由用户手动触发；本地候选已增加默认关闭的有界定时检查、集中异常清单和
   单条/批量复查。
 - 生产命令面板尚不能切换主题或 AI 模型；本地候选已补齐实际主题与服务端发现模型。
 - 生产安全 JSON 导入导出可用；本地候选已增加 Chrome/Edge 书签 HTML 和 Markdown 原子
   批量导入导出，但完整生态恢复仍不含图床对象与外层代理。
-- 生产 PWA 只有元数据和主屏图标；本地候选已增加隐私安全的离线外壳与显式更新，仍无
-  Web Push。
+- 生产 PWA 只有元数据和主屏图标；本地候选已增加隐私安全的离线外壳、显式更新与 Web Push。
 - 云端 JSON 恢复的密码二次确认、只读差异预览和替换边界已随 PR #32 发布；图床对象、
   外层代理和超过 5,000 条记录的分片/流式恢复仍不在该能力内。
 
@@ -157,9 +166,10 @@ PR #30 的图片删除重试告警正确性、PR #31 的云端安全恢复、PR 
    定期隔离恢复、失败报警与外部 dead-man。
 2. 将本地候选送入 GitHub Linux CI 和 PostgreSQL 16 隔离迁移/恢复门禁；通过后再决定 PR 与发布。
 3. 发布后保持 Passkey、提前提醒、链接检查和 AI 用量清理默认关闭，完成双域/真机验收后逐项启用。
-4. 以真实数据评估是否值得增加中文 tokenizer/BM25 和向量 embedding；当前中文子串、trigram
-   容错与带来源助理已完成源码。
-5. 最后独立评估 Web Push/VAPID 与完整块编辑器；自动保存、冲突保护和版本历史已完成源码。
+4. 将迁移 023 的中文 BM25/本地向量、迁移 024 的 Web Push 与迁移 025 的单用户块编辑器
+   送入 CI、隔离 PostgreSQL 16 门禁并完成 OVH 发布。
+5. 发布后由用户在真实 Chrome/Edge/iPhone 主屏应用中逐设备授权并验证“页面关闭仍送达”；
+   多人协作、Yjs/CRDT 与扩展商店上架继续暂缓。
 
 ## 仍建议用户手工验收
 

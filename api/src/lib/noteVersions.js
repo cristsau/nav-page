@@ -18,6 +18,9 @@ export async function archiveNoteVersion(client, note) {
         type,
         title,
         content,
+        content_format,
+        content_json,
+        content_json_encrypted,
         encrypted,
         password_hash,
         pinned,
@@ -28,8 +31,8 @@ export async function archiveNoteVersion(client, note) {
         remind_before_minutes,
         completed
       ) VALUES (
-        $1, $2, $3, $4, $5, $6, $7, $8, $9,
-        $10::jsonb, $11, $12, $13, $14, $15
+        $1, $2, $3, $4, $5, $6, $7, $8::jsonb, $9, $10, $11, $12,
+        $13::jsonb, $14, $15, $16, $17, $18
       )
       ON CONFLICT (note_id, revision) DO NOTHING
     `,
@@ -40,6 +43,9 @@ export async function archiveNoteVersion(client, note) {
       note.type,
       note.title,
       note.content,
+      note.content_format || 'plain',
+      note.content_json ? JSON.stringify(note.content_json) : null,
+      note.content_json_encrypted || null,
       Boolean(note.encrypted),
       String(note.password_hash || ''),
       Boolean(note.pinned),
@@ -84,6 +90,8 @@ export function mapNoteVersion(record) {
     type: record.type,
     title: record.title,
     content: encrypted ? '' : String(record.content || ''),
+    contentFormat: record.content_format || 'plain',
+    contentJson: encrypted ? null : (record.content_json || null),
     contentAvailable: !encrypted,
     encrypted,
     pinned: Boolean(record.pinned),

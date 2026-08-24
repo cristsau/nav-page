@@ -53,6 +53,30 @@ function createFixtureClient() {
         type: 'memo',
         title: '图床说明',
         content: '图片保存在图床。',
+        content_format: 'tiptap-json',
+        content_json: {
+          type: 'doc',
+          content: [
+            {
+              type: 'heading',
+              attrs: { level: 2 },
+              content: [{ type: 'text', text: '图床说明' }]
+            },
+            {
+              type: 'paragraph',
+              content: [{ type: 'text', text: '图片保存在图床。' }]
+            },
+            {
+              type: 'image',
+              attrs: {
+                src: 'https://pic.skrskr.net/file/nav-notes/example.webp',
+                alt: '示例图片',
+                title: 'example.webp'
+              }
+            }
+          ]
+        },
+        content_json_encrypted: null,
         encrypted: false,
         password_hash: '',
         pinned: true,
@@ -68,7 +92,9 @@ function createFixtureClient() {
         entry_date: null,
         mood: '',
         due_at: '2026-08-01T12:00:00.000Z',
+        remind_before_minutes: 30,
         completed: false,
+        revision: 4,
         created_at: '2026-07-31T05:00:00.000Z',
         updated_at: '2026-07-31T06:00:00.000Z'
       },
@@ -78,6 +104,9 @@ function createFixtureClient() {
         type: 'diary',
         title: '加密日记',
         content: '{"iv":"cipher-iv","ciphertext":"cipher-body"}',
+        content_format: 'tiptap-json',
+        content_json: null,
+        content_json_encrypted: 'encrypted-tiptap-document',
         encrypted: true,
         password_hash: 'pbkdf2$sha256$verifier',
         pinned: false,
@@ -87,6 +116,8 @@ function createFixtureClient() {
         mood: '平静',
         due_at: null,
         completed: false,
+        remind_before_minutes: 0,
+        revision: 2,
         created_at: '2026-07-31T07:00:00.000Z',
         updated_at: '2026-07-31T08:00:00.000Z'
       }
@@ -228,6 +259,12 @@ test('backend export is import-compatible and preserves cloud data metadata', as
   assert.equal(memo.numberId, 1000)
   assert.deepEqual(memo.tags, ['图片', '运维'])
   assert.equal(memo.dueAt, '2026-08-01T12:00:00.000Z')
+  assert.equal(memo.contentFormat, 'tiptap-json')
+  assert.equal(memo.contentJson.type, 'doc')
+  assert.equal(memo.contentJson.content[2].attrs.src, memo.attachments[0].url)
+  assert.equal(memo.contentJsonEncrypted, null)
+  assert.equal(memo.remindBeforeMinutes, 30)
+  assert.equal(memo.revision, 4)
   assert.deepEqual(memo.attachments, [{
     id: ATTACHMENT_ID,
     url: 'https://pic.skrskr.net/file/nav-notes/example.webp',
@@ -246,6 +283,10 @@ test('backend export is import-compatible and preserves cloud data metadata', as
   assert.equal(diary.password, '')
   assert.equal(diary.numberId, 1001)
   assert.equal(diary.entryDate, '2026-07-31')
+  assert.equal(diary.contentFormat, 'tiptap-json')
+  assert.equal(diary.contentJson, null)
+  assert.equal(diary.contentJsonEncrypted, 'encrypted-tiptap-document')
+  assert.equal(diary.revision, 2)
 
   assert.deepEqual(backup.manifest.counts, {
     groups: 1,

@@ -29,6 +29,10 @@ const iconPaths = {
   'arrow-left': [
     ['path', { d: 'm15 18-6-6 6-6' }]
   ],
+  bell: [
+    ['path', { d: 'M18 8a6 6 0 0 0-12 0c0 7-3 7-3 9h18c0-2-3-2-3-9' }],
+    ['path', { d: 'M10 21h4' }]
+  ],
   book: [
     ['path', { d: 'M4 19.5A2.5 2.5 0 0 1 6.5 17H20' }],
     ['path', { d: 'M6.5 2H20v20H6.5A2.5 2.5 0 0 1 4 19.5v-15A2.5 2.5 0 0 1 6.5 2Z' }]
@@ -104,6 +108,14 @@ const iconPaths = {
   folder: [
     ['path', { d: 'M3 7a2 2 0 0 1 2-2h5l2 2h7a2 2 0 0 1 2 2v8a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2Z' }]
   ],
+  'grip-vertical': [
+    ['circle', { cx: 9, cy: 5, r: 1 }],
+    ['circle', { cx: 15, cy: 5, r: 1 }],
+    ['circle', { cx: 9, cy: 12, r: 1 }],
+    ['circle', { cx: 15, cy: 12, r: 1 }],
+    ['circle', { cx: 9, cy: 19, r: 1 }],
+    ['circle', { cx: 15, cy: 19, r: 1 }]
+  ],
   heart: [
     ['path', { d: 'M20.8 4.6a5.5 5.5 0 0 0-7.8 0L12 5.7l-1.1-1.1a5.5 5.5 0 0 0-7.8 7.8l1.1 1.1L12 21l7.8-7.5 1.1-1.1a5.5 5.5 0 0 0-.1-7.8Z' }]
   ],
@@ -164,6 +176,10 @@ const iconPaths = {
     ['path', { d: 'M3 4v6h6M4 13a8 8 0 0 0 14.9 4l2.1-3' }],
     ['path', { d: 'M21 20v-6h-6' }]
   ],
+  redo: [
+    ['path', { d: 'M21 7v6h-6' }],
+    ['path', { d: 'M3 17a9 9 0 0 1 14.7-6.9L21 13' }]
+  ],
   search: [
     ['circle', { cx: 11, cy: 11, r: 7 }],
     ['path', { d: 'm20 20-4-4' }]
@@ -181,6 +197,10 @@ const iconPaths = {
     ['circle', { cx: 6, cy: 12, r: 2.5 }],
     ['circle', { cx: 18, cy: 19, r: 2.5 }],
     ['path', { d: 'm8.2 10.8 7.6-4.5M8.2 13.2l7.6 4.5' }]
+  ],
+  quote: [
+    ['path', { d: 'M3 21c3 0 7-1 7-8V5H3v8h4c0 3-1 5-4 6' }],
+    ['path', { d: 'M14 21c3 0 7-1 7-8V5h-7v8h4c0 3-1 5-4 6' }]
   ],
   sparkles: [
     ['path', { d: 'm12 3 1.1 3.2L16 8l-2.9 1.8L12 13l-1.1-3.2L8 8l2.9-1.8Z' }],
@@ -202,6 +222,10 @@ const iconPaths = {
     ['path', { d: 'M12 16V4' }],
     ['path', { d: 'm7 9 5-5 5 5' }],
     ['path', { d: 'M5 20h14' }]
+  ],
+  undo: [
+    ['path', { d: 'M3 7v6h6' }],
+    ['path', { d: 'M21 17a9 9 0 0 0-14.7-6.9L3 13' }]
   ],
   users: [
     ['path', { d: 'M16 21v-2a4 4 0 0 0-4-4H6a4 4 0 0 0-4 4v2' }],

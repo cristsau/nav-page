@@ -15,6 +15,8 @@ import { configureOutboundNetwork } from './lib/network.js'
 import { validatePersistentRateLimitConfiguration } from './lib/persistentRateLimit.js'
 import { startSecurityEventRetention } from './lib/securityEventRetention.js'
 import { startNoteReminderGeneration } from './lib/noteReminderScheduler.js'
+import { startSearchEmbeddingScheduler } from './lib/searchEmbeddingScheduler.js'
+import { startWebPushScheduler } from './lib/webPushScheduler.js'
 import { sendMaintenanceJobNotificationToAdmins } from './lib/telegram.js'
 import {
   recoverExpiredReleaseAcceptanceAccounts,
@@ -37,6 +39,8 @@ async function main() {
   let stopAiUsageRetention = async () => {}
   let stopNoteReminderGeneration = async () => {}
   let stopBookmarkHealthScheduler = async () => {}
+  let stopSearchEmbeddingScheduler = async () => {}
+  let stopWebPushScheduler = async () => {}
   let stopReleaseAcceptanceRecovery = async () => {}
   let closing = false
 
@@ -65,6 +69,8 @@ async function main() {
       stopAiUsageRetention(),
       stopNoteReminderGeneration(),
       stopBookmarkHealthScheduler(),
+      stopSearchEmbeddingScheduler(),
+      stopWebPushScheduler(),
       stopReleaseAcceptanceRecovery()
     ])
     await app.close()
@@ -183,6 +189,37 @@ async function main() {
       })
     })
 
+    stopSearchEmbeddingScheduler = startSearchEmbeddingScheduler({
+      enabled: config.semanticSearchEnabled && config.embeddingSchedulerEnabled,
+      policy: {
+        intervalSeconds: config.embeddingSchedulerIntervalSeconds,
+        batchSize: config.embeddingSchedulerBatchSize
+      },
+      poolInstance: pool,
+      logger: app.log,
+      observer: createMaintenanceJobObserver({
+        ...observerOptions,
+        jobName: MAINTENANCE_JOB_NAMES.SEARCH_EMBEDDING_INDEX,
+        jobLabel: '本地语义索引'
+      })
+    })
+
+    stopWebPushScheduler = startWebPushScheduler({
+      enabled: config.webPushEnabled && config.webPushSchedulerEnabled,
+      policy: {
+        intervalSeconds: config.webPushSchedulerIntervalSeconds,
+        batchSize: config.webPushSchedulerBatchSize,
+        maxAttempts: config.webPushMaxAttempts
+      },
+      poolInstance: pool,
+      logger: app.log,
+      observer: createMaintenanceJobObserver({
+        ...observerOptions,
+        jobName: MAINTENANCE_JOB_NAMES.WEB_PUSH_DELIVERY,
+        jobLabel: '后台到期提醒推送'
+      })
+    })
+
     stopReleaseAcceptanceRecovery = startReleaseAcceptanceAccountRecovery({
       poolInstance: pool,
       logger: app.log
@@ -194,6 +231,8 @@ async function main() {
       stopAiUsageRetention(),
       stopNoteReminderGeneration(),
       stopBookmarkHealthScheduler(),
+      stopSearchEmbeddingScheduler(),
+      stopWebPushScheduler(),
       stopReleaseAcceptanceRecovery()
     ])
     await app.close()

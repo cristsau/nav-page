@@ -198,6 +198,57 @@ export const config = {
     process.env.NAV_AI_USAGE_RETENTION_MAX_BATCHES_PER_RUN,
     20
   ),
+  hybridSearchEnabled: process.env.NAV_HYBRID_SEARCH_ENABLED !== 'false',
+  semanticSearchEnabled: process.env.NAV_SEMANTIC_SEARCH_ENABLED === 'true',
+  embeddingModel: String(
+    process.env.NAV_EMBEDDING_MODEL
+      || 'Xenova/paraphrase-multilingual-MiniLM-L12-v2'
+  ).trim(),
+  embeddingModelRevision: String(
+    process.env.NAV_EMBEDDING_MODEL_REVISION
+      || '2c4055b12046f11709e9df2c122e59ffbdc2f900'
+  ).trim(),
+  embeddingCacheDir: path.resolve(
+    String(process.env.NAV_EMBEDDING_CACHE_DIR || '/var/cache/nav-models').trim()
+  ),
+  embeddingSchedulerEnabled:
+    process.env.NAV_EMBEDDING_SCHEDULER_ENABLED === 'true',
+  embeddingSchedulerIntervalSeconds: normalizePositiveInteger(
+    process.env.NAV_EMBEDDING_SCHEDULER_INTERVAL_SECONDS,
+    300
+  ),
+  embeddingSchedulerBatchSize: normalizePositiveInteger(
+    process.env.NAV_EMBEDDING_SCHEDULER_BATCH_SIZE,
+    24
+  ),
+  webPushEnabled: process.env.NAV_WEB_PUSH_ENABLED === 'true',
+  webPushVapidSubject: String(
+    process.env.NAV_WEB_PUSH_VAPID_SUBJECT || 'https://nav.skrskr.net'
+  ).trim(),
+  webPushVapidPublicKey: String(
+    process.env.NAV_WEB_PUSH_VAPID_PUBLIC_KEY || ''
+  ).trim(),
+  webPushVapidPrivateKeyFile: String(
+    process.env.NAV_WEB_PUSH_VAPID_PRIVATE_KEY_FILE || ''
+  ).trim(),
+  webPushAllowedEndpointHosts: String(
+    process.env.NAV_WEB_PUSH_ALLOWED_ENDPOINT_HOSTS
+      || 'fcm.googleapis.com,push.services.mozilla.com,updates.push.services.mozilla.com,web.push.apple.com,notify.windows.com'
+  ).split(',').map((value) => value.trim().toLowerCase()).filter(Boolean),
+  webPushSchedulerEnabled:
+    process.env.NAV_WEB_PUSH_SCHEDULER_ENABLED === 'true',
+  webPushSchedulerIntervalSeconds: normalizePositiveInteger(
+    process.env.NAV_WEB_PUSH_SCHEDULER_INTERVAL_SECONDS,
+    60
+  ),
+  webPushSchedulerBatchSize: normalizePositiveInteger(
+    process.env.NAV_WEB_PUSH_SCHEDULER_BATCH_SIZE,
+    100
+  ),
+  webPushMaxAttempts: normalizePositiveInteger(
+    process.env.NAV_WEB_PUSH_MAX_ATTEMPTS,
+    6
+  ),
   aiPriceCatalogJson: String(
     process.env.NAV_AI_PRICE_CATALOG_JSON || ''
   ).trim(),

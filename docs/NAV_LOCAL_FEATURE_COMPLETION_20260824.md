@@ -1,5 +1,9 @@
 # NAV 本地功能完成候选（2026-08-24）
 
+> 后续更新：本文记录迁移 019–022 的阶段边界。BM25/本地向量、Web Push 与单用户块编辑器
+> 已在迁移 023–025 的后续候选中实现，见
+> [`NAV_ADVANCED_SEARCH_PUSH_BLOCK_EDITOR.md`](./NAV_ADVANCED_SEARCH_PUSH_BLOCK_EDITOR.md)。
+
 状态：`LOCAL_DONE / READY_FOR_CI / NOT_DEPLOYED`
 
 本页只描述当前本地候选分支，不代表 GitHub、OVH、双域或生产数据库已经更新。异地存储
@@ -87,13 +91,9 @@
 
 ## 明确暂缓，不冒充已完成
 
-- 真正的中文 tokenizer/BM25 与向量 embedding 检索。当前已提供中文子串、可选 trigram
-  容错和带来源检索助理；是否引入额外 PostgreSQL 扩展或 embedding provider，应先用真实
-  数据评估相关性、隐私、成本和恢复复杂度。
-- 网页完全关闭后的 Web Push/VAPID。当前通知只在 NAV 打开时工作，避免在没有可靠推送
-  密钥轮换和真机策略前形成“看似会提醒”的假保证。
-- 整套 Notion 式块编辑器与多人协作。当前先完成自动保存、冲突保护和版本历史这些数据安全
-  基础；块结构、Yjs 和编辑器大迁移需独立设计与回滚方案。
+- 本阶段尚未包括中文 tokenizer/BM25、向量 embedding、Web Push/VAPID 与块编辑器；这些能力
+  已由后续迁移 023–025 候选补齐，仍必须以最新状态页判断是否已经生产发布。
+- 多人实时协作、评论与 Yjs/CRDT 仍暂缓。
 - 扩展商店提交、签名和审核，以及任何第三方存储账号开通，属于外部平台动作。
 
 ## 下一次接力入口

@@ -1,4 +1,4 @@
-const CACHE_VERSION = 'domonav-shell-v1'
+const CACHE_VERSION = 'domonav-shell-v2'
 const SHELL_ASSETS = [
   '/offline.html',
   '/manifest.webmanifest',
@@ -24,12 +24,37 @@ self.addEventListener('message', (event) => {
   if (event.data?.type === 'SKIP_WAITING') self.skipWaiting()
 })
 
+self.addEventListener('push', (event) => {
+  let payload = {}
+  try {
+    payload = event.data?.json?.() || {}
+  } catch {
+    payload = { body: event.data?.text?.() || '' }
+  }
+  const title = String(payload.title || 'DOMO NAV').slice(0, 120)
+  const options = {
+    body: String(payload.body || '你有一条新的到期提醒').slice(0, 240),
+    icon: '/icons/pwa-192-v1.png',
+    badge: '/icons/pwa-192-v1.png',
+    tag: String(payload.tag || 'domo-nav-reminder').slice(0, 128),
+    renotify: false,
+    timestamp: Number(payload.timestamp) || Date.now(),
+    data: {
+      url: String(payload.url || '/whisper?reminders=1')
+    }
+  }
+  event.waitUntil(self.registration.showNotification(title, options))
+})
+
 self.addEventListener('notificationclick', (event) => {
   event.notification.close()
-  const targetUrl = new URL(
+  const requestedUrl = new URL(
     event.notification.data?.url || '/whisper?reminders=1',
     self.location.origin
-  ).href
+  )
+  const targetUrl = requestedUrl.origin === self.location.origin
+    ? requestedUrl.href
+    : new URL('/whisper?reminders=1', self.location.origin).href
   event.waitUntil(
     self.clients.matchAll({ type: 'window', includeUncontrolled: true })
       .then(async (clients) => {

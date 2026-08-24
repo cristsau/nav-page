@@ -156,6 +156,9 @@ async function verifyProductivityCompletionSchema() {
     'type',
     'title',
     'content',
+    'content_format',
+    'content_json',
+    'content_json_encrypted',
     'encrypted',
     'password_hash',
     'pinned',
@@ -845,6 +848,8 @@ async function verifyMaintenanceObservabilitySchema() {
       'bookmark_health_check',
       'media_delete_retry',
       'note_reminder_generation',
+      'search_embedding_index',
+      'web_push_delivery',
       'security_event_retention'
     ]
   )
@@ -895,6 +900,260 @@ async function verifyWorkspaceSearchSchema() {
       trgmIndexes.rows.map((row) => row.indexname),
       expectedTrgmIndexes
     )
+  }
+}
+
+async function verifyHybridWorkspaceSearchSchema() {
+  const expectedColumns = [
+    'id', 'user_id', 'bookmark_id', 'note_id', 'kind', 'title', 'body', 'url',
+    'tags', 'lexical_tokens', 'term_frequencies', 'document_length', 'source_hash',
+    'source_updated_at', 'indexed_at', 'embedding', 'embedding_model',
+    'embedding_dimensions', 'embedding_updated_at'
+  ]
+  const columns = await query(`
+    SELECT column_name
+    FROM information_schema.columns
+    WHERE table_schema = current_schema()
+      AND table_name = 'workspace_search_documents'
+  `)
+  assertExactSet(
+    'hybrid workspace search columns',
+    columns.rows.map((row) => row.column_name),
+    expectedColumns
+  )
+
+  const stateColumns = await query(`
+    SELECT column_name
+    FROM information_schema.columns
+    WHERE table_schema = current_schema()
+      AND table_name = 'workspace_search_index_state'
+  `)
+  assertExactSet(
+    'workspace search index state columns',
+    stateColumns.rows.map((row) => row.column_name),
+    ['user_id', 'dirty', 'changed_at', 'indexed_at']
+  )
+
+  const expectedConstraints = [
+    'workspace_search_documents_pkey',
+    'workspace_search_documents_user_id_fkey',
+    'workspace_search_documents_bookmark_id_fkey',
+    'workspace_search_documents_note_id_fkey',
+    'workspace_search_documents_kind_check',
+    'workspace_search_documents_source_check',
+    'workspace_search_documents_tags_check',
+    'workspace_search_documents_term_frequencies_check',
+    'workspace_search_documents_length_check',
+    'workspace_search_documents_hash_check',
+    'workspace_search_documents_embedding_check'
+  ]
+  const constraints = await query(`
+    SELECT conname, contype, confdeltype, convalidated
+    FROM pg_constraint
+    WHERE conrelid = 'workspace_search_documents'::regclass
+  `)
+  assertExactSet(
+    'hybrid workspace search constraints',
+    constraints.rows.map((row) => row.conname),
+    expectedConstraints
+  )
+  if (constraints.rows.some((row) => row.convalidated !== true)) {
+    throw new Error('hybrid workspace search constraints must be validated')
+  }
+  const foreignKeys = constraints.rows.filter((row) => row.contype === 'f')
+  if (foreignKeys.length !== 3 || foreignKeys.some((row) => row.confdeltype !== 'c')) {
+    throw new Error('hybrid workspace search foreign keys must use ON DELETE CASCADE')
+  }
+
+  const stateConstraints = await query(`
+    SELECT conname, contype, confdeltype, convalidated
+    FROM pg_constraint
+    WHERE conrelid = 'workspace_search_index_state'::regclass
+  `)
+  assertExactSet(
+    'workspace search index state constraints',
+    stateConstraints.rows.map((row) => row.conname),
+    [
+      'workspace_search_index_state_pkey',
+      'workspace_search_index_state_user_id_fkey'
+    ]
+  )
+  const stateForeignKey = stateConstraints.rows.find((row) => row.contype === 'f')
+  if (
+    !stateForeignKey
+    || stateForeignKey.confdeltype !== 'c'
+    || stateForeignKey.convalidated !== true
+  ) {
+    throw new Error('workspace search index state user foreign key must be a validated cascade')
+  }
+
+  const triggers = await query(`
+    SELECT trigger_row.tgname, trigger_row.tgenabled, function_row.proname
+    FROM pg_trigger AS trigger_row
+    JOIN pg_proc AS function_row ON function_row.oid = trigger_row.tgfoid
+    WHERE trigger_row.tgrelid IN ('nav_bookmarks'::regclass, 'notes'::regclass)
+      AND trigger_row.tgname = ANY($1::text[])
+      AND NOT trigger_row.tgisinternal
+  `, [[
+    'nav_bookmarks_workspace_search_dirty',
+    'notes_workspace_search_dirty'
+  ]])
+  assertExactSet(
+    'workspace search dirty triggers',
+    triggers.rows.map((row) => row.tgname),
+    [
+      'nav_bookmarks_workspace_search_dirty',
+      'notes_workspace_search_dirty'
+    ]
+  )
+  if (triggers.rows.some((row) => (
+    row.tgenabled !== 'O' || row.proname !== 'nav_mark_workspace_search_dirty'
+  ))) {
+    throw new Error('workspace search dirty triggers must be enabled and use the canonical function')
+  }
+
+  const expectedIndexes = [
+    'idx_workspace_search_documents_bookmark',
+    'idx_workspace_search_documents_note',
+    'idx_workspace_search_documents_user_kind',
+    'idx_workspace_search_documents_lexical_tokens',
+    'idx_workspace_search_documents_pending_embedding'
+  ]
+  const indexes = await query(`
+    SELECT indexname
+    FROM pg_indexes
+    WHERE schemaname = current_schema()
+      AND tablename = 'workspace_search_documents'
+      AND indexname = ANY($1::text[])
+  `, [expectedIndexes])
+  assertExactSet(
+    'hybrid workspace search indexes',
+    indexes.rows.map((row) => row.indexname),
+    expectedIndexes
+  )
+}
+
+async function verifyWebPushSchema() {
+  const expectedTables = new Map([
+    ['web_push_subscriptions', [
+      'id', 'user_id', 'endpoint', 'endpoint_hash', 'p256dh', 'auth',
+      'user_agent_digest', 'device_label', 'failure_count', 'last_success_at',
+      'last_failure_at', 'disabled_at', 'created_at', 'updated_at'
+    ]],
+    ['note_reminder_push_deliveries', [
+      'reminder_id', 'subscription_id', 'status', 'attempt_count',
+      'last_attempt_at', 'delivered_at', 'last_error_code', 'updated_at'
+    ]]
+  ])
+  for (const [tableName, expectedColumns] of expectedTables) {
+    const columns = await query(`
+      SELECT column_name
+      FROM information_schema.columns
+      WHERE table_schema = current_schema()
+        AND table_name = $1
+    `, [tableName])
+    assertExactSet(
+      `${tableName} columns`,
+      columns.rows.map((row) => row.column_name),
+      expectedColumns
+    )
+  }
+
+  const expectedConstraints = [
+    'web_push_subscriptions_pkey',
+    'web_push_subscriptions_user_id_fkey',
+    'web_push_subscriptions_endpoint_hash_check',
+    'web_push_subscriptions_key_check',
+    'web_push_subscriptions_device_label_check',
+    'web_push_subscriptions_failure_count_check',
+    'web_push_subscriptions_user_agent_digest_check',
+    'web_push_subscriptions_user_endpoint_unique',
+    'note_reminder_push_deliveries_pkey',
+    'note_reminder_push_deliveries_reminder_id_fkey',
+    'note_reminder_push_deliveries_subscription_id_fkey',
+    'note_reminder_push_deliveries_status_check',
+    'note_reminder_push_deliveries_attempt_count_check',
+    'note_reminder_push_deliveries_error_code_check'
+  ]
+  const constraints = await query(`
+    SELECT conname, contype, confdeltype, convalidated
+    FROM pg_constraint
+    WHERE conrelid IN (
+      'web_push_subscriptions'::regclass,
+      'note_reminder_push_deliveries'::regclass
+    )
+  `)
+  assertExactSet(
+    'Web Push constraints',
+    constraints.rows.map((row) => row.conname),
+    expectedConstraints
+  )
+  if (constraints.rows.some((row) => row.convalidated !== true)) {
+    throw new Error('Web Push constraints must be validated')
+  }
+  const foreignKeys = constraints.rows.filter((row) => row.contype === 'f')
+  if (foreignKeys.length !== 3 || foreignKeys.some((row) => row.confdeltype !== 'c')) {
+    throw new Error('Web Push foreign keys must use ON DELETE CASCADE')
+  }
+
+  const expectedIndexes = [
+    'idx_web_push_subscriptions_user_active',
+    'idx_note_reminder_push_deliveries_pending'
+  ]
+  const indexes = await query(`
+    SELECT indexname
+    FROM pg_indexes
+    WHERE schemaname = current_schema()
+      AND indexname = ANY($1::text[])
+  `, [expectedIndexes])
+  assertExactSet(
+    'Web Push indexes',
+    indexes.rows.map((row) => row.indexname),
+    expectedIndexes
+  )
+}
+
+async function verifyBlockEditorSchema() {
+  const richColumns = await query(`
+    SELECT table_name, column_name
+    FROM information_schema.columns
+    WHERE table_schema = current_schema()
+      AND table_name IN ('notes', 'note_versions')
+      AND column_name IN ('content_format', 'content_json', 'content_json_encrypted')
+  `)
+  for (const tableName of ['notes', 'note_versions']) {
+    assertExactSet(
+      `${tableName} rich content columns`,
+      richColumns.rows
+        .filter((row) => row.table_name === tableName)
+        .map((row) => row.column_name),
+      ['content_format', 'content_json', 'content_json_encrypted']
+    )
+  }
+
+  const expectedConstraints = [
+    'notes_content_format_check',
+    'notes_content_json_object_check',
+    'notes_rich_content_privacy_check',
+    'notes_rich_content_state_check',
+    'note_versions_content_format_check',
+    'note_versions_content_json_object_check',
+    'note_versions_rich_content_privacy_check',
+    'note_versions_rich_content_state_check'
+  ]
+  const constraints = await query(`
+    SELECT conname, convalidated
+    FROM pg_constraint
+    WHERE conrelid IN ('notes'::regclass, 'note_versions'::regclass)
+      AND conname = ANY($1::text[])
+  `, [expectedConstraints])
+  assertExactSet(
+    'block editor constraints',
+    constraints.rows.map((row) => row.conname),
+    expectedConstraints
+  )
+  if (constraints.rows.some((row) => row.convalidated !== true)) {
+    throw new Error('block editor constraints must be validated')
   }
 }
 
@@ -980,6 +1239,9 @@ async function main() {
   await verifyWebAuthnSchema()
   await verifyMaintenanceObservabilitySchema()
   await verifyWorkspaceSearchSchema()
+  await verifyHybridWorkspaceSearchSchema()
+  await verifyWebPushSchema()
+  await verifyBlockEditorSchema()
   await verifyAiUsageSchema()
   console.log('migration schema verification complete')
 }

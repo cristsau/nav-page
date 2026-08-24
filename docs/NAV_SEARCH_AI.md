@@ -1,6 +1,7 @@
 # NAV 统一搜索、个人资料助理与 AI 用量
 
-本能力由迁移 `020_workspace_search.sql` 与 `021_ai_usage.sql` 提供。它们只属于源码候选；合并、
+本能力由迁移 `020_workspace_search.sql`、`021_ai_usage.sql` 与
+`023_hybrid_workspace_search.sql` 提供。它们只属于源码候选；合并、
 迁移与生产启用仍需遵循发布门禁。
 
 ## 统一站内搜索
@@ -14,8 +15,11 @@
   零扩展的精确/前缀/子串查询，不阻断搜索。
 - 前端优先调用统一 API；服务端不可用时保留 Dexie 本地缓存降级，并明确显示降级来源。
 
-这不是中文分词 BM25 或向量语义搜索。中文无需空格的子串检索与 `pg_trgm` 错字容错已经可用，
-后续若数据量与相关性评估确有需要，再引入 tokenizer/BM25 或向量索引。
+高级搜索候选在既有结果上增加本地中文 uni/bi/trigram tokenizer、字段加权 BM25 与固定 revision
+的多语言 MiniLM q8 向量。BM25 占 68%、语义占 32%，精确 ID/标题仍优先；模型不可用时自动
+降级为 BM25。加密笔记在索引源 SQL 中排除，模型和向量缓存只位于 NAV 的 OVH 容器卷。
+详细运行边界见
+[`NAV_ADVANCED_SEARCH_PUSH_BLOCK_EDITOR.md`](./NAV_ADVANCED_SEARCH_PUSH_BLOCK_EDITOR.md)。
 
 ## 单轮个人资料助理
 

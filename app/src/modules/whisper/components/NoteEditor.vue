@@ -13,6 +13,11 @@ import {
 } from '@/shared/services/notesApi'
 import Icon from '@/shared/components/Icon.vue'
 import NoteAiPanel from './NoteAiPanel.vue'
+import BlockEditor from './BlockEditor.vue'
+import {
+  plainTextToTiptapDocument,
+  tiptapDocumentImageUrls
+} from '@/shared/utils/noteRichContent'
 
 const MAX_IMAGE_BYTES = 10 * 1024 * 1024
 const MAX_NOTE_IMAGES = 8
@@ -44,6 +49,8 @@ const formData = ref({
   type: 'memo',
   title: '',
   content: '',
+  contentFormat: 'tiptap-json',
+  contentJson: plainTextToTiptapDocument(''),
   encrypted: false,
   password: '',
   confirmPassword: '',
@@ -65,6 +72,7 @@ const initialSnapshot = ref('')
 const copiedId = ref(false)
 const titleInputRef = ref(null)
 const imageInputRef = ref(null)
+const blockEditorRef = ref(null)
 const uploadingImage = ref(false)
 const imageMessage = ref('')
 const imageMessageType = ref('')
@@ -74,6 +82,7 @@ const initialEncrypted = ref(false)
 let autosaveTimer = null
 let autosaveSequence = 0
 let initializingForm = false
+let embeddedImageUrls = new Set()
 
 // 是否编辑模式
 const isEdit = computed(() => !!props.note?.id)
@@ -125,6 +134,10 @@ watch(() => props.show, async (val) => {
         type: props.note.type,
         title: props.note.title,
         content: props.note.encrypted && !props.note._unlocked ? '' : props.note.content,
+        contentFormat: 'tiptap-json',
+        contentJson: props.note.encrypted && !props.note._unlocked
+          ? plainTextToTiptapDocument('')
+          : (props.note.contentJson || plainTextToTiptapDocument(props.note.content)),
         encrypted: props.note.encrypted,
         password: '',
         confirmPassword: '',
@@ -141,6 +154,7 @@ watch(() => props.show, async (val) => {
       resetForm(props.note?.type || 'memo')
     }
     initialEncrypted.value = Boolean(formData.value.encrypted)
+    embeddedImageUrls = new Set(tiptapDocumentImageUrls(formData.value.contentJson))
     tagMessage.value = ''
     tagMessageType.value = ''
     imageMessage.value = ''
@@ -162,6 +176,8 @@ function resetForm(type = 'memo') {
     type,
     title: '',
     content: '',
+    contentFormat: 'tiptap-json',
+    contentJson: plainTextToTiptapDocument(''),
     encrypted: false,
     password: '',
     confirmPassword: '',
@@ -179,6 +195,7 @@ function resetForm(type = 'memo') {
   tagMessageType.value = ''
   imageMessage.value = ''
   imageMessageType.value = ''
+  embeddedImageUrls = new Set()
 }
 
 function clearAutosaveTimer() {
@@ -193,6 +210,8 @@ function buildPlainPayload() {
     type: formData.value.type,
     title: formData.value.title.trim() || buildDefaultTitle(),
     content: formData.value.content,
+    contentFormat: 'tiptap-json',
+    contentJson: formData.value.contentJson,
     encrypted: false,
     password: '',
     tags: [...formData.value.tags],
@@ -355,14 +374,11 @@ async function copyNoteId() {
 }
 
 function insertAiText(text) {
-  const current = formData.value.content.trimEnd()
-  formData.value.content = current
-    ? `${current}\n\n${text}`
-    : text
+  blockEditorRef.value?.insertText(text)
 }
 
 function replaceAiText(text) {
-  formData.value.content = text
+  blockEditorRef.value?.replaceText(text)
 }
 
 function applyAiTags(tags) {
@@ -450,6 +466,11 @@ async function handleImageUpload(event) {
     for (const file of files) {
       const attachment = await uploadBackendNoteImage(file)
       formData.value.attachments.push(attachment)
+      blockEditorRef.value?.insertImage(
+        attachment.url,
+        attachment.name || '笔记图片',
+        attachment.name || ''
+      )
     }
     imageMessage.value = `已上传 ${files.length} 张图片，保存笔记后完成关联。`
     imageMessageType.value = 'success'
@@ -461,8 +482,20 @@ async function handleImageUpload(event) {
   }
 }
 
+function syncEmbeddedImages(urls) {
+  const nextUrls = new Set(Array.isArray(urls) ? urls : [])
+  formData.value.attachments = formData.value.attachments.filter((attachment) => (
+    !embeddedImageUrls.has(attachment.url) || nextUrls.has(attachment.url)
+  ))
+  embeddedImageUrls = nextUrls
+}
+
 function removeImage(index) {
-  formData.value.attachments.splice(index, 1)
+  const image = formData.value.attachments[index]
+  if (!image) return
+  blockEditorRef.value?.removeImage(image.url)
+  formData.value.attachments = formData.value.attachments.filter((attachment) => attachment.url !== image.url)
+  embeddedImageUrls.delete(image.url)
   imageMessage.value = '已从编辑器移除图片。保存后，若没有其他笔记引用且图片未设为“长期保留”，NAV 才会删除图床原图。'
   imageMessageType.value = ''
 }
@@ -498,6 +531,8 @@ async function handleSubmit() {
   if (props.saving || uploadingImage.value || autosaveStatus.value === 'saving') return
 
   let content = formData.value.content
+  let contentJson = formData.value.contentJson
+  let contentJsonEncrypted = null
   let passwordHash = ''
   const title = formData.value.title.trim() || buildDefaultTitle()
 
@@ -525,6 +560,11 @@ async function handleSubmit() {
       return
     }
     content = await encrypt(formData.value.content, formData.value.password)
+    contentJsonEncrypted = await encrypt(
+      JSON.stringify(formData.value.contentJson),
+      formData.value.password
+    )
+    contentJson = null
     passwordHash = await hashPassword(formData.value.password)
   }
 
@@ -532,6 +572,9 @@ async function handleSubmit() {
     type: formData.value.type,
     title,
     content,
+    contentFormat: 'tiptap-json',
+    contentJson,
+    contentJsonEncrypted,
     encrypted: formData.value.encrypted,
     password: passwordHash,
     tags: [...formData.value.tags],
@@ -649,14 +692,17 @@ function close() {
         </label>
       </div>
 
-      <!-- 内容 -->
+      <!-- 块内容 -->
       <div class="form-group">
-        <textarea
-          v-model="formData.content"
-          class="input editor__textarea"
-          placeholder="写下你的想法..."
-          rows="8"
+        <BlockEditor
+          ref="blockEditorRef"
+          v-model="formData.contentJson"
+          :plain-text="formData.content"
           :disabled="saving"
+          :allow-images="!formData.encrypted"
+          @update:text="formData.content = $event"
+          @update:image-urls="syncEmbeddedImages"
+          @request-image="chooseImages"
         />
         <div class="editor__counter">{{ contentCount }} 字</div>
       </div>
@@ -846,7 +892,7 @@ function close() {
   background: var(--bg-card);
   border-radius: var(--radius-lg);
   width: 100%;
-  max-width: 600px;
+  max-width: 960px;
   max-height: 90vh;
   overflow-y: auto;
   box-shadow: var(--shadow-lg);
@@ -865,11 +911,16 @@ function close() {
 }
 
 .editor__header {
+  position: sticky;
+  top: 0;
+  z-index: 12;
   display: flex;
   align-items: center;
   justify-content: space-between;
   padding: 20px 24px;
   border-bottom: 1px solid var(--border-light);
+  background: color-mix(in srgb, var(--bg-card) 92%, transparent);
+  backdrop-filter: blur(16px);
 }
 
 .editor__title {

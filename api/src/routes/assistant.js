@@ -1,5 +1,5 @@
 import { createHash } from 'node:crypto'
-import { query } from '../db/index.js'
+import { pool, query } from '../db/index.js'
 import { enforceAiRateLimit } from '../lib/aiRateLimit.js'
 import {
   buildChatRequest,
@@ -8,7 +8,7 @@ import {
 import { resolveChatProviderModel } from '../lib/aiModelCatalog.js'
 import { assertSafeOutboundEndpoint } from '../lib/outboundEndpoints.js'
 import { getUserSettingValue } from '../lib/userSettings.js'
-import { searchWorkspaceForUser } from '../lib/workspaceSearch.js'
+import { searchWorkspaceHybridForUser } from '../lib/hybridWorkspaceSearch.js'
 import {
   buildAssistantPrompts,
   buildAssistantSources,
@@ -111,11 +111,13 @@ export default async function assistantRoutes(fastify) {
       return { error: `问题不能超过 ${MAX_ASSISTANT_QUERY_LENGTH} 个字符` }
     }
 
-    const searchResult = await searchWorkspaceForUser({
+    const searchResult = await searchWorkspaceHybridForUser({
       userId: request.currentUser.id,
       search: question,
       limit: 10,
-      queryFn: query
+      poolInstance: pool,
+      queryFn: query,
+      logger: request.log
     })
     const sources = buildAssistantSources(searchResult.results)
 

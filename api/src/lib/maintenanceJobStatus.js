@@ -3,7 +3,9 @@ export const MAINTENANCE_JOB_NAMES = Object.freeze({
   MEDIA_DELETE_RETRY: 'media_delete_retry',
   AI_USAGE_RETENTION: 'ai_usage_retention',
   NOTE_REMINDER_GENERATION: 'note_reminder_generation',
-  BOOKMARK_HEALTH_CHECK: 'bookmark_health_check'
+  BOOKMARK_HEALTH_CHECK: 'bookmark_health_check',
+  SEARCH_EMBEDDING_INDEX: 'search_embedding_index',
+  WEB_PUSH_DELIVERY: 'web_push_delivery'
 })
 
 const KNOWN_JOB_NAMES = new Set(Object.values(MAINTENANCE_JOB_NAMES))
@@ -135,6 +137,18 @@ const RESULT_FIELDS = Object.freeze({
     'suspect',
     'unsupported',
     'reachable'
+  ],
+  [MAINTENANCE_JOB_NAMES.SEARCH_EMBEDDING_INDEX]: [
+    'indexed',
+    'processed',
+    'remaining'
+  ],
+  [MAINTENANCE_JOB_NAMES.WEB_PUSH_DELIVERY]: [
+    'processed',
+    'delivered',
+    'failed',
+    'disabled',
+    'remaining'
   ]
 })
 

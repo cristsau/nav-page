@@ -2,6 +2,7 @@
 import { computed, ref, watch } from 'vue'
 import Icon from '@/shared/components/Icon.vue'
 import Modal from '@/shared/components/Modal.vue'
+import BlockContent from './BlockContent.vue'
 import {
   fetchBackendNoteVersions,
   restoreBackendNoteVersion,
@@ -99,6 +100,11 @@ watch(() => props.show, (show) => {
         <p v-if="selected.encrypted" class="version-history__locked">
           <Icon name="lock" :size="17" /> 加密版本的正文不会发送到浏览器，可直接恢复后再用原密码解锁。
         </p>
+        <BlockContent
+          v-else-if="selected.contentFormat === 'tiptap-json' && selected.contentJson"
+          :document="selected.contentJson"
+          :plain-text="selected.content"
+        />
         <pre v-else>{{ selected.content || '此版本没有正文' }}</pre>
       </article>
     </div>

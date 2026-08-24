@@ -220,7 +220,7 @@ test('frontend wires autosave, versions, dynamic commands and privacy-safe PWA s
   assert.match(worker, /url\.pathname\.startsWith\('\/api\/'\)/)
   assert.match(worker, /caches\.match\('\/offline\.html'\)/)
   assert.match(worker, /addEventListener\('notificationclick'/)
-  assert.doesNotMatch(worker, /PushManager|pushsubscriptionchange|addEventListener\('push'/)
+  assert.match(worker, /addEventListener\('push'/)
   assert.match(reminderClient, /navigator\.serviceWorker\?\.getRegistration/)
   assert.match(reminderClient, /registration\.showNotification\(title, options\)/)
   assert.match(reminderClient, /const notificationError = ref\(''\)/)

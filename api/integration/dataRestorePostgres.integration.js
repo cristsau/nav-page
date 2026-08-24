@@ -186,13 +186,38 @@ function normalBackup(userId = USER_A_ID) {
         numberId: 4000,
         type: 'memo',
         title: 'Explicit number',
-        content: 'restored note one',
+        content: '恢复后的块内容',
+        contentFormat: 'tiptap-json',
+        contentJson: {
+          type: 'doc',
+          content: [
+            {
+              type: 'heading',
+              attrs: { level: 2 },
+              content: [{ type: 'text', text: '恢复演练' }]
+            },
+            {
+              type: 'taskList',
+              content: [{
+                type: 'taskItem',
+                attrs: { checked: true },
+                content: [{
+                  type: 'paragraph',
+                  content: [{ type: 'text', text: '恢复后的块内容' }]
+                }]
+              }]
+            }
+          ]
+        },
+        contentJsonEncrypted: null,
         encrypted: false,
         password: '',
         pinned: true,
         tags: ['restore'],
         attachments: [],
-        completed: false
+        completed: false,
+        remindBeforeMinutes: 30,
+        revision: 7
       },
       {
         id: automaticNoteId,
@@ -709,6 +734,21 @@ test('real PostgreSQL restore replaces one account, preserves the other, restore
     [USER_A_ID]
   )
   assert.deepEqual(noteNumbers.rows.map((row) => row.number_id), ['4000', '9001'])
+  const richNote = await pool.query(
+    `
+      SELECT content, content_format, content_json, content_json_encrypted,
+             remind_before_minutes, revision
+      FROM notes
+      WHERE id = $1 AND user_id = $2
+    `,
+    [backup.data.notes[0].id, USER_A_ID]
+  )
+  assert.equal(richNote.rows[0].content, '恢复演练\n恢复后的块内容')
+  assert.equal(richNote.rows[0].content_format, 'tiptap-json')
+  assert.equal(richNote.rows[0].content_json.type, 'doc')
+  assert.equal(richNote.rows[0].content_json_encrypted, null)
+  assert.equal(richNote.rows[0].remind_before_minutes, 0)
+  assert.equal(richNote.rows[0].revision, 7)
   assert.equal(
     (await pool.query('SELECT COUNT(*)::integer AS count FROM note_reminders WHERE user_id = $1', [USER_A_ID])).rows[0].count,
     0

@@ -1,4 +1,5 @@
 import { normalizeNoteAttachments } from './noteAttachments.js'
+import { sanitizeTiptapDocument } from './noteRichContent.js'
 
 const SHANGHAI_OFFSET_MS = 8 * 60 * 60 * 1000
 
@@ -53,10 +54,22 @@ export function mapPublicNote(record, {
         name
       }))
     : []
+  let contentJson = null
+  if (record.content_format === 'tiptap-json' && record.content_json) {
+    try {
+      contentJson = sanitizeTiptapDocument(record.content_json, {
+        allowedImageOrigin: allowedAttachmentOrigin
+      })
+    } catch {
+      contentJson = null
+    }
+  }
 
   return {
     title: String(record.title || ''),
     content: String(record.content || ''),
+    contentFormat: contentJson ? 'tiptap-json' : 'plain',
+    contentJson,
     tags: Array.isArray(record.tags)
       ? record.tags
           .map((tag) => String(tag || '').trim())
@@ -80,6 +93,11 @@ export function mapNote(record) {
     type: record.type,
     title: record.title,
     content: record.content,
+    contentFormat: record.content_format || 'plain',
+    contentJson: record.encrypted ? null : (record.content_json || null),
+    contentJsonEncrypted: record.encrypted
+      ? String(record.content_json_encrypted || '')
+      : '',
     encrypted: record.encrypted,
     password: '',
     pinned: record.pinned,

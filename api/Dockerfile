@@ -1,4 +1,4 @@
-FROM node:24-alpine
+FROM node:24-bookworm-slim
 
 ARG NAV_RELEASE_SHA=development
 
@@ -13,6 +13,7 @@ COPY package*.json ./
 RUN npm ci --omit=dev
 
 COPY src ./src
+COPY scripts ./scripts
 
 EXPOSE 3001
 

@@ -6,6 +6,7 @@ import { fetchBackendShareByCode, shouldUseBackendNotes } from '@/shared/service
 import Icon from '@/shared/components/Icon.vue'
 import { resolvePublicAppOrigin } from '@/shared/utils/publicAppOrigin'
 import CopyableNoteContent from './components/CopyableNoteContent.vue'
+import BlockContent from './components/BlockContent.vue'
 
 const route = useRoute()
 
@@ -350,8 +351,14 @@ onBeforeUnmount(() => {
       <div class="article-rule" aria-hidden="true"></div>
 
       <section class="article-body" aria-label="正文">
+        <BlockContent
+          v-if="note.contentFormat === 'tiptap-json' && note.contentJson"
+          class="article-copyable"
+          :document="note.contentJson"
+          :plain-text="note.content"
+        />
         <CopyableNoteContent
-          v-if="note.content"
+          v-else-if="note.content"
           class="article-copyable"
           :content="note.content"
           @copy="handleCopy"

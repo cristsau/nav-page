@@ -1,4 +1,8 @@
 import { createHash, createHmac, timingSafeEqual } from 'node:crypto'
+import {
+  normalizeEncryptedRichDocument,
+  sanitizeTiptapDocument
+} from './noteRichContent.js'
 
 export const DATA_RESTORE_SOURCES = Object.freeze({
   LOCAL_BROWSER: 'local-browser',
@@ -274,8 +278,70 @@ function validateRestoreScalarFields(data) {
     }
     validateOptionalDateOnly(note.entryDate, '日记日期')
     validateOptionalTimestamp(note.dueAt, '备忘录截止时间')
+    validateOptionalInteger(note.remindBeforeMinutes, '提醒提前分钟', { min: 0, max: 43_200 })
+    validateOptionalInteger(note.revision, '笔记版本号', { min: 1, max: Number.MAX_SAFE_INTEGER })
     validateOptionalTimestamp(note.createdAt, '笔记创建时间')
     validateOptionalTimestamp(note.updatedAt, '笔记更新时间')
+    if (
+      note.contentFormat !== undefined
+      && !['plain', 'tiptap-json'].includes(String(note.contentFormat || ''))
+    ) {
+      throw invalidRestore('笔记内容格式必须是 plain 或 tiptap-json')
+    }
+    if (
+      note.contentJson !== undefined
+      && note.contentJson !== null
+      && !isPlainObject(note.contentJson)
+    ) {
+      throw invalidRestore('笔记块内容必须是对象')
+    }
+    if (
+      note.contentJsonEncrypted !== undefined
+      && note.contentJsonEncrypted !== null
+      && typeof note.contentJsonEncrypted !== 'string'
+    ) {
+      throw invalidRestore('加密块内容必须是字符串')
+    }
+
+    const contentFormat = String(note.contentFormat || 'plain')
+    const encrypted = note.encrypted === true
+    if (contentFormat === 'plain') {
+      if (note.contentJson !== undefined && note.contentJson !== null) {
+        throw invalidRestore('纯文本笔记不能包含块内容')
+      }
+      if (
+        note.contentJsonEncrypted !== undefined
+        && note.contentJsonEncrypted !== null
+        && note.contentJsonEncrypted !== ''
+      ) {
+        throw invalidRestore('纯文本笔记不能包含加密块内容')
+      }
+    } else if (encrypted) {
+      if (note.contentJson !== undefined && note.contentJson !== null) {
+        throw invalidRestore('加密块笔记不能包含明文块内容')
+      }
+      try {
+        if (!normalizeEncryptedRichDocument(note.contentJsonEncrypted)) {
+          throw invalidRestore('加密块笔记缺少加密块内容')
+        }
+      } catch (error) {
+        if (error?.code === 'invalid_restore_payload') throw error
+        throw invalidRestore(error?.message || '加密块内容无效')
+      }
+    } else {
+      if (
+        note.contentJsonEncrypted !== undefined
+        && note.contentJsonEncrypted !== null
+        && note.contentJsonEncrypted !== ''
+      ) {
+        throw invalidRestore('普通块笔记不能包含加密块内容')
+      }
+      try {
+        sanitizeTiptapDocument(note.contentJson)
+      } catch (error) {
+        throw invalidRestore(error?.message || '笔记块内容无效')
+      }
+    }
   }
   for (const engine of data.customEngines) {
     validateOptionalInteger(engine.order, '搜索引擎顺序')
