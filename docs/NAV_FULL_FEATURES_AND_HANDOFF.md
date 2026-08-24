@@ -8,7 +8,9 @@
 
 - GitHub 仓库：`cristsau/nav-page`，应保持 **Private**。
 - 主分支：`master`。
-- 2026-08-24 当前 master 为 `788be84c766470d0dce845b282aa246286f77d67`（PR #38）。
+- 2026-08-24 最近一次运行时代码 merge 为
+  `788be84c766470d0dce845b282aa246286f77d67`（PR #38）。后续 docs-only merge 不改变运行时；
+  当前 `origin/master` 仍须现场读取。
 - 当前 OVH release：`/opt/nav-stack/releases/20260824-031310-a9eff0d`；API 应用提交与镜像固定为
   `a9eff0d7888fd29f8888a503a336af86371c3b80`。PR #38 的 Service Worker no-cache 修复已在
   release-local Nginx 中生效，恢复就绪竞态修复已进入 master 源码。
@@ -408,7 +410,7 @@ AI 配置仍保存在当前用户的 `appConfig.search.providers.chatgpt` 中：
    - `docs/NAV_BACKUP_RUNBOOK.md`
    - `docs/NAV_PRODUCTION_RELEASE_ACCEPTANCE.md`
    - `docs/NAV_RELEASE_20260824_ADVANCED_FEATURES.md`
-6. 只读确认 PR #38、`origin/master` 和实时生产；本文记录的 `788be84…` 与 `a9eff0d…` 只是
+6. 只读确认 PR #38 之后的 `origin/master` 和实时生产；本文记录的 `788be84…` 与 `a9eff0d…` 只是
    2026-08-24 源码/生产验收快照，不能代替当前核验。
 7. 完整 npm 安装、依赖审计、API 测试与 Vite 构建优先交给 GitHub Actions；个人电脑默认只做源码、静态和差异检查。
 8. 只有 CI 通过、PR 合并、生产前备份与恢复门禁通过并取得明确发布授权后，才能发布。
@@ -526,12 +528,13 @@ docs/NAV_FULL_FEATURES_AND_HANDOFF.md，然后只读核对 Git 当前分支、
 origin/master、未提交内容、GitHub PR/CI 和实时生产状态。不要从历史工作树拼接代码，
 不要读取或输出任何 Secret、密码、Token、Cookie、私钥或真实 .env。
 
-截至 2026-08-24，当前 GitHub master 是 788be84c766470d0dce845b282aa246286f77d67；
+截至 2026-08-24，最近一次运行时代码 merge 是 788be84c766470d0dce845b282aa246286f77d67；
 OVH release 是 /opt/nav-stack/releases/20260824-031310-a9eff0d，API 应用 SHA 是
 a9eff0d7888fd29f8888a503a336af86371c3b80。迁移 019-025、Passkey 源码、统一搜索/带来源助理、
 AI 用量、提前提醒、定时链接检查、书签 HTML/Markdown 导入、PWA、自动保存/版本、本地
 BM25/固定 revision 向量、Web Push/VAPID 和 Tiptap 单用户块编辑器已合并并发布。
-最终 master CI 32689782306 五项全绿；生产前后备份、隔离 PostgreSQL 16 恢复、双域、一次性
+运行时代码 master CI 32689782306 五项全绿；docs-only PR #39 的 master CI 32690635012
+在上游下载超时作业重跑后也全绿。生产前后备份、隔离 PostgreSQL 16 恢复、双域、一次性
 管理员、混合搜索、块编辑和 Push 服务端链已通过。真实设备通知授权和 Passkey 仍需人工验收。
 
 当前 GitHub master 和生产可能已继续前进；先只读核对 origin/master、实时生产 SHA、
