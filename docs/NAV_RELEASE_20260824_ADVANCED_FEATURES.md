@@ -7,9 +7,10 @@
 - 功能 PR：[#37](https://github.com/cristsau/nav-page/pull/37)
 - 功能 merge：`a9eff0d7888fd29f8888a503a336af86371c3b80`
 - 加固 PR：[#38](https://github.com/cristsau/nav-page/pull/38)
-- 当前 master：`788be84c766470d0dce845b282aa246286f77d67`
+- 运行时代码基线：`788be84c766470d0dce845b282aa246286f77d67`
 - 功能 merge CI：`32685311488`
-- 最终 master CI：`32689782306`
+- 运行时代码 master CI：`32689782306`
+- docs-only PR #39 master CI：`32690635012`（上游二进制下载超时作业重跑后成功）
 - 两轮 master CI 的 `test-and-build`、`restore-postgres-integration`、
   `maintenance-postgres-integration`、`advanced-features-postgres-integration` 与
   `release-acceptance-postgres-integration` 均成功。

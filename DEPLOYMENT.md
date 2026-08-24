@@ -8,8 +8,9 @@
 - 外层入口：Nginx Proxy Manager → `nav-web` → `nav-api`
 - 当前 release：`/opt/nav-stack/releases/20260824-031310-a9eff0d`
 - 当前 API 应用提交：`a9eff0d7888fd29f8888a503a336af86371c3b80`
-- 当前 GitHub master：`788be84c766470d0dce845b282aa246286f77d67`；PR #38 的 Nginx
-  no-cache 修复已在上述 release 中生效，恢复就绪修复已进入源码。
+- 最近一次运行时代码 merge：`788be84c766470d0dce845b282aa246286f77d67`（PR #38）；Nginx
+  no-cache 修复已在上述 release 中生效，恢复就绪修复已进入源码。后续 docs-only merge 不改变
+  运行时，`origin/master` 仍须现场读取。
 - 前端容器静态目录：`/usr/share/nginx/html`
 - 前端配置挂载：`/etc/nginx/conf.d/default.conf`
 - 后端服务：`nav-api`

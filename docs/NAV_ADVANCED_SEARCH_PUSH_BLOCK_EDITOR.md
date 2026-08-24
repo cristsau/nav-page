@@ -13,7 +13,8 @@ OVH 发布前后备份和生产验收均已通过。
 
 - OVH release：`/opt/nav-stack/releases/20260824-031310-a9eff0d`。
 - API 镜像：`nav-ovh-api:a9eff0d7888fd29f8888a503a336af86371c3b80`。
-- 最终 master CI：`32689782306`，五个作业全部成功。
+- 运行时代码 merge CI：`32689782306`，五个作业全部成功；后续 docs-only PR #39 的 master
+  CI `32690635012` 也已通过（首次上游二进制下载超时，失败作业重跑成功）。
 - 数据库迁移 ledger 已精确核对到 `025_block_editor.sql`；发布后备份在隔离 PostgreSQL 16
   中恢复为 25 张表。
 - 双域健康/CORS、一次性管理员登录与清理、混合检索 `searchMode=hybrid`、块笔记创建和版本、

@@ -29,7 +29,9 @@
 ## 当前源码与生产基线
 
 - GitHub：`cristsau/nav-page`（Private），默认分支 `master`。
-- 2026-08-24 当前 GitHub master：`788be84c766470d0dce845b282aa246286f77d67`。
+- 2026-08-24 最近一次运行时代码 merge（PR #38）：
+  `788be84c766470d0dce845b282aa246286f77d67`。后续 docs-only merge 不改变运行时代码；
+  `origin/master` 仍须现场读取。
 - 当前生产 API 应用 SHA：`a9eff0d7888fd29f8888a503a336af86371c3b80`；release-local Nginx
   已包含随后合并的 PR #38 缓存修复。
 - 当前生产源码包含的连续 PR：
