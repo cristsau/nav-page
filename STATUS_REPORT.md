@@ -6,19 +6,36 @@
 和 `UNFINISHED`。仓库中存在脚本或代码，不等于生产
 已经安装、启用或形成灾难恢复闭环；每次发布前仍须重新读取 GitHub、OVH 与双域状态。
 
+## 2026-08-24 实时评论事件流候选
+
+- 状态：`LOCAL_DONE / READY_FOR_CI / NOT_DEPLOYED`；生产仍运行 PR #42 的 4 秒近实时评论版本。
+- 新增迁移 `028_realtime_collaboration_events.sql`，使用 PostgreSQL `LISTEN/NOTIFY` 把已提交的
+  `note_sync_events` 安全广播到所有 API 实例。
+- 新增逐用户、逐笔记鉴权的只读事件 WebSocket；事件仅包含游标和实体元数据，不包含评论正文。
+- 前端连接成功后取消 4 秒轮询，断线时指数退避重连，并以 30 秒低频刷新、窗口聚焦、页面恢复
+  可见和离线 outbox 完成事件作为兜底。
+- 迁移验证检查触发器启用状态及函数定义；GitHub PostgreSQL 16 协作作业将打开真实 WebSocket，
+  创建评论并验证 `comment.upsert` 即时送达且载荷没有 `body`。
+- 设计、安全边界、CI/发布和回滚门禁见
+  [`docs/NAV_REALTIME_COMMENTS_20260824.md`](./docs/NAV_REALTIME_COMMENTS_20260824.md)。
+
 ## 2026-08-24 协作、离线、整套灾难恢复与流式恢复候选
 
-- 状态：`SOURCE_READY / CI_PENDING / NOT_DEPLOYED`。
+- 状态：协作、离线和流式恢复为 `VERIFIED_LIVE`；图床对象与外层代理灾备仍为 `PARTIAL / NOT_CONFIGURED`。
+- PR #42 已合并为 `d918f449c0ee90ee363ae5ea7eef4d2025721a84`，OVH release 为
+  `/opt/nav-stack/releases/20260824-180310-d918f44`；迁移 026/027、双域协作/离线/流式接口、
+  一次性双用户、Yjs WebSocket、合成数据清理与发布后 PostgreSQL 16 隔离恢复均已通过。
 - 迁移 `026` 增加协作者、评论、Yjs 文档/更新、增量同步事件、幂等离线收据和设备游标；
   `027` 增加会话绑定的 NDJSON 流式上传暂存表。
 - 未加密块笔记支持 owner/editor 实时 CRDT 正文、角色权限、选区/块评论和 4 秒可见页面近实时
   刷新；已访问工作区支持 IndexedDB 离线重开、离线笔记/评论 outbox、Background Sync 与
   前台回退、跨设备增量收敛。
-- 恢复上传改为 128 MiB NDJSON 流、2 MiB 单行和 250 条批处理，隔离测试目标为 6,500 条；
+- 恢复上传使用 128 MiB NDJSON 流、2 MiB 单行和 250 条批处理，隔离测试已通过 6,500 条；
   完整灾难恢复脚本新增图床对象、NPM SQLite/代理配置、路径原子恢复、应用前回滚和健康门禁。
 - 加密笔记仍禁止服务器协作；图床二进制必须联网；完整 DR 在 OVH 填入对象读取权限和外层代理
   路径并完成可丢弃环境演练前，不能标记为 `VERIFIED_LIVE`。
-- 设计、边界和验收清单见
+- 图床对象和 NPM/外层代理因运行凭据与路径未配置，发布后备份明确报告 `NOT_CONFIGURED`；不得
+  把已完成的编排代码表述为完整异地灾备闭环。设计、边界和验收清单见
   [`docs/NAV_COLLABORATION_OFFLINE_DR_STREAMING.md`](./docs/NAV_COLLABORATION_OFFLINE_DR_STREAMING.md)。
 
 ## 2026-08-24 Web Push 当前设备登记修复
@@ -35,16 +52,17 @@
 - 详细证据与上线门禁见
   [`docs/NAV_WEB_PUSH_DEVICE_REGISTRATION_FIX.md`](./docs/NAV_WEB_PUSH_DEVICE_REGISTRATION_FIX.md)。
 
-## 2026-08-24 功能与生产状态
+## 2026-08-24 高级搜索、Web Push 与块编辑器历史发布快照
 
-- 状态：`VERIFIED_LIVE`，真实设备通知授权除外。
+- 状态：该批功能为 `VERIFIED_LIVE`，真实设备通知授权除外；当前整体生产基线以上方 PR #42
+  快照为准。
 - PR [#37](https://github.com/cristsau/nav-page/pull/37) 已把迁移 `019` 至 `025`、Passkey 源码、
   统一搜索/带来源助理、AI 用量、提前提醒、定时链接检查、Chrome/Edge 与 Markdown 导入导出、
   PWA 离线外壳、自动保存/50 个版本，以及本地中文 BM25、固定 revision 多语言向量、标准
   Web Push/VAPID 和 Tiptap 单用户块编辑器合并到 `a9eff0d`。
 - PR [#38](https://github.com/cristsau/nav-page/pull/38) 已把 Service Worker 明确 no-cache 与
   PostgreSQL 16 恢复就绪竞态修复合并到 `788be84`；合并后 master CI `32689782306` 五项全绿。
-- OVH 当前应用 release 为 `/opt/nav-stack/releases/20260824-031310-a9eff0d`，API 镜像固定为
+- PR #37/#38 当时的 OVH release 为 `/opt/nav-stack/releases/20260824-031310-a9eff0d`，API 镜像为
   `nav-ovh-api:a9eff0d7888fd29f8888a503a336af86371c3b80`。PR #38 的 Nginx 修复已在该 release
   内同步生效；恢复工具源码已修复，主机全局工具更新留待独立维护授权。
 - 语义模型缓存使用 OVH Docker volume；VAPID 私钥使用 release-local 只读 Secret。两者均不
@@ -58,11 +76,9 @@
 ## 当前源码与生产基线
 
 - GitHub：`cristsau/nav-page`（Private），默认分支 `master`。
-- 2026-08-24 最近一次运行时代码 merge（PR #38）：
-  `788be84c766470d0dce845b282aa246286f77d67`。后续 docs-only merge 不改变运行时代码；
-  `origin/master` 仍须现场读取。
-- 当前生产 API 应用 SHA：`a9eff0d7888fd29f8888a503a336af86371c3b80`；release-local Nginx
-  已包含随后合并的 PR #38 缓存修复。
+- 2026-08-24 本工作树创建时的 `origin/master` 为 PR #42 merge：
+  `d918f449c0ee90ee363ae5ea7eef4d2025721a84`；后续状态仍须现场读取。
+- 最近一次已验证生产 API 应用 SHA：`d918f449c0ee90ee363ae5ea7eef4d2025721a84`。
 - 当前生产源码包含的连续 PR：
   - [#28 发布文档校准](https://github.com/cristsau/nav-page/pull/28)
   - [#29 异地备份调度候选](https://github.com/cristsau/nav-page/pull/29)（源码已包含，运行环境仍为
@@ -78,10 +94,11 @@
   - [#34 主机 CIDR 精确验收修复](https://github.com/cristsau/nav-page/pull/34)
   - [#37 高级搜索、Web Push 与块编辑器](https://github.com/cristsau/nav-page/pull/37)
   - [#38 恢复就绪与 PWA 缓存加固](https://github.com/cristsau/nav-page/pull/38)
-- 当前 OVH release：`/opt/nav-stack/releases/20260824-031310-a9eff0d`。
-- 当前 API 镜像：`nav-ovh-api:a9eff0d7888fd29f8888a503a336af86371c3b80`。
-- 应用回滚目标：发布前 release `/opt/nav-stack/releases/20260823-233024-25c9c13`，提交
-  `25c9c133ad6c34b857cf13c293aa5a89c8ef04d7`；迁移 019–025 为加法迁移，应用回滚时保留。
+  - [#41 当前设备 Web Push 登记修复](https://github.com/cristsau/nav-page/pull/41)
+  - [#42 协作、离线、完整灾备编排与流式恢复](https://github.com/cristsau/nav-page/pull/42)
+- 最近一次已验证 OVH release：`/opt/nav-stack/releases/20260824-180310-d918f44`。
+- PR #42 发布前回滚目标：`/opt/nav-stack/releases/20260824-055950-accf664`；迁移 019–027 均为
+  加法迁移，应用回滚时保留。
 - 生产域名：
   - `https://nav.skrskr.net`
   - `https://nav.cristsau.cn`
@@ -146,7 +163,7 @@ PR #30 的图片删除重试告警正确性、PR #31 的云端安全恢复、PR 
   21600 秒，恢复后通知一次。
 - 运行内告警无法报告 OVH 主机、容器、网络或调度器整体离线，仍需主机外 dead-man。
 
-## 最新生产发布与恢复证据
+## PR #37/#38 高级功能发布与恢复证据（历史）
 
 - PR #37 与 #38 已合并；`a9eff0d` master CI `32685311488` 和最终 `788be84` master CI
   `32689782306` 的 `test-and-build`、`restore-postgres-integration`、
@@ -177,7 +194,7 @@ PR #30 的图片删除重试告警正确性、PR #31 的云端安全恢复、PR 
   `/etc/nav/restic-offsite.env` 仍不存在。主机全局恢复工具存在，但哈希与仓库当前修复版不同。
 - 因此当前仍没有自动异地加密上传、远端保留清理、备份失败外部报警或定期恢复演练；现状是
   “调度骨架已安装、未配置、未启用”，不能写成已形成异地灾备。
-- 图床对象和外层代理配置的完整备份/恢复编排已进入当前候选源码；生产尚未填入对象读取凭据、
+- 图床对象和外层代理配置的完整备份/恢复编排已随 PR #42 进入生产源码；生产尚未填入对象读取凭据、
   NPM 路径并完成干净环境演练，因此闭环状态仍为 `PARTIAL`。
 
 ## 生产仍为部分完成
@@ -188,10 +205,12 @@ PR #30 的图片删除重试告警正确性、PR #31 的云端安全恢复、PR 
   生产开关；Passkey 尚未完成真实设备注册与登录验收。
 - 生产安全 JSON、Chrome/Edge 书签 HTML 和 Markdown 导入导出已进入发布版本，但完整生态
   恢复仍不含图床对象与外层代理。
-- PWA 离线说明壳、显式更新与 Web Push 已上线；完整离线工作区与跨设备同步在当前候选中，
-  发布和双设备验收前仍不是生产能力。iPhone/iPad 必须从主屏幕安装入口授权通知。
+- PWA 离线说明壳、显式更新、Web Push、已访问工作区的完整离线编辑和跨设备增量同步已随
+  PR #42 上线；iPhone/iPad 仍必须从主屏幕安装入口授权通知，真实双设备离线并发体验建议继续
+  人工验收。
 - 云端 JSON 恢复的密码二次确认、只读差异预览和替换边界已随 PR #32 发布；超过 5,000 条的
-  NDJSON 流式恢复、图床对象和外层代理整套恢复在当前候选中，尚待 CI 与生产门禁。
+  NDJSON 流式恢复已随 PR #42 上线并通过 6,500 条 PostgreSQL 16 隔离演练；图床对象和外层
+  代理整套恢复仍等待运行配置与可丢弃环境演练。
 
 ## 仍未完成
 

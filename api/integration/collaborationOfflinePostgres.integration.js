@@ -1,6 +1,7 @@
 import assert from 'node:assert/strict'
 import { randomUUID } from 'node:crypto'
 import test, { after, before, beforeEach } from 'node:test'
+import { WebSocket } from 'ws'
 
 const EXPECTED_DATABASE_NAME = 'nav_collaboration_test'
 const ALLOWED_DATABASE_HOSTS = new Set(['127.0.0.1', 'localhost'])
@@ -35,14 +36,17 @@ let app
 let config
 let createSessionToken
 let hashSessionToken
+let realtimeBaseUrl
+let stopCollaborationWebSocket
 
 before(async () => {
-  const [appModule, configModule, databaseModule, authModule, collaborationModule] = await Promise.all([
+  const [appModule, configModule, databaseModule, authModule, collaborationModule, realtimeModule] = await Promise.all([
     import('../src/app.js'),
     import('../src/config.js'),
     import('../src/db/index.js'),
     import('../src/lib/auth.js'),
-    import('../src/lib/noteCollaboration.js')
+    import('../src/lib/noteCollaboration.js'),
+    import('../src/lib/collaborationWebSocket.js')
   ])
   config = configModule.config
   pool = databaseModule.pool
@@ -51,6 +55,9 @@ before(async () => {
   getNoteAccess = collaborationModule.getNoteAccess
   app = appModule.createApp()
   await app.ready()
+  stopCollaborationWebSocket = await realtimeModule.attachCollaborationWebSocket(app.server, app.log)
+  await app.listen({ host: '127.0.0.1', port: 0 })
+  realtimeBaseUrl = `ws://127.0.0.1:${app.server.address().port}`
 })
 
 beforeEach(async () => {
@@ -79,6 +86,7 @@ beforeEach(async () => {
 })
 
 after(async () => {
+  await stopCollaborationWebSocket?.()
   await app?.close()
   await pool?.end()
 })
@@ -107,6 +115,50 @@ function apiRequest(method, path, session, payload) {
   }
   if (payload !== undefined) request.payload = payload
   return app.inject(request)
+}
+
+function openRealtimeSocket(session, noteId) {
+  return new Promise((resolve, reject) => {
+    const socket = new WebSocket(
+      `${realtimeBaseUrl}/api/collaboration/events/${encodeURIComponent(noteId)}`,
+      {
+        headers: { Cookie: session.cookie },
+        origin: 'http://localhost:5174'
+      }
+    )
+    const timer = setTimeout(() => {
+      socket.terminate()
+      reject(new Error('realtime collaboration socket did not become ready'))
+    }, 4_000)
+    socket.on('message', function handleReady(value) {
+      const message = JSON.parse(String(value))
+      if (message.type !== 'ready') return
+      clearTimeout(timer)
+      socket.off('message', handleReady)
+      resolve(socket)
+    })
+    socket.once('error', (error) => {
+      clearTimeout(timer)
+      reject(error)
+    })
+  })
+}
+
+function waitForRealtimeEvent(socket, predicate) {
+  return new Promise((resolve, reject) => {
+    const timer = setTimeout(() => {
+      socket.off('message', handleMessage)
+      reject(new Error('expected realtime collaboration event was not delivered'))
+    }, 4_000)
+    function handleMessage(value) {
+      const message = JSON.parse(String(value))
+      if (!predicate(message)) return
+      clearTimeout(timer)
+      socket.off('message', handleMessage)
+      resolve(message)
+    }
+    socket.on('message', handleMessage)
+  })
 }
 
 test('owner, editor and viewer access is ranked and encrypted notes reject collaboration', async () => {
@@ -186,6 +238,34 @@ test('member and comment events retain the audience required for cross-device sy
   assert.ok(removed.audience_user_ids.includes(OWNER_ID))
   assert.ok(removed.audience_user_ids.includes(EDITOR_ID))
   assert.equal(removed.payload.deleted, true)
+})
+
+test('authorized note members receive comment metadata through the realtime event socket', async () => {
+  const ownerSession = await seedSession(OWNER_ID)
+  const socket = await openRealtimeSocket(ownerSession, NOTE_ID)
+  try {
+    const eventPromise = waitForRealtimeEvent(
+      socket,
+      (message) => message.type === 'note-sync' && message.eventKind === 'comment.upsert'
+    )
+    const response = await apiRequest(
+      'POST',
+      `/collaboration/notes/${NOTE_ID}/comments`,
+      ownerSession,
+      { body: '实时评论不应出现在事件载荷里' }
+    )
+    assert.equal(response.statusCode, 201)
+
+    const event = await eventPromise
+    assert.equal(event.noteId, NOTE_ID)
+    assert.match(event.cursor, /^\d+$/)
+    assert.equal(typeof event.entityId, 'string')
+    assert.equal(Object.hasOwn(event, 'body'), false)
+    assert.equal(Object.hasOwn(event, 'actorUserId'), false)
+    assert.equal(Object.hasOwn(event, 'createdAt'), false)
+  } finally {
+    socket.close(1000, 'test complete')
+  }
 })
 
 test('delete events survive note cascade and preserve the last known audience', async () => {

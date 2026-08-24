@@ -1270,12 +1270,13 @@ async function verifyCollaborationOfflineSchema() {
     'trg_note_comments_sync_event',
     'trg_note_crdt_documents_validate_target',
     'trg_note_crdt_updates_validate_target',
+    'trg_note_sync_events_notify',
     'trg_notes_sync_event_upsert',
     'trg_notes_sync_event_delete'
   ]
   const triggers = await query(
     `
-      SELECT tgname
+      SELECT tgname, tgenabled
       FROM pg_trigger
       WHERE NOT tgisinternal
         AND tgname = ANY($1::text[])
@@ -1287,6 +1288,37 @@ async function verifyCollaborationOfflineSchema() {
     triggers.rows.map((row) => row.tgname),
     expectedTriggers
   )
+  if (triggers.rows.some((row) => row.tgenabled !== 'O')) {
+    throw new Error('collaboration/offline triggers must be enabled')
+  }
+
+  const notifyFunctions = await query(
+    `
+      SELECT p.proname, pg_get_functiondef(p.oid) AS definition
+      FROM pg_proc p
+      JOIN pg_namespace namespace ON namespace.oid = p.pronamespace
+      WHERE namespace.nspname = current_schema()
+        AND p.proname = 'nav_notify_note_sync_event'
+        AND p.prorettype = 'trigger'::regtype
+        AND p.proargtypes = ''::oidvector
+    `
+  )
+  assertExactSet(
+    'collaboration realtime notification functions',
+    notifyFunctions.rows.map((row) => row.proname),
+    ['nav_notify_note_sync_event']
+  )
+  const notifyDefinition = String(notifyFunctions.rows[0]?.definition || '')
+  const normalizedNotifyDefinition = notifyDefinition.replace(/\s+/g, ' ')
+  if (
+    !/(?:pg_catalog\.)?pg_notify\s*\(\s*'nav_note_sync_events'/i.test(normalizedNotifyDefinition)
+    || !/eventId/.test(normalizedNotifyDefinition)
+    || !/eventKind/.test(normalizedNotifyDefinition)
+    || !/comment\.upsert/.test(normalizedNotifyDefinition)
+    || !/member\.delete/.test(normalizedNotifyDefinition)
+  ) {
+    throw new Error('collaboration realtime notification function definition mismatch')
+  }
 }
 
 async function verifyStreamingDataRestoreSchema() {

@@ -6,10 +6,10 @@ import {
   setPersistence
 } from '@y/websocket-server/utils'
 import { yDocToProsemirrorJSON } from '@tiptap/y-tiptap'
-import { WebSocketServer } from 'ws'
+import { WebSocket, WebSocketServer } from 'ws'
 import * as Y from 'yjs'
 import { config } from '../config.js'
-import { query, withTransaction } from '../db/index.js'
+import { pool, query, withTransaction } from '../db/index.js'
 import { hashSessionToken } from './auth.js'
 import { archiveNoteVersion, pruneNoteVersions } from './noteVersions.js'
 import { sanitizeTiptapDocument, tiptapDocumentText } from './noteRichContent.js'
@@ -18,6 +18,8 @@ import { getImgBedOrigin } from './noteAttachments.js'
 import { parseAllowedOrigins } from './requestSecurity.js'
 
 const WS_PATH_PREFIX = '/api/collaboration/ws/'
+const EVENT_WS_PATH_PREFIX = '/api/collaboration/events/'
+const NOTE_SYNC_CHANNEL = 'nav_note_sync_events'
 const NOTE_ID_PATTERN = /^[0-9a-f]{8}-(?:[0-9a-f]{4}-){3}[0-9a-f]{12}$/i
 const documentContexts = new WeakMap()
 const activePersistenceWrites = new Set()
@@ -46,6 +48,15 @@ function noteIdFromDocumentName(value) {
   return NOTE_ID_PATTERN.test(noteId) ? noteId : ''
 }
 
+function noteIdFromEventPath(value) {
+  const pathname = String(value || '').split('?', 1)[0]
+  if (!pathname.startsWith(EVENT_WS_PATH_PREFIX)) return ''
+  const remainder = pathname.slice(EVENT_WS_PATH_PREFIX.length)
+  if (!remainder || remainder.includes('/')) return ''
+  const noteId = decodeURIComponent(remainder)
+  return NOTE_ID_PATTERN.test(noteId) ? noteId : ''
+}
+
 async function loadSession(request) {
   const token = parseCookies(request.headers.cookie).get(config.sessionCookieName)
   if (!token) return null
@@ -64,7 +75,7 @@ async function loadSession(request) {
   return rows[0] || null
 }
 
-async function authorizeRealtimeEdit(userId, noteId) {
+async function realtimeAccess(userId, noteId) {
   const { rows } = await query(
     `
       SELECT
@@ -80,11 +91,13 @@ async function authorizeRealtimeEdit(userId, noteId) {
     [noteId, userId]
   )
   const access = rows[0]
-  return Boolean(
-    access
-    && !access.encrypted
-    && ['owner', 'editor'].includes(access.access_role)
-  )
+  if (!access || access.encrypted) return null
+  return access
+}
+
+async function authorizeRealtimeEdit(userId, noteId) {
+  const access = await realtimeAccess(userId, noteId)
+  return Boolean(access && ['owner', 'editor'].includes(access.access_role))
 }
 
 function updateHash(value) {
@@ -240,25 +253,239 @@ function rejectUpgrade(socket, statusCode, message) {
   socket.destroy()
 }
 
-export function attachCollaborationWebSocket(server, logger = console) {
+export function parseNoteSyncNotification(value) {
+  try {
+    const parsed = JSON.parse(String(value || ''))
+    const eventId = String(parsed?.eventId || '').trim()
+    const noteId = String(parsed?.noteId || '').trim()
+    if (
+      !/^\d{1,19}$/.test(eventId)
+      || BigInt(eventId) < 1n
+      || BigInt(eventId) > 9_223_372_036_854_775_807n
+      || !NOTE_ID_PATTERN.test(noteId)
+    ) return null
+    return { eventId, noteId }
+  } catch {
+    return null
+  }
+}
+
+function eventNoteId(event) {
+  const direct = String(event?.note_id || '').trim()
+  if (NOTE_ID_PATTERN.test(direct)) return direct
+  if (event?.event_kind === 'note.delete') {
+    const deleted = String(event?.entity_id || '').trim()
+    if (NOTE_ID_PATTERN.test(deleted)) return deleted
+  }
+  return ''
+}
+
+export function canDeliverNoteSyncEvent(event, userId, noteId) {
+  const audience = Array.isArray(event?.audience_user_ids)
+    ? event.audience_user_ids.map((value) => String(value))
+    : []
+  return Boolean(
+    NOTE_ID_PATTERN.test(String(noteId || ''))
+    && eventNoteId(event) === String(noteId)
+    && audience.includes(String(userId || ''))
+  )
+}
+
+async function startNoteSyncListener({ onNotification, logger = console } = {}) {
+  let listener = null
+  let reconnectTimer = null
+  let reconnectAttempt = 0
+  let stopped = false
+  let connecting = null
+  const listenerHandlers = new WeakMap()
+
+  const scheduleReconnect = () => {
+    if (stopped || reconnectTimer) return
+    const delay = Math.min(30_000, 1_000 * (2 ** Math.min(reconnectAttempt, 5)))
+    reconnectAttempt += 1
+    reconnectTimer = setTimeout(() => {
+      reconnectTimer = null
+      void connect()
+    }, delay)
+    reconnectTimer.unref?.()
+  }
+
+  const detach = (client, destroy = false) => {
+    if (!client) return
+    const handlers = listenerHandlers.get(client)
+    if (handlers) {
+      client.removeListener('notification', handlers.notification)
+      client.removeListener('error', handlers.disconnect)
+      client.removeListener('end', handlers.disconnect)
+      listenerHandlers.delete(client)
+    }
+    if (listener === client) listener = null
+    try {
+      client.release(destroy)
+    } catch {
+      // The pg client may already have been released after a connection error.
+    }
+  }
+
+  const connect = async () => {
+    if (stopped || listener || connecting) return connecting
+    connecting = (async () => {
+      let candidate
+      try {
+        candidate = await pool.connect()
+        if (stopped) {
+          candidate.release()
+          return
+        }
+        const handleNotification = (notification) => {
+          if (notification.channel !== NOTE_SYNC_CHANNEL) return
+          Promise.resolve(onNotification?.(notification.payload)).catch((error) => {
+            logger.error?.({ error: error?.message }, 'collaboration realtime notification failed')
+          })
+        }
+        const handleDisconnect = (error) => {
+          if (listener !== candidate || stopped) return
+          logger.warn?.({ error: error?.message }, 'collaboration realtime listener disconnected')
+          detach(candidate, true)
+          scheduleReconnect()
+        }
+        listener = candidate
+        listenerHandlers.set(candidate, {
+          notification: handleNotification,
+          disconnect: handleDisconnect
+        })
+        candidate.on('notification', handleNotification)
+        candidate.once('error', handleDisconnect)
+        candidate.once('end', handleDisconnect)
+        await candidate.query(`LISTEN ${NOTE_SYNC_CHANNEL}`)
+        reconnectAttempt = 0
+      } catch (error) {
+        if (candidate) detach(candidate, true)
+        if (!stopped) {
+          logger.warn?.({ error: error?.message }, 'collaboration realtime listener unavailable')
+          scheduleReconnect()
+        }
+      }
+    })()
+    try {
+      await connecting
+    } finally {
+      connecting = null
+    }
+    return undefined
+  }
+
+  await connect()
+  return async () => {
+    stopped = true
+    if (reconnectTimer) clearTimeout(reconnectTimer)
+    reconnectTimer = null
+    await connecting
+    const client = listener
+    if (!client) return
+    try {
+      await client.query(`UNLISTEN ${NOTE_SYNC_CHANNEL}`)
+      detach(client)
+    } catch {
+      detach(client, true)
+    }
+  }
+}
+
+export async function attachCollaborationWebSocket(server, logger = console) {
   configurePersistence(logger)
   const allowedOrigins = new Set(parseAllowedOrigins(config.corsOrigin))
   const wss = new WebSocketServer({ noServer: true, clientTracking: true, maxPayload: 1024 * 1024 })
+  const eventWss = new WebSocketServer({ noServer: true, clientTracking: true, maxPayload: 16 * 1024 })
   wss.on('connection', (socket, request) => setupWSConnection(socket, request, {
     docName: request.navDocumentName,
     gc: true
   }))
+  eventWss.on('connection', (socket) => {
+    socket.navAlive = true
+    socket.on('pong', () => { socket.navAlive = true })
+    socket.on('message', () => socket.close(1003, 'Read-only event stream'))
+    socket.send(JSON.stringify({ type: 'ready', noteId: socket.navNoteId }))
+  })
+
+  const stopNoteSyncListener = await startNoteSyncListener({
+    logger,
+    onNotification: async (payload) => {
+      const notification = parseNoteSyncNotification(payload)
+      if (!notification) return
+      const { rows } = await query(
+        `
+          SELECT
+            id::text,
+            note_id::text,
+            event_kind,
+            entity_id,
+            audience_user_ids
+          FROM note_sync_events
+          WHERE id = $1::bigint
+          LIMIT 1
+        `,
+        [notification.eventId]
+      )
+      const event = rows[0]
+      if (!event || eventNoteId(event) !== notification.noteId) return
+      const message = JSON.stringify({
+        type: 'note-sync',
+        cursor: String(event.id),
+        noteId: notification.noteId,
+        eventKind: event.event_kind,
+        entityId: event.entity_id
+      })
+      for (const socket of eventWss.clients) {
+        if (
+          socket.readyState !== WebSocket.OPEN
+          || !canDeliverNoteSyncEvent(event, socket.navUser?.id, socket.navNoteId)
+        ) continue
+        socket.send(message)
+        if (
+          event.event_kind === 'note.delete'
+          || (event.event_kind === 'member.delete' && String(event.entity_id) === String(socket.navUser?.id))
+        ) socket.close(1008, 'Collaboration access changed')
+      }
+    }
+  })
+
+  const heartbeat = setInterval(() => {
+    for (const socket of eventWss.clients) {
+      if (socket.readyState !== WebSocket.OPEN) continue
+      if (!socket.navAlive) {
+        socket.terminate()
+        continue
+      }
+      socket.navAlive = false
+      socket.ping()
+    }
+  }, 25_000)
+  heartbeat.unref?.()
 
   const handleUpgrade = async (request, socket, head) => {
     try {
       const url = new URL(request.url || '/', 'http://nav.internal')
-      if (!url.pathname.startsWith(WS_PATH_PREFIX)) return
-      const noteId = noteIdFromDocumentName(url.pathname)
       const origin = String(request.headers.origin || '')
-      if (!noteId) return rejectUpgrade(socket, 400, 'Bad Request')
+      if (!url.pathname.startsWith(WS_PATH_PREFIX) && !url.pathname.startsWith(EVENT_WS_PATH_PREFIX)) return
       if (!origin || !allowedOrigins.has(origin)) return rejectUpgrade(socket, 403, 'Forbidden')
       const user = await loadSession(request)
       if (!user) return rejectUpgrade(socket, 401, 'Unauthorized')
+
+      if (url.pathname.startsWith(EVENT_WS_PATH_PREFIX)) {
+        const noteId = noteIdFromEventPath(url.pathname)
+        if (!noteId) return rejectUpgrade(socket, 400, 'Bad Request')
+        if (!(await realtimeAccess(user.id, noteId))) return rejectUpgrade(socket, 403, 'Forbidden')
+        eventWss.handleUpgrade(request, socket, head, (webSocket) => {
+          webSocket.navUser = user
+          webSocket.navNoteId = noteId
+          eventWss.emit('connection', webSocket, request)
+        })
+        return
+      }
+
+      const noteId = noteIdFromDocumentName(url.pathname)
+      if (!noteId) return rejectUpgrade(socket, 400, 'Bad Request')
       if (!(await authorizeRealtimeEdit(user.id, noteId))) return rejectUpgrade(socket, 403, 'Forbidden')
       const documentName = url.pathname.replace(/^\/+/, '')
       const document = getYDoc(documentName, true)
@@ -283,8 +510,14 @@ export function attachCollaborationWebSocket(server, logger = console) {
   server.on('upgrade', handleUpgrade)
   return async () => {
     server.off('upgrade', handleUpgrade)
+    clearInterval(heartbeat)
     for (const client of wss.clients) client.terminate()
-    await new Promise((resolve) => wss.close(resolve))
+    for (const client of eventWss.clients) client.terminate()
+    await Promise.all([
+      new Promise((resolve) => wss.close(resolve)),
+      new Promise((resolve) => eventWss.close(resolve)),
+      stopNoteSyncListener()
+    ])
     await Promise.allSettled([...activePersistenceWrites])
   }
 }

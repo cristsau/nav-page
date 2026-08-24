@@ -124,6 +124,11 @@ jobs:
           NAV_ADVANCED_FEATURES_SCHEMA_DRIFT_TEST: "true"
         run: node --test api/test/advancedFeaturesSchemaDrift.integration.test.js
 
+      - name: Reject realtime collaboration schema drift
+        env:
+          NAV_COLLABORATION_REALTIME_SCHEMA_DRIFT_TEST: "true"
+        run: node --test api/test/collaborationRealtimeSchemaDrift.integration.test.js
+
       - name: Build frontend
         run: npm run build --prefix app
 
