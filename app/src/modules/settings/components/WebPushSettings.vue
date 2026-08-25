@@ -10,7 +10,11 @@ import {
   sendWebPushTest,
   webPushBrowserCapability
 } from '@/shared/services/webPushApi'
-import { repairPwaRegistration } from '@/shared/services/pwa'
+import {
+  getActivePwaRegistration,
+  getPwaRegistration,
+  repairPwaRegistration
+} from '@/shared/services/pwa'
 import {
   currentActiveWebPushSubscription,
   webPushEnableLabel,
@@ -92,12 +96,46 @@ async function enable() {
   if (busy.value || !status.value?.publicKey) return
   busy.value = true
   lastFailureStage.value = ''
-  setMessage('正在完成浏览器订阅、服务器登记与测试投递…', 'progress')
+  if (!deviceState.value.serviceWorkerReady) {
+    setMessage('正在准备本机通知环境…', 'progress')
+    try {
+      await getPwaRegistration()
+      await reload()
+      if (!deviceState.value.serviceWorkerReady) {
+        const preparationError = new Error('Service Worker 尚未进入活动状态')
+        preparationError.webPushStage = 'service-worker'
+        throw preparationError
+      }
+      setMessage('通知环境已准备。请再次点击“启用当前设备”以允许通知并建立订阅。', 'success')
+    } catch (error) {
+      lastFailureStage.value = 'service-worker'
+      setMessage(webPushFailureMessage(error, { stage: 'service-worker' }), 'error')
+    } finally {
+      busy.value = false
+    }
+    return
+  }
+
+  const preparedRegistration = getActivePwaRegistration()
+  if (!preparedRegistration) {
+    deviceState.value = { ...deviceState.value, serviceWorkerReady: false }
+    setMessage('通知环境状态已变化，请先重新准备。', 'error')
+    busy.value = false
+    return
+  }
+
+  setMessage('正在建立浏览器订阅、服务器登记与测试投递…', 'progress')
   try {
     const result = await enableWebPush({
       publicKey: status.value.publicKey,
-      deviceLabel: defaultDeviceLabel()
+      deviceLabel: defaultDeviceLabel(),
+      registration: preparedRegistration
     })
+    if (result.requiresUserGestureRetry) {
+      await reload()
+      setMessage('旧订阅密钥已移除。请再次点击“启用当前设备”建立新订阅。', 'success')
+      return
+    }
     const enabledSubscriptionId = result.subscription?.id || currentWebPushSubscriptionId()
     if (!enabledSubscriptionId) {
       const registrationError = new Error('服务器没有返回当前设备订阅 ID')

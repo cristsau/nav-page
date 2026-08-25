@@ -13,6 +13,11 @@ const EVENT_TYPE_LABELS = Object.freeze({
   'admin.registration.approve': '批准注册',
   'admin.registration.reject': '拒绝注册',
   'admin.mail.test': '发送邮件通道测试',
+  'admin.integrations.mail.updated': '更新邮件集成配置',
+  'admin.integrations.mail.smtp_tested': '验证 SMTP 连接',
+  'admin.integrations.mail.imap_tested': '验证 IMAP 连接',
+  'admin.integrations.cloud_backup.updated': '更新云备份集成配置',
+  'admin.integrations.cloud_backup.tested': '验证云备份连接',
   'admin.telegram_config.update': '更新 Telegram 配置',
   'admin.security_events.export': '导出安全审计记录',
   'admin.security_events.delete': '删除安全审计记录'
@@ -34,6 +39,8 @@ const RESOURCE_TYPE_LABELS = Object.freeze({
   security_event: '安全审计记录',
   account_data: '账号数据',
   mail_outbox: '邮件发送队列',
+  mail_integration: '邮件集成',
+  cloud_backup_integration: '云备份集成',
   telegram_config: 'Telegram 配置'
 })
 
