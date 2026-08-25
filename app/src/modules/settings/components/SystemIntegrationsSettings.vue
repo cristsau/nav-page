@@ -1,5 +1,5 @@
 <script setup>
-import { computed, onMounted, reactive, ref, watch } from 'vue'
+import { computed, nextTick, onMounted, reactive, ref, watch } from 'vue'
 import Icon from '@/shared/components/Icon.vue'
 import {
   fetchManagedIntegrations,
@@ -19,6 +19,11 @@ const updatedAt = ref(null)
 const savedSmtpFingerprint = ref('')
 const savedImapFingerprint = ref('')
 const savedCloudFingerprint = ref('')
+const errorNotice = ref(null)
+const smtpHostInput = ref(null)
+const imapHostInput = ref(null)
+
+const SERVER_HOST_PATTERN = /^(?=.{1,253}$)(?:[a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])?\.)*[a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])?$/i
 
 const mail = reactive({
   deliveryEnabled: false,
@@ -121,6 +126,21 @@ const cloudReadyToTest = computed(() => Boolean(
   cloud.endpoint && cloud.bucket && cloud.accessKeyConfigured && cloud.secretKeyConfigured
   && !cloudHasUnsavedChanges.value
 ))
+
+function serverHostError(value, label) {
+  const host = String(value || '').trim().toLowerCase().replace(/\.$/, '')
+  if (!host) return ''
+  if (host.includes('@')) {
+    return `${label}要填写服务器主机名（例如 your-server.mxrouting.net），不是邮箱地址。`
+  }
+  if (!SERVER_HOST_PATTERN.test(host) || host === 'localhost' || host.endsWith('.localhost') || host.endsWith('.local')) {
+    return `${label}格式无效，请填写邮箱服务商提供的服务器主机名。`
+  }
+  return ''
+}
+
+const smtpHostError = computed(() => serverHostError(mail.smtpHost, 'SMTP 主机'))
+const imapHostError = computed(() => serverHostError(mail.imapHost, 'IMAP 主机'))
 
 watch(smtpFingerprint, (current) => {
   if (!savedSmtpFingerprint.value || current === savedSmtpFingerprint.value) return
@@ -243,6 +263,9 @@ async function run(action, successText, callback) {
     return result
   } catch (caught) {
     error.value = caught.message || '操作失败，请稍后重试。'
+    await nextTick()
+    errorNotice.value?.focus({ preventScroll: true })
+    errorNotice.value?.scrollIntoView({ behavior: 'smooth', block: 'center' })
     return null
   } finally {
     busyAction.value = ''
@@ -250,6 +273,19 @@ async function run(action, successText, callback) {
 }
 
 async function saveMail() {
+  const invalidHost = smtpHostError.value
+    ? { input: smtpHostInput.value, message: smtpHostError.value }
+    : imapHostError.value
+      ? { input: imapHostInput.value, message: imapHostError.value }
+      : null
+  if (invalidHost) {
+    message.value = ''
+    error.value = invalidHost.message
+    await nextTick()
+    invalidHost.input?.focus({ preventScroll: true })
+    invalidHost.input?.scrollIntoView({ behavior: 'smooth', block: 'center' })
+    return
+  }
   const result = await run('save-mail', '邮件配置已安全保存并应用。', () => saveManagedMail(mailPayload()))
   if (result?.mail) {
     const current = await fetchManagedIntegrations()
@@ -318,7 +354,7 @@ onMounted(refresh)
       服务器尚未挂载可管理集成目录。当前页面为只读；发布时配置 NAV_MANAGED_INTEGRATIONS_DIR 后即可自助保存。
     </div>
     <p v-if="message" class="notice notice--success" role="status">{{ message }}</p>
-    <p v-if="error" class="notice notice--error" role="alert">{{ error }}</p>
+    <p v-if="error" ref="errorNotice" class="notice notice--error" role="alert" tabindex="-1">{{ error }}</p>
 
     <form class="integration-card" @submit.prevent="saveMail">
       <header class="card-header">
@@ -338,7 +374,20 @@ onMounted(refresh)
       <fieldset>
         <legend>发送设置</legend>
         <div class="field-grid">
-          <label><span>SMTP 主机</span><input v-model.trim="mail.smtpHost" type="text" autocomplete="off" placeholder="mail.example.com"></label>
+          <label>
+            <span>SMTP 主机</span>
+            <input
+              ref="smtpHostInput"
+              v-model.trim="mail.smtpHost"
+              type="text"
+              autocomplete="off"
+              placeholder="your-server.mxrouting.net"
+              :aria-invalid="Boolean(smtpHostError)"
+              :aria-describedby="smtpHostError ? 'smtp-host-tip smtp-host-error' : 'smtp-host-tip'"
+            >
+            <small id="smtp-host-tip" class="field-help">填服务器主机名，不是邮箱地址。MXroute 用户可在控制面板 Email Clients 或域名主 MX 记录中查看。</small>
+            <small v-if="smtpHostError" id="smtp-host-error" class="field-error">{{ smtpHostError }}</small>
+          </label>
           <label><span>端口</span><input :value="465" type="number" readonly aria-describedby="smtp-tls-tip"></label>
           <label><span>登录邮箱</span><input v-model.trim="mail.smtpUsername" type="email" autocomplete="username" placeholder="nav@example.com"></label>
           <label><span>SMTP 密码</span><input v-model="mail.smtpPassword" type="password" autocomplete="new-password" :placeholder="mail.smtpPasswordConfigured ? '已安全保存，留空保持不变' : '输入邮箱密码'"></label>
@@ -359,7 +408,20 @@ onMounted(refresh)
         <legend>智能收件</legend>
         <div class="field-grid">
           <label><span>归属 NAV 用户名</span><input v-model.trim="mail.ownerUsername" type="text" autocomplete="off" placeholder="cristsau"></label>
-          <label><span>IMAP 主机</span><input v-model.trim="mail.imapHost" type="text" autocomplete="off" placeholder="mail.example.com"></label>
+          <label>
+            <span>IMAP 主机</span>
+            <input
+              ref="imapHostInput"
+              v-model.trim="mail.imapHost"
+              type="text"
+              autocomplete="off"
+              placeholder="your-server.mxrouting.net"
+              :aria-invalid="Boolean(imapHostError)"
+              :aria-describedby="imapHostError ? 'imap-host-tip imap-host-error' : 'imap-host-tip'"
+            >
+            <small id="imap-host-tip" class="field-help">通常与 SMTP 主机相同；这里同样不能填写登录邮箱。</small>
+            <small v-if="imapHostError" id="imap-host-error" class="field-error">{{ imapHostError }}</small>
+          </label>
           <label><span>登录邮箱</span><input v-model.trim="mail.imapUsername" type="email" autocomplete="off" placeholder="nav@example.com"></label>
           <label><span>IMAP 密码</span><input v-model="mail.imapPassword" type="password" autocomplete="new-password" :disabled="mail.reuseSmtpPasswordForImap" :placeholder="mail.imapPasswordConfigured ? '已安全保存，留空保持不变' : '输入邮箱密码'"></label>
           <label><span>邮箱目录</span><input v-model.trim="mail.imapMailbox" type="text" autocomplete="off"></label>
@@ -466,8 +528,12 @@ legend { padding: 0 8px; color: var(--text-primary); font-size: .82rem; font-wei
 .field-wide { margin-top: 14px; }
 input, select { width: 100%; min-height: 44px; padding: 10px 12px; color: var(--text-primary); font: inherit; background: var(--bg-secondary); border: 1px solid var(--border-color); border-radius: 13px; box-sizing: border-box; }
 input:focus-visible, select:focus-visible { outline: 3px solid color-mix(in srgb, var(--accent-color) 28%, transparent); outline-offset: 1px; border-color: var(--accent-color); }
+input[aria-invalid="true"] { border-color: var(--danger-color, #b45151); }
 input:disabled { opacity: .62; }
 .field-tip { margin: 10px 0 0; color: var(--text-muted); font-size: .69rem; }
+.field-help, .field-error { font-size: .66rem; line-height: 1.5; }
+.field-help { color: var(--text-muted); }
+.field-error { color: var(--danger-color, #b45151); font-weight: 650; }
 .check-row { display: flex; min-height: 44px; margin-top: 10px; align-items: center; gap: 9px; color: var(--text-secondary); font-size: .75rem; }
 .check-row input, .toggle-grid input, .enable-card input { width: 18px; min-height: 18px; flex: 0 0 auto; accent-color: var(--accent-color); }
 .toggle-grid { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 10px; }
