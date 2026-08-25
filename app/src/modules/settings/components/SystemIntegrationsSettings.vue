@@ -131,7 +131,7 @@ function serverHostError(value, label) {
   const host = String(value || '').trim().toLowerCase().replace(/\.$/, '')
   if (!host) return ''
   if (host.includes('@')) {
-    return `${label}要填写服务器主机名（例如 your-server.mxrouting.net），不是邮箱地址。`
+    return `${label}要填写服务器主机名（例如 mail.example.com），不是邮箱地址。`
   }
   if (!SERVER_HOST_PATTERN.test(host) || host === 'localhost' || host.endsWith('.localhost') || host.endsWith('.local')) {
     return `${label}格式无效，请填写邮箱服务商提供的服务器主机名。`
@@ -381,11 +381,11 @@ onMounted(refresh)
               v-model.trim="mail.smtpHost"
               type="text"
               autocomplete="off"
-              placeholder="your-server.mxrouting.net"
+              placeholder="mail.example.com"
               :aria-invalid="Boolean(smtpHostError)"
               :aria-describedby="smtpHostError ? 'smtp-host-tip smtp-host-error' : 'smtp-host-tip'"
             >
-            <small id="smtp-host-tip" class="field-help">填服务器主机名，不是邮箱地址。MXroute 用户可在控制面板 Email Clients 或域名主 MX 记录中查看。</small>
+            <small id="smtp-host-tip" class="field-help">填服务器主机名，不是邮箱地址。可在邮箱服务商的客户端设置或域名主 MX 记录中查看。</small>
             <small v-if="smtpHostError" id="smtp-host-error" class="field-error">{{ smtpHostError }}</small>
           </label>
           <label><span>端口</span><input :value="465" type="number" readonly aria-describedby="smtp-tls-tip"></label>
@@ -415,7 +415,7 @@ onMounted(refresh)
               v-model.trim="mail.imapHost"
               type="text"
               autocomplete="off"
-              placeholder="your-server.mxrouting.net"
+              placeholder="mail.example.com"
               :aria-invalid="Boolean(imapHostError)"
               :aria-describedby="imapHostError ? 'imap-host-tip imap-host-error' : 'imap-host-tip'"
             >
