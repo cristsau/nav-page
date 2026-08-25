@@ -78,8 +78,12 @@ test('encrypted reminder delivery never exposes note title and disables a gone e
     }
   })
 
-  assert.equal(payloads[0].title, '加密备忘录到期提醒')
-  assert.doesNotMatch(JSON.stringify(payloads[0]), /private title/)
+  assert.equal(payloads[0].title, 'DOMO NAV')
+  assert.equal(payloads[0].tag, 'nav-note-reminder')
+  assert.doesNotMatch(
+    JSON.stringify(payloads[0]),
+    /private title|11111111|33333333/
+  )
   assert.equal(result.disabled, 1)
   assert.equal(result.failed, 1)
   assert.ok(queries.some(({ sql, params }) => /disabled_at = CASE/.test(sql) && params?.[1] === true))

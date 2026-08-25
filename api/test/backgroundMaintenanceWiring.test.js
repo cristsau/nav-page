@@ -22,8 +22,12 @@ test('server, config and Compose keep maintenance and logs bounded', async () =>
   assert.match(server, /startBookmarkHealthScheduler/)
   assert.match(server, /startSearchEmbeddingScheduler/)
   assert.match(server, /startWebPushScheduler/)
+  assert.match(server, /startMailDeliveryScheduler/)
+  assert.match(server, /startEmailIngestScheduler/)
+  assert.match(server, /startEmailDigestScheduler/)
   assert.match(server, /createMaintenanceJobObserver/)
-  assert.match(server, /sendMaintenanceJobNotificationToAdmins/)
+  assert.match(server, /sendMaintenanceNotification/)
+  assert.doesNotMatch(server, /sendMaintenanceJobNotificationToAdmins/)
   assert.match(server, /attemptMediaAssetDeletion/)
   assert.match(server, /await Promise\.all/)
   assert.match(config, /NAV_SECURITY_EVENT_RETENTION_ENABLED/)
@@ -34,6 +38,9 @@ test('server, config and Compose keep maintenance and logs bounded', async () =>
   assert.match(config, /NAV_MAINTENANCE_ALERTS_ENABLED/)
   assert.match(config, /NAV_EMBEDDING_SCHEDULER_ENABLED/)
   assert.match(config, /NAV_WEB_PUSH_SCHEDULER_ENABLED/)
+  assert.match(config, /NAV_MAIL_DELIVERY_ENABLED/)
+  assert.match(config, /NAV_EMAIL_INGEST_ENABLED/)
+  assert.match(config, /NAV_EMAIL_DIGEST_ENABLED/)
   assert.match(envExample, /NAV_SECURITY_EVENT_RETENTION_ENABLED=false/)
   assert.match(envExample, /NAV_MEDIA_DELETE_RETRY_ENABLED=false/)
   assert.match(envExample, /NAV_AI_USAGE_RETENTION_ENABLED=false/)
@@ -42,6 +49,9 @@ test('server, config and Compose keep maintenance and logs bounded', async () =>
   assert.match(envExample, /NAV_MAINTENANCE_ALERTS_ENABLED=false/)
   assert.match(envExample, /NAV_EMBEDDING_SCHEDULER_ENABLED=false/)
   assert.match(envExample, /NAV_WEB_PUSH_SCHEDULER_ENABLED=false/)
+  assert.match(envExample, /NAV_MAIL_DELIVERY_ENABLED=false/)
+  assert.match(envExample, /NAV_EMAIL_INGEST_ENABLED=false/)
+  assert.match(envExample, /NAV_EMAIL_DIGEST_ENABLED=false/)
   assert.match(app, /level: config\.apiLogLevel/)
   assert.match(app, /req\.headers\.authorization/)
   assert.match(app, /req\.headers\.cookie/)
@@ -53,7 +63,7 @@ test('server, config and Compose keep maintenance and logs bounded', async () =>
   assert.equal((compose.match(/logging: \*nav-logging/g) || []).length, 2)
 })
 
-test('migration verification keeps all seven maintenance jobs after feature integration', async () => {
+test('migration verification keeps all ten maintenance jobs after feature integration', async () => {
   const [verifier, statusService, maintenanceRoute] = await Promise.all([
     source('../src/db/verifyMigrations.js'),
     source('../src/lib/maintenanceJobStatus.js'),
@@ -67,7 +77,10 @@ test('migration verification keeps all seven maintenance jobs after feature inte
     'note_reminder_generation',
     'bookmark_health_check',
     'search_embedding_index',
-    'web_push_delivery'
+    'web_push_delivery',
+    'mail_delivery',
+    'email_ingest',
+    'email_digest'
   ]
 
   for (const job of expectedJobs) {

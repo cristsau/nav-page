@@ -101,6 +101,8 @@ async function authPlugin(fastify) {
           s.last_seen_at,
           u.id,
           u.username,
+          u.email,
+          u.email_verified_at,
           u.role,
           u.status,
           u.created_at,

@@ -19,6 +19,8 @@ import migrationRoutes from './routes/migration.js'
 import maintenanceRoutes from './routes/maintenance.js'
 import mediaRoutes from './routes/media.js'
 import navigationRoutes from './routes/navigation.js'
+import notificationsRoutes from './routes/notifications.js'
+import emailRoutes from './routes/email.js'
 import noteAiRoutes from './routes/noteAi.js'
 import noteImagesRoutes from './routes/noteImages.js'
 import noteReminderRoutes from './routes/noteReminders.js'
@@ -71,6 +73,7 @@ export function createApp() {
           'req.body.recoveryCode',
           'req.body.apiKey',
           'req.body.token',
+          'req.body.email',
           'req.body.planToken',
           'req.body.backupReceipt',
           'req.body.backup',
@@ -140,6 +143,8 @@ export function createApp() {
   app.register(maintenanceRoutes, { prefix: '/api' })
   app.register(mediaRoutes, { prefix: '/api' })
   app.register(navigationRoutes, { prefix: '/api' })
+  app.register(notificationsRoutes, { prefix: '/api' })
+  app.register(emailRoutes, { prefix: '/api' })
   app.register(noteAiRoutes, { prefix: '/api' })
   app.register(noteImagesRoutes, { prefix: '/api' })
   app.register(noteReminderRoutes, { prefix: '/api' })

@@ -12,6 +12,7 @@ const EVENT_TYPE_LABELS = Object.freeze({
   'account.data.restore': '恢复云端数据',
   'admin.registration.approve': '批准注册',
   'admin.registration.reject': '拒绝注册',
+  'admin.mail.test': '发送邮件通道测试',
   'admin.telegram_config.update': '更新 Telegram 配置',
   'admin.security_events.export': '导出安全审计记录',
   'admin.security_events.delete': '删除安全审计记录'
@@ -32,6 +33,7 @@ const RESOURCE_TYPE_LABELS = Object.freeze({
   passkey: 'Passkey',
   security_event: '安全审计记录',
   account_data: '账号数据',
+  mail_outbox: '邮件发送队列',
   telegram_config: 'Telegram 配置'
 })
 

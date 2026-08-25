@@ -2,6 +2,7 @@
 import { computed } from 'vue'
 import { useRoute } from 'vue-router'
 import Icon from '@/shared/components/Icon.vue'
+import NotificationCenter from '@/shared/components/NotificationCenter.vue'
 import { useCommandPalette } from '@/shared/composables/useCommandPalette'
 import { useConfig } from '@/shared/composables/useConfig'
 import { useTheme } from '@/shared/composables/useTheme'
@@ -53,6 +54,7 @@ const navigationItems = computed(() => (
         <span>搜索</span>
         <kbd aria-hidden="true">Ctrl K</kbd>
       </button>
+      <NotificationCenter />
       <button
         type="button"
         :aria-label="isDark ? '切到亮色模式' : '切到暗色模式'"
@@ -154,6 +156,7 @@ const navigationItems = computed(() => (
 }
 
 .primary-header__actions > button,
+.primary-header__actions :deep(.notification-center__trigger),
 .primary-header__action-link {
   display: inline-flex;
   min-width: 44px;
@@ -171,6 +174,8 @@ const navigationItems = computed(() => (
 
 .primary-header__actions > button:hover,
 .primary-header__actions > button:focus-visible,
+.primary-header__actions :deep(.notification-center__trigger:hover),
+.primary-header__actions :deep(.notification-center__trigger:focus-visible),
 .primary-header__action-link:hover,
 .primary-header__action-link:focus-visible {
   color: var(--text-primary);

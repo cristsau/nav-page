@@ -213,6 +213,30 @@ export async function registerWithBackend(payload) {
   return result.request
 }
 
+export async function fetchBackendRegistrationConfig() {
+  return request('/auth/registration/config', {
+    method: 'GET',
+    cache: 'no-store',
+    expectedUnauthorized: true
+  })
+}
+
+export async function verifyBackendRegistrationEmail(requestId, token) {
+  return request('/auth/register/verify', {
+    method: 'POST',
+    expectedUnauthorized: true,
+    body: JSON.stringify({ requestId, token })
+  })
+}
+
+export async function resendBackendRegistrationEmail(email) {
+  return request('/auth/register/resend-verification', {
+    method: 'POST',
+    expectedUnauthorized: true,
+    body: JSON.stringify({ email })
+  })
+}
+
 export async function fetchBackendApprovedUsers() {
   const result = await request('/admin/users', { method: 'GET' })
   return result.users || []
