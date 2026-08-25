@@ -145,7 +145,7 @@ export async function deliverDueWebPushNotifications({
         await sendFn(candidate, {
           title: 'DOMO NAV',
           body: '你有一条新的到期提醒，登录后查看完整内容。',
-          tag: `note-${candidate.note_id}`,
+          tag: 'nav-note-reminder',
           url: '/whisper',
           icon: '/icons/pwa-192-v1.png',
           badge: '/icons/pwa-192-v1.png',
@@ -271,7 +271,9 @@ export async function deliverDueWebPushNotifications({
         await sendFn(candidate, {
           title: 'DOMO NAV',
           body: '你有一条新的重要提醒，登录后查看完整内容。',
-          tag: `notification-${candidate.notification_id}`,
+          tag: candidate.sensitive
+            ? 'nav-sensitive-notification'
+            : `notification-${candidate.notification_id}`,
           url: candidate.sensitive ? '/?notifications=1' : (candidate.action_url || '/?notifications=1'),
           icon: '/icons/pwa-192-v1.png',
           badge: '/icons/pwa-192-v1.png',
