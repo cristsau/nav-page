@@ -4,6 +4,7 @@ import { config } from '../config.js'
 import { query } from '../db/index.js'
 import { sanitizeMaintenanceErrorCode } from './maintenanceJobStatus.js'
 import { readOwnerSecretFile } from './ownerSecretFile.js'
+import { assertSafeOutboundHost } from './outboundEndpoints.js'
 
 const EMAIL_PATTERN = /^[^\s@<>]+@[^\s@<>]+\.[^\s@<>]+$/u
 const MESSAGE_TYPE_PATTERN = /^[a-z0-9_.-]+$/
@@ -151,6 +152,25 @@ async function createSmtpTransport(runtimeConfig = config, readSecretImpl = read
     socketTimeout: 30_000,
     tls: { minVersion: 'TLSv1.2', rejectUnauthorized: true }
   })
+}
+
+export async function verifySmtpConnection(
+  runtimeConfig = config,
+  {
+    readSecretImpl = readOwnerSecretFile,
+    transportFactory = createSmtpTransport,
+    assertHostImpl = assertSafeOutboundHost
+  } = {}
+) {
+  validateMxrouteSmtpConfig(runtimeConfig)
+  await assertHostImpl(runtimeConfig.smtpHost, { label: 'SMTP ' })
+  const transport = await transportFactory(runtimeConfig, readSecretImpl)
+  try {
+    await transport.verify()
+    return { ok: true, host: runtimeConfig.smtpHost, port: Number(runtimeConfig.smtpPort), secure: true }
+  } finally {
+    try { transport.close?.() } catch {}
+  }
 }
 
 export async function deliverMailOutbox({

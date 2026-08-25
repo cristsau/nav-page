@@ -1,0 +1,45 @@
+#!/bin/sh
+set -eu
+
+JOURNALCTL_BIN="${JOURNALCTL_BIN:-/usr/bin/journalctl}"
+DOCKER_BIN="${DOCKER_BIN:-/usr/bin/docker}"
+FIND_BIN="${FIND_BIN:-/usr/bin/find}"
+READLINK_BIN="${READLINK_BIN:-/usr/bin/readlink}"
+
+"$JOURNALCTL_BIN" --rotate --quiet
+"$JOURNALCTL_BIN" --vacuum-time=30d --quiet
+
+container_ids="$($DOCKER_BIN ps -q --filter label=com.docker.compose.service=cliproxy)"
+container_count="$(printf '%s\n' "$container_ids" | sed '/^$/d' | wc -l)"
+if [ "$container_count" -eq 0 ]; then
+  exit 0
+fi
+if [ "$container_count" -ne 1 ]; then
+  echo "refusing CLIProxy log cleanup: expected exactly one running cliproxy service" >&2
+  exit 1
+fi
+
+log_path="$($DOCKER_BIN inspect "$container_ids" --format '{{range .Mounts}}{{if eq .Destination "/CLIProxyAPI/logs"}}{{.Source}}{{end}}{{end}}')"
+case "$log_path" in
+  /opt/nav-stack/releases/*/cliproxy/logs) ;;
+  *)
+    echo "refusing CLIProxy log cleanup: unexpected log mount" >&2
+    exit 1
+    ;;
+esac
+
+resolved_path="$($READLINK_BIN -f -- "$log_path")"
+case "$resolved_path" in
+  /opt/nav-stack/releases/*/cliproxy/logs) ;;
+  *)
+    echo "refusing CLIProxy log cleanup: resolved path escaped the release tree" >&2
+    exit 1
+    ;;
+esac
+
+if [ ! -d "$resolved_path" ] || [ -L "$resolved_path" ]; then
+  echo "refusing CLIProxy log cleanup: log mount is not a regular directory" >&2
+  exit 1
+fi
+
+"$FIND_BIN" "$resolved_path" -xdev -type f -mtime +30 -delete

@@ -174,6 +174,7 @@ ops/systemd/nav-backup-retention.timer
 ops/systemd/nav-restore-rehearsal.service
 ops/systemd/nav-restore-rehearsal.timer
 ops/systemd/nav-scheduled-failure@.service
+ops/cron/nav-log-retention
 ```
 
 After reviewing the exact release and paths, install them from a clean, locked
@@ -183,7 +184,7 @@ merge SHA:
 sudo bash scripts/install-nav-backup-systemd.sh
 ```
 
-This copies scripts and units, creates only the bounded backup/report
+This copies scripts, units, and the bounded daily log-retention job, creates only the bounded backup/report
 directories, runs `systemd-analyze verify` when available, and reloads systemd.
 It deliberately does **not** create credentials, initialize restic, enable a
 timer, start a job, alter containers, or delete a backup.

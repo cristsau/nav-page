@@ -21,6 +21,7 @@ import mediaRoutes from './routes/media.js'
 import navigationRoutes from './routes/navigation.js'
 import notificationsRoutes from './routes/notifications.js'
 import emailRoutes from './routes/email.js'
+import integrationRoutes from './routes/integrations.js'
 import noteAiRoutes from './routes/noteAi.js'
 import noteImagesRoutes from './routes/noteImages.js'
 import noteReminderRoutes from './routes/noteReminders.js'
@@ -72,6 +73,11 @@ export function createApp() {
           'req.body.newPassword',
           'req.body.recoveryCode',
           'req.body.apiKey',
+          'req.body.smtpPassword',
+          'req.body.imapPassword',
+          'req.body.accessKeyId',
+          'req.body.secretAccessKey',
+          'req.body.sessionToken',
           'req.body.token',
           'req.body.email',
           'req.body.planToken',
@@ -145,6 +151,7 @@ export function createApp() {
   app.register(navigationRoutes, { prefix: '/api' })
   app.register(notificationsRoutes, { prefix: '/api' })
   app.register(emailRoutes, { prefix: '/api' })
+  app.register(integrationRoutes, { prefix: '/api' })
   app.register(noteAiRoutes, { prefix: '/api' })
   app.register(noteImagesRoutes, { prefix: '/api' })
   app.register(noteReminderRoutes, { prefix: '/api' })
