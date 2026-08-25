@@ -7,11 +7,12 @@ async function source(relativePath) {
 }
 
 test('admin integrations expose write-only email and cloud backup configuration', async () => {
-  const [route, managed, app, compose] = await Promise.all([
+  const [route, managed, app, compose, securityEvents] = await Promise.all([
     source('../src/routes/integrations.js'),
     source('../src/lib/managedIntegrations.js'),
     source('../src/app.js'),
-    source('../../docker-compose.backend.yml')
+    source('../../docker-compose.backend.yml'),
+    source('../src/lib/securityEvents.js')
   ])
   assert.match(route, /requireAdmin/)
   assert.match(route, /test-smtp/)
@@ -25,6 +26,15 @@ test('admin integrations expose write-only email and cloud backup configuration'
   assert.match(app, /req\.body\.secretAccessKey/)
   assert.match(compose, /NAV_MANAGED_INTEGRATIONS_DIR/)
   assert.match(compose, /NAV_INTEGRATIONS_DIR/)
+  for (const eventType of [
+    'admin.integrations.mail.updated',
+    'admin.integrations.mail.smtp_tested',
+    'admin.integrations.mail.imap_tested',
+    'admin.integrations.cloud_backup.updated',
+    'admin.integrations.cloud_backup.tested'
+  ]) {
+    assert.match(securityEvents, new RegExp(eventType.replaceAll('.', '\\.')))
+  }
 })
 
 test('settings include a dedicated responsive system integration category', async () => {
@@ -43,7 +53,8 @@ test('settings include a dedicated responsive system integration category', asyn
   assert.match(component, /测试 IMAP/)
   assert.match(component, /只读测试存储/)
   assert.match(component, /smtpHasUnsavedChanges/)
-  assert.match(component, /请先保存 SMTP 修改/)
+  assert.match(component, /smtpTestDisabledReason/)
+  assert.match(component, /配置已保存，可测试/)
   assert.match(component, /cloud\.accessKeyConfigured && cloud\.secretKeyConfigured/)
   assert.match(component, /watch\(smtpFingerprint/)
   assert.match(component, /mail\.deliveryEnabled = false/)

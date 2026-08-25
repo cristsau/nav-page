@@ -1,4 +1,4 @@
-const CACHE_VERSION = 'domonav-shell-v3'
+const CACHE_VERSION = 'domonav-shell-v4'
 const OFFLINE_SYNC_DB = 'NavPageOfflineSyncDB'
 const OFFLINE_SYNC_STORE = 'mutations'
 const OFFLINE_SYNC_TAG = 'domo-nav-offline-sync'
@@ -14,18 +14,13 @@ const SHELL_ASSETS = [
 
 async function cacheApplicationShell() {
   const cache = await caches.open(CACHE_VERSION)
-  await cache.addAll(SHELL_ASSETS)
-  const manifestResponse = await fetch('/.vite/manifest.json', { cache: 'no-store' })
-  if (!manifestResponse.ok) throw new Error('DOMO NAV build manifest is unavailable')
-  const manifest = await manifestResponse.json()
-  const assets = new Set()
-  for (const entry of Object.values(manifest || {})) {
-    for (const path of [entry?.file, ...(entry?.css || []), ...(entry?.assets || [])]) {
-      if (path) assets.add(`/${String(path).replace(/^\/+/, '')}`)
-    }
-  }
-  if (!assets.size) throw new Error('DOMO NAV build manifest is empty')
-  await cache.addAll([...assets])
+  // A slow or temporarily unavailable chunk must not prevent the Service
+  // Worker from becoming active on iOS. Cache only the small stable shell here;
+  // hashed Vite assets are cached on first successful fetch below.
+  await Promise.allSettled(SHELL_ASSETS.map(async (asset) => {
+    const response = await fetch(asset, { cache: 'no-store' })
+    if (response.ok) await cache.put(asset, response)
+  }))
 }
 
 self.addEventListener('install', (event) => {

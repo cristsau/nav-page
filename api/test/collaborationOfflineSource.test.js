@@ -54,7 +54,9 @@ test('offline workspace is restart-safe and keeps private API responses out of t
   const auth = await read('app/src/shared/composables/useAuth.js')
   const vite = await read('app/vite.config.js')
 
-  assert.match(serviceWorker, /fetch\('\/\.vite\/manifest\.json', \{ cache: 'no-store' \}\)/)
+  assert.match(serviceWorker, /Promise\.allSettled\(SHELL_ASSETS/)
+  assert.doesNotMatch(serviceWorker, /fetch\('\/\.vite\/manifest\.json'/)
+  assert.match(serviceWorker, /\/\^\\\/assets\\\/\[\^\/\]\+\\\.\[a-z0-9\]\+\$\/i/)
   assert.match(serviceWorker, /url\.pathname\.startsWith\('\/api\/'\)/)
   assert.match(serviceWorker, /self\.addEventListener\('sync'/)
   assert.match(serviceWorker, /caches\.match\('\/'\)/)

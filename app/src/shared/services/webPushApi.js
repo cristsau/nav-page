@@ -1,5 +1,5 @@
 import { apiRequest } from './apiClient'
-import { getPwaRegistration } from './pwa'
+import { getPwaRegistration, inspectPwaRegistration } from './pwa'
 import { runWebPushStage } from './webPushTiming'
 
 const LOCAL_SUBSCRIPTION_ID_KEY = 'domo-nav-web-push-subscription-id'
@@ -61,7 +61,7 @@ export async function inspectCurrentWebPushDevice({ publicKey = '' } = {}) {
 
   let registration
   try {
-    registration = await runWebPushStage('service-worker', getPwaRegistration, 8_000)
+    registration = await runWebPushStage('service-worker', inspectPwaRegistration, 8_000)
   } catch {
     result.errorStage = 'service-worker'
     return result
