@@ -46,7 +46,12 @@ export async function registerPwa() {
       scope: '/',
       updateViaCache: 'none'
     }))
-    await registration.update()
+    // Safari/iOS can leave update() pending while the registration itself is
+    // already usable. Do not make Web Push wait for an unrelated update check.
+    void registration.update().catch((error) => {
+      state.error = error.message || 'Service Worker 更新检查失败'
+      emitState()
+    })
     navigator.serviceWorker.addEventListener('controllerchange', () => {
       if (!applyingUpdate) return
       applyingUpdate = false

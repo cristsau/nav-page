@@ -148,6 +148,13 @@ function serverHostError(value, label) {
 
 const smtpHostError = computed(() => serverHostError(mail.smtpHost, 'SMTP 主机'))
 const imapHostError = computed(() => serverHostError(mail.imapHost, 'IMAP 主机'))
+const mailSaveStatus = computed(() => {
+  if (loading.value) return '正在读取服务器配置…'
+  if (!writable.value) return '服务器集成目录当前为只读，无法保存。'
+  if (smtpHostError.value || imapHostError.value) return '请先修正标红的服务器主机名。'
+  if (busyAction.value === 'save-mail') return '正在安全保存，请稍候…'
+  return '点击保存后会写入服务器；保存成功后才能测试 SMTP / IMAP。'
+})
 
 watch(smtpFingerprint, (current) => {
   if (!savedSmtpFingerprint.value || current === savedSmtpFingerprint.value) return
@@ -357,13 +364,13 @@ onMounted(refresh)
       </button>
     </div>
 
-    <div v-if="!writable && !loading" class="notice notice--warning" role="alert">
+    <div v-if="!writable && !loading" id="integration-write-warning" class="notice notice--warning" role="alert">
       服务器尚未挂载可管理集成目录。当前页面为只读；发布时配置 NAV_MANAGED_INTEGRATIONS_DIR 后即可自助保存。
     </div>
     <p v-if="message" class="notice notice--success" role="status">{{ message }}</p>
     <p v-if="error" ref="errorNotice" class="notice notice--error" role="alert" tabindex="-1">{{ error }}</p>
 
-    <form class="integration-card" novalidate @submit.prevent="saveMail">
+    <form class="integration-card" novalidate @submit.prevent.stop="saveMail">
       <header class="card-header">
         <div class="card-icon"><Icon name="mail" :size="20" /></div>
         <div>
@@ -373,6 +380,7 @@ onMounted(refresh)
       </header>
 
       <div class="status-row" aria-label="邮件配置状态">
+        <span :class="{ 'is-ok': writable }">配置 {{ writable ? '可保存' : '只读' }}</span>
         <span :class="{ 'is-ok': mail.smtpVerified }">SMTP {{ statusLabel(mail.smtpVerified) }}</span>
         <span :class="{ 'is-ok': mail.imapVerified }">IMAP {{ statusLabel(mail.imapVerified) }}</span>
         <span :class="{ 'is-ok': mail.encryptionConfigured }">正文加密 {{ mail.encryptionConfigured ? '已生成' : '待生成' }}</span>
@@ -455,8 +463,13 @@ onMounted(refresh)
       </fieldset>
 
       <footer class="card-footer">
-        <p>修改主机名、账号或密码后，原验证自动失效，需重新测试后才能启用。</p>
-        <button class="button button--primary" type="button" :disabled="!writable || busyAction" @click="saveMail">
+        <p>{{ mailSaveStatus }} 修改主机名、账号或密码后，原验证自动失效。</p>
+        <button
+          class="button button--primary"
+          type="submit"
+          :disabled="loading || !writable || Boolean(busyAction)"
+          :aria-describedby="!writable ? 'integration-write-warning' : undefined"
+        >
           <Icon name="check" :size="16" />
           {{ busyAction === 'save-mail' ? '保存中' : '保存邮件配置' }}
         </button>
@@ -558,7 +571,7 @@ input:disabled { opacity: .62; }
 .action-row, .card-footer { display: flex; margin-top: 14px; align-items: center; justify-content: space-between; gap: 14px; }
 .action-row span, .card-footer p { margin: 0; color: var(--text-muted); font-size: .69rem; line-height: 1.55; }
 .card-footer { margin-top: 0; padding-top: 16px; border-top: 1px solid var(--border-light); }
-.button { display: inline-flex; min-height: 44px; padding: 0 14px; align-items: center; justify-content: center; gap: 7px; color: var(--text-primary); font: inherit; font-size: .75rem; font-weight: 650; background: var(--bg-secondary); border: 1px solid var(--border-color); border-radius: 13px; cursor: pointer; }
+.button { display: inline-flex; min-height: 44px; padding: 0 14px; align-items: center; justify-content: center; gap: 7px; color: var(--text-primary); font: inherit; font-size: .75rem; font-weight: 650; background: var(--bg-secondary); border: 1px solid var(--border-color); border-radius: 13px; cursor: pointer; touch-action: manipulation; }
 .button--primary { color: var(--accent-contrast, #fff); background: var(--accent-color); border-color: var(--accent-color); }
 .button:disabled { opacity: .55; cursor: not-allowed; }
 .notice { margin: 0; padding: 12px 14px; color: var(--text-secondary); font-size: .76rem; line-height: 1.6; background: var(--bg-card); border: 1px solid var(--border-light); border-radius: 14px; }

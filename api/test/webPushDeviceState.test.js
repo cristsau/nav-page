@@ -107,3 +107,35 @@ test('Web Push settings automatically tests after registration and never falls b
   assert.match(source, /2 浏览器订阅/)
   assert.match(source, /3 服务器登记/)
 })
+
+test('Web Push inspection and error recovery cannot leave the settings UI permanently busy', async () => {
+  const [apiSource, settingsSource, pwaSource] = await Promise.all([
+    fs.readFile(new URL('../../app/src/shared/services/webPushApi.js', import.meta.url), 'utf8'),
+    fs.readFile(new URL('../../app/src/modules/settings/components/WebPushSettings.vue', import.meta.url), 'utf8'),
+    fs.readFile(new URL('../../app/src/shared/services/pwa.js', import.meta.url), 'utf8')
+  ])
+
+  assert.match(apiSource, /runWebPushStage\('service-worker', getPwaRegistration, 8_000\)/)
+  assert.match(apiSource, /runWebPushStage\([\s\S]*?'browser-subscription',[\s\S]*?getSubscription\(\),[\s\S]*?8_000/)
+  assert.match(apiSource, /if \(error\?\.code !== 'WEB_PUSH_TIMEOUT'\) throw error/)
+  assert.match(apiSource, /pushManager\.subscribe/)
+  assert.match(settingsSource, /function refreshInBackground\(\)[\s\S]*?void reload\(\)/)
+  assert.doesNotMatch(settingsSource, /catch \(error\) \{\s*await reload\(\)/)
+  assert.match(pwaSource, /void registration\.update\(\)\.catch/)
+  const registerFunction = pwaSource.match(
+    /export async function registerPwa\(\) \{[\s\S]*?\n\}/
+  )?.[0] || ''
+  assert.doesNotMatch(registerFunction, /await registration\.update\(\)/)
+})
+
+test('Mail configuration uses native form submission for reliable iPhone touch handling', async () => {
+  const source = await fs.readFile(
+    new URL('../../app/src/modules/settings/components/SystemIntegrationsSettings.vue', import.meta.url),
+    'utf8'
+  )
+
+  assert.match(source, /@submit\.prevent\.stop="saveMail"/)
+  assert.match(source, /class="button button--primary"\s+type="submit"/)
+  assert.match(source, /配置 \{\{ writable \? '可保存' : '只读' \}\}/)
+  assert.match(source, /touch-action: manipulation/)
+})
