@@ -25,9 +25,9 @@ const sessions = ref([])
 const passkeys = ref([])
 const passkeyConfig = ref({
   enabled: false,
-  canonicalOrigin: '',
+  allowedOrigins: [],
   rpId: '',
-  passwordOnlyAliasMessage: ''
+  unsupportedOriginMessage: ''
 })
 const passkeyBrowserSupported = ref(false)
 const passkeyDisplayName = ref('我的 Passkey')
@@ -59,15 +59,21 @@ const currentSession = computed(() => (
 const otherSessionCount = computed(() => (
   sessions.value.filter((session) => !session.current).length
 ))
-const onCanonicalPasskeyOrigin = computed(() => (
+const onSupportedPasskeyOrigin = computed(() => (
   typeof window !== 'undefined'
-  && Boolean(passkeyConfig.value.canonicalOrigin)
-  && window.location.origin === passkeyConfig.value.canonicalOrigin
+  && passkeyConfig.value.allowedOrigins?.some((item) => (
+    item.origin === window.location.origin
+  ))
 ))
 const canRegisterPasskey = computed(() => (
   passkeyConfig.value.enabled
-  && onCanonicalPasskeyOrigin.value
+  && onSupportedPasskeyOrigin.value
   && passkeyBrowserSupported.value
+))
+const currentPasskeyRpId = computed(() => (
+  passkeyConfig.value.allowedOrigins?.find((item) => (
+    typeof window !== 'undefined' && item.origin === window.location.origin
+  ))?.rpId || passkeyConfig.value.rpId || '未识别'
 ))
 
 watch(
@@ -136,8 +142,8 @@ function getSecurityErrorMessage(error, fallback) {
   if (/authentication required/i.test(value)) {
     return '登录状态已失效，请重新登录。'
   }
-  if (/passkey.+only at|passkey management.+only at/i.test(value)) {
-    return 'Passkey 只能在主域名 nav.skrskr.net 管理。'
+  if (/passkeys are available only on an approved/i.test(value)) {
+    return '当前域名不在 Passkey 允许列表中。'
   }
   if (/passkey authentication is not enabled/i.test(value)) {
     return '服务器暂未启用 Passkey。'
@@ -674,8 +680,8 @@ onBeforeUnmount(() => {
         <div>
           <h4>Passkey</h4>
           <p>
-            使用设备锁屏、指纹或面容登录。唯一 RP ID 为
-            <code>{{ passkeyConfig.rpId || 'nav.skrskr.net' }}</code>。
+            使用设备锁屏、指纹或面容登录。当前域名 RP ID 为
+            <code>{{ currentPasskeyRpId }}</code>；两个域名需要分别登记。
           </p>
         </div>
         <span
@@ -687,12 +693,10 @@ onBeforeUnmount(() => {
       </div>
 
       <div
-        v-if="passkeyConfig.enabled && !onCanonicalPasskeyOrigin"
+        v-if="passkeyConfig.enabled && !onSupportedPasskeyOrigin"
         class="passkey-notice"
       >
-        当前别名域只保留密码登录。请前往
-        <a :href="passkeyConfig.canonicalOrigin">{{ passkeyConfig.canonicalOrigin }}</a>
-        管理和使用 Passkey。
+        {{ passkeyConfig.unsupportedOriginMessage || '当前域名不支持 Passkey。' }}
       </div>
       <div v-else-if="!passkeyConfig.enabled" class="passkey-notice">
         服务器默认关闭 Passkey。管理员完成迁移与主域名验收后，可设置
@@ -705,7 +709,7 @@ onBeforeUnmount(() => {
         当前浏览器不支持 WebAuthn，不能登记新 Passkey。
       </div>
 
-      <div v-if="onCanonicalPasskeyOrigin" class="passkey-form">
+      <div v-if="onSupportedPasskeyOrigin" class="passkey-form">
         <label class="security-field">
           <span>Passkey 名称</span>
           <input
@@ -744,12 +748,13 @@ onBeforeUnmount(() => {
             <strong>{{ passkey.displayName }}</strong>
             <div class="session-card__meta">
               <span>{{ passkey.backedUp ? '已同步/备份' : '仅此设备' }}</span>
+              <span>适用域名：{{ passkey.rpId }}</span>
               <span>登记于：{{ formatDate(passkey.createdAt) }}</span>
               <span>最近使用：{{ formatDate(passkey.lastUsedAt) }}</span>
             </div>
           </div>
           <button
-            v-if="onCanonicalPasskeyOrigin"
+            v-if="onSupportedPasskeyOrigin"
             class="button button--danger"
             type="button"
             :disabled="Boolean(passkeyAction)"

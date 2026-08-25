@@ -56,18 +56,18 @@ export function validateMailDeliveryPolicy(policy = {}) {
   }
 }
 
-export function validateMxrouteSmtpConfig(runtimeConfig = config) {
+export function validateSmtpConfig(runtimeConfig = config) {
   const host = String(runtimeConfig.smtpHost || '').trim().toLowerCase()
   if (!host || host.length > 253 || /[\s\u0000-\u001F\u007F]/.test(host)) {
-    throw new Error('MXroute SMTP host is invalid')
+    throw new Error('SMTP host is invalid')
   }
   if (Number(runtimeConfig.smtpPort) !== 465 || runtimeConfig.smtpSecure !== true) {
-    throw new Error('MXroute SMTP must use implicit TLS on port 465')
+    throw new Error('SMTP must use implicit TLS on port 465')
   }
   normalizeEmailAddress(runtimeConfig.smtpUsername)
   normalizeEmailAddress(runtimeConfig.smtpFromAddress)
   if (!String(runtimeConfig.smtpPasswordFile || '').trim()) {
-    throw new Error('MXroute SMTP password file is not configured')
+    throw new Error('SMTP password file is not configured')
   }
   return host
 }
@@ -83,21 +83,21 @@ export async function verifiedMailConfigurationStatus(
     && runtimeConfig.smtpFromAddress
   )
   if (!baseConfigured) {
-    return { configured: false, enabled: runtimeConfig.mailDeliveryEnabled, transport: 'mxroute-smtp' }
+    return { configured: false, enabled: runtimeConfig.mailDeliveryEnabled, transport: 'smtp-tls' }
   }
   try {
-    validateMxrouteSmtpConfig(runtimeConfig)
+    validateSmtpConfig(runtimeConfig)
     await readSecretImpl(runtimeConfig.smtpPasswordFile, { label: 'SMTP password', maxBytes: 4096 })
     return {
       configured: true,
       enabled: runtimeConfig.mailDeliveryEnabled,
-      transport: 'mxroute-smtp',
+      transport: 'smtp-tls',
       host: runtimeConfig.smtpHost,
       port: runtimeConfig.smtpPort,
       secure: runtimeConfig.smtpSecure
     }
   } catch {
-    return { configured: false, enabled: runtimeConfig.mailDeliveryEnabled, transport: 'mxroute-smtp' }
+    return { configured: false, enabled: runtimeConfig.mailDeliveryEnabled, transport: 'smtp-tls' }
   }
 }
 
@@ -134,7 +134,7 @@ export async function enqueueMail({
 }
 
 async function createSmtpTransport(runtimeConfig = config, readSecretImpl = readOwnerSecretFile) {
-  validateMxrouteSmtpConfig(runtimeConfig)
+  validateSmtpConfig(runtimeConfig)
   const password = await readSecretImpl(runtimeConfig.smtpPasswordFile, {
     label: 'SMTP password',
     maxBytes: 4096
@@ -162,7 +162,7 @@ export async function verifySmtpConnection(
     assertHostImpl = assertSafeOutboundHost
   } = {}
 ) {
-  validateMxrouteSmtpConfig(runtimeConfig)
+  validateSmtpConfig(runtimeConfig)
   await assertHostImpl(runtimeConfig.smtpHost, { label: 'SMTP ' })
   const transport = await transportFactory(runtimeConfig, readSecretImpl)
   try {

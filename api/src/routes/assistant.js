@@ -3,6 +3,11 @@ import { pool, query, withTransaction } from '../db/index.js'
 import { enforceAiRateLimit } from '../lib/aiRateLimit.js'
 import { buildChatRequest, extractAiText } from '../lib/aiResponses.js'
 import { resolveChatProviderModel } from '../lib/aiModelCatalog.js'
+import {
+  applyAssistantPreferences,
+  AssistantPreferenceError,
+  normalizeAssistantPreferences
+} from '../lib/assistantPreferences.js'
 import { assertSafeOutboundEndpoint } from '../lib/outboundEndpoints.js'
 import { getUserSettingValue } from '../lib/userSettings.js'
 import { searchWorkspaceHybridForUser } from '../lib/hybridWorkspaceSearch.js'
@@ -50,6 +55,9 @@ function mapConversation(row) {
   return {
     id: row.id,
     title: row.title,
+    modelMode: row.model_mode || 'latest',
+    model: row.model || '',
+    reasoningEffort: row.reasoning_effort || 'low',
     createdAt: row.created_at,
     updatedAt: row.updated_at,
     preview: row.preview || '',
@@ -155,12 +163,32 @@ async function findConversation(client, userId, conversationId) {
   return rows[0] || null
 }
 
-async function createConversation(client, userId, title = '新对话') {
+function conversationPreferenceFallback(row) {
+  return {
+    modelMode: row?.model_mode || 'latest',
+    model: row?.model || '',
+    reasoningEffort: row?.reasoning_effort || 'low'
+  }
+}
+
+async function createConversation(
+  client,
+  userId,
+  title = '新对话',
+  preferences = normalizeAssistantPreferences()
+) {
   const safeTitle = normalizeText(title).slice(0, 160) || '新对话'
   const { rows } = await client.query(
-    `INSERT INTO assistant_conversations (user_id, title)
-     VALUES ($1, $2) RETURNING *`,
-    [userId, safeTitle]
+    `INSERT INTO assistant_conversations (
+       user_id, title, model_mode, model, reasoning_effort
+     ) VALUES ($1, $2, $3, $4, $5) RETURNING *`,
+    [
+      userId,
+      safeTitle,
+      preferences.modelMode,
+      preferences.model,
+      preferences.reasoningEffort
+    ]
   )
   return rows[0]
 }
@@ -233,13 +261,17 @@ async function collectAssistantSources(userId, question, logger) {
   ])
 }
 
-async function resolveAssistantProvider(userId) {
+async function resolveAssistantProvider(userId, preferences) {
   const appConfig = await getUserSettingValue(userId, 'appConfig', {})
   const providerConfig = appConfig?.search?.providers?.chatgpt || {}
-  const resolution = await resolveChatProviderModel(providerConfig)
+  const resolution = applyAssistantPreferences(
+    await resolveChatProviderModel(providerConfig, { discoverPinned: true }),
+    preferences
+  )
   return {
     providerConfig,
-    provider: resolution.provider
+    provider: resolution.provider,
+    catalog: resolution.catalog
   }
 }
 
@@ -475,13 +507,74 @@ export default async function assistantRoutes(fastify) {
 
   fastify.post('/assistant/conversations', async (request, reply) => {
     await fastify.requireAuth(request, reply)
+    let preferences
+    try {
+      preferences = normalizeAssistantPreferences(request.body || {})
+      await resolveAssistantProvider(request.currentUser.id, preferences)
+    } catch (error) {
+      reply.code(error instanceof AssistantPreferenceError ? 400 : 503)
+      return {
+        error: error instanceof AssistantPreferenceError
+          ? error.message
+          : 'AI 模型目录暂时不可用，请稍后重试'
+      }
+    }
     const conversation = await createConversation(
       { query },
       request.currentUser.id,
-      request.body?.title
+      request.body?.title,
+      preferences
     )
     reply.code(201)
     return { conversation: mapConversation(conversation) }
+  })
+
+  fastify.patch('/assistant/conversations/:conversationId/preferences', async (request, reply) => {
+    await fastify.requireAuth(request, reply)
+    if (!isUuid(request.params.conversationId)) {
+      reply.code(400)
+      return { error: '对话 ID 格式无效' }
+    }
+    const conversation = await findConversation(
+      { query },
+      request.currentUser.id,
+      request.params.conversationId
+    )
+    if (!conversation) {
+      reply.code(404)
+      return { error: '对话不存在' }
+    }
+
+    let preferences
+    try {
+      preferences = normalizeAssistantPreferences(
+        request.body || {},
+        conversationPreferenceFallback(conversation)
+      )
+      await resolveAssistantProvider(request.currentUser.id, preferences)
+    } catch (error) {
+      reply.code(error instanceof AssistantPreferenceError ? 400 : 503)
+      return {
+        error: error instanceof AssistantPreferenceError
+          ? error.message
+          : 'AI 模型目录暂时不可用，请稍后重试'
+      }
+    }
+
+    const { rows } = await query(
+      `UPDATE assistant_conversations
+       SET model_mode = $3, model = $4, reasoning_effort = $5, updated_at = NOW()
+       WHERE id = $1 AND user_id = $2
+       RETURNING *`,
+      [
+        conversation.id,
+        request.currentUser.id,
+        preferences.modelMode,
+        preferences.model,
+        preferences.reasoningEffort
+      ]
+    )
+    return { conversation: mapConversation(rows[0]) }
   })
 
   fastify.get('/assistant/conversations/:conversationId', async (request, reply) => {
@@ -556,6 +649,34 @@ export default async function assistantRoutes(fastify) {
       return { error: '对话 ID 格式无效' }
     }
 
+    const existingConversation = requestedConversationId
+      ? await findConversation({ query }, request.currentUser.id, requestedConversationId)
+      : null
+    if (requestedConversationId && !existingConversation) {
+      reply.code(404)
+      return { error: '对话不存在' }
+    }
+
+    let preferences
+    let providerResolution
+    try {
+      preferences = normalizeAssistantPreferences(
+        request.body || {},
+        conversationPreferenceFallback(existingConversation)
+      )
+      providerResolution = await resolveAssistantProvider(
+        request.currentUser.id,
+        preferences
+      )
+    } catch (error) {
+      reply.code(error instanceof AssistantPreferenceError ? 400 : 503)
+      return {
+        error: error instanceof AssistantPreferenceError
+          ? error.message
+          : 'AI 模型目录暂时不可用，请检查服务端配置后重试'
+      }
+    }
+
     const startedAt = Date.now()
     const sources = await collectAssistantSources(
       request.currentUser.id,
@@ -568,7 +689,26 @@ export default async function assistantRoutes(fastify) {
         : null
       if (requestedConversationId && !conversation) return null
       if (!conversation) {
-        conversation = await createConversation(client, request.currentUser.id, safeQuestionForHistory)
+        conversation = await createConversation(
+          client,
+          request.currentUser.id,
+          safeQuestionForHistory,
+          preferences
+        )
+      } else {
+        const { rows } = await client.query(
+          `UPDATE assistant_conversations
+           SET model_mode = $2, model = $3, reasoning_effort = $4, updated_at = NOW()
+           WHERE id = $1
+           RETURNING *`,
+          [
+            conversation.id,
+            preferences.modelMode,
+            preferences.model,
+            preferences.reasoningEffort
+          ]
+        )
+        conversation = rows[0]
       }
       const history = await recentConversationHistory(
         client,
@@ -610,7 +750,7 @@ export default async function assistantRoutes(fastify) {
     const abortOnDisconnect = () => clientAbort.abort()
     reply.raw.once('close', abortOnDisconnect)
     try {
-      const { provider, providerConfig } = await resolveAssistantProvider(request.currentUser.id)
+      const { provider, providerConfig } = providerResolution
       if (!provider?.enabled || !normalizeText(provider.apiKey)) {
         const fallback = retrievalResponse(
           question,

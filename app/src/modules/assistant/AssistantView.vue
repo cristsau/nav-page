@@ -7,8 +7,14 @@ import {
   deleteAssistantConversation,
   fetchAssistantConversation,
   fetchAssistantConversations,
-  streamAssistantMessage
+  streamAssistantMessage,
+  updateAssistantConversationPreferences
 } from '@/shared/services/assistantApi'
+import { fetchBackendChatModels } from '@/shared/services/aiSearchApi'
+import {
+  AUTO_CHAT_MODEL_OPTION_ID,
+  buildChatModelPicker
+} from '@/shared/config/aiModels'
 import { fetchEmailEvent } from '@/shared/services/emailApi'
 
 const route = useRoute()
@@ -21,16 +27,113 @@ const question = ref('')
 const loadingConversations = ref(false)
 const loadingConversation = ref(false)
 const sending = ref(false)
+const preferenceSaving = ref(false)
 const errorMessage = ref('')
 const emailDetail = ref(null)
 const emailLoading = ref(false)
 const usageExpanded = ref(false)
 const composer = ref(null)
 const messageList = ref(null)
+const assistantPreferences = ref({
+  modelMode: 'latest',
+  model: '',
+  reasoningEffort: 'low'
+})
+const modelCatalog = ref({
+  models: [],
+  latestModel: '',
+  apiMode: 'responses',
+  source: ''
+})
+const modelCatalogLoading = ref(false)
+const modelCatalogError = ref('')
 let streamController = null
 
 const canSend = computed(() => Boolean(question.value.trim()) && !sending.value)
 const activeTitle = computed(() => activeConversation.value?.title || '新的对话')
+const modelPicker = computed(() => buildChatModelPicker({
+  currentModel: assistantPreferences.value.model,
+  modelMode: assistantPreferences.value.modelMode,
+  discoveredModels: modelCatalog.value.models,
+  latestModel: modelCatalog.value.latestModel
+}))
+const modelOptions = computed(() => {
+  if (modelCatalog.value.models.length) return modelPicker.value.options
+  if (assistantPreferences.value.modelMode === 'pinned' && assistantPreferences.value.model) {
+    return [{
+      id: assistantPreferences.value.model,
+      label: assistantPreferences.value.model,
+      description: '当前对话配置'
+    }]
+  }
+  return []
+})
+const usesResponsesApi = computed(() => modelCatalog.value.apiMode === 'responses')
+const controlsDisabled = computed(() => sending.value || preferenceSaving.value)
+
+function preferencesFromConversation(conversation) {
+  return {
+    modelMode: conversation?.modelMode === 'pinned' ? 'pinned' : 'latest',
+    model: conversation?.model || '',
+    reasoningEffort: conversation?.reasoningEffort || 'low'
+  }
+}
+
+function replaceConversationInList(conversation) {
+  const index = conversations.value.findIndex((item) => item.id === conversation?.id)
+  if (index >= 0) conversations.value.splice(index, 1, conversation)
+}
+
+async function savePreferences(nextPreferences) {
+  if (controlsDisabled.value) return
+  const previous = { ...assistantPreferences.value }
+  assistantPreferences.value = nextPreferences
+  errorMessage.value = ''
+  if (!activeConversation.value?.id) return
+
+  preferenceSaving.value = true
+  try {
+    const result = await updateAssistantConversationPreferences(
+      activeConversation.value.id,
+      nextPreferences
+    )
+    activeConversation.value = result.conversation
+    replaceConversationInList(result.conversation)
+  } catch (error) {
+    assistantPreferences.value = previous
+    errorMessage.value = error.message || '对话模型设置保存失败'
+  } finally {
+    preferenceSaving.value = false
+  }
+}
+
+function selectModel(value) {
+  const pinned = value !== AUTO_CHAT_MODEL_OPTION_ID
+  void savePreferences({
+    ...assistantPreferences.value,
+    modelMode: pinned ? 'pinned' : 'latest',
+    model: pinned ? value : ''
+  })
+}
+
+function selectReasoningEffort(value) {
+  void savePreferences({
+    ...assistantPreferences.value,
+    reasoningEffort: value
+  })
+}
+
+async function loadModelCatalog() {
+  modelCatalogLoading.value = true
+  modelCatalogError.value = ''
+  try {
+    modelCatalog.value = await fetchBackendChatModels()
+  } catch (error) {
+    modelCatalogError.value = error.message || '模型列表加载失败'
+  } finally {
+    modelCatalogLoading.value = false
+  }
+}
 
 function formatDate(value) {
   if (!value) return ''
@@ -71,6 +174,7 @@ async function openConversation(conversationId) {
   try {
     const result = await fetchAssistantConversation(conversationId)
     activeConversation.value = result.conversation
+    assistantPreferences.value = preferencesFromConversation(result.conversation)
     messages.value = result.messages || []
     await scrollToLatest()
   } catch (error) {
@@ -83,6 +187,7 @@ async function openConversation(conversationId) {
 function startNewConversation() {
   if (sending.value) return
   activeConversation.value = null
+  assistantPreferences.value = preferencesFromConversation(null)
   messages.value = []
   errorMessage.value = ''
   nextTick(() => composer.value?.focus())
@@ -155,10 +260,12 @@ async function sendQuestion() {
     await streamAssistantMessage({
       conversationId: activeConversation.value?.id || '',
       query: text,
+      ...assistantPreferences.value,
       signal: streamController.signal,
       onEvent(event, payload) {
         if (event === 'conversation') {
           activeConversation.value = payload.conversation
+          assistantPreferences.value = preferencesFromConversation(payload.conversation)
           Object.assign(userMessage, payload.userMessage || {})
         } else if (event === 'sources') {
           assistantMessage.sources = payload.sources || []
@@ -228,6 +335,7 @@ watch(() => route.query.email, (value) => {
 onMounted(async () => {
   await Promise.all([
     loadConversations(),
+    loadModelCatalog(),
     loadLinkedEmail(String(route.query.email || ''))
   ])
   composer.value?.focus()
@@ -286,11 +394,52 @@ onBeforeUnmount(() => streamController?.abort())
 
     <section class="assistant-workspace" aria-label="助理对话">
       <header class="assistant-workspace__header">
-        <div>
-            <span class="assistant-eyebrow">站内优先 AI 助理</span>
+        <div class="assistant-workspace__title">
+          <span class="assistant-eyebrow">站内优先 AI 助理</span>
           <h2>{{ activeTitle }}</h2>
         </div>
+        <div class="assistant-model-controls" aria-label="当前对话 AI 设置">
+          <label>
+            <span>模型</span>
+            <select
+              :value="modelPicker.selectionValue"
+              :disabled="controlsDisabled || modelCatalogLoading"
+              aria-label="选择当前对话模型"
+              @change="selectModel($event.target.value)"
+            >
+              <option :value="AUTO_CHAT_MODEL_OPTION_ID">
+                自动 · {{ modelPicker.latestModel }}
+              </option>
+              <option
+                v-for="model in modelOptions"
+                :key="model.id"
+                :value="model.id"
+              >
+                {{ model.label }}
+              </option>
+            </select>
+          </label>
+          <label :class="{ 'is-disabled': !usesResponsesApi }">
+            <span>思考</span>
+            <select
+              :value="assistantPreferences.reasoningEffort"
+              :disabled="controlsDisabled || !usesResponsesApi"
+              aria-label="选择当前对话推理强度"
+              @change="selectReasoningEffort($event.target.value)"
+            >
+              <option value="low">低</option>
+              <option value="medium">中</option>
+              <option value="high">高</option>
+              <option value="xhigh">极高</option>
+              <option value="max">最大</option>
+              <option value="ultra">超强</option>
+            </select>
+          </label>
+          <span v-if="preferenceSaving" class="assistant-model-controls__status" role="status">保存中…</span>
+          <span v-else-if="modelCatalogError" class="assistant-model-controls__status is-warning" role="status">仅可使用自动模式</span>
+        </div>
         <button
+          class="assistant-export"
           type="button"
           :disabled="!messages.length"
           title="导出 Markdown"
@@ -323,6 +472,7 @@ onBeforeUnmount(() => streamController?.abort())
             <div class="assistant-message__role">
               <Icon :name="message.role === 'user' ? 'user' : 'sparkles'" :size="16" />
               <span>{{ message.role === 'user' ? '我' : 'DOMO 助理' }}</span>
+              <span v-if="message.role === 'assistant' && message.model" class="assistant-message__model">{{ message.model }}</span>
             </div>
             <div class="assistant-message__content">{{ message.content }}<span v-if="message.streaming" class="assistant-caret" aria-label="正在生成"></span></div>
             <div v-if="message.sources?.length" class="assistant-sources" aria-label="回答来源">
@@ -406,8 +556,10 @@ onBeforeUnmount(() => streamController?.abort())
 .assistant-email { min-width: 0; background: var(--bg-secondary); }
 .assistant-sidebar { display: flex; max-height: calc(100vh - var(--app-shell-header-height, 64px)); flex-direction: column; border-right: 1px solid var(--border-light); }
 .assistant-sidebar__header,
-.assistant-workspace__header,
 .assistant-email > header { display: flex; align-items: center; justify-content: space-between; gap: 14px; }
+.assistant-workspace__header { display: grid; align-items: center; grid-template-columns: minmax(120px, 1fr) auto auto; gap: 14px; }
+.assistant-workspace__title { min-width: 0; }
+.assistant-workspace__title h2 { overflow: hidden; white-space: nowrap; text-overflow: ellipsis; }
 .assistant-sidebar__header { padding: 24px 18px 16px; }
 .assistant-sidebar h1,
 .assistant-workspace h2,
@@ -453,6 +605,15 @@ onBeforeUnmount(() => streamController?.abort())
 .assistant-workspace__header { min-height: 74px; padding: 14px clamp(20px, 4vw, 48px); border-bottom: 1px solid var(--border-light); }
 .assistant-workspace__header button { display: inline-flex; padding: 0 12px; align-items: center; gap: 7px; }
 .assistant-workspace__header button:disabled { opacity: 0.45; cursor: not-allowed; }
+.assistant-model-controls { display: flex; min-width: 0; align-items: center; gap: 8px; }
+.assistant-model-controls label { display: flex; min-width: 0; min-height: 42px; padding: 4px 9px; align-items: center; gap: 6px; background: var(--bg-card); border: 1px solid var(--border-light); border-radius: 12px; }
+.assistant-model-controls label:focus-within { border-color: var(--accent-color); box-shadow: 0 0 0 3px color-mix(in srgb, var(--accent-color) 9%, transparent); }
+.assistant-model-controls label > span { flex: 0 0 auto; color: var(--text-muted); font-size: 0.64rem; font-weight: 720; }
+.assistant-model-controls select { max-width: 190px; min-width: 90px; color: var(--text-primary); font: inherit; font-size: 0.72rem; font-weight: 680; background: transparent; border: 0; outline: 0; cursor: pointer; }
+.assistant-model-controls label:nth-child(2) select { max-width: 72px; min-width: 52px; }
+.assistant-model-controls label.is-disabled { opacity: 0.52; }
+.assistant-model-controls__status { color: var(--text-muted); font-size: 0.65rem; }
+.assistant-model-controls__status.is-warning { color: var(--warning-color); }
 .assistant-messages { min-height: 0; padding: 28px clamp(20px, 6vw, 84px); overflow-y: auto; scroll-behavior: smooth; }
 .assistant-welcome { max-width: 680px; margin: 11vh auto 0; text-align: center; }
 .assistant-welcome__icon { display: grid; width: 58px; height: 58px; margin: 0 auto 18px; place-items: center; color: var(--accent-color); background: var(--accent-bg); border-radius: 18px; }
@@ -465,6 +626,7 @@ onBeforeUnmount(() => streamController?.abort())
 .assistant-message { width: min(760px, 100%); margin: 0 auto 30px; }
 .assistant-message.is-user { width: min(660px, 92%); margin-right: max(0px, calc((100% - 760px) / 2)); }
 .assistant-message__role { display: flex; margin-bottom: 9px; align-items: center; gap: 7px; color: var(--text-muted); font-size: 0.7rem; font-weight: 720; }
+.assistant-message__model { padding: 2px 7px; color: var(--text-secondary); background: var(--bg-secondary); border: 1px solid var(--border-light); border-radius: 999px; font-size: 0.61rem; font-weight: 640; }
 .assistant-message__content { padding: 17px 19px; white-space: pre-wrap; overflow-wrap: anywhere; line-height: 1.78; background: var(--bg-card); border: 1px solid var(--border-light); border-radius: 18px; }
 .assistant-message.is-user .assistant-message__content { background: var(--accent-bg); border-color: color-mix(in srgb, var(--accent-color) 30%, var(--border-light)); }
 .assistant-caret { display: inline-block; width: 7px; height: 1.1em; margin-left: 3px; vertical-align: -2px; background: var(--accent-color); animation: assistant-blink 0.8s steps(2, start) infinite; }
@@ -505,6 +667,8 @@ onBeforeUnmount(() => streamController?.abort())
   .assistant-page,
   .assistant-page:has(.assistant-email) { grid-template-columns: 230px minmax(0, 1fr); }
   .assistant-email { position: fixed; top: var(--app-shell-header-height, 64px); right: 0; bottom: 0; z-index: 610; width: min(390px, 92vw); box-shadow: var(--shadow-lg); }
+  .assistant-workspace__header { grid-template-columns: minmax(100px, 1fr) auto; }
+  .assistant-export { display: none !important; }
 }
 
 @media (max-width: 820px), (pointer: coarse) and (max-width: 1024px) {
@@ -520,7 +684,11 @@ onBeforeUnmount(() => streamController?.abort())
   .assistant-history article { min-width: 190px; flex: 0 0 190px; }
   .assistant-history__delete { opacity: 1; }
   .assistant-workspace { max-height: none; min-height: calc(100vh - 210px); grid-template-rows: auto minmax(360px, 1fr) auto auto; }
-  .assistant-workspace__header { min-height: 62px; padding: 10px 14px; }
+  .assistant-workspace__header { min-height: 62px; padding: 10px 14px; align-items: start; grid-template-columns: 1fr; gap: 8px; }
+  .assistant-model-controls { width: 100%; overflow-x: auto; }
+  .assistant-model-controls label { flex: 0 0 auto; }
+  .assistant-model-controls label:first-child { flex: 1 0 180px; }
+  .assistant-model-controls label:first-child select { max-width: none; min-width: 0; flex: 1; }
   .assistant-workspace__header button span { display: none; }
   .assistant-messages { padding: 20px 14px; }
   .assistant-welcome { margin-top: 6vh; }

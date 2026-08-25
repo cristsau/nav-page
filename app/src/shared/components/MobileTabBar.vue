@@ -52,9 +52,10 @@ const navigationItems = computed(() => (
 
 .mobile-tabs a {
   display: inline-flex;
-  min-width: 74px;
+  min-width: 0;
   min-height: 50px;
-  padding: 6px 12px;
+  padding: 6px 8px;
+  flex: 1 1 0;
   flex-direction: column;
   align-items: center;
   justify-content: center;
@@ -68,8 +69,9 @@ const navigationItems = computed(() => (
 
 @media (max-width: 420px) {
   .mobile-tabs a {
-    min-width: 62px;
-    padding-inline: 8px;
+    min-width: 0;
+    padding-inline: 4px;
+    font-size: 0.63rem;
   }
 }
 

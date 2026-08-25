@@ -20,10 +20,10 @@ export async function fetchAssistantConversations(search = '') {
   })
 }
 
-export async function createAssistantConversation(title = '') {
+export async function createAssistantConversation(title = '', preferences = {}) {
   return request('/assistant/conversations', {
     method: 'POST',
-    body: JSON.stringify({ title })
+    body: JSON.stringify({ title, ...preferences })
   })
 }
 
@@ -38,6 +38,19 @@ export async function deleteAssistantConversation(conversationId) {
   return request(`/assistant/conversations/${encodeURIComponent(conversationId)}`, {
     method: 'DELETE'
   })
+}
+
+export async function updateAssistantConversationPreferences(
+  conversationId,
+  preferences
+) {
+  return request(
+    `/assistant/conversations/${encodeURIComponent(conversationId)}/preferences`,
+    {
+      method: 'PATCH',
+      body: JSON.stringify(preferences)
+    }
+  )
 }
 
 function parseSseFrame(frame) {
@@ -58,12 +71,21 @@ function parseSseFrame(frame) {
 export async function streamAssistantMessage({
   conversationId = '',
   query,
+  modelMode = 'latest',
+  model = '',
+  reasoningEffort = 'low',
   signal,
   onEvent = () => {}
 }) {
   const response = await apiRawRequest('/assistant/chat/stream', {
     method: 'POST',
-    body: JSON.stringify({ conversationId: conversationId || undefined, query }),
+    body: JSON.stringify({
+      conversationId: conversationId || undefined,
+      query,
+      modelMode,
+      ...(modelMode === 'pinned' && model ? { model } : {}),
+      reasoningEffort
+    }),
     signal
   })
   if (!response.body) throw new Error('当前浏览器不支持流式回答')

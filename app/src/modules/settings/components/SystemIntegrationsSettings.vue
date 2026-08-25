@@ -306,7 +306,7 @@ onMounted(refresh)
     <div class="integration-heading">
       <div>
         <h3 id="system-integrations-title">系统集成</h3>
-        <p>自行配置 MXroute 邮箱和任意 S3 兼容对象存储。Secret 只写入服务器，不会回传到浏览器。</p>
+        <p>自行配置支持标准 SMTP / IMAP 的邮箱和任意 S3 兼容对象存储。Secret 只写入服务器，不会回传到浏览器。</p>
       </div>
       <button class="button button--secondary" type="button" :disabled="loading || busyAction" @click="refresh">
         <Icon name="refresh" :size="16" />
@@ -324,8 +324,8 @@ onMounted(refresh)
       <header class="card-header">
         <div class="card-icon"><Icon name="mail" :size="20" /></div>
         <div>
-          <h4>MXroute 邮箱</h4>
-          <p>SMTP 负责注册与通知邮件；IMAP 负责收件、分类和摘要。Cloudflare 仅继续解析 DNS。</p>
+          <h4>邮件服务（SMTP / IMAP）</h4>
+          <p>兼容使用密码或应用专用密码、支持 SMTP 465 与 IMAP 993 隐式 TLS 的邮箱。仅支持 OAuth 登录的邮箱暂未接入。</p>
         </div>
       </header>
 

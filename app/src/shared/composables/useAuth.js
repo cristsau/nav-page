@@ -391,9 +391,9 @@ export function useAuth() {
     if (!isBackendAuthEnabled()) {
       return {
         enabled: false,
-        canonicalOrigin: '',
+        allowedOrigins: [],
         rpId: '',
-        passwordOnlyAliasMessage: ''
+        unsupportedOriginMessage: ''
       }
     }
     return fetchBackendPasskeyConfig()

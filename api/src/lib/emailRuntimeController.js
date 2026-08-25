@@ -39,7 +39,7 @@ async function startCurrent() {
       },
       poolInstance,
       logger,
-      observer: observerFactory(MAINTENANCE_JOB_NAMES.EMAIL_INGEST, 'MXroute 邮件接收与分类')
+        observer: observerFactory(MAINTENANCE_JOB_NAMES.EMAIL_INGEST, '邮件接收与分类')
     }),
     startEmailDigestScheduler({
       enabled: config.emailDigestEnabled,

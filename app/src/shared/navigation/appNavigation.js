@@ -22,6 +22,13 @@ export const PRIMARY_NAV_ITEMS = Object.freeze([
     path: '/media'
   },
   {
+    id: 'mail',
+    label: '邮件',
+    description: '智能收件与重要邮件',
+    icon: 'mail',
+    path: '/mail'
+  },
+  {
     id: 'assistant',
     label: '助理',
     description: '带来源的个人资料助理',

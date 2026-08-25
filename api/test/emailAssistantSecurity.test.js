@@ -85,7 +85,7 @@ test('mail ingestion ignores attachments and bounds source/body sizes', async ()
   assert.doesNotMatch(migration, /subject\s+TEXT|body\s+TEXT|sender_address\s+TEXT/i)
 })
 
-test('registration resend rotates the token and MXroute SMTP is constrained to implicit TLS', async () => {
+test('registration resend rotates the token and SMTP is constrained to implicit TLS', async () => {
   const [authRoute, delivery, mailOutbox, migration] = await Promise.all([
     source('../src/routes/auth.js'),
     source('../src/lib/notificationDelivery.js'),
@@ -95,7 +95,7 @@ test('registration resend rotates the token and MXroute SMTP is constrained to i
   assert.match(authRoute, /\/auth\/register\/resend-verification/)
   assert.match(authRoute, /verification_sent_at <= NOW\(\) - INTERVAL '60 seconds'/)
   assert.match(delivery, /registration-verify:\$\{requestId\}:\$\{tokenDigest\}/)
-  assert.match(mailOutbox, /MXroute SMTP must use implicit TLS on port 465/)
+  assert.match(mailOutbox, /SMTP must use implicit TLS on port 465/)
   assert.match(mailOutbox, /tls: \{ minVersion: 'TLSv1\.2', rejectUnauthorized: true \}/)
   assert.match(migration, /registration_requests_verification_state_check/)
   assert.match(migration, /idx_registration_requests_pending_email_unique/)
@@ -109,9 +109,10 @@ test('bounded email digest batches use distinct idempotency keys', async () => {
 })
 
 test('email-derived assistant history is encrypted and persists only generic source metadata', async () => {
-  const [assistantRoute, migration, verifier] = await Promise.all([
+  const [assistantRoute, migration, preferencesMigration, verifier] = await Promise.all([
     source('../src/routes/assistant.js'),
     source('../src/db/migrations/030_email_assistant.sql'),
+    source('../src/db/migrations/031_assistant_chat_preferences.sql'),
     source('../src/db/verifyMigrations.js')
   ])
   assert.match(migration, /content_encrypted BYTEA/)
@@ -123,4 +124,7 @@ test('email-derived assistant history is encrypted and persists only generic sou
   assert.match(assistantRoute, /邮件来源（登录后打开查看）/)
   assert.match(assistantRoute, /encryptEmailPayload/)
   assert.match(assistantRoute, /decryptEmailPayload/)
+  assert.match(preferencesMigration, /reasoning_effort/)
+  assert.match(preferencesMigration, /model_mode/)
+  assert.match(verifier, /assistant_conversations_reasoning_effort_check/)
 })
