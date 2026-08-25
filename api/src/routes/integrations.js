@@ -28,9 +28,12 @@ async function audit(request, eventType, resourceType, outcome = 'success') {
   }, request.log)
 }
 
-function safeConnectionError(error, fallback) {
+export function safeConnectionError(error, fallback) {
   const message = String(error?.message || '')
-  if (/格式无效|不能指向|无法解析|必须使用|尚未启用|请先保存|不完整|未配置/.test(message)) {
+  if (
+    /格式无效|不能指向|无法解析|必须使用|尚未启用|请先保存|不完整|未配置/.test(message)
+    || message === '启用云备份前，请完整填写对象存储配置并通过只读连接测试'
+  ) {
     return message.slice(0, 240)
   }
   return fallback
