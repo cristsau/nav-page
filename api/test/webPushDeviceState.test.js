@@ -1,6 +1,15 @@
 import assert from 'node:assert/strict'
 import fs from 'node:fs/promises'
 import test from 'node:test'
+import { waitForActiveRegistration } from '../../app/src/shared/services/pwa.js'
+import {
+  startWebPushSubscription,
+  webPushPermissionBlockReason
+} from '../../app/src/shared/services/webPushSubscription.js'
+import {
+  createRegistrationGeneration,
+  isRootServiceWorkerScope
+} from '../../app/src/shared/services/pwaRegistrationState.js'
 import { runWebPushStage } from '../../app/src/shared/services/webPushTiming.js'
 import {
   currentActiveWebPushSubscription,
@@ -24,6 +33,56 @@ test('Web Push browser operations release the UI after a bounded timeout', async
   ))
   assert.match(message, /按钮已恢复/)
   assert.match(message, /继续完成启用/)
+})
+
+test('Web Push subscription starts synchronously from the user gesture', async () => {
+  let subscribeCalled = false
+  const expectedSubscription = { endpoint: 'https://push.example.test/current' }
+  const registration = {
+    active: { state: 'activated' },
+    pushManager: {
+      subscribe(options) {
+        subscribeCalled = true
+        assert.equal(options.userVisibleOnly, true)
+        assert.ok(options.applicationServerKey instanceof Uint8Array)
+        return Promise.resolve(expectedSubscription)
+      }
+    }
+  }
+
+  const pending = startWebPushSubscription(registration, 'AQIDBA')
+  assert.equal(subscribeCalled, true)
+  assert.equal(await pending, expectedSubscription)
+})
+
+test('Web Push permission states keep default and granted actionable while denied is blocked', () => {
+  assert.equal(webPushPermissionBlockReason('default'), '')
+  assert.equal(webPushPermissionBlockReason('granted'), '')
+  assert.match(webPushPermissionBlockReason('denied'), /未获允许/)
+})
+
+test('repair generation invalidates late registration results', async () => {
+  const generation = createRegistrationGeneration()
+  const captured = generation.current()
+  let releaseLateResult
+  let polluted = false
+  const lateResult = new Promise((resolve) => {
+    releaseLateResult = resolve
+  }).then(() => {
+    if (generation.isCurrent(captured)) polluted = true
+  })
+
+  generation.invalidate()
+  releaseLateResult()
+  await lateResult
+  assert.equal(polluted, false)
+})
+
+test('PWA repair matches only the exact root scope and preserves sibling scopes', () => {
+  assert.equal(isRootServiceWorkerScope('https://nav.example.test/', 'https://nav.example.test'), true)
+  assert.equal(isRootServiceWorkerScope('https://nav.example.test/tools/', 'https://nav.example.test'), false)
+  assert.equal(isRootServiceWorkerScope('https://other.example.test/', 'https://nav.example.test'), false)
+  assert.equal(isRootServiceWorkerScope('not-a-url', 'https://nav.example.test'), false)
 })
 
 test('Web Push test action is bound to the active subscription for this device', () => {
@@ -109,23 +168,87 @@ test('Web Push settings automatically tests after registration and never falls b
 })
 
 test('Web Push inspection and error recovery cannot leave the settings UI permanently busy', async () => {
-  const [apiSource, settingsSource, pwaSource] = await Promise.all([
+  const [apiSource, settingsSource, pwaSource, workerSource] = await Promise.all([
     fs.readFile(new URL('../../app/src/shared/services/webPushApi.js', import.meta.url), 'utf8'),
     fs.readFile(new URL('../../app/src/modules/settings/components/WebPushSettings.vue', import.meta.url), 'utf8'),
-    fs.readFile(new URL('../../app/src/shared/services/pwa.js', import.meta.url), 'utf8')
+    fs.readFile(new URL('../../app/src/shared/services/pwa.js', import.meta.url), 'utf8'),
+    fs.readFile(new URL('../../app/public/sw.js', import.meta.url), 'utf8')
   ])
 
-  assert.match(apiSource, /runWebPushStage\('service-worker', getPwaRegistration, 8_000\)/)
+  assert.match(apiSource, /runWebPushStage\('service-worker', inspectPwaRegistration, 8_000\)/)
   assert.match(apiSource, /runWebPushStage\([\s\S]*?'browser-subscription',[\s\S]*?getSubscription\(\),[\s\S]*?8_000/)
-  assert.match(apiSource, /if \(error\?\.code !== 'WEB_PUSH_TIMEOUT'\) throw error/)
-  assert.match(apiSource, /pushManager\.subscribe/)
+  assert.doesNotMatch(apiSource, /runWebPushStage\('service-worker', getPwaRegistration/)
+  assert.doesNotMatch(apiSource, /Notification\.requestPermission/)
+  assert.match(apiSource, /const pendingSubscription = startWebPushSubscription\(registration, publicKey\)/)
+  assert.match(apiSource, /requiresUserGestureRetry: true/)
   assert.match(settingsSource, /function refreshInBackground\(\)[\s\S]*?void reload\(\)/)
   assert.doesNotMatch(settingsSource, /catch \(error\) \{\s*await reload\(\)/)
-  assert.match(pwaSource, /void registration\.update\(\)\.catch/)
+  assert.match(settingsSource, /if \(!deviceState\.value\.serviceWorkerReady\)/)
+  assert.match(settingsSource, /await getPwaRegistration\(\)[\s\S]*?请再次点击/)
+  assert.match(settingsSource, /const preparedRegistration = getActivePwaRegistration\(\)/)
+  assert.match(settingsSource, /registration: preparedRegistration/)
+  assert.match(settingsSource, /旧订阅密钥已移除。[\s\S]*?再次点击/)
+  assert.match(settingsSource, /repairPwaRegistration/)
+  assert.match(settingsSource, /修复本机通知环境/)
+  assert.match(pwaSource, /let registrationPromise = null/)
+  assert.match(pwaSource, /getRegistration\(currentClientUrl\(\)\)/)
+  assert.match(pwaSource, /export function getActivePwaRegistration\(\)/)
+  assert.doesNotMatch(pwaSource, /navigator\.serviceWorker\.ready/)
+  assert.match(pwaSource, /读取本站 Service Worker 列表超时/)
+  assert.match(pwaSource, /清理本站旧 Service Worker 超时/)
+  assert.match(pwaSource, /registrationGeneration\.invalidate\(\)/)
+  assert.match(pwaSource, /registrationPromise === pendingRegistration/)
+  assert.match(pwaSource, /repairPromise === pendingRepair/)
+  assert.match(pwaSource, /isRootServiceWorkerScope\(item\.scope, origin\)/)
+  assert.match(pwaSource, /void activeRegistration\.update\(\)\.catch/)
+  assert.match(workerSource, /Promise\.allSettled\(SHELL_ASSETS/)
+  assert.doesNotMatch(workerSource, /fetch\('\/\.vite\/manifest\.json'/)
   const registerFunction = pwaSource.match(
     /export async function registerPwa\(\) \{[\s\S]*?\n\}/
   )?.[0] || ''
   assert.doesNotMatch(registerFunction, /await registration\.update\(\)/)
+})
+
+test('Service Worker activation resolves only after an active worker exists', async () => {
+  const worker = new EventTarget()
+  worker.state = 'installing'
+  const registration = { active: null, installing: worker, waiting: null }
+  const pending = waitForActiveRegistration(registration, 100)
+
+  registration.active = { state: 'activated' }
+  worker.state = 'activated'
+  worker.dispatchEvent(new Event('statechange'))
+
+  assert.equal(await pending, registration)
+})
+
+test('Service Worker activation rejects a redundant install without hanging', async () => {
+  const worker = new EventTarget()
+  worker.state = 'installing'
+  const registration = { active: null, installing: worker, waiting: null }
+  const pending = waitForActiveRegistration(registration, 100)
+
+  worker.state = 'redundant'
+  worker.dispatchEvent(new Event('statechange'))
+
+  await assert.rejects(pending, (error) => (
+    error.pwaStage === 'activation' && /安装已失效/.test(error.message)
+  ))
+})
+
+test('a waiting first-install Service Worker is asked to activate', async () => {
+  const worker = new EventTarget()
+  worker.state = 'installed'
+  let message = null
+  worker.postMessage = (payload) => { message = payload }
+  const registration = { active: null, installing: null, waiting: worker }
+  const pending = waitForActiveRegistration(registration, 100)
+
+  assert.deepEqual(message, { type: 'SKIP_WAITING' })
+  registration.active = { state: 'activated' }
+  worker.state = 'activated'
+  worker.dispatchEvent(new Event('statechange'))
+  assert.equal(await pending, registration)
 })
 
 test('Mail configuration uses native form submission for reliable iPhone touch handling', async () => {
@@ -137,5 +260,8 @@ test('Mail configuration uses native form submission for reliable iPhone touch h
   assert.match(source, /@submit\.prevent\.stop="saveMail"/)
   assert.match(source, /class="button button--primary"\s+type="submit"/)
   assert.match(source, /配置 \{\{ writable \? '可保存' : '只读' \}\}/)
+  assert.match(source, /配置已保存，可测试/)
+  assert.match(source, /必须填写，例如当前 NAV 用户名/)
+  assert.match(source, /保存时将 SMTP 密码复制给 IMAP/)
   assert.match(source, /touch-action: manipulation/)
 })

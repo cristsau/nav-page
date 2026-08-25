@@ -57,9 +57,9 @@ export function webPushFailureMessage(error, {
   }
   if (stage === 'service-worker') {
     if (error?.code === 'WEB_PUSH_TIMEOUT') {
-      return 'Service Worker 等待超时，按钮已恢复。请完全退出 DOMO NAV，从主屏幕重新打开后重试。'
+      return 'Service Worker 等待超时，按钮已恢复。请点“修复本机通知环境”，重新载入后再启用。'
     }
-    return `Service Worker 未就绪：${detail}。请刷新页面后重试。`
+    return `Service Worker 未就绪：${detail}。可点“修复本机通知环境”后重试。`
   }
   if (stage === 'browser-subscription') {
     if (error?.code === 'WEB_PUSH_TIMEOUT') {

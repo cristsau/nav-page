@@ -1,6 +1,7 @@
 <script setup>
 import { computed, nextTick, onMounted, reactive, ref, watch } from 'vue'
 import Icon from '@/shared/components/Icon.vue'
+import { useAuth } from '@/shared/composables/useAuth'
 import {
   fetchManagedIntegrations,
   saveManagedCloudBackup,
@@ -9,6 +10,12 @@ import {
   testManagedImap,
   testManagedSmtp
 } from '@/shared/services/integrationApi'
+import {
+  imapTestDisabledReason as resolveImapTestDisabledReason,
+  smtpTestDisabledReason as resolveSmtpTestDisabledReason
+} from '@/shared/services/mailIntegrationState'
+
+const { currentUser } = useAuth()
 
 const loading = ref(true)
 const busyAction = ref('')
@@ -120,15 +127,27 @@ function cloudFingerprint() {
 const smtpHasUnsavedChanges = computed(() => smtpFingerprint() !== savedSmtpFingerprint.value)
 const imapHasUnsavedChanges = computed(() => imapFingerprint() !== savedImapFingerprint.value)
 const cloudHasUnsavedChanges = computed(() => cloudFingerprint() !== savedCloudFingerprint.value)
-const smtpReadyToTest = computed(() => Boolean(
-  mail.smtpHost && mail.smtpUsername && mail.smtpFromAddress
-  && mail.smtpPasswordConfigured && !smtpHasUnsavedChanges.value
-))
-const imapReadyToTest = computed(() => Boolean(
-  mail.ownerUsername && mail.imapHost && mail.imapUsername
-  && (mail.imapPasswordConfigured || (mail.reuseSmtpPasswordForImap && mail.smtpPasswordConfigured))
-  && !imapHasUnsavedChanges.value
-))
+const smtpTestDisabledReason = computed(() => resolveSmtpTestDisabledReason({
+  writable: writable.value,
+  busyAction: busyAction.value,
+  host: mail.smtpHost,
+  username: mail.smtpUsername,
+  fromAddress: mail.smtpFromAddress,
+  passwordConfigured: mail.smtpPasswordConfigured,
+  hasUnsavedChanges: smtpHasUnsavedChanges.value
+}))
+const imapTestDisabledReason = computed(() => resolveImapTestDisabledReason({
+  writable: writable.value,
+  busyAction: busyAction.value,
+  ownerUsername: mail.ownerUsername,
+  host: mail.imapHost,
+  username: mail.imapUsername,
+  passwordConfigured: mail.imapPasswordConfigured
+    || (mail.reuseSmtpPasswordForImap && mail.smtpPasswordConfigured),
+  hasUnsavedChanges: imapHasUnsavedChanges.value
+}))
+const smtpReadyToTest = computed(() => !smtpTestDisabledReason.value)
+const imapReadyToTest = computed(() => !imapTestDisabledReason.value)
 const cloudReadyToTest = computed(() => Boolean(
   cloud.endpoint && cloud.bucket && cloud.accessKeyConfigured && cloud.secretKeyConfigured
   && !cloudHasUnsavedChanges.value
@@ -193,13 +212,14 @@ function applyState(state) {
   updatedAt.value = state.updatedAt || null
   const mailState = state.mail || {}
   const mailConfig = mailState.config || {}
+  const reuseSmtpPasswordForImap = mail.reuseSmtpPasswordForImap
   Object.assign(mail, {
     ...mailConfig,
     adminRecipientsText: (mailConfig.adminRecipients || []).join(', '),
     digestHoursText: (mailConfig.digestHours || [12, 20]).join(','),
     smtpPassword: '',
     imapPassword: '',
-    reuseSmtpPasswordForImap: false,
+    reuseSmtpPasswordForImap,
     smtpPasswordConfigured: mailState.secrets?.smtpPasswordConfigured === true,
     imapPasswordConfigured: mailState.secrets?.imapPasswordConfigured === true,
     encryptionConfigured: mailState.secrets?.encryptionConfigured === true,
@@ -228,6 +248,11 @@ function applyState(state) {
   savedSmtpFingerprint.value = smtpFingerprint()
   savedImapFingerprint.value = imapFingerprint()
   savedCloudFingerprint.value = cloudFingerprint()
+  if (!mail.ownerUsername && currentUser.value?.username) {
+    // Make the required value visible instead of disguising an empty field as
+    // a placeholder. It remains an unsaved change until the user saves it.
+    mail.ownerUsername = currentUser.value.username
+  }
 }
 
 async function refresh() {
@@ -412,8 +437,15 @@ onMounted(refresh)
         <p id="smtp-tls-tip" class="field-tip">固定使用 465 / TLS 1.2+，不提供明文或降级连接。</p>
         <label class="field-wide"><span>管理员通知邮箱（逗号分隔）</span><input v-model="mail.adminRecipientsText" type="text" autocomplete="off" placeholder="admin@example.com"></label>
         <div class="action-row">
-          <span>{{ smtpHasUnsavedChanges ? '请先保存 SMTP 修改，再进行连接测试。' : `最近验证：${formatDate(mail.smtpVerifiedAt)}` }}</span>
-          <button class="button button--secondary" type="button" :disabled="!writable || !smtpReadyToTest || busyAction" @click="testSmtp">
+          <span>{{ smtpTestDisabledReason || `配置已保存，可测试。最近验证：${formatDate(mail.smtpVerifiedAt)}` }}</span>
+          <button
+            class="button button--secondary"
+            :class="{ 'is-ready': smtpReadyToTest }"
+            type="button"
+            :disabled="!smtpReadyToTest"
+            :title="smtpTestDisabledReason || '验证 SMTP 连接'"
+            @click="testSmtp"
+          >
             {{ busyAction === 'test-smtp' ? '测试中' : '测试 SMTP' }}
           </button>
         </div>
@@ -422,7 +454,7 @@ onMounted(refresh)
       <fieldset>
         <legend>智能收件</legend>
         <div class="field-grid">
-          <label><span>归属 NAV 用户名</span><input v-model.trim="mail.ownerUsername" type="text" autocomplete="off" placeholder="cristsau"></label>
+          <label><span>归属 NAV 用户名</span><input v-model.trim="mail.ownerUsername" type="text" autocomplete="off" placeholder="必须填写，例如当前 NAV 用户名"></label>
           <label>
             <span>IMAP 主机</span>
             <input
@@ -443,10 +475,17 @@ onMounted(refresh)
           <label><span>摘要时间（小时，逗号分隔）</span><input v-model="mail.digestHoursText" type="text" inputmode="numeric" autocomplete="off"></label>
           <label><span>摘要时区</span><input v-model.trim="mail.digestTimeZone" type="text" autocomplete="off"></label>
         </div>
-        <label class="check-row"><input v-model="mail.reuseSmtpPasswordForImap" type="checkbox">IMAP 与 SMTP 使用同一个密码</label>
+        <label class="check-row"><input v-model="mail.reuseSmtpPasswordForImap" type="checkbox">保存时将 SMTP 密码复制给 IMAP</label>
         <div class="action-row">
-          <span>{{ imapHasUnsavedChanges ? '请先保存 IMAP 修改，再进行连接测试。' : `最近验证：${formatDate(mail.imapVerifiedAt)}` }}</span>
-          <button class="button button--secondary" type="button" :disabled="!writable || !imapReadyToTest || busyAction" @click="testImap">
+          <span>{{ imapTestDisabledReason || `配置已保存，可测试。最近验证：${formatDate(mail.imapVerifiedAt)}` }}</span>
+          <button
+            class="button button--secondary"
+            :class="{ 'is-ready': imapReadyToTest }"
+            type="button"
+            :disabled="!imapReadyToTest"
+            :title="imapTestDisabledReason || '验证 IMAP 连接'"
+            @click="testImap"
+          >
             {{ busyAction === 'test-imap' ? '测试中' : '测试 IMAP' }}
           </button>
         </div>
@@ -573,6 +612,7 @@ input:disabled { opacity: .62; }
 .card-footer { margin-top: 0; padding-top: 16px; border-top: 1px solid var(--border-light); }
 .button { display: inline-flex; min-height: 44px; padding: 0 14px; align-items: center; justify-content: center; gap: 7px; color: var(--text-primary); font: inherit; font-size: .75rem; font-weight: 650; background: var(--bg-secondary); border: 1px solid var(--border-color); border-radius: 13px; cursor: pointer; touch-action: manipulation; }
 .button--primary { color: var(--accent-contrast, #fff); background: var(--accent-color); border-color: var(--accent-color); }
+.button--secondary.is-ready { color: var(--accent-contrast, #fff); background: var(--accent-color); border-color: var(--accent-color); }
 .button:disabled { opacity: .55; cursor: not-allowed; }
 .notice { margin: 0; padding: 12px 14px; color: var(--text-secondary); font-size: .76rem; line-height: 1.6; background: var(--bg-card); border: 1px solid var(--border-light); border-radius: 14px; }
 .notice--warning { color: var(--warning-color, #9a6b28); }

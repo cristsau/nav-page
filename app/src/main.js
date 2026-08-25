@@ -29,7 +29,10 @@ async function bootstrapApp() {
   app.mount('#app')
   appRoot?.removeAttribute('aria-busy')
   startupSkeleton?.remove()
-  void registerPwa()
+  void registerPwa().catch(() => {
+    // The settings page exposes a bounded, user-driven repair path. Startup
+    // must remain usable even when WebKit cannot activate the worker yet.
+  })
 }
 
 function renderStartupError(error) {

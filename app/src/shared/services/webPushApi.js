@@ -1,6 +1,11 @@
 import { apiRequest } from './apiClient'
-import { getPwaRegistration } from './pwa'
+import { getPwaRegistration, inspectPwaRegistration } from './pwa'
 import { runWebPushStage } from './webPushTiming'
+import {
+  applicationServerKey,
+  startWebPushSubscription,
+  webPushPermissionBlockReason
+} from './webPushSubscription'
 
 const LOCAL_SUBSCRIPTION_ID_KEY = 'domo-nav-web-push-subscription-id'
 
@@ -12,13 +17,6 @@ function stagedWebPushError(error, stage) {
   wrapped.webPushStage = stage
   wrapped.cause = error
   return wrapped
-}
-
-function applicationServerKey(value) {
-  const padding = '='.repeat((4 - (value.length % 4)) % 4)
-  const base64 = `${value}${padding}`.replace(/-/g, '+').replace(/_/g, '/')
-  const raw = atob(base64)
-  return Uint8Array.from([...raw].map((character) => character.charCodeAt(0)))
 }
 
 function equalApplicationServerKey(subscription, publicKey) {
@@ -61,7 +59,7 @@ export async function inspectCurrentWebPushDevice({ publicKey = '' } = {}) {
 
   let registration
   try {
-    registration = await runWebPushStage('service-worker', getPwaRegistration, 8_000)
+    registration = await runWebPushStage('service-worker', inspectPwaRegistration, 8_000)
   } catch {
     result.errorStage = 'service-worker'
     return result
@@ -97,43 +95,42 @@ export async function inspectCurrentWebPushDevice({ publicKey = '' } = {}) {
   return result
 }
 
-export async function enableWebPush({ publicKey, deviceLabel }) {
-  if (!webPushBrowserCapability().supported) {
+export async function enableWebPush({ publicKey, deviceLabel, registration }) {
+  const capability = webPushBrowserCapability()
+  if (!capability.supported) {
     throw new Error('当前浏览器或安装方式不支持后台通知')
   }
-  const permission = await runWebPushStage(
-    'permission',
-    () => Notification.requestPermission()
-  )
-  if (permission !== 'granted') {
-    throw stagedWebPushError(new Error('通知权限未获允许'), 'permission')
+  const permissionBlockReason = webPushPermissionBlockReason(capability.permission)
+  if (permissionBlockReason) {
+    throw stagedWebPushError(new Error(permissionBlockReason), 'permission')
   }
-  const registration = await runWebPushStage('service-worker', getPwaRegistration)
-  if (!registration) throw stagedWebPushError(new Error('Service Worker 尚未就绪'), 'service-worker')
-  let subscription = null
+
+  // WebKit requires PushManager.subscribe() to start directly from a user
+  // gesture. The caller must prepare an active registration in an earlier
+  // step; do not place permission, registration or subscription lookups before
+  // this synchronous invocation.
+  let subscription
   try {
+    const pendingSubscription = startWebPushSubscription(registration, publicKey)
     subscription = await runWebPushStage(
+      'browser-subscription',
+      () => pendingSubscription
+    )
+  } catch (error) {
+    if (Notification.permission === 'denied') {
+      throw stagedWebPushError(error, 'permission')
+    }
+    // A VAPID key rotation leaves an existing subscription with incompatible
+    // options. This click only removes it; a second explicit click creates the
+    // replacement while preserving WebKit's user-gesture requirement.
+    if (error?.name !== 'InvalidStateError') throw error
+    const existing = await runWebPushStage(
       'browser-subscription',
       () => registration.pushManager.getSubscription()
     )
-  } catch (error) {
-    // Some installed iOS PWAs have been observed to leave getSubscription()
-    // pending even though subscribe() can still create or recover the current
-    // subscription. Keep non-timeout failures explicit.
-    if (error?.code !== 'WEB_PUSH_TIMEOUT') throw error
-  }
-  if (subscription && !equalApplicationServerKey(subscription, publicKey)) {
-    await runWebPushStage('browser-subscription', () => subscription.unsubscribe())
-    subscription = null
-  }
-  if (!subscription) {
-    subscription = await runWebPushStage(
-      'browser-subscription',
-      () => registration.pushManager.subscribe({
-        userVisibleOnly: true,
-        applicationServerKey: applicationServerKey(publicKey)
-      })
-    )
+    if (!existing) throw error
+    await runWebPushStage('browser-subscription', () => existing.unsubscribe())
+    return { requiresUserGestureRetry: true }
   }
   const result = await runWebPushStage(
     'server-registration',

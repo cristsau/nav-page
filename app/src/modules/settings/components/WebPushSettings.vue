@@ -11,6 +11,11 @@ import {
   webPushBrowserCapability
 } from '@/shared/services/webPushApi'
 import {
+  getActivePwaRegistration,
+  getPwaRegistration,
+  repairPwaRegistration
+} from '@/shared/services/pwa'
+import {
   currentActiveWebPushSubscription,
   webPushEnableLabel,
   webPushFailureMessage,
@@ -20,6 +25,7 @@ import {
 const status = ref(null)
 const busy = ref(false)
 const message = ref({ text: '', type: '' })
+const lastFailureStage = ref('')
 const capability = ref(webPushBrowserCapability())
 const currentSubscriptionId = ref(currentWebPushSubscriptionId())
 const deviceState = ref({
@@ -36,11 +42,15 @@ const currentSubscription = computed(() => currentActiveWebPushSubscription(
   activeSubscriptions.value,
   currentSubscriptionId.value
 ))
-const enableLabel = computed(() => webPushEnableLabel({
-  permission: capability.value.permission,
-  currentSubscription: currentSubscription.value,
-  keyMatches: deviceState.value.applicationServerKeyMatches
-}))
+const enableLabel = computed(() => (
+  deviceState.value.serviceWorkerReady
+    ? webPushEnableLabel({
+      permission: capability.value.permission,
+      currentSubscription: currentSubscription.value,
+      keyMatches: deviceState.value.applicationServerKeyMatches
+    })
+    : '准备通知环境'
+))
 const testDisabledReason = computed(() => webPushTestDisabledReason({
   busy: busy.value,
   configured: status.value?.configured === true,
@@ -85,12 +95,47 @@ function refreshInBackground() {
 async function enable() {
   if (busy.value || !status.value?.publicKey) return
   busy.value = true
-  setMessage('正在完成浏览器订阅、服务器登记与测试投递…', 'progress')
+  lastFailureStage.value = ''
+  if (!deviceState.value.serviceWorkerReady) {
+    setMessage('正在准备本机通知环境…', 'progress')
+    try {
+      await getPwaRegistration()
+      await reload()
+      if (!deviceState.value.serviceWorkerReady) {
+        const preparationError = new Error('Service Worker 尚未进入活动状态')
+        preparationError.webPushStage = 'service-worker'
+        throw preparationError
+      }
+      setMessage('通知环境已准备。请再次点击“启用当前设备”以允许通知并建立订阅。', 'success')
+    } catch (error) {
+      lastFailureStage.value = 'service-worker'
+      setMessage(webPushFailureMessage(error, { stage: 'service-worker' }), 'error')
+    } finally {
+      busy.value = false
+    }
+    return
+  }
+
+  const preparedRegistration = getActivePwaRegistration()
+  if (!preparedRegistration) {
+    deviceState.value = { ...deviceState.value, serviceWorkerReady: false }
+    setMessage('通知环境状态已变化，请先重新准备。', 'error')
+    busy.value = false
+    return
+  }
+
+  setMessage('正在建立浏览器订阅、服务器登记与测试投递…', 'progress')
   try {
     const result = await enableWebPush({
       publicKey: status.value.publicKey,
-      deviceLabel: defaultDeviceLabel()
+      deviceLabel: defaultDeviceLabel(),
+      registration: preparedRegistration
     })
+    if (result.requiresUserGestureRetry) {
+      await reload()
+      setMessage('旧订阅密钥已移除。请再次点击“启用当前设备”建立新订阅。', 'success')
+      return
+    }
     const enabledSubscriptionId = result.subscription?.id || currentWebPushSubscriptionId()
     if (!enabledSubscriptionId) {
       const registrationError = new Error('服务器没有返回当前设备订阅 ID')
@@ -109,8 +154,23 @@ async function enable() {
     await reload()
     setMessage('当前设备已启用，测试通知已发送。收到后即可关闭网页继续接收到期提醒。')
   } catch (error) {
+    lastFailureStage.value = error?.webPushStage || ''
     setMessage(webPushFailureMessage(error), 'error')
-    refreshInBackground()
+    if (lastFailureStage.value !== 'service-worker') refreshInBackground()
+  } finally {
+    busy.value = false
+  }
+}
+
+async function repairServiceWorker() {
+  if (busy.value) return
+  busy.value = true
+  try {
+    await repairPwaRegistration()
+    setMessage('本机旧通知环境已清理，正在重新载入 DOMO NAV…', 'progress')
+    window.setTimeout(() => window.location.reload(), 250)
+  } catch (error) {
+    setMessage(`修复本机通知环境失败：${error.message || '请稍后重试'}`, 'error')
   } finally {
     busy.value = false
   }
@@ -184,6 +244,15 @@ onMounted(() => reload().catch((error) => setMessage(error.message, 'error')))
         >
           <Icon name="bell" :size="16" />
           {{ enableLabel }}
+        </button>
+        <button
+          v-if="lastFailureStage === 'service-worker'"
+          type="button"
+          :disabled="busy"
+          @click="repairServiceWorker"
+        >
+          <Icon name="refresh" :size="16" />
+          修复本机通知环境
         </button>
         <button
           type="button"

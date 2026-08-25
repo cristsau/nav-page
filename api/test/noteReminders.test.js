@@ -126,6 +126,7 @@ test('browser notifications remain explicit opt-in and add authenticated Web Pus
     readSource('../../app/src/shared/composables/useNoteReminders.js'),
     readSource('../../app/src/modules/whisper/components/ReminderCenter.vue'),
     readSource('../../app/src/shared/services/webPushApi.js'),
+    readSource('../../app/src/shared/services/webPushSubscription.js'),
     readSource('../../app/public/sw.js'),
     readSource('../src/routes/webPush.js')
   ])

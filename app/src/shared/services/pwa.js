@@ -1,9 +1,20 @@
+import {
+  createRegistrationGeneration,
+  isRootServiceWorkerScope
+} from './pwaRegistrationState.js'
+
 let registration = null
+let registrationPromise = null
+let repairPromise = null
 let applyingUpdate = false
+let controllerListenerInstalled = false
 const listeners = new Set()
+const watchedRegistrationGenerations = new WeakMap()
+const registrationGeneration = createRegistrationGeneration()
 const state = {
   supported: typeof navigator !== 'undefined' && 'serviceWorker' in navigator,
   registered: false,
+  active: false,
   updateReady: false,
   error: ''
 }
@@ -13,19 +24,160 @@ function emitState() {
   for (const listener of listeners) listener(snapshot)
 }
 
-function watchRegistration(nextRegistration) {
+function staleRegistrationError() {
+  const error = pwaError(
+    null,
+    'Service Worker 注册状态已更新，请重试',
+    'registration'
+  )
+  error.code = 'PWA_REGISTRATION_STALE'
+  return error
+}
+
+function assertCurrentGeneration(generation) {
+  if (!registrationGeneration.isCurrent(generation)) throw staleRegistrationError()
+}
+
+function watchRegistration(nextRegistration, generation = registrationGeneration.current()) {
+  if (!nextRegistration) return null
+  assertCurrentGeneration(generation)
   registration = nextRegistration
   state.registered = true
-  state.updateReady = Boolean(registration.waiting)
+  state.active = Boolean(nextRegistration.active)
+  state.updateReady = Boolean(nextRegistration.waiting)
+  state.error = ''
   emitState()
-  registration.addEventListener('updatefound', () => {
-    const worker = registration.installing
+  if (watchedRegistrationGenerations.get(nextRegistration) === generation) return nextRegistration
+  watchedRegistrationGenerations.set(nextRegistration, generation)
+  nextRegistration.addEventListener('updatefound', () => {
+    if (!registrationGeneration.isCurrent(generation)) return
+    const worker = nextRegistration.installing
     worker?.addEventListener('statechange', () => {
+      if (!registrationGeneration.isCurrent(generation)) return
+      state.active = Boolean(nextRegistration.active)
       if (worker.state === 'installed' && navigator.serviceWorker.controller) {
         state.updateReady = true
-        emitState()
       }
+      emitState()
     })
+  })
+  return nextRegistration
+}
+
+function pwaError(error, fallback, stage = 'registration') {
+  const wrapped = new Error(error?.message || fallback)
+  wrapped.name = error?.name || 'Error'
+  wrapped.code = String(error?.code || '')
+  wrapped.pwaStage = stage
+  wrapped.cause = error
+  return wrapped
+}
+
+function currentClientUrl() {
+  return globalThis.location?.href || '/'
+}
+
+async function withPwaTimeout(operation, timeoutMs, fallback, stage = 'registration') {
+  let timeoutId
+  try {
+    const pending = Promise.resolve().then(operation)
+    const timeout = new Promise((_, reject) => {
+      timeoutId = setTimeout(() => {
+        reject(pwaError(null, fallback, stage))
+      }, timeoutMs)
+    })
+    return await Promise.race([pending, timeout])
+  } finally {
+    if (timeoutId) clearTimeout(timeoutId)
+  }
+}
+
+async function findExistingRegistration(generation = registrationGeneration.current()) {
+  if (!state.supported || !globalThis.isSecureContext) return null
+  const existing = await navigator.serviceWorker.getRegistration(currentClientUrl())
+  assertCurrentGeneration(generation)
+  return existing || null
+}
+
+export function waitForActiveRegistration(
+  nextRegistration,
+  timeoutMs = 12_000,
+  generation = registrationGeneration.current()
+) {
+  if (!registrationGeneration.isCurrent(generation)) {
+    return Promise.reject(staleRegistrationError())
+  }
+  if (nextRegistration?.active) {
+    state.active = true
+    emitState()
+    return Promise.resolve(nextRegistration)
+  }
+
+  const worker = nextRegistration?.installing || nextRegistration?.waiting
+  if (!worker) {
+    return Promise.reject(pwaError(
+      null,
+      'Service Worker 注册存在，但没有可激活的 worker',
+      'activation'
+    ))
+  }
+
+  // A restored iOS Home Screen app can retain a waiting worker without an
+  // active controller. Ask that worker to activate before listening; updates
+  // with an existing active controller keep the normal explicit-update flow.
+  if (!nextRegistration.active && nextRegistration.waiting === worker) {
+    worker.postMessage?.({ type: 'SKIP_WAITING' })
+  }
+
+  return new Promise((resolve, reject) => {
+    const timeoutId = setTimeout(() => {
+      finish()
+      if (!registrationGeneration.isCurrent(generation)) {
+        reject(staleRegistrationError())
+        return
+      }
+      reject(pwaError(
+        null,
+        `Service Worker 在 ${Math.ceil(timeoutMs / 1000)} 秒内没有激活`,
+        'activation'
+      ))
+    }, timeoutMs)
+    const finish = () => {
+      clearTimeout(timeoutId)
+      worker.removeEventListener('statechange', handleStateChange)
+    }
+    const handleStateChange = () => {
+      if (!registrationGeneration.isCurrent(generation)) {
+        finish()
+        reject(staleRegistrationError())
+        return
+      }
+      state.active = Boolean(nextRegistration.active)
+      emitState()
+      if (nextRegistration.active) {
+        finish()
+        resolve(nextRegistration)
+      } else if (worker.state === 'redundant') {
+        finish()
+        reject(pwaError(
+          null,
+          'Service Worker 安装已失效，请修复当前站点的通知环境',
+          'activation'
+        ))
+      }
+    }
+    worker.addEventListener('statechange', handleStateChange)
+    handleStateChange()
+  })
+}
+
+function ensureControllerListener() {
+  if (controllerListenerInstalled || !state.supported) return
+  controllerListenerInstalled = true
+  navigator.serviceWorker.addEventListener('controllerchange', () => {
+    if (!applyingUpdate) return
+    applyingUpdate = false
+    window.location.reload()
   })
 }
 
@@ -41,38 +193,151 @@ export function subscribePwaState(listener) {
 
 export async function registerPwa() {
   if (!state.supported || !globalThis.isSecureContext || !import.meta.env?.PROD) return null
-  try {
-    watchRegistration(await navigator.serviceWorker.register('/sw.js', {
-      scope: '/',
-      updateViaCache: 'none'
-    }))
-    // Safari/iOS can leave update() pending while the registration itself is
-    // already usable. Do not make Web Push wait for an unrelated update check.
-    void registration.update().catch((error) => {
+  ensureControllerListener()
+  if (registration?.active) return registration
+  if (registrationPromise) return registrationPromise
+  if (repairPromise) {
+    throw pwaError(null, 'Service Worker 正在修复，请稍后重试', 'repair')
+  }
+
+  const generation = registrationGeneration.current()
+  const pendingRegistration = (async () => {
+    const existing = await withPwaTimeout(
+      () => findExistingRegistration(generation),
+      4_000,
+      '读取现有 Service Worker 超时'
+    )
+    assertCurrentGeneration(generation)
+    const nextRegistration = existing
+      ? watchRegistration(existing, generation)
+      : watchRegistration(
+        await withPwaTimeout(
+          () => navigator.serviceWorker.register('/sw.js', {
+            scope: '/',
+            updateViaCache: 'none'
+          }),
+          10_000,
+          '创建 Service Worker 注册超时'
+        ),
+        generation
+      )
+    assertCurrentGeneration(generation)
+    const activeRegistration = await waitForActiveRegistration(nextRegistration, 10_000, generation)
+    assertCurrentGeneration(generation)
+
+    // Safari/iOS can leave update() pending while the active registration is
+    // already usable. Keep the update check detached from notification setup.
+    void activeRegistration.update().catch((error) => {
+      if (!registrationGeneration.isCurrent(generation)) return
       state.error = error.message || 'Service Worker 更新检查失败'
       emitState()
     })
-    navigator.serviceWorker.addEventListener('controllerchange', () => {
-      if (!applyingUpdate) return
-      applyingUpdate = false
-      window.location.reload()
-    })
-    return registration
+    return activeRegistration
+  })()
+  registrationPromise = pendingRegistration
+
+  try {
+    return await pendingRegistration
   } catch (error) {
-    state.error = error.message || 'Service Worker 注册失败'
-    emitState()
-    return null
+    const wrapped = pwaError(error, 'Service Worker 注册失败', error?.pwaStage || 'registration')
+    if (registrationGeneration.isCurrent(generation)) {
+      registrationGeneration.invalidate()
+      registration = null
+      state.registered = false
+      state.error = wrapped.message
+      state.active = false
+      emitState()
+    }
+    throw wrapped
+  } finally {
+    if (registrationPromise === pendingRegistration) registrationPromise = null
   }
 }
 
 export async function getPwaRegistration() {
-  if (registration) return registration
-  await registerPwa()
-  if (registration) return registration
-  if (state.supported && globalThis.isSecureContext) {
-    return navigator.serviceWorker.ready
+  if (registration?.active) return registration
+  return registerPwa()
+}
+
+export function getActivePwaRegistration() {
+  return registration?.active ? registration : null
+}
+
+export async function inspectPwaRegistration() {
+  if (registration?.active) return registration
+  const generation = registrationGeneration.current()
+  const existing = await withPwaTimeout(
+    () => findExistingRegistration(generation),
+    6_000,
+    '检查 Service Worker 状态超时',
+    'inspection'
+  )
+  assertCurrentGeneration(generation)
+  const watched = existing ? watchRegistration(existing, generation) : null
+  return watched?.active ? watched : null
+}
+
+export async function repairPwaRegistration() {
+  if (!state.supported || !globalThis.isSecureContext) return false
+  if (repairPromise) return repairPromise
+
+  // Invalidate first so any registration/getRegistration promise that resolves
+  // after repair starts cannot repopulate the repaired in-memory state.
+  registrationGeneration.invalidate()
+  registration = null
+  registrationPromise = null
+  state.registered = false
+  state.active = false
+  state.updateReady = false
+  state.error = ''
+  emitState()
+
+  const unregisterRootScope = async () => {
+    const registrations = await withPwaTimeout(
+      () => navigator.serviceWorker.getRegistrations(),
+      8_000,
+      '读取本站 Service Worker 列表超时',
+      'repair'
+    )
+    const origin = globalThis.location?.origin || currentClientUrl()
+    const matching = registrations.filter((item) => isRootServiceWorkerScope(item.scope, origin))
+    await withPwaTimeout(
+      () => Promise.all(matching.map((item) => item.unregister())),
+      8_000,
+      '清理本站旧 Service Worker 超时',
+      'repair'
+    )
   }
-  return null
+
+  const pendingRepair = (async () => {
+    await unregisterRootScope()
+    if (typeof caches !== 'undefined') {
+      const keys = await withPwaTimeout(
+        () => caches.keys(),
+        5_000,
+        '读取本站离线缓存超时',
+        'repair'
+      )
+      await withPwaTimeout(
+        () => Promise.all(
+          keys.filter((key) => key.startsWith('domonav-shell-')).map((key) => caches.delete(key))
+        ),
+        5_000,
+        '清理本站离线缓存超时',
+        'repair'
+      )
+    }
+    // Re-read once after cache cleanup to catch a timed-out registration call
+    // that completed while repair was already in progress.
+    await unregisterRootScope()
+    return true
+  })()
+  repairPromise = pendingRepair
+  try {
+    return await pendingRepair
+  } finally {
+    if (repairPromise === pendingRepair) repairPromise = null
+  }
 }
 
 export async function checkPwaUpdate() {
