@@ -122,12 +122,21 @@ export function waitForActiveRegistration(
     ))
   }
 
-  // A restored iOS Home Screen app can retain a waiting worker without an
-  // active controller. Ask that worker to activate before listening; updates
-  // with an existing active controller keep the normal explicit-update flow.
-  if (!nextRegistration.active && nextRegistration.waiting === worker) {
+  let activationRequested = false
+  const requestActivationIfWaiting = () => {
+    if (
+      activationRequested
+      || nextRegistration.active
+      || (nextRegistration.waiting !== worker && worker.state !== 'installed')
+    ) return
+    activationRequested = true
     worker.postMessage?.({ type: 'SKIP_WAITING' })
   }
+
+  // A restored iOS Home Screen app can retain a waiting worker without an
+  // active controller. Also repeat this check on state changes below because
+  // an installing worker can transition to waiting after this function starts.
+  requestActivationIfWaiting()
 
   return new Promise((resolve, reject) => {
     const timeoutId = setTimeout(() => {
@@ -154,6 +163,7 @@ export function waitForActiveRegistration(
       }
       state.active = Boolean(nextRegistration.active)
       emitState()
+      requestActivationIfWaiting()
       if (nextRegistration.active) {
         finish()
         resolve(nextRegistration)

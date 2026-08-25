@@ -1,6 +1,7 @@
 import test from 'node:test'
 import assert from 'node:assert/strict'
 import { readFile } from 'node:fs/promises'
+import { recordSecurityEventBestEffort } from '../src/lib/securityEvents.js'
 
 async function source(relativePath) {
   return readFile(new URL(relativePath, import.meta.url), 'utf8')
@@ -19,6 +20,8 @@ test('admin integrations expose write-only email and cloud backup configuration'
   assert.match(route, /test-imap/)
   assert.match(route, /cloud-backup\/test/)
   assert.match(route, /withManagedIntegrationMutation/)
+  assert.match(route, /resourceId: null/)
+  assert.doesNotMatch(route, /resourceId: resourceType/)
   assert.match(managed, /atomicWrite/)
   assert.match(managed, /0o600/)
   assert.match(managed, /smtpPasswordConfigured/)
@@ -35,6 +38,30 @@ test('admin integrations expose write-only email and cloud backup configuration'
   ]) {
     assert.match(securityEvents, new RegExp(eventType.replaceAll('.', '\\.')))
   }
+})
+
+test('integration audit records a typed resource without an invalid UUID resource id', async () => {
+  let loggedFailure = false
+  const logger = { error() { loggedFailure = true } }
+  const client = {
+    async query(_sql, values) {
+      assert.equal(values[4], 'mail_integration')
+      assert.equal(values[5], null)
+      return { rows: [{ id: 'audit-id', created_at: new Date().toISOString() }] }
+    }
+  }
+
+  const recorded = await recordSecurityEventBestEffort({
+    client,
+    eventType: 'admin.integrations.mail.smtp_tested',
+    outcome: 'success',
+    resourceType: 'mail_integration',
+    resourceId: null,
+    affectedCount: 1
+  }, logger)
+
+  assert.equal(recorded, true)
+  assert.equal(loggedFailure, false)
 })
 
 test('settings include a dedicated responsive system integration category', async () => {

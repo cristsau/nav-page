@@ -1,6 +1,7 @@
 import assert from 'node:assert/strict'
 import fs from 'node:fs/promises'
 import test from 'node:test'
+import vm from 'node:vm'
 import { waitForActiveRegistration } from '../../app/src/shared/services/pwa.js'
 import {
   startWebPushSubscription,
@@ -168,11 +169,12 @@ test('Web Push settings automatically tests after registration and never falls b
 })
 
 test('Web Push inspection and error recovery cannot leave the settings UI permanently busy', async () => {
-  const [apiSource, settingsSource, pwaSource, workerSource] = await Promise.all([
+  const [apiSource, settingsSource, pwaSource, workerSource, nginxSource] = await Promise.all([
     fs.readFile(new URL('../../app/src/shared/services/webPushApi.js', import.meta.url), 'utf8'),
     fs.readFile(new URL('../../app/src/modules/settings/components/WebPushSettings.vue', import.meta.url), 'utf8'),
     fs.readFile(new URL('../../app/src/shared/services/pwa.js', import.meta.url), 'utf8'),
-    fs.readFile(new URL('../../app/public/sw.js', import.meta.url), 'utf8')
+    fs.readFile(new URL('../../app/public/sw.js', import.meta.url), 'utf8'),
+    fs.readFile(new URL('../../ovh/nginx.conf', import.meta.url), 'utf8')
   ])
 
   assert.match(apiSource, /runWebPushStage\('service-worker', inspectPwaRegistration, 8_000\)/)
@@ -201,12 +203,59 @@ test('Web Push inspection and error recovery cannot leave the settings UI perman
   assert.match(pwaSource, /repairPromise === pendingRepair/)
   assert.match(pwaSource, /isRootServiceWorkerScope\(item\.scope, origin\)/)
   assert.match(pwaSource, /void activeRegistration\.update\(\)\.catch/)
-  assert.match(workerSource, /Promise\.allSettled\(SHELL_ASSETS/)
+  assert.match(workerSource, /Promise\.allSettled\([\s\S]*?SHELL_ASSETS\.map/)
+  assert.match(workerSource, /SHELL_FETCH_TIMEOUT_MS = 4_000/)
+  assert.match(workerSource, /Promise\.race\(/)
+  assert.match(workerSource, /controller\.abort\(\)/)
   assert.doesNotMatch(workerSource, /fetch\('\/\.vite\/manifest\.json'/)
+  assert.match(
+    nginxSource,
+    /location = \/manifest\.webmanifest \{[\s\S]*?default_type application\/manifest\+json;/
+  )
   const registerFunction = pwaSource.match(
     /export async function registerPwa\(\) \{[\s\S]*?\n\}/
   )?.[0] || ''
   assert.doesNotMatch(registerFunction, /await registration\.update\(\)/)
+})
+
+test('Service Worker shell pre-cache releases install when an asset fetch never settles', async () => {
+  const workerSource = await fs.readFile(
+    new URL('../../app/public/sw.js', import.meta.url),
+    'utf8'
+  )
+  const context = {
+    AbortController,
+    URL,
+    Promise,
+    Response,
+    clearTimeout,
+    setTimeout,
+    caches: {
+      async open() {
+        return { put: async () => {} }
+      },
+      async keys() { return [] },
+      async delete() { return true },
+      async match() { return null }
+    },
+    fetch() {
+      return new Promise(() => {})
+    },
+    indexedDB: { open() { throw new Error('not used') } },
+    self: {
+      addEventListener() {},
+      clients: { claim: async () => {} },
+      location: { origin: 'https://nav.example.test' },
+      registration: { showNotification: async () => {} },
+      skipWaiting: async () => {}
+    }
+  }
+  vm.createContext(context)
+  vm.runInContext(workerSource, context)
+
+  const startedAt = Date.now()
+  await context.cacheApplicationShell(5)
+  assert.ok(Date.now() - startedAt < 200)
 })
 
 test('Service Worker activation resolves only after an active worker exists', async () => {
@@ -239,13 +288,35 @@ test('Service Worker activation rejects a redundant install without hanging', as
 test('a waiting first-install Service Worker is asked to activate', async () => {
   const worker = new EventTarget()
   worker.state = 'installed'
-  let message = null
-  worker.postMessage = (payload) => { message = payload }
+  const messages = []
+  worker.postMessage = (payload) => messages.push(payload)
   const registration = { active: null, installing: null, waiting: worker }
   const pending = waitForActiveRegistration(registration, 100)
 
-  assert.deepEqual(message, { type: 'SKIP_WAITING' })
+  assert.deepEqual(messages, [{ type: 'SKIP_WAITING' }])
   registration.active = { state: 'activated' }
+  worker.state = 'activated'
+  worker.dispatchEvent(new Event('statechange'))
+  assert.equal(await pending, registration)
+})
+
+test('an installing Service Worker is asked to activate when it transitions to waiting', async () => {
+  const worker = new EventTarget()
+  worker.state = 'installing'
+  const messages = []
+  worker.postMessage = (payload) => messages.push(payload)
+  const registration = { active: null, installing: worker, waiting: null }
+  const pending = waitForActiveRegistration(registration, 100)
+
+  assert.deepEqual(messages, [])
+  registration.installing = null
+  registration.waiting = worker
+  worker.state = 'installed'
+  worker.dispatchEvent(new Event('statechange'))
+  assert.deepEqual(messages, [{ type: 'SKIP_WAITING' }])
+
+  registration.active = { state: 'activated' }
+  registration.waiting = null
   worker.state = 'activated'
   worker.dispatchEvent(new Event('statechange'))
   assert.equal(await pending, registration)
