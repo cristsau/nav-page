@@ -287,7 +287,7 @@ onBeforeUnmount(() => streamController?.abort())
     <section class="assistant-workspace" aria-label="助理对话">
       <header class="assistant-workspace__header">
         <div>
-          <span class="assistant-eyebrow">只读站内助理</span>
+            <span class="assistant-eyebrow">站内优先 AI 助理</span>
           <h2>{{ activeTitle }}</h2>
         </div>
         <button
@@ -357,7 +357,7 @@ onBeforeUnmount(() => streamController?.abort())
           @keydown="handleComposerKeydown"
         ></textarea>
         <div>
-          <span>仅检索你的站内数据，不执行删除或修改操作</span>
+              <span>优先检索你的站内数据，也能回答一般问题；不会执行删除或修改操作</span>
           <button type="submit" :disabled="!canSend">
             <Icon name="sparkles" :size="17" />
             {{ sending ? '回答中…' : '发送' }}

@@ -4,6 +4,7 @@ import { config } from '../config.js'
 import { sanitizeMaintenanceErrorCode } from './maintenanceJobStatus.js'
 import { readOwnerSecretFile } from './ownerSecretFile.js'
 import { processInboundEmail } from './emailEvents.js'
+import { assertSafeOutboundHost } from './outboundEndpoints.js'
 
 function boundedInteger(value, fallback, minimum, maximum) {
   const parsed = Number(value)
@@ -33,6 +34,42 @@ export function validateMxrouteImapConfig(runtimeConfig = config) {
     throw new Error('IMAP mailbox name is invalid')
   }
   return sourceKey
+}
+
+export async function verifyImapConnection(
+  runtimeConfig = config,
+  {
+    ImapClient = ImapFlow,
+    readSecretImpl = readOwnerSecretFile,
+    assertHostImpl = assertSafeOutboundHost
+  } = {}
+) {
+  validateMxrouteImapConfig(runtimeConfig)
+  await assertHostImpl(runtimeConfig.imapHost, { label: 'IMAP ' })
+  const password = await readSecretImpl(runtimeConfig.imapPasswordFile, {
+    label: 'IMAP password',
+    maxBytes: 4096
+  })
+  const client = new ImapClient({
+    host: runtimeConfig.imapHost,
+    port: Number(runtimeConfig.imapPort),
+    secure: true,
+    auth: { user: runtimeConfig.imapUsername, pass: password },
+    disableAutoIdle: true,
+    tls: { minVersion: 'TLSv1.2', rejectUnauthorized: true },
+    logger: false
+  })
+  try {
+    await client.connect()
+    return { ok: true, host: runtimeConfig.imapHost, port: Number(runtimeConfig.imapPort), secure: true }
+  } finally {
+    try {
+      if (client.usable) await client.logout()
+      else client.close?.()
+    } catch {
+      try { client.close?.() } catch {}
+    }
+  }
 }
 
 function firstAddress(addresses) {

@@ -39,6 +39,42 @@ export function isBlockedNetworkAddress(address) {
   return true
 }
 
+export async function assertSafeOutboundHost(
+  value,
+  { label = '外部服务', allowPrivate = config.allowPrivateIntegrationEndpoints } = {}
+) {
+  const hostname = String(value || '')
+    .trim()
+    .toLowerCase()
+    .replace(/\.$/, '')
+    .replace(/^\[|\]$/g, '')
+  if (!hostname || hostname.length > 253 || /[\s\u0000-\u001F\u007F]/.test(hostname)) {
+    throw new Error(`${label}主机名格式无效`)
+  }
+  if (
+    !allowPrivate
+    && (hostname === 'localhost' || hostname.endsWith('.localhost') || hostname.endsWith('.local'))
+  ) {
+    throw new Error(`${label}不能指向本机或私有网络`)
+  }
+  if (net.isIP(hostname)) {
+    if (!allowPrivate && isBlockedNetworkAddress(hostname)) {
+      throw new Error(`${label}不能指向本机或私有网络`)
+    }
+    return [{ address: hostname, family: net.isIP(hostname) }]
+  }
+  let addresses
+  try {
+    addresses = await dns.lookup(hostname, { all: true, verbatim: true })
+  } catch {
+    throw new Error(`${label}域名无法解析`)
+  }
+  if (!addresses.length || (!allowPrivate && addresses.some(({ address }) => isBlockedNetworkAddress(address)))) {
+    throw new Error(`${label}不能指向本机或私有网络`)
+  }
+  return addresses
+}
+
 export function parseOutboundEndpoint(value) {
   let url
   try {

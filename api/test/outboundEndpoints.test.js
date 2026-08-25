@@ -2,6 +2,7 @@ import test from 'node:test'
 import assert from 'node:assert/strict'
 import {
   assertSafeOutboundEndpoint,
+  assertSafeOutboundHost,
   isBlockedNetworkAddress,
   parseOutboundEndpoint
 } from '../src/lib/outboundEndpoints.js'
@@ -39,6 +40,10 @@ test('private and loopback network addresses are blocked', async () => {
   )
   await assert.rejects(
     () => assertSafeOutboundEndpoint('https://[::1]/v1/chat/completions'),
+    /不能指向本机或私有网络/
+  )
+  await assert.rejects(
+    () => assertSafeOutboundHost('127.0.0.1', { label: 'SMTP ' }),
     /不能指向本机或私有网络/
   )
 })

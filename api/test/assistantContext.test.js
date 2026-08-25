@@ -70,6 +70,20 @@ test('assistant prompt marks source records as untrusted data and requires citat
   assert.match(prompts.userInput, /SOURCE_DATA_JSON/)
   assert.match(prompts.userInput, /"id":"S1"/)
   assert.doesNotMatch(prompts.userInput, /do-not-send/)
+  assert.equal(prompts.mode, 'grounded')
+})
+
+test('assistant prompt allows general conversation when retrieval has no sources', () => {
+  const prompts = buildAssistantPrompts('你是谁？', [], {
+    history: [{ role: 'user', content: '你好' }]
+  })
+
+  assert.equal(prompts.mode, 'general')
+  assert.match(prompts.systemPrompt, /一般知识问题/)
+  assert.match(prompts.systemPrompt, /不要编造站内记录/)
+  assert.match(prompts.systemPrompt, /不使用 \[S1\]/)
+  assert.match(prompts.userInput, /你是谁/)
+  assert.doesNotMatch(prompts.userInput, /SOURCE_DATA_JSON/)
 })
 
 test('retrieval fallback remains useful without an AI provider', () => {
@@ -90,4 +104,6 @@ test('assistant route preserves one-shot compatibility and adds owned conversati
   assert.match(source, /text\/event-stream/)
   assert.match(source, /safeQuestionForHistory/)
   assert.match(source, /redactAssistantContext\(question\)/)
+  assert.doesNotMatch(source, /if \(!sources\.length \|\| !provider\?\.enabled/)
+  assert.doesNotMatch(source, /if \(!sources\.length\) \{\s*await recordRetrievalUsage/)
 })

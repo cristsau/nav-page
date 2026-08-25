@@ -40,6 +40,7 @@ services:
       - ./api/.env
     environment:
       NODE_ENV: production
+      NAV_MANAGED_INTEGRATIONS_DIR: "${NAV_INTEGRATIONS_DIR:-/etc/nav/integrations}"
     ports:
       - "127.0.0.1:3001:3001"
     volumes:
@@ -50,6 +51,7 @@ services:
       - "${NAV_SECRETS_DIR:?set NAV_SECRETS_DIR to the release-local secrets directory}/smtp-password:/run/secrets/nav/smtp-password:ro"
       - "${NAV_SECRETS_DIR:?set NAV_SECRETS_DIR to the release-local secrets directory}/imap-password:/run/secrets/nav/imap-password:ro"
       - "${NAV_SECRETS_DIR:?set NAV_SECRETS_DIR to the release-local secrets directory}/email-encryption-key:/run/secrets/nav/email-encryption-key:ro"
+      - "${NAV_INTEGRATIONS_DIR:-/etc/nav/integrations}:${NAV_INTEGRATIONS_DIR:-/etc/nav/integrations}"
       - nav-model-cache:/var/cache/nav-models
 
 volumes:

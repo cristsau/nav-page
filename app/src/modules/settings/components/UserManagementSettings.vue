@@ -113,7 +113,8 @@ onMounted(async () => {
         <div><span>IMAP 智能收件</span><strong>{{ mailStatus.ingest?.configured && mailStatus.ingest?.enabled ? '已启用' : '未启用' }}</strong></div>
         <div><span>每日摘要</span><strong>{{ mailStatus.digest?.enabled ? `${mailStatus.digest.hours?.join(' / ')} 时` : '未启用' }}</strong></div>
       </div>
-      <p class="mail-tip">Cloudflare 继续负责 DNS；邮箱收发由 MXroute 的实际服务器主机名处理。密码和邮件加密密钥只从服务器只读 Secret 文件读取，页面不会显示或保存。</p>
+      <p class="mail-tip">Cloudflare 继续负责 DNS；邮箱收发由 MXroute 的实际服务器主机名处理。管理员可在“邮件与云备份”中填写参数，密码只写入服务器 Secret 文件且不会回显。</p>
+      <a class="mail-config-link" href="/settings?category=system">配置邮件与云备份</a>
       <div class="mail-test">
         <label>
           <span>测试收件地址</span>
@@ -316,6 +317,26 @@ onMounted(async () => {
   color: var(--text-muted);
   font-size: 12px;
   line-height: 1.6;
+}
+
+.mail-config-link {
+  display: inline-flex;
+  min-height: 44px;
+  margin-top: 8px;
+  padding: 0 13px;
+  align-items: center;
+  color: var(--accent-color);
+  font-size: 12px;
+  font-weight: 650;
+  text-decoration: none;
+  background: color-mix(in srgb, var(--accent-color) 9%, var(--bg-secondary));
+  border: 1px solid color-mix(in srgb, var(--accent-color) 30%, var(--border-light));
+  border-radius: 13px;
+}
+
+.mail-config-link:focus-visible {
+  outline: 3px solid color-mix(in srgb, var(--accent-color) 28%, transparent);
+  outline-offset: 2px;
 }
 
 .mail-test {

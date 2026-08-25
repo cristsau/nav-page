@@ -324,6 +324,10 @@ export const config = {
   emailDigestTimeZone: String(
     process.env.NAV_EMAIL_DIGEST_TIME_ZONE || 'Asia/Shanghai'
   ).trim(),
+  managedIntegrationsDir: String(
+    process.env.NAV_MANAGED_INTEGRATIONS_DIR || ''
+  ).trim(),
+  allowPrivateIntegrationEndpoints: process.env.NAV_ALLOW_PRIVATE_INTEGRATION_ENDPOINTS === 'true',
   aiPriceCatalogJson: String(
     process.env.NAV_AI_PRICE_CATALOG_JSON || ''
   ).trim(),

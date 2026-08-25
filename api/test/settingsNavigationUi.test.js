@@ -28,11 +28,12 @@ test('authenticated routes share one primary navigation shell', async () => {
   assert.match(navigation, /label:\s*'图片库'/)
 })
 
-test('settings are split into six lazy categories with desktop and mobile navigation', async () => {
-  const [settings, securityCategory, userCategory] = await Promise.all([
+test('settings are split into seven lazy categories with desktop and mobile navigation', async () => {
+  const [settings, securityCategory, userCategory, systemCategory] = await Promise.all([
     readSource('app/src/modules/settings/Settings.vue'),
     readSource('app/src/modules/settings/categories/SecurityAuditCategory.vue'),
-    readSource('app/src/modules/settings/categories/UserManagementCategory.vue')
+    readSource('app/src/modules/settings/categories/UserManagementCategory.vue'),
+    readSource('app/src/modules/settings/categories/SystemIntegrationsCategory.vue')
   ])
 
   assert.match(settings, /defineAsyncComponent\(\(\) => import\('\.\/categories\/BasicAppearanceCategory\.vue'\)\)/)
@@ -41,14 +42,16 @@ test('settings are split into six lazy categories with desktop and mobile naviga
   assert.match(settings, /搜索与 AI/)
   assert.match(settings, /浏览器与手机/)
   assert.match(settings, /用户管理/)
+  assert.match(settings, /邮件与云备份/)
   assert.match(settings, /账号安全与审计/)
   assert.match(settings, /数据与关于/)
   assert.match(settings, /class="category-sidebar"/)
   assert.match(settings, /class="category-tabs"/)
-  assert.match(settings, /<KeepAlive[\s\S]*:max="6"/)
-  assert.match(settings, /:exclude="\['SecurityAuditCategory', 'UserManagementCategory'\]"/)
+  assert.match(settings, /<KeepAlive[\s\S]*:max="7"/)
+  assert.match(settings, /:exclude="\['SecurityAuditCategory', 'UserManagementCategory', 'SystemIntegrationsCategory'\]"/)
   assert.match(securityCategory, /defineOptions\(\{ name: 'SecurityAuditCategory' \}\)/)
   assert.match(userCategory, /defineOptions\(\{ name: 'UserManagementCategory' \}\)/)
+  assert.match(systemCategory, /defineOptions\(\{ name: 'SystemIntegrationsCategory' \}\)/)
   assert.doesNotMatch(settings, /import GeneralSettings from/)
   assert.doesNotMatch(settings, /import SecurityAuditSettings from/)
 })

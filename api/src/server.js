@@ -17,9 +17,8 @@ import { startSecurityEventRetention } from './lib/securityEventRetention.js'
 import { startNoteReminderGeneration } from './lib/noteReminderScheduler.js'
 import { startSearchEmbeddingScheduler } from './lib/searchEmbeddingScheduler.js'
 import { startWebPushScheduler } from './lib/webPushScheduler.js'
-import { startMailDeliveryScheduler } from './lib/mailOutbox.js'
-import { startEmailIngestScheduler } from './lib/emailIngestScheduler.js'
-import { startEmailDigestScheduler } from './lib/emailDigestScheduler.js'
+import { configureEmailRuntime, stopEmailRuntime } from './lib/emailRuntimeController.js'
+import { applyManagedIntegrationsToRuntime } from './lib/managedIntegrations.js'
 import { sendMaintenanceNotification } from './lib/notificationDelivery.js'
 import { attachCollaborationWebSocket } from './lib/collaborationWebSocket.js'
 import {
@@ -32,6 +31,7 @@ configureOutboundNetwork()
 async function main() {
   validatePersistentRateLimitConfiguration()
   await runMigrations()
+  await applyManagedIntegrationsToRuntime()
   const initialAcceptanceRecovery = await recoverExpiredReleaseAcceptanceAccounts({
     poolInstance: pool
   })
@@ -46,9 +46,6 @@ async function main() {
   let stopBookmarkHealthScheduler = async () => {}
   let stopSearchEmbeddingScheduler = async () => {}
   let stopWebPushScheduler = async () => {}
-  let stopMailDeliveryScheduler = async () => {}
-  let stopEmailIngestScheduler = async () => {}
-  let stopEmailDigestScheduler = async () => {}
   let stopReleaseAcceptanceRecovery = async () => {}
   let closing = false
 
@@ -79,9 +76,7 @@ async function main() {
       stopBookmarkHealthScheduler(),
       stopSearchEmbeddingScheduler(),
       stopWebPushScheduler(),
-      stopMailDeliveryScheduler(),
-      stopEmailIngestScheduler(),
-      stopEmailDigestScheduler(),
+      stopEmailRuntime(),
       stopReleaseAcceptanceRecovery(),
       stopCollaborationWebSocket()
     ])
@@ -232,53 +227,13 @@ async function main() {
       })
     })
 
-    stopMailDeliveryScheduler = startMailDeliveryScheduler({
-      enabled: config.mailDeliveryEnabled,
-      policy: {
-        intervalSeconds: config.mailDeliveryIntervalSeconds,
-        batchSize: config.mailDeliveryBatchSize,
-        maxAttempts: config.mailDeliveryMaxAttempts
-      },
+    await configureEmailRuntime({
       poolInstance: pool,
       logger: app.log,
-      observer: createMaintenanceJobObserver({
+      observerFactory: (jobName, jobLabel) => createMaintenanceJobObserver({
         ...observerOptions,
-        jobName: MAINTENANCE_JOB_NAMES.MAIL_DELIVERY,
-        jobLabel: '邮件发送队列'
-      })
-    })
-
-    stopEmailIngestScheduler = startEmailIngestScheduler({
-      enabled: config.emailIngestEnabled,
-      policy: {
-        pollIntervalSeconds: config.imapPollIntervalSeconds,
-        initialLookback: config.imapInitialLookback,
-        batchSize: config.imapBatchSize,
-        maxMessageBytes: config.imapMaxMessageBytes
-      },
-      poolInstance: pool,
-      logger: app.log,
-      observer: createMaintenanceJobObserver({
-        ...observerOptions,
-        jobName: MAINTENANCE_JOB_NAMES.EMAIL_INGEST,
-        jobLabel: 'MXroute 邮件接收与分类'
-      })
-    })
-
-    stopEmailDigestScheduler = startEmailDigestScheduler({
-      enabled: config.emailDigestEnabled,
-      policy: {
-        intervalSeconds: config.emailDigestIntervalSeconds,
-        hours: config.emailDigestHours,
-        timeZone: config.emailDigestTimeZone,
-        batchSize: config.mailDeliveryBatchSize
-      },
-      poolInstance: pool,
-      logger: app.log,
-      observer: createMaintenanceJobObserver({
-        ...observerOptions,
-        jobName: MAINTENANCE_JOB_NAMES.EMAIL_DIGEST,
-        jobLabel: '邮件摘要生成'
+        jobName,
+        jobLabel
       })
     })
 
@@ -295,9 +250,7 @@ async function main() {
       stopBookmarkHealthScheduler(),
       stopSearchEmbeddingScheduler(),
       stopWebPushScheduler(),
-      stopMailDeliveryScheduler(),
-      stopEmailIngestScheduler(),
-      stopEmailDigestScheduler(),
+      stopEmailRuntime(),
       stopReleaseAcceptanceRecovery(),
       stopCollaborationWebSocket()
     ])

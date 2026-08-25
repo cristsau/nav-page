@@ -611,11 +611,11 @@ export default async function assistantRoutes(fastify) {
     reply.raw.once('close', abortOnDisconnect)
     try {
       const { provider, providerConfig } = await resolveAssistantProvider(request.currentUser.id)
-      if (!sources.length || !provider?.enabled || !normalizeText(provider.apiKey)) {
+      if (!provider?.enabled || !normalizeText(provider.apiKey)) {
         const fallback = retrievalResponse(
           question,
           sources,
-          !sources.length ? 'no-sources' : 'not-configured'
+          'not-configured'
         )
         writeSse(reply.raw, 'delta', { delta: fallback.answer })
         result = {
@@ -750,11 +750,6 @@ export default async function assistantRoutes(fastify) {
       question,
       request.log
     )
-    if (!sources.length) {
-      await recordRetrievalUsage(request.currentUser.id, startedAt, request.log)
-      return retrievalResponse(question, sources, 'no-sources')
-    }
-
     let provider = null
     let providerConfig = {}
     try {
@@ -780,7 +775,7 @@ export default async function assistantRoutes(fastify) {
         latencyMs: Math.max(0, Date.now() - startedAt)
       }, request.log)
       return {
-        mode: 'answer',
+        mode: sources.length ? 'answer' : 'general',
         query: question,
         answer: result.answer,
         sources,

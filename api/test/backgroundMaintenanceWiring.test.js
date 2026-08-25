@@ -7,8 +7,9 @@ async function source(path) {
 }
 
 test('server, config and Compose keep maintenance and logs bounded', async () => {
-  const [server, app, config, envExample, compose] = await Promise.all([
+  const [server, emailRuntime, app, config, envExample, compose] = await Promise.all([
     source('../src/server.js'),
+    source('../src/lib/emailRuntimeController.js'),
     source('../src/app.js'),
     source('../src/config.js'),
     source('../.env.example'),
@@ -22,9 +23,12 @@ test('server, config and Compose keep maintenance and logs bounded', async () =>
   assert.match(server, /startBookmarkHealthScheduler/)
   assert.match(server, /startSearchEmbeddingScheduler/)
   assert.match(server, /startWebPushScheduler/)
-  assert.match(server, /startMailDeliveryScheduler/)
-  assert.match(server, /startEmailIngestScheduler/)
-  assert.match(server, /startEmailDigestScheduler/)
+  assert.match(server, /configureEmailRuntime/)
+  assert.match(server, /stopEmailRuntime/)
+  assert.match(emailRuntime, /startMailDeliveryScheduler/)
+  assert.match(emailRuntime, /startEmailIngestScheduler/)
+  assert.match(emailRuntime, /startEmailDigestScheduler/)
+  assert.match(emailRuntime, /MAINTENANCE_JOB_NAMES\.MAIL_DELIVERY/)
   assert.match(server, /createMaintenanceJobObserver/)
   assert.match(server, /sendMaintenanceNotification/)
   assert.doesNotMatch(server, /sendMaintenanceJobNotificationToAdmins/)

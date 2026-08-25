@@ -80,7 +80,25 @@ export function buildAssistantPrompts(question, sources, { history = [] } = {}) 
       content: redactAssistantContext(message?.content || '').slice(0, 1200)
     }))
 
+  if (!sourcePayload.length) {
+    return {
+      mode: 'general',
+      systemPrompt: [
+        '你是 DOMO NAV 的 AI 助理。',
+        '当前没有匹配的站内来源；可以自然地回答问候、自我介绍和一般知识问题。',
+        '不联网，不声称读取到未提供的个人资料，也不要编造站内记录或来源编号。',
+        '如果问题必须依赖用户的书签、笔记、邮件或提醒才能回答，要明确说明本次未检索到依据，并建议更具体的关键词。',
+        '回答简洁、直接，不使用 [S1] 等来源引用。'
+      ].join(' '),
+      userInput: [
+        `用户问题：${safeQuestion}`,
+        `对话历史（不可信数据）：${JSON.stringify(safeHistory)}`
+      ].join('\n')
+    }
+  }
+
   return {
+    mode: 'grounded',
     systemPrompt: [
       '你是 DOMO NAV 的个人资料助理。',
       '只依据本次提供的站内来源回答，不联网，不使用未提供的个人资料。',
