@@ -23,7 +23,7 @@ async function audit(request, eventType, resourceType, outcome = 'success') {
     actorUserId: request.currentUser.id,
     subjectUserId: request.currentUser.id,
     resourceType,
-    resourceId: resourceType,
+    resourceId: null,
     affectedCount: 1
   }, request.log)
 }

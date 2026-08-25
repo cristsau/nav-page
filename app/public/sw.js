@@ -2,6 +2,7 @@ const CACHE_VERSION = 'domonav-shell-v4'
 const OFFLINE_SYNC_DB = 'NavPageOfflineSyncDB'
 const OFFLINE_SYNC_STORE = 'mutations'
 const OFFLINE_SYNC_TAG = 'domo-nav-offline-sync'
+const SHELL_FETCH_TIMEOUT_MS = 4_000
 const SHELL_ASSETS = [
   '/',
   '/offline.html',
@@ -12,15 +13,42 @@ const SHELL_ASSETS = [
   '/icons/apple-touch-icon-180-v1.png'
 ]
 
-async function cacheApplicationShell() {
+async function cacheShellAsset(cache, asset, timeoutMs = SHELL_FETCH_TIMEOUT_MS) {
+  const controller = new AbortController()
+  let timeoutId
+  const timeout = new Promise((resolve) => {
+    timeoutId = setTimeout(() => {
+      controller.abort()
+      resolve()
+    }, timeoutMs)
+  })
+  try {
+    await Promise.race([
+      (async () => {
+        const response = await fetch(asset, {
+          cache: 'no-store',
+          signal: controller.signal
+        })
+        if (response.ok) await cache.put(asset, response)
+      })(),
+      timeout
+    ])
+  } catch {
+    // Shell pre-cache is best effort. A single failed request must never keep
+    // the worker in the installing state on iOS.
+  } finally {
+    if (timeoutId) clearTimeout(timeoutId)
+  }
+}
+
+async function cacheApplicationShell(timeoutMs = SHELL_FETCH_TIMEOUT_MS) {
   const cache = await caches.open(CACHE_VERSION)
   // A slow or temporarily unavailable chunk must not prevent the Service
   // Worker from becoming active on iOS. Cache only the small stable shell here;
   // hashed Vite assets are cached on first successful fetch below.
-  await Promise.allSettled(SHELL_ASSETS.map(async (asset) => {
-    const response = await fetch(asset, { cache: 'no-store' })
-    if (response.ok) await cache.put(asset, response)
-  }))
+  await Promise.allSettled(
+    SHELL_ASSETS.map((asset) => cacheShellAsset(cache, asset, timeoutMs))
+  )
 }
 
 self.addEventListener('install', (event) => {
