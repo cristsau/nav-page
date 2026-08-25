@@ -1,5 +1,6 @@
 import { apiRequest } from './apiClient'
 import { getPwaRegistration } from './pwa'
+import { runWebPushStage } from './webPushTiming'
 
 const LOCAL_SUBSCRIPTION_ID_KEY = 'domo-nav-web-push-subscription-id'
 
@@ -11,14 +12,6 @@ function stagedWebPushError(error, stage) {
   wrapped.webPushStage = stage
   wrapped.cause = error
   return wrapped
-}
-
-async function runWebPushStage(stage, operation) {
-  try {
-    return await operation()
-  } catch (error) {
-    throw stagedWebPushError(error, stage)
-  }
 }
 
 function applicationServerKey(value) {

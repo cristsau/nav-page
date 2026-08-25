@@ -1,12 +1,30 @@
 import assert from 'node:assert/strict'
 import fs from 'node:fs/promises'
 import test from 'node:test'
+import { runWebPushStage } from '../../app/src/shared/services/webPushTiming.js'
 import {
   currentActiveWebPushSubscription,
   webPushEnableLabel,
   webPushFailureMessage,
   webPushTestDisabledReason
 } from '../../app/src/shared/services/webPushState.js'
+
+test('Web Push browser operations release the UI after a bounded timeout', async () => {
+  await assert.rejects(
+    runWebPushStage('browser-subscription', () => new Promise(() => {}), 5),
+    (error) => (
+      error.code === 'WEB_PUSH_TIMEOUT'
+      && error.webPushStage === 'browser-subscription'
+    )
+  )
+
+  const message = webPushFailureMessage(Object.assign(
+    new Error('timed out'),
+    { code: 'WEB_PUSH_TIMEOUT', webPushStage: 'browser-subscription' }
+  ))
+  assert.match(message, /按钮已恢复/)
+  assert.match(message, /继续完成启用/)
+})
 
 test('Web Push test action is bound to the active subscription for this device', () => {
   const subscriptions = [
