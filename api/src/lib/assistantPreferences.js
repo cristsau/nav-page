@@ -73,6 +73,7 @@ export function normalizeAssistantPreferences(input = {}, fallback = {}) {
 }
 
 export function applyAssistantPreferences(resolution, preferences) {
+  const normalizedPreferences = normalizeAssistantPreferences(preferences)
   const catalog = resolution?.catalog || {}
   const provider = resolution?.provider || {}
   const allowedModels = new Set([
@@ -83,9 +84,9 @@ export function applyAssistantPreferences(resolution, preferences) {
     normalizeText(catalog.resolvedModelId)
   ].filter(Boolean))
 
-  const model = preferences.modelMode === AI_MODEL_MODES.LATEST
+  const model = normalizedPreferences.modelMode === AI_MODEL_MODES.LATEST
     ? normalizeText(catalog.latestModelId || catalog.resolvedModelId || provider.model)
-    : normalizeText(preferences.model)
+    : normalizeText(normalizedPreferences.model)
 
   if (!model || !allowedModels.has(model)) {
     throw new AssistantPreferenceError('所选模型已不在服务端可用列表，请刷新后重新选择')
@@ -93,12 +94,12 @@ export function applyAssistantPreferences(resolution, preferences) {
 
   return {
     ...resolution,
-    preferences,
+    preferences: normalizedPreferences,
     provider: {
       ...provider,
-      modelMode: preferences.modelMode,
+      modelMode: normalizedPreferences.modelMode,
       model,
-      reasoningEffort: preferences.reasoningEffort
+      reasoningEffort: normalizedPreferences.reasoningEffort
     }
   }
 }

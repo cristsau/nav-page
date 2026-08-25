@@ -26,6 +26,18 @@ test('assistant preferences default to latest with low reasoning', () => {
   })
 })
 
+test('assistant provider applies default preferences when legacy query omits them', () => {
+  const selected = applyAssistantPreferences(resolution)
+  assert.deepEqual(selected.preferences, {
+    modelMode: 'latest',
+    model: null,
+    reasoningEffort: 'low'
+  })
+  assert.equal(selected.provider.modelMode, 'latest')
+  assert.equal(selected.provider.model, 'gpt-5.6-sol')
+  assert.equal(selected.provider.reasoningEffort, 'low')
+})
+
 test('assistant preferences use stored conversation values as fallback', () => {
   assert.deepEqual(normalizeAssistantPreferences({}, {
     modelMode: 'pinned',
