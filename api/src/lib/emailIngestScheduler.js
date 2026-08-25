@@ -21,15 +21,15 @@ export function validateEmailIngestPolicy(policy = {}) {
   return normalized
 }
 
-export function validateMxrouteImapConfig(runtimeConfig = config) {
+export function validateImapConfig(runtimeConfig = config) {
   const sourceKey = String(runtimeConfig.emailSourceKey || '').trim().toLowerCase()
   if (!/^[a-z0-9_.-]{1,80}$/.test(sourceKey)) throw new Error('Email source key is invalid')
   if (!runtimeConfig.emailOwnerUsername) throw new Error('Email owner username is not configured')
   if (!runtimeConfig.imapHost || !runtimeConfig.imapUsername || !runtimeConfig.imapPasswordFile) {
-    throw new Error('MXroute IMAP configuration is incomplete')
+    throw new Error('IMAP configuration is incomplete')
   }
-  if (!runtimeConfig.imapSecure) throw new Error('MXroute IMAP must use implicit TLS')
-  if (Number(runtimeConfig.imapPort) !== 993) throw new Error('MXroute IMAP must use TLS port 993')
+  if (!runtimeConfig.imapSecure) throw new Error('IMAP must use implicit TLS')
+  if (Number(runtimeConfig.imapPort) !== 993) throw new Error('IMAP must use TLS port 993')
   if (!runtimeConfig.imapMailbox || /[\r\n\u0000]/.test(runtimeConfig.imapMailbox)) {
     throw new Error('IMAP mailbox name is invalid')
   }
@@ -44,7 +44,7 @@ export async function verifyImapConnection(
     assertHostImpl = assertSafeOutboundHost
   } = {}
 ) {
-  validateMxrouteImapConfig(runtimeConfig)
+  validateImapConfig(runtimeConfig)
   await assertHostImpl(runtimeConfig.imapHost, { label: 'IMAP ' })
   const password = await readSecretImpl(runtimeConfig.imapPasswordFile, {
     label: 'IMAP password',
@@ -147,7 +147,7 @@ export function startEmailIngestScheduler({
 }) {
   if (!enabled) return async () => {}
   const validated = validateEmailIngestPolicy(policy)
-  const sourceKey = validateMxrouteImapConfig(runtimeConfig)
+  const sourceKey = validateImapConfig(runtimeConfig)
   let stopped = false
   let imap = null
   let activeRun = null
@@ -181,7 +181,7 @@ export function startEmailIngestScheduler({
       logger: false
     })
     client.on('exists', () => scheduleSoon())
-    client.on('error', (error) => logger?.warn?.({ errorCode: sanitizeMaintenanceErrorCode(error) }, 'MXroute IMAP connection error'))
+    client.on('error', (error) => logger?.warn?.({ errorCode: sanitizeMaintenanceErrorCode(error) }, 'IMAP connection error'))
     client.on('close', () => {
       if (imap === client) imap = null
       scheduleSoon(5_000)
@@ -325,7 +325,7 @@ export function startEmailIngestScheduler({
           finishedAt: new Date(finishedAtMs),
           durationMs: Math.max(0, finishedAtMs - startedAtMs)
         }, logger)
-        logger?.error?.({ errorCode: sanitizeMaintenanceErrorCode(error) }, 'MXroute email ingestion failed')
+      logger?.error?.({ errorCode: sanitizeMaintenanceErrorCode(error) }, 'email ingestion failed')
       })
       .finally(() => { activeRun = null })
     return activeRun

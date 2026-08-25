@@ -3,7 +3,7 @@ import { config } from '../config.js'
 import { query } from '../db/index.js'
 import { loadEmailEncryptionKey } from '../lib/emailCrypto.js'
 import { getEmailEventForUser, getEmailNotificationDetails } from '../lib/emailEvents.js'
-import { validateMxrouteImapConfig } from '../lib/emailIngestScheduler.js'
+import { validateImapConfig } from '../lib/emailIngestScheduler.js'
 import {
   enqueueMail,
   normalizeEmailAddress,
@@ -28,7 +28,7 @@ async function emailFeatureStatus({ includeTransportDetails = false } = {}) {
     encryptionConfigured = true
   } catch {}
   try {
-    validateMxrouteImapConfig(config)
+    validateImapConfig(config)
     await readOwnerSecretFile(config.imapPasswordFile, { label: 'IMAP password', maxBytes: 4096 })
     imapConfigured = true
   } catch {}
@@ -44,7 +44,7 @@ async function emailFeatureStatus({ includeTransportDetails = false } = {}) {
     ingest: {
       enabled: config.emailIngestEnabled,
       configured: imapConfigured && encryptionConfigured,
-      source: 'mxroute-imap',
+      source: 'imap-tls',
       idle: true
     },
     digest: {
@@ -121,7 +121,7 @@ export default async function emailRoutes(fastify) {
     const mailStatus = await verifiedMailConfigurationStatus()
     if (!mailStatus.configured || !mailStatus.enabled) {
       reply.code(503)
-      return { error: 'MXroute mail delivery is not configured and enabled' }
+      return { error: 'Mail delivery is not configured and enabled' }
     }
 
     let recipient
@@ -136,9 +136,9 @@ export default async function emailRoutes(fastify) {
     const queued = await enqueueMail({
       messageType: 'system.test',
       recipient,
-      subject: 'DOMO NAV MXroute 邮件通道测试',
-      textBody: `这是 DOMO NAV 的 MXroute SMTP 通道测试邮件。\n\n收到这封邮件说明发件队列与 SMTP 通道工作正常。\n${origin}`,
-      htmlBody: `<p>这是 DOMO NAV 的 MXroute SMTP 通道测试邮件。</p><p>收到这封邮件说明发件队列与 SMTP 通道工作正常。</p><p><a href="${origin}">打开 DOMO NAV</a></p>`,
+      subject: 'DOMO NAV 邮件通道测试',
+      textBody: `这是 DOMO NAV 的 SMTP 通道测试邮件。\n\n收到这封邮件说明发件队列与 SMTP 通道工作正常。\n${origin}`,
+      htmlBody: `<p>这是 DOMO NAV 的 SMTP 通道测试邮件。</p><p>收到这封邮件说明发件队列与 SMTP 通道工作正常。</p><p><a href="${origin}">打开 DOMO NAV</a></p>`,
       dedupeKey: `system-test:${request.currentUser.id}:${randomUUID()}`,
       sensitive: true
     })

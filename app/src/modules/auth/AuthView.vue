@@ -28,9 +28,9 @@ const errorMessage = ref('')
 const successMessage = ref('')
 const passkeyConfig = ref({
   enabled: false,
-  canonicalOrigin: '',
+  allowedOrigins: [],
   rpId: '',
-  passwordOnlyAliasMessage: ''
+  unsupportedOriginMessage: ''
 })
 const passkeyBrowserSupported = ref(false)
 const registrationConfig = ref({ emailVerificationEnabled: false, emailRequired: false })
@@ -74,20 +74,21 @@ const redirectTarget = computed(() => {
 const currentOrigin = computed(() => (
   typeof window === 'undefined' ? '' : window.location.origin
 ))
-const onCanonicalPasskeyOrigin = computed(() => (
-  Boolean(passkeyConfig.value.canonicalOrigin)
-  && currentOrigin.value === passkeyConfig.value.canonicalOrigin
+const onSupportedPasskeyOrigin = computed(() => (
+  passkeyConfig.value.allowedOrigins?.some((item) => (
+    item.origin === currentOrigin.value
+  ))
 ))
 const passkeyAvailable = computed(() => (
   backendAuthEnabled.value
   && passkeyConfig.value.enabled
-  && onCanonicalPasskeyOrigin.value
+  && onSupportedPasskeyOrigin.value
   && passkeyBrowserSupported.value
 ))
 const passkeyAliasNotice = computed(() => (
   backendAuthEnabled.value
   && passkeyConfig.value.enabled
-  && !onCanonicalPasskeyOrigin.value
+  && !onSupportedPasskeyOrigin.value
 ))
 
 async function loadPasskeyAvailability() {
@@ -417,11 +418,10 @@ async function handleResendVerification() {
           {{ loading ? '验证中...' : '使用 Passkey 登录' }}
         </button>
         <p v-else-if="passkeyAliasNotice" class="auth-passkey-notice">
-          当前域名只支持密码登录。Passkey 请前往
-          <a :href="passkeyConfig.canonicalOrigin">{{ passkeyConfig.canonicalOrigin }}</a>。
+          {{ passkeyConfig.unsupportedOriginMessage || '当前域名未启用 Passkey，请使用密码登录。' }}
         </p>
         <p
-          v-else-if="passkeyConfig.enabled && onCanonicalPasskeyOrigin && !passkeyBrowserSupported"
+          v-else-if="passkeyConfig.enabled && onSupportedPasskeyOrigin && !passkeyBrowserSupported"
           class="auth-passkey-notice"
         >
           当前浏览器不支持 Passkey，请使用密码登录或更换浏览器。

@@ -32,7 +32,7 @@ const allCategories = [
   { id: 'search', label: '搜索与 AI', shortLabel: '搜索 AI', icon: 'sparkles', description: '搜索引擎、模型与联网能力' },
   { id: 'integrations', label: '浏览器与手机', shortLabel: '集成', icon: 'extension', description: '扩展、快速添加与移动端入口' },
   { id: 'users', label: '用户管理', shortLabel: '用户', icon: 'users', description: '注册审批、邮箱验证与邮件通知', adminOnly: true },
-  { id: 'system', label: '邮件与云备份', shortLabel: '系统集成', icon: 'cloud', description: 'MXroute 邮箱与加密对象存储', adminOnly: true, backendOnly: true },
+  { id: 'system', label: '邮件与云备份', shortLabel: '系统集成', icon: 'cloud', description: 'SMTP / IMAP 邮件服务与加密对象存储', adminOnly: true, backendOnly: true },
   { id: 'security', label: '账号安全与审计', shortLabel: '安全', icon: 'shield', description: '资料、会话、恢复码与审计', backendOnly: true },
   { id: 'data', label: '数据与关于', shortLabel: '数据', icon: 'database', description: '导入、导出、恢复与版本信息' }
 ]

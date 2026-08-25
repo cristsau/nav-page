@@ -696,15 +696,16 @@ async function verifyWebAuthnSchema() {
     'webauthn_challenges_origin_check',
     'webauthn_challenges_pkey',
     'webauthn_challenges_registration_scope_check',
+    'webauthn_challenges_rp_origin_check',
     'webauthn_challenges_rp_id_check',
     'webauthn_challenges_session_id_fkey',
     'webauthn_challenges_user_id_fkey',
     'webauthn_credentials_counter_check',
-    'webauthn_credentials_credential_id_key',
     'webauthn_credentials_device_type_check',
     'webauthn_credentials_display_name_check',
     'webauthn_credentials_pkey',
     'webauthn_credentials_rp_id_check',
+    'webauthn_credentials_rp_credential_unique',
     'webauthn_credentials_user_id_fkey'
   ]
   const constraints = await query(
@@ -1611,7 +1612,8 @@ async function verifyEmailAssistantSchema() {
       'notified_at', 'digested_at', 'created_at', 'updated_at'
     ]],
     ['assistant_conversations', [
-      'id', 'user_id', 'title', 'created_at', 'updated_at'
+      'id', 'user_id', 'title', 'model_mode', 'model', 'reasoning_effort',
+      'created_at', 'updated_at'
     ]],
     ['assistant_messages', [
       'id', 'conversation_id', 'user_id', 'role', 'content', 'sources',
@@ -1656,7 +1658,10 @@ async function verifyEmailAssistantSchema() {
     ]],
     ['assistant_conversations', [
       'assistant_conversations_user_id_fkey',
-      'assistant_conversations_title_check'
+      'assistant_conversations_title_check',
+      'assistant_conversations_model_mode_check',
+      'assistant_conversations_model_check',
+      'assistant_conversations_reasoning_effort_check'
     ]],
     ['assistant_messages', [
       'assistant_messages_conversation_id_fkey',

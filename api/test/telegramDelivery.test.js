@@ -193,7 +193,7 @@ test('Telegram configuration test rejects a non-numeric Chat ID before making a 
   }
 })
 
-test('legacy Telegram delivery stays compatible while current settings use MXroute', async () => {
+test('legacy Telegram delivery stays compatible while current settings use generic mail', async () => {
   const [localService, settingsView] = await Promise.all([
     fs.readFile(
       fileURLToPath(new URL('../../app/src/shared/services/telegramApproval.js', import.meta.url)),
@@ -209,7 +209,7 @@ test('legacy Telegram delivery stays compatible while current settings use MXrou
   assert.match(localService, /\/api\/telegram\/send-message/)
   assert.match(localService, /chatId:\s*expectedChatId/)
   assert.match(localService, /delivery\.result\?\.chat\?\.id/)
-  assert.match(settingsView, /MXroute 邮件通道/)
+  assert.match(settingsView, /邮件通知通道/)
   assert.match(settingsView, /发送测试邮件/)
   assert.doesNotMatch(settingsView, /发送测试消息|测试消息已送达/)
 })

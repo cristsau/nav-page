@@ -37,6 +37,12 @@ const routes = [
     meta: { title: '图片库' }
   },
   {
+    path: '/mail',
+    name: 'Mail',
+    component: () => import('@/modules/mail/MailView.vue'),
+    meta: { title: '邮件' }
+  },
+  {
     path: '/assistant',
     name: 'Assistant',
     component: () => import('@/modules/assistant/AssistantView.vue'),

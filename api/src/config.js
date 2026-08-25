@@ -1,6 +1,7 @@
 import path from 'node:path'
 import process from 'node:process'
 import { normalizePublicAppOrigin } from './lib/publicSharePage.js'
+import { WEBAUTHN_RELYING_PARTIES } from './lib/webauthnRelyingParties.js'
 
 function normalizePositiveInteger(value, fallback) {
   const parsed = Number(value)
@@ -337,6 +338,7 @@ export const config = {
   webauthnEnabled: process.env.NAV_WEBAUTHN_ENABLED === 'true',
   webauthnRpId: 'nav.skrskr.net',
   webauthnOrigin: 'https://nav.skrskr.net',
+  webauthnRelyingParties: WEBAUTHN_RELYING_PARTIES,
   webauthnRpName: 'DOMO NAV',
   corsOrigin: process.env.CORS_ORIGIN || 'http://localhost:5174',
   allowPrivateAiEndpoints: process.env.ALLOW_PRIVATE_AI_ENDPOINTS === 'true',

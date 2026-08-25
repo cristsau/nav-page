@@ -53,7 +53,7 @@ const JOB_DEFINITIONS = Object.freeze([
   },
   {
     name: MAINTENANCE_JOB_NAMES.EMAIL_INGEST,
-    label: 'MXroute 邮件接收与分类',
+    label: '邮件接收与分类',
     enabled: () => config.emailIngestEnabled,
     intervalSeconds: () => config.imapPollIntervalSeconds
   },

@@ -84,7 +84,7 @@ onMounted(async () => {
     <div class="section-header">
       <div>
         <h3 class="settings-section__title">用户管理</h3>
-        <p class="settings-section__subtitle">注册申请通过 MXroute 邮件送达，审批仍需登录本页完成。</p>
+        <p class="settings-section__subtitle">注册申请通过已配置的邮件服务送达，审批仍需登录本页完成。</p>
       </div>
       <button class="sync-btn" :disabled="mailStatusLoading" @click="loadMailStatus">
         {{ mailStatusLoading ? '检查中...' : '刷新邮件状态' }}
@@ -107,13 +107,13 @@ onMounted(async () => {
     </div>
 
     <div class="mail-panel">
-      <div class="user-block__title">MXroute 邮件通道</div>
+      <div class="user-block__title">邮件通知通道</div>
       <div class="mail-status-grid">
         <div><span>注册与审批邮件</span><strong>{{ mailStatus.mail?.configured && mailStatus.mail?.enabled ? '已就绪' : '待配置' }}</strong></div>
         <div><span>IMAP 智能收件</span><strong>{{ mailStatus.ingest?.configured && mailStatus.ingest?.enabled ? '已启用' : '未启用' }}</strong></div>
         <div><span>每日摘要</span><strong>{{ mailStatus.digest?.enabled ? `${mailStatus.digest.hours?.join(' / ')} 时` : '未启用' }}</strong></div>
       </div>
-      <p class="mail-tip">Cloudflare 继续负责 DNS；邮箱收发由 MXroute 的实际服务器主机名处理。管理员可在“邮件与云备份”中填写参数，密码只写入服务器 Secret 文件且不会回显。</p>
+      <p class="mail-tip">Cloudflare 继续负责 DNS；收发由你填写的 SMTP / IMAP 主机处理。管理员可在“邮件与云备份”中配置，密码只写入服务器 Secret 文件且不会回显。</p>
       <a class="mail-config-link" href="/settings?category=system">配置邮件与云备份</a>
       <div class="mail-test">
         <label>

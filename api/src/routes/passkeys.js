@@ -27,6 +27,7 @@ import {
   inspectReleaseAcceptanceLoginEligibility,
   isReleaseAcceptanceUsername
 } from '../ops/releaseAcceptanceAccount.js'
+import { resolveWebAuthnRelyingParty } from '../lib/webauthnRelyingParties.js'
 
 const CHALLENGE_TTL_SECONDS = 300
 const UUID_PATTERN = /^[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i
@@ -41,24 +42,35 @@ const ALLOWED_TRANSPORTS = new Set([
   'usb'
 ])
 
-function isCanonicalOrigin(request) {
-  return String(request.headers?.origin || '').trim() === config.webauthnOrigin
+function requestRelyingParty(request) {
+  return resolveWebAuthnRelyingParty(request.headers?.origin)
 }
 
-function requirePasskeyFeature(request, reply, { canonical = false } = {}) {
+function requirePasskeyFeature(reply) {
   if (!config.webauthnEnabled) {
     reply.code(404)
     return { error: 'Passkey authentication is not enabled' }
   }
 
-  if (canonical && !isCanonicalOrigin(request)) {
+  return null
+}
+
+function requirePasskeyRelyingParty(request, reply) {
+  const unavailable = requirePasskeyFeature(reply)
+  if (unavailable) return { errorResponse: unavailable, relyingParty: null }
+
+  const relyingParty = requestRelyingParty(request)
+  if (!relyingParty) {
     reply.code(403)
     return {
-      error: `Passkeys are available only at ${config.webauthnOrigin}`
+      errorResponse: {
+        error: 'Passkeys are available only on an approved DOMO NAV origin'
+      },
+      relyingParty: null
     }
   }
 
-  return null
+  return { errorResponse: null, relyingParty }
 }
 
 function normalizeDisplayName(value) {
@@ -107,6 +119,7 @@ async function cleanupChallenges() {
 async function consumeChallenge({
   challengeId,
   kind,
+  relyingParty,
   userId = null,
   sessionId = null
 }) {
@@ -123,8 +136,8 @@ async function consumeChallenge({
   const params = [
     challengeId,
     kind,
-    config.webauthnRpId,
-    config.webauthnOrigin
+    relyingParty.rpId,
+    relyingParty.origin
   ]
 
   if (userId) {
@@ -178,7 +191,7 @@ async function enforcePasskeyLoginRateLimit(request, reply, identity = '') {
   }
 }
 
-async function createAuthenticationChallenge(username) {
+async function createAuthenticationChallenge(username, relyingParty) {
   const userResult = await query(
     `
       SELECT u.id
@@ -193,11 +206,11 @@ async function createAuthenticationChallenge(username) {
         )
       LIMIT 1
     `,
-    [isValidUsername(username) ? username : '__invalid__', config.webauthnRpId]
+    [isValidUsername(username) ? username : '__invalid__', relyingParty.rpId]
   )
   const userId = userResult.rows[0]?.id || null
   const options = await generateAuthenticationOptions({
-    rpID: config.webauthnRpId,
+    rpID: relyingParty.rpId,
     allowCredentials: [],
     userVerification: 'required',
     timeout: CHALLENGE_TTL_SECONDS * 1000
@@ -224,8 +237,8 @@ async function createAuthenticationChallenge(username) {
     [
       userId,
       options.challenge,
-      config.webauthnRpId,
-      config.webauthnOrigin,
+      relyingParty.rpId,
+      relyingParty.origin,
       String(CHALLENGE_TTL_SECONDS)
     ]
   )
@@ -239,14 +252,22 @@ async function createAuthenticationChallenge(username) {
 export default async function passkeyRoutes(fastify) {
   fastify.get('/auth/passkeys/config', {
     config: { skipSession: true }
-  }, async () => ({
-    enabled: config.webauthnEnabled,
-    canonicalOrigin: config.webauthnOrigin,
-    rpId: config.webauthnRpId,
-    passwordOnlyAliasMessage:
-      `Passkeys are available only at ${config.webauthnOrigin}. `
-      + 'This domain supports password login only.'
-  }))
+  }, async (request) => {
+    const relyingParty = requestRelyingParty(request)
+    return {
+      enabled: config.webauthnEnabled,
+      supported: Boolean(relyingParty),
+      origin: relyingParty?.origin || '',
+      rpId: relyingParty?.rpId || '',
+      allowedOrigins: config.webauthnRelyingParties.map((item) => ({
+        origin: item.origin,
+        rpId: item.rpId
+      })),
+      enrollmentMode: 'per-origin',
+      unsupportedOriginMessage:
+        'Passkey 仅支持已批准的 DOMO NAV 域名；每个域名需要分别登记。'
+    }
+  })
 
   fastify.get('/auth/passkeys', async (request, reply) => {
     await fastify.requireAuth(request, reply)
@@ -264,18 +285,17 @@ export default async function passkeyRoutes(fastify) {
           last_used_at
         FROM webauthn_credentials
         WHERE user_id = $1
-          AND rp_id = $2
-        ORDER BY created_at DESC
+        ORDER BY created_at DESC, id DESC
       `,
-      [request.currentUser.id, config.webauthnRpId]
+      [request.currentUser.id]
     )
     return { passkeys: rows.map(mapPasskey) }
   })
 
   fastify.post('/auth/passkeys/register/options', async (request, reply) => {
     await fastify.requireAuth(request, reply)
-    const unavailable = requirePasskeyFeature(request, reply, { canonical: true })
-    if (unavailable) return unavailable
+    const { errorResponse, relyingParty } = requirePasskeyRelyingParty(request, reply)
+    if (errorResponse) return errorResponse
 
     const currentPassword = String(request.body?.currentPassword || '')
     const displayName = normalizeDisplayName(request.body?.displayName)
@@ -316,11 +336,11 @@ export default async function passkeyRoutes(fastify) {
         WHERE user_id = $1
           AND rp_id = $2
       `,
-      [user.id, config.webauthnRpId]
+      [user.id, relyingParty.rpId]
     )
     const options = await generateRegistrationOptions({
       rpName: config.webauthnRpName,
-      rpID: config.webauthnRpId,
+      rpID: relyingParty.rpId,
       userName: user.username,
       userDisplayName: user.username,
       userID: uuidToBytes(user.id),
@@ -374,8 +394,8 @@ export default async function passkeyRoutes(fastify) {
           request.session.id,
           options.challenge,
           user.id,
-          config.webauthnRpId,
-          config.webauthnOrigin,
+          relyingParty.rpId,
+          relyingParty.origin,
           String(CHALLENGE_TTL_SECONDS)
         ]
       )
@@ -390,8 +410,8 @@ export default async function passkeyRoutes(fastify) {
 
   fastify.post('/auth/passkeys/register/verify', async (request, reply) => {
     await fastify.requireAuth(request, reply)
-    const unavailable = requirePasskeyFeature(request, reply, { canonical: true })
-    if (unavailable) return unavailable
+    const { errorResponse, relyingParty } = requirePasskeyRelyingParty(request, reply)
+    if (errorResponse) return errorResponse
 
     const challengeId = String(request.body?.challengeId || '').trim()
     const displayName = normalizeDisplayName(request.body?.displayName)
@@ -399,6 +419,7 @@ export default async function passkeyRoutes(fastify) {
     const challenge = await consumeChallenge({
       challengeId,
       kind: 'registration',
+      relyingParty,
       userId: request.currentUser.id,
       sessionId: request.session?.id
     })
@@ -419,8 +440,8 @@ export default async function passkeyRoutes(fastify) {
       const verification = await verifyRegistrationResponse({
         response,
         expectedChallenge: challenge.challenge,
-        expectedOrigin: config.webauthnOrigin,
-        expectedRPID: config.webauthnRpId,
+        expectedOrigin: challenge.origin,
+        expectedRPID: challenge.rp_id,
         requireUserVerification: true
       })
       if (!verification.verified || !verification.registrationInfo) {
@@ -447,7 +468,7 @@ export default async function passkeyRoutes(fastify) {
               display_name,
               rp_id
             ) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10)
-            ON CONFLICT (credential_id) DO NOTHING
+            ON CONFLICT (rp_id, credential_id) DO NOTHING
             RETURNING *
           `,
           [
@@ -460,7 +481,7 @@ export default async function passkeyRoutes(fastify) {
             credentialDeviceType,
             Boolean(credentialBackedUp),
             displayName,
-            config.webauthnRpId
+            challenge.rp_id
           ]
         )
         const record = result.rows[0]
@@ -499,12 +520,8 @@ export default async function passkeyRoutes(fastify) {
 
   fastify.delete('/auth/passkeys/:passkeyId', async (request, reply) => {
     await fastify.requireAuth(request, reply)
-    if (!isCanonicalOrigin(request)) {
-      reply.code(403)
-      return {
-        error: `Passkey management is available only at ${config.webauthnOrigin}`
-      }
-    }
+    const { errorResponse } = requirePasskeyRelyingParty(request, reply)
+    if (errorResponse) return errorResponse
 
     const passkeyId = String(request.params?.passkeyId || '').trim()
     const currentPassword = String(request.body?.currentPassword || '')
@@ -532,10 +549,9 @@ export default async function passkeyRoutes(fastify) {
           DELETE FROM webauthn_credentials
           WHERE id = $1
             AND user_id = $2
-            AND rp_id = $3
           RETURNING id
         `,
-        [passkeyId, request.currentUser.id, config.webauthnRpId]
+        [passkeyId, request.currentUser.id]
       )
       if (!result.rows.length) return { status: 'not-found' }
 
@@ -585,8 +601,8 @@ export default async function passkeyRoutes(fastify) {
   fastify.post('/auth/passkeys/login/options', {
     config: { skipSession: true }
   }, async (request, reply) => {
-    const unavailable = requirePasskeyFeature(request, reply, { canonical: true })
-    if (unavailable) return unavailable
+    const { errorResponse, relyingParty } = requirePasskeyRelyingParty(request, reply)
+    if (errorResponse) return errorResponse
 
     const username = normalizeUsername(request.body?.username)
     const ipRateLimited = await enforcePasskeyLoginRateLimit(request, reply)
@@ -599,14 +615,14 @@ export default async function passkeyRoutes(fastify) {
     if (identityRateLimited) return identityRateLimited.response
 
     await cleanupChallenges()
-    return createAuthenticationChallenge(username)
+    return createAuthenticationChallenge(username, relyingParty)
   })
 
   fastify.post('/auth/passkeys/login/verify', {
     config: { skipSession: true }
   }, async (request, reply) => {
-    const unavailable = requirePasskeyFeature(request, reply, { canonical: true })
-    if (unavailable) return unavailable
+    const { errorResponse, relyingParty } = requirePasskeyRelyingParty(request, reply)
+    if (errorResponse) return errorResponse
 
     const verifyRateLimited = await enforcePasskeyLoginRateLimit(request, reply)
     if (verifyRateLimited) return verifyRateLimited.response
@@ -615,7 +631,8 @@ export default async function passkeyRoutes(fastify) {
     const response = request.body?.response
     const challenge = await consumeChallenge({
       challengeId,
-      kind: 'authentication'
+      kind: 'authentication',
+      relyingParty
     })
     if (!challenge || !response || !challenge.user_id) {
       await recordSecurityEventBestEffort({
@@ -649,7 +666,7 @@ export default async function passkeyRoutes(fastify) {
             LIMIT 1
             FOR UPDATE OF credential, u
           `,
-          [response.id, challenge.user_id, config.webauthnRpId]
+          [response.id, challenge.user_id, challenge.rp_id]
         )
         const credential = credentialResult.rows[0]
         if (!credential) throw new Error('Passkey credential unavailable')
@@ -674,8 +691,8 @@ export default async function passkeyRoutes(fastify) {
         const verification = await verifyAuthenticationResponse({
           response,
           expectedChallenge: challenge.challenge,
-          expectedOrigin: config.webauthnOrigin,
-          expectedRPID: config.webauthnRpId,
+          expectedOrigin: challenge.origin,
+          expectedRPID: challenge.rp_id,
           requireUserVerification: true,
           credential: {
             id: credential.credential_id,
