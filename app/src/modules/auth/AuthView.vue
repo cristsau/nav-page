@@ -3,6 +3,11 @@ import { computed, onBeforeUnmount, onMounted, ref } from 'vue'
 import { useRoute } from 'vue-router'
 import Icon from '@/shared/components/Icon.vue'
 import { useAuth } from '@/shared/composables/useAuth'
+import {
+  fetchBackendRegistrationConfig,
+  resendBackendRegistrationEmail,
+  verifyBackendRegistrationEmail
+} from '@/shared/services/authApi'
 
 const route = useRoute()
 const {
@@ -28,6 +33,10 @@ const passkeyConfig = ref({
   passwordOnlyAliasMessage: ''
 })
 const passkeyBrowserSupported = ref(false)
+const registrationConfig = ref({ emailVerificationEnabled: false, emailRequired: false })
+const showVerificationResend = ref(false)
+const resendEmail = ref('')
+const resendLoading = ref(false)
 
 const loginForm = ref({
   username: '',
@@ -36,6 +45,7 @@ const loginForm = ref({
 
 const registerForm = ref({
   username: '',
+  email: '',
   password: '',
   confirmPassword: ''
 })
@@ -90,14 +100,47 @@ async function loadPasskeyAvailability() {
   }
 }
 
+async function loadRegistrationConfig() {
+  if (!backendAuthEnabled.value) return
+  try {
+    registrationConfig.value = await fetchBackendRegistrationConfig()
+  } catch {
+    registrationConfig.value = { emailVerificationEnabled: false, emailRequired: false }
+  }
+}
+
+async function verifyRegistrationFromLink() {
+  const fragment = String(window.location.hash || '')
+  if (!fragment.startsWith('#register-verify?')) return
+  const params = new URLSearchParams(fragment.slice('#register-verify?'.length))
+  const requestId = String(params.get('request') || '')
+  const token = String(params.get('token') || '')
+  if (!requestId || !token || !backendAuthEnabled.value) return
+  loading.value = true
+  try {
+    await verifyBackendRegistrationEmail(requestId, token)
+    activeTab.value = 'login'
+    successMessage.value = '邮箱验证成功，注册申请已提交给管理员审批。审批结果会发送到该邮箱。'
+    showVerificationResend.value = false
+    window.history.replaceState({}, '', '/auth')
+  } catch (error) {
+    errorMessage.value = error.message || '邮箱验证链接无效或已过期。'
+    showVerificationResend.value = true
+  } finally {
+    loading.value = false
+  }
+}
+
 onMounted(async () => {
   if (String(route.query.passwordChanged || '') === '1') {
     successMessage.value = '密码已修改，所有设备均已退出。请使用新密码重新登录。'
   }
   await Promise.all([
     initAuth(),
-    loadPasskeyAvailability()
+    loadPasskeyAvailability(),
+    loadRegistrationConfig()
   ])
+  await verifyRegistrationFromLink()
 })
 
 onBeforeUnmount(clearRecoverySecrets)
@@ -164,6 +207,7 @@ function closeRecoveryMode({ preserveUsername = true } = {}) {
 function selectTab(tab) {
   closeRecoveryMode({ preserveUsername: tab === 'login' })
   activeTab.value = tab
+  if (tab === 'register') showVerificationResend.value = false
   successMessage.value = ''
 }
 
@@ -239,6 +283,11 @@ async function handleRegister() {
     return
   }
 
+  if (registrationConfig.value.emailRequired && !registerForm.value.email.trim()) {
+    errorMessage.value = '请填写用于验证和接收审批结果的邮箱。'
+    return
+  }
+
   if (
     backendAuthEnabled.value
     && registerForm.value.password.length < 12
@@ -257,14 +306,24 @@ async function handleRegister() {
   try {
     const request = await register({
       username: registerForm.value.username,
+      email: registerForm.value.email,
       password: registerForm.value.password
     })
 
     successMessage.value = request.autoApproved
       ? '本地管理员已创建，请使用刚才的账号登录。'
-      : `注册申请已提交，等待管理员审批。申请编号：${request.id}`
+      : request.status === 'email_pending'
+        ? `验证邮件已发送。请先打开邮件完成验证，申请编号：${request.id}`
+        : `注册申请已提交，等待管理员审批。申请编号：${request.id}`
+    if (request.status === 'email_pending') {
+      resendEmail.value = registerForm.value.email.trim()
+      showVerificationResend.value = true
+    } else {
+      showVerificationResend.value = false
+    }
     registerForm.value = {
       username: '',
+      email: '',
       password: '',
       confirmPassword: ''
     }
@@ -274,6 +333,25 @@ async function handleRegister() {
     errorMessage.value = error.message || '注册失败，请稍后再试。'
   } finally {
     loading.value = false
+  }
+}
+
+async function handleResendVerification() {
+  const email = resendEmail.value.trim()
+  errorMessage.value = ''
+  successMessage.value = ''
+  if (!email) {
+    errorMessage.value = '请输入注册时使用的邮箱。'
+    return
+  }
+  resendLoading.value = true
+  try {
+    await resendBackendRegistrationEmail(email)
+    successMessage.value = '如果该邮箱存在待验证申请，新验证邮件已进入发送队列。请检查收件箱和垃圾邮件。'
+  } catch (error) {
+    errorMessage.value = error.message || '暂时无法重发验证邮件。'
+  } finally {
+    resendLoading.value = false
   }
 }
 </script>
@@ -419,6 +497,16 @@ async function handleRegister() {
           <span>用户名</span>
           <input v-model="registerForm.username" type="text" autocomplete="username">
         </label>
+        <label v-if="registrationConfig.emailVerificationEnabled" class="auth-field">
+          <span>邮箱</span>
+          <input
+            v-model="registerForm.email"
+            type="email"
+            autocomplete="email"
+            :required="registrationConfig.emailRequired"
+            placeholder="用于验证并接收审批结果"
+          >
+        </label>
         <label class="auth-field">
           <span>密码</span>
           <input
@@ -441,6 +529,25 @@ async function handleRegister() {
           {{ loading ? '提交中...' : '提交注册申请' }}
         </button>
       </form>
+
+      <div v-if="showVerificationResend" class="verification-resend">
+        <div>
+          <strong>没有收到验证邮件？</strong>
+          <p>验证链接过期后可在这里重发。为了保护账号，页面不会透露该邮箱是否存在。</p>
+        </div>
+        <label class="auth-field">
+          <span>注册邮箱</span>
+          <input v-model="resendEmail" type="email" autocomplete="email">
+        </label>
+        <button
+          class="auth-passkey"
+          type="button"
+          :disabled="resendLoading || loading"
+          @click="handleResendVerification"
+        >
+          {{ resendLoading ? '重发中...' : '重发验证邮件' }}
+        </button>
+      </div>
 
       <p v-if="errorMessage" class="auth-message auth-message--error">{{ errorMessage }}</p>
       <p v-if="successMessage" class="auth-message auth-message--success">{{ successMessage }}</p>
@@ -535,6 +642,27 @@ async function handleRegister() {
 .auth-form {
   display: grid;
   gap: 14px;
+}
+
+.verification-resend {
+  display: grid;
+  gap: 12px;
+  margin-top: 18px;
+  padding: 16px;
+  border: 1px solid var(--border-light);
+  border-radius: 18px;
+  background: var(--bg-secondary);
+}
+
+.verification-resend strong {
+  color: var(--text-primary);
+}
+
+.verification-resend p {
+  margin: 6px 0 0;
+  color: var(--text-secondary);
+  font-size: 12px;
+  line-height: 1.6;
 }
 
 .auth-form__heading h2 {

@@ -22,8 +22,10 @@ test('security audit labels and identifiers remain explicit and compact', () => 
   assert.equal(securityEventTypeLabel('auth.account.password.update'), '修改密码')
   assert.equal(securityEventTypeLabel('admin.security_events.export'), '导出安全审计记录')
   assert.equal(securityEventTypeLabel('admin.security_events.delete'), '删除安全审计记录')
+  assert.equal(securityEventTypeLabel('admin.mail.test'), '发送邮件通道测试')
   assert.equal(securityOutcomeLabel('denied'), '已拒绝')
   assert.equal(securityResourceTypeLabel('session'), '登录会话')
+  assert.equal(securityResourceTypeLabel('mail_outbox'), '邮件发送队列')
   assert.equal(securityResourceTypeLabel(''), '对象')
   assert.equal(
     compactSecurityIdentifier('8a6db381-01a5-4731-ae8d-b5c3b49c2be1'),

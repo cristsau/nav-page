@@ -61,6 +61,30 @@ const constraintCases = [
       OR (content_format = 'tiptap-json' AND encrypted = TRUE
         AND content_json IS NULL AND NULLIF(content_json_encrypted, '') IS NOT NULL)
     )`
+  },
+  {
+    table: 'registration_requests',
+    name: 'registration_requests_verification_state_check',
+    restore: `CHECK (
+      (status = 'email_pending' AND email IS NOT NULL AND email_verified_at IS NULL
+        AND verification_token_hash IS NOT NULL AND verification_expires_at IS NOT NULL
+        AND verification_sent_at IS NOT NULL)
+      OR (status <> 'email_pending' AND verification_token_hash IS NULL
+        AND verification_expires_at IS NULL)
+    )`
+  },
+  {
+    table: 'email_events',
+    name: 'email_events_source_message_unique',
+    restore: 'UNIQUE (user_id, source_key, message_id_hash)'
+  },
+  {
+    table: 'assistant_messages',
+    name: 'assistant_messages_sensitive_content_check',
+    restore: `CHECK (
+      (content_sensitive = FALSE AND content_encrypted IS NULL)
+      OR (content_sensitive = TRUE AND content_encrypted IS NOT NULL)
+    )`
   }
 ]
 
@@ -92,7 +116,7 @@ test('advanced feature migration verification fails closed for critical schema d
         )
         assert.match(
           `${verification.stdout}\n${verification.stderr}`,
-          /hybrid workspace search constraints|workspace search index state constraints|Web Push constraints|block editor constraints|foreign key/
+          /hybrid workspace search constraints|workspace search index state constraints|Web Push constraints|block editor constraints|registration_requests constraints|email_events constraints|assistant_messages constraints|foreign key/
         )
       } finally {
         await pool.query(

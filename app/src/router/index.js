@@ -37,6 +37,12 @@ const routes = [
     meta: { title: '图片库' }
   },
   {
+    path: '/assistant',
+    name: 'Assistant',
+    component: () => import('@/modules/assistant/AssistantView.vue'),
+    meta: { title: '助理' }
+  },
+  {
     path: '/share/:code',
     name: 'ShareView',
     component: () => import('@/modules/whisper/ShareView.vue'),

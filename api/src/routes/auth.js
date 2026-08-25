@@ -1,3 +1,4 @@
+import { createHash, randomBytes } from 'node:crypto'
 import { config } from '../config.js'
 import { query, withTransaction } from '../db/index.js'
 import {
@@ -22,7 +23,12 @@ import {
   recordSecurityEvent,
   recordSecurityEventBestEffort
 } from '../lib/securityEvents.js'
-import { sendDecisionNotificationToAdmins, sendRegistrationNotificationToAdmins } from '../lib/telegram.js'
+import {
+  notifyRegistrationRequestToAdmins,
+  queueRegistrationDecision,
+  queueRegistrationVerification
+} from '../lib/notificationDelivery.js'
+import { normalizeEmailAddress, verifiedMailConfigurationStatus } from '../lib/mailOutbox.js'
 import { mapRegistrationRequest, sanitizeUser } from '../lib/users.js'
 import {
   inspectReleaseAcceptanceLoginEligibility,
@@ -84,12 +90,36 @@ export default async function authRoutes(fastify) {
     user: request.currentUser || null
   }))
 
+  fastify.get('/auth/registration/config', {
+    config: { skipSession: true }
+  }, async (_request, reply) => {
+    reply.header('Cache-Control', 'public, max-age=60')
+    return {
+      emailVerificationEnabled: config.registrationEmailEnabled,
+      emailRequired: config.registrationEmailEnabled
+    }
+  })
+
   fastify.post('/auth/register', async (request, reply) => {
     const rateLimited = await enforcePublicAuthRateLimit('register', request, reply)
     if (rateLimited) return rateLimited.response
 
     const username = normalizeUsername(request.body?.username)
     const password = String(request.body?.password || '')
+    let email = null
+    if (config.registrationEmailEnabled) {
+      try {
+        email = normalizeEmailAddress(request.body?.email)
+      } catch (error) {
+        reply.code(400)
+        return { error: error.message }
+      }
+      const mailStatus = await verifiedMailConfigurationStatus()
+      if (!mailStatus.configured || !mailStatus.enabled) {
+        reply.code(503)
+        return { error: 'Registration email verification is temporarily unavailable' }
+      }
+    }
 
     if (!isValidUsername(username) || !password) {
       reply.code(400)
@@ -108,37 +138,184 @@ export default async function authRoutes(fastify) {
       return { error: 'Username already exists' }
     }
 
+    if (email) {
+      const existingEmail = await query('SELECT id FROM users WHERE LOWER(email) = LOWER($1) LIMIT 1', [email])
+      if (existingEmail.rowCount > 0) {
+        reply.code(409)
+        return { error: 'Email address is already registered' }
+      }
+    }
+
+    await query(
+      `
+        UPDATE registration_requests
+        SET status = 'expired', verification_token_hash = NULL,
+            verification_expires_at = NULL, updated_at = NOW()
+        WHERE status = 'email_pending'
+          AND verification_expires_at <= NOW()
+      `
+    )
+
     const pendingRequest = await query(
       `
         SELECT id
         FROM registration_requests
-        WHERE username = $1
-          AND status = 'pending'
+        WHERE (username = $1 OR ($2::text IS NOT NULL AND LOWER(email) = LOWER($2)))
+          AND status IN ('email_pending', 'pending')
         LIMIT 1
       `,
-      [username]
+      [username, email]
     )
 
     if (pendingRequest.rowCount > 0) {
       reply.code(409)
-      return { error: 'A pending registration already exists for this username' }
+      return { error: 'A pending registration already exists for this username or email address' }
     }
 
-    const { rows } = await query(
-      `
-        INSERT INTO registration_requests (username, password_hash, status)
-        VALUES ($1, $2, 'pending')
-        RETURNING id, username, status, created_at, updated_at, decided_at, decided_by
-      `,
-      [username, await hashPassword(password)]
-    )
+    const verificationToken = email ? randomBytes(32).toString('base64url') : ''
+    const verificationTokenHash = verificationToken
+      ? createHash('sha256').update(verificationToken).digest('hex')
+      : null
+    let rows
+    try {
+      const inserted = await query(
+        `
+          INSERT INTO registration_requests (
+            username, password_hash, email, status,
+            verification_token_hash, verification_expires_at, verification_sent_at
+          )
+          VALUES (
+            $1, $2, $3, $4, $5,
+            CASE WHEN $5::text IS NULL THEN NULL ELSE NOW() + ($6::integer * INTERVAL '1 minute') END,
+            CASE WHEN $5::text IS NULL THEN NULL ELSE NOW() END
+          )
+          RETURNING id, username, email, email_verified_at, status,
+                    created_at, updated_at, decided_at, decided_by
+        `,
+        [
+          username,
+          await hashPassword(password),
+          email,
+          email ? 'email_pending' : 'pending',
+          verificationTokenHash,
+          config.registrationEmailVerificationMinutes
+        ]
+      )
+      rows = inserted.rows
+    } catch (error) {
+      if (error?.code === '23505') {
+        reply.code(409)
+        return { error: 'A pending registration already exists for this username or email address' }
+      }
+      throw error
+    }
 
-    await sendRegistrationNotificationToAdmins(rows[0]).catch((error) => {
-      fastify.log.error(error, 'failed to send registration notification')
-    })
+    if (email) {
+      try {
+        await queueRegistrationVerification(rows[0], verificationToken)
+      } catch (error) {
+        await query('DELETE FROM registration_requests WHERE id = $1 AND status = $2', [rows[0].id, 'email_pending'])
+        throw error
+      }
+    } else {
+      await notifyRegistrationRequestToAdmins(rows[0]).catch((error) => {
+        fastify.log.error(error, 'failed to queue registration notification')
+      })
+    }
 
     reply.code(201)
     return { request: mapRegistrationRequest(rows[0]) }
+  })
+
+  fastify.post('/auth/register/verify', {
+    config: { skipSession: true }
+  }, async (request, reply) => {
+    const rateLimited = await enforcePublicAuthRateLimit('register', request, reply)
+    if (rateLimited) return rateLimited.response
+    const requestId = String(request.body?.requestId || '')
+    const token = String(request.body?.token || '').trim()
+    if (!UUID_PATTERN.test(requestId) || !/^[A-Za-z0-9_-]{32,128}$/.test(token)) {
+      reply.code(400)
+      return { error: 'Email verification link is invalid' }
+    }
+    const tokenHash = createHash('sha256').update(token).digest('hex')
+    const { rows } = await query(
+      `
+        UPDATE registration_requests
+        SET status = 'pending', email_verified_at = NOW(),
+            verification_token_hash = NULL, verification_expires_at = NULL,
+            updated_at = NOW()
+        WHERE id = $1 AND status = 'email_pending'
+          AND verification_token_hash = $2
+          AND verification_expires_at > NOW()
+        RETURNING id, username, email, email_verified_at, status,
+                  created_at, updated_at, decided_at, decided_by
+      `,
+      [requestId, tokenHash]
+    )
+    if (!rows[0]) {
+      reply.code(400)
+      return { error: 'Email verification link is invalid or expired' }
+    }
+    await notifyRegistrationRequestToAdmins(rows[0]).catch((error) => {
+      fastify.log.error(error, 'failed to queue verified registration notification')
+    })
+    return { ok: true, request: mapRegistrationRequest(rows[0]) }
+  })
+
+  fastify.post('/auth/register/resend-verification', {
+    config: { skipSession: true }
+  }, async (request, reply) => {
+    const rateLimited = await enforcePublicAuthRateLimit('register', request, reply)
+    if (rateLimited) return rateLimited.response
+
+    let email
+    try {
+      email = normalizeEmailAddress(request.body?.email)
+    } catch {
+      reply.code(202)
+      return { ok: true, message: 'If a pending registration exists, a new verification email will be sent.' }
+    }
+
+    const token = randomBytes(32).toString('base64url')
+    const tokenHash = createHash('sha256').update(token).digest('hex')
+    const rotated = await withTransaction(async (client) => {
+      const { rows } = await client.query(
+        `
+          UPDATE registration_requests
+          SET verification_token_hash = $2,
+              verification_expires_at = NOW() + ($3::integer * INTERVAL '1 minute'),
+              verification_sent_at = NOW(),
+              updated_at = NOW()
+          WHERE id = (
+            SELECT id
+            FROM registration_requests
+            WHERE LOWER(email) = LOWER($1)
+              AND status = 'email_pending'
+              AND (
+                verification_sent_at IS NULL
+                OR verification_sent_at <= NOW() - INTERVAL '60 seconds'
+              )
+            ORDER BY created_at DESC
+            LIMIT 1
+            FOR UPDATE SKIP LOCKED
+          )
+          RETURNING id, username, email, email_verified_at, status,
+                    created_at, updated_at, decided_at, decided_by
+        `,
+        [email, tokenHash, config.registrationEmailVerificationMinutes]
+      )
+      return rows[0] || null
+    })
+
+    if (rotated) {
+      await queueRegistrationVerification(rotated, token).catch((error) => {
+        fastify.log.error(error, 'failed to queue replacement registration verification email')
+      })
+    }
+
+    reply.code(202)
+    return { ok: true, message: 'If a pending registration exists, a new verification email will be sent.' }
   })
 
   fastify.post('/auth/login', async (request, reply) => {
@@ -931,7 +1108,8 @@ export default async function authRoutes(fastify) {
     await fastify.requireAdmin(request, reply)
     const { rows } = await query(
       `
-        SELECT id, username, role, status, created_at, updated_at, approved_at, last_login_at
+        SELECT id, username, email, email_verified_at, role, status,
+               created_at, updated_at, approved_at, last_login_at
         FROM users
         ORDER BY created_at ASC
       `
@@ -953,7 +1131,8 @@ export default async function authRoutes(fastify) {
 
     const { rows } = await query(
       `
-        SELECT id, username, status, created_at, updated_at, decided_at, decided_by
+        SELECT id, username, email, email_verified_at, status,
+               created_at, updated_at, decided_at, decided_by
         FROM registration_requests
         ${whereClause}
         ORDER BY updated_at DESC
@@ -967,6 +1146,10 @@ export default async function authRoutes(fastify) {
   fastify.post('/admin/registration-requests/:requestId/approve', async (request, reply) => {
     await fastify.requireAdmin(request, reply)
     const requestId = request.params.requestId
+    if (!UUID_PATTERN.test(String(requestId || ''))) {
+      reply.code(400)
+      return { error: 'Registration request id is invalid' }
+    }
 
     const result = await withTransaction(async (client) => {
       const requestResult = await client.query(
@@ -992,13 +1175,20 @@ export default async function authRoutes(fastify) {
             INSERT INTO users (
               username,
               password_hash,
+              email,
+              email_verified_at,
               role,
               status,
               approved_at
-            ) VALUES ($1, $2, 'user', 'approved', NOW())
+            ) VALUES ($1, $2, $3, $4, 'user', 'approved', NOW())
             RETURNING id
           `,
-          [registration.username, registration.password_hash]
+          [
+            registration.username,
+            registration.password_hash,
+            registration.email,
+            registration.email_verified_at
+          ]
         )
         subjectUserId = createdUser.rows[0].id
       }
@@ -1011,7 +1201,8 @@ export default async function authRoutes(fastify) {
               decided_at = NOW(),
               decided_by = $2
           WHERE id = $1
-          RETURNING id, username, status, created_at, updated_at, decided_at, decided_by
+          RETURNING id, username, email, email_verified_at, status,
+                    created_at, updated_at, decided_at, decided_by
         `,
         [requestId, request.currentUser.id]
       )
@@ -1035,8 +1226,8 @@ export default async function authRoutes(fastify) {
       return { error: 'Registration request not found' }
     }
 
-    await sendDecisionNotificationToAdmins(result, '批准').catch((error) => {
-      fastify.log.error(error, 'failed to send approval notification')
+    await queueRegistrationDecision(result, 'approved').catch((error) => {
+      fastify.log.error(error, 'failed to queue registration approval email')
     })
 
     return { request: result }
@@ -1045,6 +1236,10 @@ export default async function authRoutes(fastify) {
   fastify.post('/admin/registration-requests/:requestId/reject', async (request, reply) => {
     await fastify.requireAdmin(request, reply)
     const requestId = request.params.requestId
+    if (!UUID_PATTERN.test(String(requestId || ''))) {
+      reply.code(400)
+      return { error: 'Registration request id is invalid' }
+    }
 
     const rejected = await withTransaction(async (client) => {
       const requestResult = await client.query(
@@ -1056,7 +1251,8 @@ export default async function authRoutes(fastify) {
               decided_by = $2
           WHERE id = $1
             AND status = 'pending'
-          RETURNING id, username, status, created_at, updated_at, decided_at, decided_by
+          RETURNING id, username, email, email_verified_at, status,
+                    created_at, updated_at, decided_at, decided_by
         `,
         [requestId, request.currentUser.id]
       )
@@ -1080,8 +1276,8 @@ export default async function authRoutes(fastify) {
       return { error: 'Pending registration request not found' }
     }
 
-    await sendDecisionNotificationToAdmins(rejected, '拒绝').catch((error) => {
-      fastify.log.error(error, 'failed to send rejection notification')
+    await queueRegistrationDecision(rejected, 'rejected').catch((error) => {
+      fastify.log.error(error, 'failed to queue registration rejection email')
     })
 
     return { request: mapRegistrationRequest(rejected) }

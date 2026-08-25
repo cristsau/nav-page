@@ -47,6 +47,9 @@ services:
       - "${NAV_SECRETS_DIR:?set NAV_SECRETS_DIR to the release-local secrets directory}/cliproxy-api-key:/run/secrets/nav/cli-proxy-api-key:ro"
       - "${NAV_SECRETS_DIR:?set NAV_SECRETS_DIR to the release-local secrets directory}/imgbed-library-token:/run/secrets/nav/imgbed-library-token:ro"
       - "${NAV_SECRETS_DIR:?set NAV_SECRETS_DIR to the release-local secrets directory}/web-push-vapid-private-key:/run/secrets/nav/web-push-vapid-private-key:ro"
+      - "${NAV_SECRETS_DIR:?set NAV_SECRETS_DIR to the release-local secrets directory}/smtp-password:/run/secrets/nav/smtp-password:ro"
+      - "${NAV_SECRETS_DIR:?set NAV_SECRETS_DIR to the release-local secrets directory}/imap-password:/run/secrets/nav/imap-password:ro"
+      - "${NAV_SECRETS_DIR:?set NAV_SECRETS_DIR to the release-local secrets directory}/email-encryption-key:/run/secrets/nav/email-encryption-key:ro"
       - nav-model-cache:/var/cache/nav-models
 
 volumes:

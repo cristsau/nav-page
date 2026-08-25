@@ -227,6 +227,10 @@ const iconPaths = {
     ['path', { d: 'M3 7v6h6' }],
     ['path', { d: 'M21 17a9 9 0 0 0-14.7-6.9L3 13' }]
   ],
+  user: [
+    ['circle', { cx: 12, cy: 7, r: 4 }],
+    ['path', { d: 'M4 21a8 8 0 0 1 16 0' }]
+  ],
   users: [
     ['path', { d: 'M16 21v-2a4 4 0 0 0-4-4H6a4 4 0 0 0-4 4v2' }],
     ['circle', { cx: 9, cy: 7, r: 4 }],

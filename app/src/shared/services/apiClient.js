@@ -131,6 +131,16 @@ export async function apiRequest(path, options = {}) {
   return payload
 }
 
+export async function apiRawRequest(path, options = {}) {
+  const response = await fetch(
+    `${API_BASE_URL}${path}`,
+    buildApiRequestOptions(options)
+  )
+
+  if (!response.ok) throw await responseError(response, path, options)
+  return response
+}
+
 export async function apiFileRequest(path, options = {}) {
   const response = await fetch(
     `${API_BASE_URL}${path}`,

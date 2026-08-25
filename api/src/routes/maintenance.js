@@ -32,6 +32,36 @@ const JOB_DEFINITIONS = Object.freeze([
     label: '书签定时失效检查',
     enabled: () => config.bookmarkHealthSchedulerEnabled,
     intervalSeconds: () => config.bookmarkHealthSchedulerIntervalSeconds
+  },
+  {
+    name: MAINTENANCE_JOB_NAMES.SEARCH_EMBEDDING_INDEX,
+    label: '本地语义索引',
+    enabled: () => config.embeddingSchedulerEnabled,
+    intervalSeconds: () => config.embeddingSchedulerIntervalSeconds
+  },
+  {
+    name: MAINTENANCE_JOB_NAMES.WEB_PUSH_DELIVERY,
+    label: 'Web Push 通知发送',
+    enabled: () => config.webPushSchedulerEnabled,
+    intervalSeconds: () => config.webPushSchedulerIntervalSeconds
+  },
+  {
+    name: MAINTENANCE_JOB_NAMES.MAIL_DELIVERY,
+    label: '邮件发送队列',
+    enabled: () => config.mailDeliveryEnabled,
+    intervalSeconds: () => config.mailDeliveryIntervalSeconds
+  },
+  {
+    name: MAINTENANCE_JOB_NAMES.EMAIL_INGEST,
+    label: 'MXroute 邮件接收与分类',
+    enabled: () => config.emailIngestEnabled,
+    intervalSeconds: () => config.imapPollIntervalSeconds
+  },
+  {
+    name: MAINTENANCE_JOB_NAMES.EMAIL_DIGEST,
+    label: '邮件摘要生成',
+    enabled: () => config.emailDigestEnabled,
+    intervalSeconds: () => config.emailDigestIntervalSeconds
   }
 ])
 
@@ -103,7 +133,7 @@ export default async function maintenanceRoutes(fastify, options = {}) {
         enabled: config.maintenanceAlertsEnabled,
         failureThreshold: config.maintenanceAlertFailureThreshold,
         cooldownSeconds: config.maintenanceAlertCooldownSeconds,
-        channel: 'telegram'
+        channels: ['in_app', 'web_push', 'email']
       }
     }
   })

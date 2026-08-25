@@ -29,6 +29,7 @@ const FALLBACK_EVENT_TYPES = [
   'account.data.restore',
   'admin.registration.approve',
   'admin.registration.reject',
+  'admin.mail.test',
   'admin.telegram_config.update',
   'admin.security_events.export',
   'admin.security_events.delete'
@@ -167,6 +168,34 @@ function maintenanceResultSummary(job) {
       `受安全策略限制 ${Number(result.unsupported || 0)} 个`
     ].join('，') + '。'
   }
+  if (job?.name === 'search_embedding_index') {
+    return `上次索引 ${Number(result.indexed || 0)} 条，处理 ${Number(result.processed || 0)} 条，剩余 ${Number(result.remaining || 0)} 条。`
+  }
+  if (job?.name === 'web_push_delivery') {
+    return [
+      `上次处理 ${Number(result.processed || 0)} 条`,
+      `送达 ${Number(result.delivered || 0)} 条`,
+      `通知送达 ${Number(result.notificationDelivered || 0)} 条`,
+      `失败 ${Number(result.failed || 0)} 条`,
+      `剩余 ${Number(result.remaining || 0)} 条`
+    ].join('，') + '。'
+  }
+  if (job?.name === 'mail_delivery') {
+    return `上次处理 ${Number(result.processed || 0)} 封，发送 ${Number(result.sent || 0)} 封，失败 ${Number(result.failed || 0)} 封，重试耗尽并清理 ${Number(result.expired || 0)} 封，剩余 ${Number(result.remaining || 0)} 封。`
+  }
+  if (job?.name === 'email_ingest') {
+    return [
+      `上次处理 ${Number(result.processed || 0)} 封`,
+      `新增 ${Number(result.inserted || 0)} 封`,
+      `去重 ${Number(result.duplicates || 0)} 封`,
+      `重要 ${Number(result.tier1 || 0)} 封`,
+      `摘要 ${Number(result.tier2 || 0)} 封`,
+      `归档 ${Number(result.tier3 || 0)} 封`
+    ].join('，') + '。'
+  }
+  if (job?.name === 'email_digest') {
+    return `上次生成 ${Number(result.generated || 0)} 份摘要，汇总 ${Number(result.emails || 0)} 封邮件，剩余 ${Number(result.remaining || 0)} 封。`
+  }
   return '尚无运行结果。'
 }
 
@@ -181,7 +210,7 @@ function notificationStatusLabel(status) {
 
 const maintenanceAlertSummary = computed(() => {
   if (!maintenanceAlerts.value?.enabled) {
-    return '运行内 Telegram 失败告警当前关闭；任务状态仍会持续记录。'
+    return '运行内站内通知、Web Push 与邮件失败告警当前关闭；任务状态仍会持续记录。'
   }
   const threshold = Number(maintenanceAlerts.value.failureThreshold || 0)
   const cooldown = formatInterval(maintenanceAlerts.value.cooldownSeconds)

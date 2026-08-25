@@ -845,6 +845,9 @@ async function verifyMaintenanceObservabilitySchema() {
     [
       'ai_usage_retention',
       'bookmark_health_check',
+      'email_digest',
+      'email_ingest',
+      'mail_delivery',
       'media_delete_retry',
       'note_reminder_generation',
       'search_embedding_index',
@@ -1471,6 +1474,229 @@ async function verifyAiUsageSchema() {
   )
 }
 
+async function verifyNotificationMailSchema() {
+  const userColumns = await query(`
+    SELECT column_name FROM information_schema.columns
+    WHERE table_schema = current_schema() AND table_name = 'users'
+      AND column_name = ANY($1::text[])
+  `, [['email', 'email_verified_at']])
+  assertExactSet(
+    'user email columns',
+    userColumns.rows.map((row) => row.column_name),
+    ['email', 'email_verified_at']
+  )
+
+  const userConstraints = ['users_email_shape_check']
+  const userConstraintRows = await query(`
+    SELECT conname FROM pg_constraint
+    WHERE conrelid = 'users'::regclass AND conname = ANY($1::text[])
+  `, [userConstraints])
+  assertExactSet(
+    'user email constraints',
+    userConstraintRows.rows.map((row) => row.conname),
+    userConstraints
+  )
+
+  const expectedColumns = new Map([
+    ['registration_requests', [
+      'id', 'username', 'password_hash', 'status', 'created_at', 'updated_at',
+      'decided_at', 'decided_by', 'email', 'email_verified_at',
+      'verification_token_hash', 'verification_expires_at', 'verification_sent_at'
+    ]],
+    ['notifications', [
+      'id', 'user_id', 'event_type', 'title', 'summary', 'source_type',
+      'source_id', 'action_url', 'dedupe_key', 'sensitive', 'push_enabled',
+      'metadata', 'read_at', 'expires_at', 'created_at', 'updated_at'
+    ]],
+    ['notification_push_deliveries', [
+      'notification_id', 'subscription_id', 'status', 'attempt_count',
+      'last_attempt_at', 'delivered_at', 'last_error_code', 'updated_at'
+    ]],
+    ['mail_outbox', [
+      'id', 'message_type', 'recipient', 'subject', 'text_body', 'html_body',
+      'dedupe_key', 'sensitive', 'status', 'attempt_count', 'next_attempt_at',
+      'last_attempt_at', 'sent_at', 'scrubbed_at', 'last_error_code',
+      'created_at', 'updated_at'
+    ]]
+  ])
+  const columns = await query(`
+    SELECT table_name, column_name FROM information_schema.columns
+    WHERE table_schema = current_schema() AND table_name = ANY($1::text[])
+  `, [[...expectedColumns.keys()]])
+  for (const [tableName, names] of expectedColumns) {
+    assertExactSet(
+      `${tableName} columns`,
+      columns.rows.filter((row) => row.table_name === tableName).map((row) => row.column_name),
+      names
+    )
+  }
+
+  const expectedConstraints = new Map([
+    ['registration_requests', [
+      'registration_requests_status_check',
+      'registration_requests_email_shape_check',
+      'registration_requests_verification_token_check',
+      'registration_requests_verification_state_check'
+    ]],
+    ['notifications', [
+      'notifications_user_id_fkey',
+      'notifications_event_type_check',
+      'notifications_source_type_check',
+      'notifications_action_url_check',
+      'notifications_metadata_check',
+      'notifications_title_length_check',
+      'notifications_summary_length_check',
+      'notifications_dedupe_key_length_check'
+    ]],
+    ['notification_push_deliveries', [
+      'notification_push_deliveries_notification_id_fkey',
+      'notification_push_deliveries_subscription_id_fkey',
+      'notification_push_deliveries_status_check',
+      'notification_push_deliveries_attempt_count_check',
+      'notification_push_deliveries_error_code_check'
+    ]],
+    ['mail_outbox', [
+      'mail_outbox_message_type_check',
+      'mail_outbox_status_check',
+      'mail_outbox_attempt_count_check',
+      'mail_outbox_recipient_length_check',
+      'mail_outbox_subject_length_check',
+      'mail_outbox_dedupe_key_length_check',
+      'mail_outbox_error_code_check'
+    ]]
+  ])
+  for (const [tableName, names] of expectedConstraints) {
+    const constraints = await query(
+      `SELECT conname FROM pg_constraint
+       WHERE conrelid = $1::regclass AND conname = ANY($2::text[])`,
+      [tableName, names]
+    )
+    assertExactSet(
+      `${tableName} constraints`,
+      constraints.rows.map((row) => row.conname),
+      names
+    )
+  }
+
+  const expectedIndexes = [
+    'idx_users_email_unique',
+    'idx_registration_requests_email',
+    'idx_registration_requests_verification',
+    'idx_registration_requests_pending_username_unique',
+    'idx_registration_requests_pending_email_unique',
+    'idx_notifications_user_dedupe',
+    'idx_notifications_user_unread',
+    'idx_notifications_user_created',
+    'idx_notification_push_deliveries_pending',
+    'idx_mail_outbox_pending'
+  ]
+  const indexes = await query(`
+    SELECT indexname FROM pg_indexes
+    WHERE schemaname = current_schema() AND indexname = ANY($1::text[])
+  `, [expectedIndexes])
+  assertExactSet('notification and mail indexes', indexes.rows.map((row) => row.indexname), expectedIndexes)
+}
+
+async function verifyEmailAssistantSchema() {
+  const expectedColumns = new Map([
+    ['email_mailbox_state', [
+      'source_key', 'user_id', 'uid_validity', 'last_uid', 'last_connected_at',
+      'last_message_at', 'last_error_at', 'last_error_code', 'updated_at'
+    ]],
+    ['email_events', [
+      'id', 'user_id', 'source_key', 'mailbox_uid', 'message_id_hash',
+      'sender_hash', 'received_at', 'tier', 'urgency', 'deterministic_signature',
+      'event_signature', 'state_signature', 'duplicate_of',
+      'classification_status', 'provider', 'model', 'content_encrypted',
+      'notified_at', 'digested_at', 'created_at', 'updated_at'
+    ]],
+    ['assistant_conversations', [
+      'id', 'user_id', 'title', 'created_at', 'updated_at'
+    ]],
+    ['assistant_messages', [
+      'id', 'conversation_id', 'user_id', 'role', 'content', 'sources',
+      'provider', 'model', 'created_at', 'search_document',
+      'content_encrypted', 'content_sensitive'
+    ]]
+  ])
+  const columns = await query(`
+    SELECT table_name, column_name FROM information_schema.columns
+    WHERE table_schema = current_schema() AND table_name = ANY($1::text[])
+  `, [[...expectedColumns.keys()]])
+  for (const [tableName, names] of expectedColumns) {
+    assertExactSet(
+      `${tableName} columns`,
+      columns.rows.filter((row) => row.table_name === tableName).map((row) => row.column_name),
+      names
+    )
+  }
+
+  const expectedConstraints = new Map([
+    ['email_mailbox_state', [
+      'email_mailbox_state_user_id_fkey',
+      'email_mailbox_state_source_key_check',
+      'email_mailbox_state_last_uid_check',
+      'email_mailbox_state_error_code_check'
+    ]],
+    ['email_events', [
+      'email_events_user_id_fkey',
+      'email_events_duplicate_of_fkey',
+      'email_events_source_key_check',
+      'email_events_mailbox_uid_check',
+      'email_events_message_id_hash_check',
+      'email_events_sender_hash_check',
+      'email_events_tier_check',
+      'email_events_urgency_check',
+      'email_events_event_signature_check',
+      'email_events_deterministic_signature_check',
+      'email_events_state_signature_check',
+      'email_events_classification_status_check',
+      'email_events_content_size_check',
+      'email_events_source_message_unique'
+    ]],
+    ['assistant_conversations', [
+      'assistant_conversations_user_id_fkey',
+      'assistant_conversations_title_check'
+    ]],
+    ['assistant_messages', [
+      'assistant_messages_conversation_id_fkey',
+      'assistant_messages_user_id_fkey',
+      'assistant_messages_role_check',
+      'assistant_messages_content_check',
+      'assistant_messages_encrypted_content_size_check',
+      'assistant_messages_sensitive_content_check',
+      'assistant_messages_sources_check'
+    ]]
+  ])
+  for (const [tableName, names] of expectedConstraints) {
+    const constraints = await query(
+      `SELECT conname FROM pg_constraint
+       WHERE conrelid = $1::regclass AND conname = ANY($2::text[])`,
+      [tableName, names]
+    )
+    assertExactSet(
+      `${tableName} constraints`,
+      constraints.rows.map((row) => row.conname),
+      names
+    )
+  }
+
+  const expectedIndexes = [
+    'idx_email_events_user_received',
+    'idx_email_events_event_state',
+    'idx_email_events_deterministic',
+    'idx_email_events_pending_digest',
+    'idx_assistant_conversations_user_updated',
+    'idx_assistant_messages_conversation_created',
+    'idx_assistant_messages_user_search'
+  ]
+  const indexes = await query(`
+    SELECT indexname FROM pg_indexes
+    WHERE schemaname = current_schema() AND indexname = ANY($1::text[])
+  `, [expectedIndexes])
+  assertExactSet('email assistant indexes', indexes.rows.map((row) => row.indexname), expectedIndexes)
+}
+
 async function main() {
   await verifyMigrationLedger()
   await verifyNavigationMaintenanceSchema()
@@ -1487,6 +1713,8 @@ async function main() {
   await verifyCollaborationOfflineSchema()
   await verifyStreamingDataRestoreSchema()
   await verifyAiUsageSchema()
+  await verifyNotificationMailSchema()
+  await verifyEmailAssistantSchema()
   console.log('migration schema verification complete')
 }
 

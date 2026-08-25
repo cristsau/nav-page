@@ -31,6 +31,20 @@ function normalizeTrustedProxyAddresses(value) {
     .filter(Boolean)
 }
 
+function normalizeCsv(value) {
+  return String(value || '')
+    .split(',')
+    .map((item) => item.trim())
+    .filter(Boolean)
+}
+
+function normalizeHourList(value, fallback = [12, 20]) {
+  const hours = normalizeCsv(value)
+    .map(Number)
+    .filter((hour) => Number.isSafeInteger(hour) && hour >= 0 && hour <= 23)
+  return [...new Set(hours.length ? hours : fallback)].sort((left, right) => left - right)
+}
+
 export const config = {
   nodeEnv,
   apiLogLevel: normalizeLogLevel(
@@ -249,6 +263,67 @@ export const config = {
     process.env.NAV_WEB_PUSH_MAX_ATTEMPTS,
     6
   ),
+  mailDeliveryEnabled: process.env.NAV_MAIL_DELIVERY_ENABLED === 'true',
+  mailDeliveryIntervalSeconds: normalizePositiveInteger(
+    process.env.NAV_MAIL_DELIVERY_INTERVAL_SECONDS,
+    30
+  ),
+  mailDeliveryBatchSize: normalizePositiveInteger(
+    process.env.NAV_MAIL_DELIVERY_BATCH_SIZE,
+    25
+  ),
+  mailDeliveryMaxAttempts: normalizePositiveInteger(
+    process.env.NAV_MAIL_DELIVERY_MAX_ATTEMPTS,
+    8
+  ),
+  smtpHost: String(process.env.NAV_SMTP_HOST || '').trim(),
+  smtpPort: normalizePositiveInteger(process.env.NAV_SMTP_PORT, 465),
+  smtpSecure: process.env.NAV_SMTP_SECURE !== 'false',
+  smtpUsername: String(process.env.NAV_SMTP_USERNAME || '').trim(),
+  smtpPasswordFile: String(process.env.NAV_SMTP_PASSWORD_FILE || '').trim(),
+  smtpFromAddress: String(process.env.NAV_SMTP_FROM_ADDRESS || '').trim(),
+  smtpFromName: String(process.env.NAV_SMTP_FROM_NAME || 'DOMO NAV').trim(),
+  adminEmailRecipients: normalizeCsv(process.env.NAV_ADMIN_EMAIL_RECIPIENTS),
+  registrationEmailEnabled: process.env.NAV_REGISTRATION_EMAIL_ENABLED === 'true',
+  registrationEmailVerificationMinutes: normalizePositiveInteger(
+    process.env.NAV_REGISTRATION_EMAIL_VERIFICATION_MINUTES,
+    30
+  ),
+  emailIngestEnabled: process.env.NAV_EMAIL_INGEST_ENABLED === 'true',
+  emailSourceKey: String(process.env.NAV_EMAIL_SOURCE_KEY || 'mxroute').trim().toLowerCase(),
+  emailOwnerUsername: String(process.env.NAV_EMAIL_OWNER_USERNAME || '').trim(),
+  emailEncryptionKeyFile: String(process.env.NAV_EMAIL_ENCRYPTION_KEY_FILE || '').trim(),
+  imapHost: String(process.env.NAV_IMAP_HOST || '').trim(),
+  imapPort: normalizePositiveInteger(process.env.NAV_IMAP_PORT, 993),
+  imapSecure: process.env.NAV_IMAP_SECURE !== 'false',
+  imapUsername: String(process.env.NAV_IMAP_USERNAME || '').trim(),
+  imapPasswordFile: String(process.env.NAV_IMAP_PASSWORD_FILE || '').trim(),
+  imapMailbox: String(process.env.NAV_IMAP_MAILBOX || 'INBOX').trim(),
+  imapPollIntervalSeconds: normalizePositiveInteger(
+    process.env.NAV_IMAP_POLL_INTERVAL_SECONDS,
+    60
+  ),
+  imapInitialLookback: normalizePositiveInteger(
+    process.env.NAV_IMAP_INITIAL_LOOKBACK,
+    50
+  ),
+  imapBatchSize: normalizePositiveInteger(
+    process.env.NAV_IMAP_BATCH_SIZE,
+    100
+  ),
+  imapMaxMessageBytes: normalizePositiveInteger(
+    process.env.NAV_IMAP_MAX_MESSAGE_BYTES,
+    512 * 1024
+  ),
+  emailDigestEnabled: process.env.NAV_EMAIL_DIGEST_ENABLED === 'true',
+  emailDigestIntervalSeconds: normalizePositiveInteger(
+    process.env.NAV_EMAIL_DIGEST_INTERVAL_SECONDS,
+    60
+  ),
+  emailDigestHours: normalizeHourList(process.env.NAV_EMAIL_DIGEST_HOURS),
+  emailDigestTimeZone: String(
+    process.env.NAV_EMAIL_DIGEST_TIME_ZONE || 'Asia/Shanghai'
+  ).trim(),
   aiPriceCatalogJson: String(
     process.env.NAV_AI_PRICE_CATALOG_JSON || ''
   ).trim(),

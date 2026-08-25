@@ -66,6 +66,13 @@ const navigationItems = computed(() => (
   border-radius: 15px;
 }
 
+@media (max-width: 420px) {
+  .mobile-tabs a {
+    min-width: 62px;
+    padding-inline: 8px;
+  }
+}
+
 .mobile-tabs a.is-active {
   color: var(--accent-color);
   background: var(--accent-bg);

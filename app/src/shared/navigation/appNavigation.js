@@ -20,6 +20,13 @@ export const PRIMARY_NAV_ITEMS = Object.freeze([
     description: '图片、引用与分享',
     icon: 'image',
     path: '/media'
+  },
+  {
+    id: 'assistant',
+    label: '助理',
+    description: '带来源的个人资料助理',
+    icon: 'sparkles',
+    path: '/assistant'
   }
 ])
 

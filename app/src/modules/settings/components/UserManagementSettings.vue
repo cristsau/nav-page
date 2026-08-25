@@ -1,14 +1,7 @@
 <script setup>
-import { computed, onMounted, onUnmounted, ref } from 'vue'
+import { computed, onMounted, ref } from 'vue'
 import { useAuth } from '@/shared/composables/useAuth'
-import { getTelegramConfig, setTelegramConfig } from '@/shared/db/database'
-import { testTelegramConfig } from '@/shared/services/telegramApproval'
-import {
-  fetchBackendTelegramConfig,
-  saveBackendTelegramConfig,
-  shouldUseBackendTelegramAdmin,
-  testBackendTelegramConfig
-} from '@/shared/services/adminTelegramApi'
+import { fetchAdminMailStatus, queueAdminMailTest } from '@/shared/services/emailApi'
 
 const {
   currentUser,
@@ -17,35 +10,26 @@ const {
   registrationHistory,
   approve,
   reject,
-  syncTelegram,
   initAuth,
   refreshAll
 } = useAuth()
 
-const syncing = ref(false)
-const syncMessage = ref('')
-const savingTelegram = ref(false)
-const testingTelegram = ref(false)
-const telegramMessage = ref('')
-const telegramForm = ref({
-  enabled: false,
-  botToken: '',
-  adminChatId: ''
+const mailStatus = ref({
+  mail: { configured: false, enabled: false },
+  ingest: { configured: false, enabled: false },
+  digest: { enabled: false, hours: [], timeZone: '' }
 })
-
-let timer = null
+const mailStatusLoading = ref(false)
+const mailTestRecipient = ref('')
+const mailTestLoading = ref(false)
+const mailTestMessage = ref('')
+const mailTestError = ref('')
 
 const pendingCount = computed(() => pendingRequests.value.length)
 
 function formatDate(timestamp) {
   if (!timestamp) return '-'
   return new Date(timestamp).toLocaleString('zh-CN', { hour12: false })
-}
-
-async function loadTelegramSettings() {
-  telegramForm.value = shouldUseBackendTelegramAdmin()
-    ? await fetchBackendTelegramConfig()
-    : await getTelegramConfig()
 }
 
 async function handleApprove(requestId) {
@@ -56,57 +40,31 @@ async function handleReject(requestId) {
   await reject(requestId)
 }
 
-async function handleSyncTelegram() {
-  if (currentUser.value?.role !== 'admin' || syncing.value) return
-
-  syncing.value = true
-  syncMessage.value = ''
-
+async function loadMailStatus() {
+  mailStatusLoading.value = true
   try {
-    const summary = await syncTelegram()
-    syncMessage.value = summary.skipped
-      ? 'Telegram 未启用或未配置'
-      : summary.processed.length
-        ? `已同步 ${summary.processed.length} 条 Telegram 审批指令`
-        : '已同步，没有新的 Telegram 审批指令'
-  } catch (error) {
-    syncMessage.value = error.message || 'Telegram 同步失败'
+    mailStatus.value = await fetchAdminMailStatus()
   } finally {
-    syncing.value = false
+    mailStatusLoading.value = false
   }
 }
 
-async function handleSaveTelegram() {
-  savingTelegram.value = true
-  telegramMessage.value = ''
-
-  try {
-    if (shouldUseBackendTelegramAdmin()) {
-      await saveBackendTelegramConfig(telegramForm.value)
-    } else {
-      await setTelegramConfig(telegramForm.value)
-    }
-    telegramMessage.value = 'Telegram 配置已保存，仅保存在当前设备管理员账户下'
-  } catch (error) {
-    telegramMessage.value = error.message || 'Telegram 配置保存失败'
-  } finally {
-    savingTelegram.value = false
+async function sendMailTest() {
+  mailTestMessage.value = ''
+  mailTestError.value = ''
+  const recipient = mailTestRecipient.value.trim()
+  if (!recipient) {
+    mailTestError.value = '请输入测试收件地址。'
+    return
   }
-}
-
-async function handleTestTelegram() {
-  testingTelegram.value = true
-  telegramMessage.value = ''
-
+  mailTestLoading.value = true
   try {
-    const result = shouldUseBackendTelegramAdmin()
-      ? await testBackendTelegramConfig(telegramForm.value)
-      : await testTelegramConfig(telegramForm.value)
-    telegramMessage.value = `测试消息已送达，Bot 名称：${result.result?.username || result.result?.first_name || '未知'}`
+    await queueAdminMailTest(recipient)
+    mailTestMessage.value = '测试邮件已进入发送队列，请稍后检查收件箱和垃圾邮件。'
   } catch (error) {
-    telegramMessage.value = error.message || 'Telegram 连接失败'
+    mailTestError.value = error.message || '无法创建测试邮件。'
   } finally {
-    testingTelegram.value = false
+    mailTestLoading.value = false
   }
 }
 
@@ -116,13 +74,8 @@ onMounted(async () => {
 
   if (currentUser.value?.role !== 'admin') return
 
-  await loadTelegramSettings()
-  await handleSyncTelegram()
-  timer = window.setInterval(handleSyncTelegram, 15000)
-})
-
-onUnmounted(() => {
-  if (timer) clearInterval(timer)
+  if (currentUser.value.email) mailTestRecipient.value = currentUser.value.email
+  await loadMailStatus()
 })
 </script>
 
@@ -131,14 +84,12 @@ onUnmounted(() => {
     <div class="section-header">
       <div>
         <h3 class="settings-section__title">用户管理</h3>
-        <p class="settings-section__subtitle">默认管理员可审批注册，也可配置自己的 Telegram 审批通道。</p>
+        <p class="settings-section__subtitle">注册申请通过 MXroute 邮件送达，审批仍需登录本页完成。</p>
       </div>
-      <button class="sync-btn" :disabled="syncing" @click="handleSyncTelegram">
-        {{ syncing ? '同步中...' : '同步 Telegram 审批' }}
+      <button class="sync-btn" :disabled="mailStatusLoading" @click="loadMailStatus">
+        {{ mailStatusLoading ? '检查中...' : '刷新邮件状态' }}
       </button>
     </div>
-
-    <div v-if="syncMessage" class="sync-message">{{ syncMessage }}</div>
 
     <div class="summary-grid">
       <div class="summary-card">
@@ -155,32 +106,35 @@ onUnmounted(() => {
       </div>
     </div>
 
-    <div class="telegram-panel">
-      <div class="user-block__title">Telegram 接入</div>
-      <div class="telegram-grid">
-        <label class="telegram-field telegram-field--switch">
-          <span>启用 Telegram 审批</span>
-          <input v-model="telegramForm.enabled" type="checkbox">
-        </label>
-        <label class="telegram-field">
-          <span>Bot Token</span>
-          <input v-model="telegramForm.botToken" type="password" placeholder="输入你自己的 Telegram Bot Token">
-        </label>
-        <label class="telegram-field">
-          <span>管理员 Chat ID</span>
-          <input v-model="telegramForm.adminChatId" type="text" placeholder="输入你自己的管理员 Chat ID">
-        </label>
+    <div class="mail-panel">
+      <div class="user-block__title">MXroute 邮件通道</div>
+      <div class="mail-status-grid">
+        <div><span>注册与审批邮件</span><strong>{{ mailStatus.mail?.configured && mailStatus.mail?.enabled ? '已就绪' : '待配置' }}</strong></div>
+        <div><span>IMAP 智能收件</span><strong>{{ mailStatus.ingest?.configured && mailStatus.ingest?.enabled ? '已启用' : '未启用' }}</strong></div>
+        <div><span>每日摘要</span><strong>{{ mailStatus.digest?.enabled ? `${mailStatus.digest.hours?.join(' / ')} 时` : '未启用' }}</strong></div>
       </div>
-      <div class="telegram-actions">
-        <button class="btn btn--secondary" :disabled="testingTelegram" @click="handleTestTelegram">
-          {{ testingTelegram ? '发送中...' : '发送测试消息' }}
-        </button>
-        <button class="btn btn--primary" :disabled="savingTelegram" @click="handleSaveTelegram">
-          {{ savingTelegram ? '保存中...' : '保存 Telegram 配置' }}
+      <p class="mail-tip">Cloudflare 继续负责 DNS；邮箱收发由 MXroute 的实际服务器主机名处理。密码和邮件加密密钥只从服务器只读 Secret 文件读取，页面不会显示或保存。</p>
+      <div class="mail-test">
+        <label>
+          <span>测试收件地址</span>
+          <input
+            v-model="mailTestRecipient"
+            type="email"
+            autocomplete="email"
+            placeholder="name@example.com"
+          >
+        </label>
+        <button
+          class="btn btn--secondary"
+          type="button"
+          :disabled="mailTestLoading || !mailStatus.mail?.configured || !mailStatus.mail?.enabled"
+          @click="sendMailTest"
+        >
+          {{ mailTestLoading ? '排队中...' : '发送测试邮件' }}
         </button>
       </div>
-      <div v-if="telegramMessage" class="sync-message">{{ telegramMessage }}</div>
-      <p class="telegram-tip">测试会向填写的 Chat ID 发送一条 DOMO NAV 测试消息，同时验证 Bot Token 与真实接收目标。</p>
+      <p v-if="mailTestMessage" class="mail-test-message is-success">{{ mailTestMessage }}</p>
+      <p v-if="mailTestError" class="mail-test-message is-error">{{ mailTestError }}</p>
     </div>
 
     <div class="user-block">
@@ -189,6 +143,7 @@ onUnmounted(() => {
         <div v-for="request in pendingRequests" :key="request.id" class="request-card">
           <div>
             <div class="request-card__name">{{ request.username }}</div>
+            <div v-if="request.email" class="request-card__meta">邮箱：{{ request.email }}</div>
             <div class="request-card__meta">申请编号：{{ request.id }}</div>
             <div class="request-card__meta">提交时间：{{ formatDate(request.createdAt) }}</div>
           </div>
@@ -318,7 +273,7 @@ onUnmounted(() => {
   font-size: 12px;
 }
 
-.telegram-panel,
+.mail-panel,
 .user-block {
   margin-top: 20px;
 }
@@ -329,46 +284,76 @@ onUnmounted(() => {
   font-weight: 600;
 }
 
-.telegram-grid {
+.mail-status-grid {
   display: grid;
-  gap: 12px;
-}
-
-.telegram-field {
-  display: grid;
-  gap: 8px;
-  color: var(--text-primary);
-}
-
-.telegram-field input {
-  width: 100%;
-  border: 1px solid var(--border-color);
-  border-radius: 14px;
-  padding: 12px 14px;
-  background: var(--bg-secondary);
-  color: var(--text-primary);
-}
-
-.telegram-field--switch {
-  display: flex;
-  align-items: center;
-  justify-content: space-between;
-  padding: 12px 14px;
-  border-radius: 14px;
-  background: var(--bg-secondary);
-}
-
-.telegram-actions {
-  display: flex;
+  grid-template-columns: repeat(3, minmax(0, 1fr));
   gap: 10px;
-  margin-top: 12px;
 }
 
-.telegram-tip {
+.mail-status-grid > div {
+  display: grid;
+  min-height: 82px;
+  padding: 14px;
+  align-content: space-between;
+  gap: 10px;
+  background: var(--bg-secondary);
+  border: 1px solid var(--border-light);
+  border-radius: 16px;
+}
+
+.mail-status-grid span {
+  color: var(--text-muted);
+  font-size: 12px;
+}
+
+.mail-status-grid strong {
+  color: var(--text-primary);
+  font-size: 14px;
+}
+
+.mail-tip {
   margin-top: 10px;
   color: var(--text-muted);
   font-size: 12px;
   line-height: 1.6;
+}
+
+.mail-test {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) auto;
+  gap: 10px;
+  align-items: end;
+  margin-top: 14px;
+}
+
+.mail-test label {
+  display: grid;
+  gap: 7px;
+  color: var(--text-secondary);
+  font-size: 12px;
+}
+
+.mail-test input {
+  min-height: 44px;
+  border: 1px solid var(--border-color);
+  border-radius: 14px;
+  padding: 10px 13px;
+  background: var(--bg-secondary);
+  color: var(--text-primary);
+  font: inherit;
+}
+
+.mail-test-message {
+  margin: 10px 0 0;
+  font-size: 12px;
+}
+
+.mail-test-message.is-success {
+  color: var(--success-color, #4f8a5b);
+}
+
+.mail-test-message.is-error {
+  color: var(--danger-color, #b45151);
 }
 
 .request-list {
@@ -448,13 +433,20 @@ onUnmounted(() => {
 
 @media (max-width: 760px) {
   .section-header,
-  .request-card,
-  .telegram-actions {
+  .request-card {
     flex-direction: column;
     align-items: stretch;
   }
 
   .summary-grid {
+    grid-template-columns: 1fr;
+  }
+
+  .mail-status-grid {
+    grid-template-columns: 1fr;
+  }
+
+  .mail-test {
     grid-template-columns: 1fr;
   }
 

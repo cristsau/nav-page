@@ -4,6 +4,8 @@ export function sanitizeUser(user) {
   return {
     id: user.id,
     username: user.username,
+    email: user.email || '',
+    emailVerifiedAt: user.email_verified_at || null,
     role: user.role,
     status: user.status,
     createdAt: user.created_at,
@@ -19,6 +21,8 @@ export function mapRegistrationRequest(record) {
   return {
     id: record.id,
     username: record.username,
+    email: record.email || '',
+    emailVerifiedAt: record.email_verified_at || null,
     status: record.status,
     createdAt: record.created_at,
     updatedAt: record.updated_at,

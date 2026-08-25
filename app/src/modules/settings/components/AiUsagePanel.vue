@@ -23,6 +23,7 @@ const featureLabels = Object.freeze({
   note_continue: '笔记续写',
   note_tags: '笔记标签',
   assistant: '个人资料助理',
+  email_classification: '邮件智能分类',
   provider_test: '连接测试'
 })
 

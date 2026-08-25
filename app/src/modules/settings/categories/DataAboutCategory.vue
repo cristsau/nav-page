@@ -21,7 +21,7 @@ import DataSettings from '../components/DataSettings.vue'
         <span>后端认证</span>
         <span>PostgreSQL 云端数据</span>
         <span>浏览器扩展快速添加</span>
-        <span>Telegram 审批</span>
+        <span>邮箱验证与审批</span>
         <span>AI 搜索代理</span>
       </div>
       <p class="about-section__signature">Design by CrisTsau</p>

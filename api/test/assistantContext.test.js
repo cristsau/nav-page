@@ -77,11 +77,17 @@ test('retrieval fallback remains useful without an AI provider', () => {
   assert.match(buildRetrievalFallbackAnswer([{ sourceId: 'S1', title: '部署记录' }]), /\[S1\] 部署记录/)
 })
 
-test('assistant route is single-turn, reuses hybrid workspace search and has no conversation store', async () => {
+test('assistant route preserves one-shot compatibility and adds owned conversation streaming', async () => {
   const source = await readFile(new URL('../src/routes/assistant.js', import.meta.url), 'utf8')
   assert.match(source, /searchWorkspaceHybridForUser/)
+  assert.match(source, /searchEmailSources/)
   assert.match(source, /buildAssistantSources/)
   assert.match(source, /recordRuntimeAiUsageSafely/)
   assert.match(source, /mode: 'retrieval'/)
-  assert.doesNotMatch(source, /INSERT\s+INTO\s+(?:assistant|conversation|message)/i)
+  assert.match(source, /\/assistant\/chat\/stream/)
+  assert.match(source, /INSERT INTO assistant_messages/)
+  assert.match(source, /conversation\.user_id = \$1|user_id = \$1 AND conversation_id = \$2/)
+  assert.match(source, /text\/event-stream/)
+  assert.match(source, /safeQuestionForHistory/)
+  assert.match(source, /redactAssistantContext\(question\)/)
 })

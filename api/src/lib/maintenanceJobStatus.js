@@ -5,7 +5,10 @@ export const MAINTENANCE_JOB_NAMES = Object.freeze({
   NOTE_REMINDER_GENERATION: 'note_reminder_generation',
   BOOKMARK_HEALTH_CHECK: 'bookmark_health_check',
   SEARCH_EMBEDDING_INDEX: 'search_embedding_index',
-  WEB_PUSH_DELIVERY: 'web_push_delivery'
+  WEB_PUSH_DELIVERY: 'web_push_delivery',
+  MAIL_DELIVERY: 'mail_delivery',
+  EMAIL_INGEST: 'email_ingest',
+  EMAIL_DIGEST: 'email_digest'
 })
 
 const KNOWN_JOB_NAMES = new Set(Object.values(MAINTENANCE_JOB_NAMES))
@@ -148,6 +151,27 @@ const RESULT_FIELDS = Object.freeze({
     'delivered',
     'failed',
     'disabled',
+    'notificationDelivered',
+    'remaining'
+  ],
+  [MAINTENANCE_JOB_NAMES.MAIL_DELIVERY]: [
+    'processed',
+    'sent',
+    'failed',
+    'expired',
+    'remaining'
+  ],
+  [MAINTENANCE_JOB_NAMES.EMAIL_INGEST]: [
+    'processed',
+    'inserted',
+    'duplicates',
+    'tier1',
+    'tier2',
+    'tier3'
+  ],
+  [MAINTENANCE_JOB_NAMES.EMAIL_DIGEST]: [
+    'generated',
+    'emails',
     'remaining'
   ]
 })
@@ -251,8 +275,8 @@ async function notifyAndRecord({
   }
 
   // Deliver at most once per worker cycle. A transport failure is ambiguous:
-  // Telegram may have accepted the message before the response was lost, and
-  // the notifier aggregates such failures across administrator targets. An
+  // one of the configured channels may have accepted the message before the
+  // response was lost, and the notifier aggregates failures across targets. An
   // immediate retry could therefore produce duplicates. Undelivered attempts
   // release only the cooldown reservation below, allowing a later worker cycle
   // to try again while preserving the open alert.

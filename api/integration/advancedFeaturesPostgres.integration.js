@@ -161,7 +161,7 @@ test('Web Push delivery persists exactly once and marks successful subscription 
         id, user_id, number_id, type, title, content, encrypted,
         password_hash, tags, attachments, due_at, remind_before_minutes, completed
       ) VALUES (
-        $1, $2, 5001, 'memo', '到期提醒', '检查发布', FALSE,
+        $1, $2, 5001, 'memo', '检查发布机密事项', '检查发布', FALSE,
         '', '[]'::jsonb, '[]'::jsonb, $3, 0, FALSE
       )
     `,
@@ -201,7 +201,10 @@ test('Web Push delivery persists exactly once and marks successful subscription 
     { processed: result.processed, delivered: result.delivered, failed: result.failed },
     { processed: 1, delivered: 1, failed: 0 }
   )
-  assert.equal(payloads[0].url, `/whisper?note=${NOTE_ID}`)
+  assert.equal(payloads[0].title, 'DOMO NAV')
+  assert.equal(payloads[0].body, '你有一条新的到期提醒，登录后查看完整内容。')
+  assert.equal(payloads[0].url, '/whisper')
+  assert.doesNotMatch(JSON.stringify(payloads[0]), /检查发布|5001|dddddddd/i)
   const delivery = await pool.query(
     `SELECT status, attempt_count, delivered_at FROM note_reminder_push_deliveries`
   )
@@ -211,6 +214,48 @@ test('Web Push delivery persists exactly once and marks successful subscription 
   assert.ok(
     (await pool.query('SELECT last_success_at FROM web_push_subscriptions WHERE id = $1', [SUBSCRIPTION_ID])).rows[0].last_success_at
   )
+})
+
+test('sensitive notification Web Push is generic and does not expose its source id', async () => {
+  await pool.query(
+    `INSERT INTO web_push_subscriptions (
+       id, user_id, endpoint, endpoint_hash, p256dh, auth, device_label
+     ) VALUES (
+       $1, $2, 'https://fcm.googleapis.com/fcm/send/generic-integration',
+       repeat('b', 64), repeat('A', 88), repeat('B', 24), 'CI browser'
+     )`,
+    [SUBSCRIPTION_ID, USER_ID]
+  )
+  const notificationId = '12121212-1212-4212-8212-121212121212'
+  const emailEventId = '34343434-3434-4434-8434-343434343434'
+  await pool.query(
+    `INSERT INTO notifications (
+       id, user_id, event_type, title, summary, source_type, source_id,
+       action_url, dedupe_key, sensitive, push_enabled
+     ) VALUES (
+       $1, $2, 'email.tier1', '数据库里可见的私密标题',
+       '数据库里可见的私密摘要', 'email', $3,
+       $4, 'integration-sensitive-push', TRUE, TRUE
+     )`,
+    [notificationId, USER_ID, emailEventId, `/assistant?email=${emailEventId}`]
+  )
+
+  const payloads = []
+  const result = await deliverDueWebPushNotifications({
+    poolInstance: pool,
+    policy: { intervalSeconds: 60, batchSize: 10, maxAttempts: 3 },
+    async sendFn(_subscription, payload) {
+      payloads.push(payload)
+      return { statusCode: 201 }
+    }
+  })
+
+  assert.equal(result.notificationDelivered, 1)
+  assert.equal(payloads.length, 1)
+  assert.equal(payloads[0].title, 'DOMO NAV')
+  assert.equal(payloads[0].url, '/?notifications=1')
+  const serialized = JSON.stringify(payloads[0])
+  assert.doesNotMatch(serialized, /私密标题|私密摘要|34343434/)
 })
 
 test('database rejects rich-content privacy states that bypass the API', async () => {
