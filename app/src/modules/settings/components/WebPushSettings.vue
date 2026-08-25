@@ -76,6 +76,12 @@ async function reload() {
   }
 }
 
+function refreshInBackground() {
+  void reload().catch(() => {
+    capability.value = webPushBrowserCapability()
+  })
+}
+
 async function enable() {
   if (busy.value || !status.value?.publicKey) return
   busy.value = true
@@ -96,17 +102,15 @@ async function enable() {
     try {
       await sendWebPushTest(enabledSubscriptionId)
     } catch (error) {
-      await reload().catch(() => {})
       setMessage(webPushFailureMessage(error, { stage: 'test-delivery' }), 'error')
+      refreshInBackground()
       return
     }
     await reload()
     setMessage('当前设备已启用，测试通知已发送。收到后即可关闭网页继续接收到期提醒。')
   } catch (error) {
-    await reload().catch(() => {
-      capability.value = webPushBrowserCapability()
-    })
     setMessage(webPushFailureMessage(error), 'error')
+    refreshInBackground()
   } finally {
     busy.value = false
   }
@@ -139,8 +143,8 @@ async function test() {
     await reload()
     setMessage('测试通知已发送，请查看系统通知中心。')
   } catch (error) {
-    await reload().catch(() => {})
     setMessage(webPushFailureMessage(error, { stage: 'test-delivery' }), 'error')
+    refreshInBackground()
   } finally {
     busy.value = false
   }

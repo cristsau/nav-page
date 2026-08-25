@@ -61,7 +61,7 @@ export async function inspectCurrentWebPushDevice({ publicKey = '' } = {}) {
 
   let registration
   try {
-    registration = await getPwaRegistration()
+    registration = await runWebPushStage('service-worker', getPwaRegistration, 8_000)
   } catch {
     result.errorStage = 'service-worker'
     return result
@@ -74,7 +74,11 @@ export async function inspectCurrentWebPushDevice({ publicKey = '' } = {}) {
 
   let subscription
   try {
-    subscription = await registration.pushManager.getSubscription()
+    subscription = await runWebPushStage(
+      'browser-subscription',
+      () => registration.pushManager.getSubscription(),
+      8_000
+    )
   } catch {
     result.errorStage = 'browser-subscription'
     return result
@@ -106,10 +110,18 @@ export async function enableWebPush({ publicKey, deviceLabel }) {
   }
   const registration = await runWebPushStage('service-worker', getPwaRegistration)
   if (!registration) throw stagedWebPushError(new Error('Service Worker 尚未就绪'), 'service-worker')
-  let subscription = await runWebPushStage(
-    'browser-subscription',
-    () => registration.pushManager.getSubscription()
-  )
+  let subscription = null
+  try {
+    subscription = await runWebPushStage(
+      'browser-subscription',
+      () => registration.pushManager.getSubscription()
+    )
+  } catch (error) {
+    // Some installed iOS PWAs have been observed to leave getSubscription()
+    // pending even though subscribe() can still create or recover the current
+    // subscription. Keep non-timeout failures explicit.
+    if (error?.code !== 'WEB_PUSH_TIMEOUT') throw error
+  }
   if (subscription && !equalApplicationServerKey(subscription, publicKey)) {
     await runWebPushStage('browser-subscription', () => subscription.unsubscribe())
     subscription = null
