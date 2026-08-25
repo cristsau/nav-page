@@ -50,15 +50,27 @@ export function webPushFailureMessage(error, {
 } = {}) {
   const detail = boundedDetail(error, fallback)
   if (stage === 'permission') {
+    if (error?.code === 'WEB_PUSH_TIMEOUT') {
+      return '系统通知权限等待超时，按钮已恢复。请确认从主屏幕打开 DOMO NAV 后再重试。'
+    }
     return `系统通知权限未完成：${detail}`
   }
   if (stage === 'service-worker') {
+    if (error?.code === 'WEB_PUSH_TIMEOUT') {
+      return 'Service Worker 等待超时，按钮已恢复。请完全退出 DOMO NAV，从主屏幕重新打开后重试。'
+    }
     return `Service Worker 未就绪：${detail}。请刷新页面后重试。`
   }
   if (stage === 'browser-subscription') {
+    if (error?.code === 'WEB_PUSH_TIMEOUT') {
+      return '浏览器 Push 订阅等待超时，按钮已恢复。请完全退出 DOMO NAV，从主屏幕重新打开后点“继续完成启用”。'
+    }
     return '通知权限已允许，但浏览器 Push 订阅没有建立。请使用普通窗口（不要使用无痕或 InPrivate），确认系统通知和网络可用后重试。'
   }
   if (stage === 'server-registration') {
+    if (error?.code === 'WEB_PUSH_TIMEOUT') {
+      return '浏览器订阅已建立，但 NAV 服务器登记超时。按钮已恢复，请检查网络后重试。'
+    }
     return `浏览器订阅已建立，但 NAV 服务器登记失败：${detail}`
   }
   if (stage === 'test-delivery') {

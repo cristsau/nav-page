@@ -22,6 +22,13 @@ const savedCloudFingerprint = ref('')
 const errorNotice = ref(null)
 const smtpHostInput = ref(null)
 const imapHostInput = ref(null)
+const busyActionLabel = computed(() => ({
+  'save-mail': '正在安全保存邮件配置…',
+  'test-smtp': '正在验证 SMTP 连接…',
+  'test-imap': '正在验证 IMAP 连接…',
+  'save-cloud': '正在安全保存云备份配置…',
+  'test-cloud': '正在验证对象存储连接…'
+}[busyAction.value] || '正在处理…'))
 
 const SERVER_HOST_PATTERN = /^(?=.{1,253}$)(?:[a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])?\.)*[a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])?$/i
 
@@ -356,7 +363,7 @@ onMounted(refresh)
     <p v-if="message" class="notice notice--success" role="status">{{ message }}</p>
     <p v-if="error" ref="errorNotice" class="notice notice--error" role="alert" tabindex="-1">{{ error }}</p>
 
-    <form class="integration-card" @submit.prevent="saveMail">
+    <form class="integration-card" novalidate @submit.prevent="saveMail">
       <header class="card-header">
         <div class="card-icon"><Icon name="mail" :size="20" /></div>
         <div>
@@ -449,14 +456,14 @@ onMounted(refresh)
 
       <footer class="card-footer">
         <p>修改主机名、账号或密码后，原验证自动失效，需重新测试后才能启用。</p>
-        <button class="button button--primary" type="submit" :disabled="!writable || busyAction">
+        <button class="button button--primary" type="button" :disabled="!writable || busyAction" @click="saveMail">
           <Icon name="check" :size="16" />
           {{ busyAction === 'save-mail' ? '保存中' : '保存邮件配置' }}
         </button>
       </footer>
     </form>
 
-    <form class="integration-card" @submit.prevent="saveCloud">
+    <form class="integration-card" novalidate @submit.prevent="saveCloud">
       <header class="card-header">
         <div class="card-icon"><Icon name="cloud" :size="20" /></div>
         <div>
@@ -499,12 +506,22 @@ onMounted(refresh)
 
       <footer class="card-footer">
         <p>页面只配置凭据和上传许可，不会从 Web 进程直接执行 root 备份或恢复。</p>
-        <button class="button button--primary" type="submit" :disabled="!writable || busyAction">
+        <button class="button button--primary" type="button" :disabled="!writable || busyAction" @click="saveCloud">
           <Icon name="check" :size="16" />
           {{ busyAction === 'save-cloud' ? '保存中' : '保存云备份配置' }}
         </button>
       </footer>
     </form>
+
+    <div
+      v-if="busyAction || message || error"
+      class="integration-toast"
+      :class="{ 'is-error': Boolean(error), 'is-busy': Boolean(busyAction) }"
+      aria-hidden="true"
+    >
+      <Icon :name="error ? 'alert' : busyAction ? 'refresh' : 'check'" :size="17" />
+      <span>{{ busyAction ? busyActionLabel : error || message }}</span>
+    </div>
   </section>
 </template>
 
@@ -548,6 +565,11 @@ input:disabled { opacity: .62; }
 .notice--warning { color: var(--warning-color, #9a6b28); }
 .notice--success { color: var(--success-color, #4f8a5b); }
 .notice--error { color: var(--danger-color, #b45151); }
+.integration-toast { position: fixed; right: 18px; bottom: 18px; z-index: 720; display: flex; width: min(440px, calc(100vw - 36px)); min-height: 48px; padding: 11px 14px; align-items: center; gap: 9px; color: var(--success-color, #4f8a5b); background: color-mix(in srgb, var(--bg-card) 96%, transparent); border: 1px solid var(--border-color); border-radius: 14px; box-shadow: var(--shadow-lg); -webkit-backdrop-filter: blur(18px); backdrop-filter: blur(18px); box-sizing: border-box; }
+.integration-toast.is-error { color: var(--danger-color, #b45151); }
+.integration-toast.is-busy { color: var(--info-color, var(--accent-color)); }
+.integration-toast.is-busy svg { animation: integration-spin .85s linear infinite; }
+@keyframes integration-spin { to { transform: rotate(360deg); } }
 .enable-card { display: flex; min-height: 64px; padding: 13px 15px; align-items: center; gap: 12px; background: var(--bg-secondary); border: 1px solid var(--border-light); border-radius: 15px; }
 .enable-card > span { display: grid; gap: 4px; }
 .enable-card strong { color: var(--text-primary); font-size: .78rem; }
@@ -557,5 +579,6 @@ input:disabled { opacity: .62; }
   .integration-heading, .action-row, .card-footer { align-items: stretch; flex-direction: column; }
   .field-grid, .toggle-grid { grid-template-columns: 1fr; }
   .button { width: 100%; }
+  .integration-toast { right: max(12px, env(safe-area-inset-right)); bottom: calc(86px + env(safe-area-inset-bottom)); left: max(12px, env(safe-area-inset-left)); width: auto; }
 }
 </style>
