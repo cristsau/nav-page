@@ -25,6 +25,24 @@ function assertExactSequence(label, actualValues, expectedValues) {
   }
 }
 
+function normalizeSqlDefinition(value) {
+  return String(value || '')
+    .toLowerCase()
+    .replace(/"/g, '')
+    .replace(/\s+/g, ' ')
+    .trim()
+}
+
+function assertDefinitionIncludes(label, definition, expectedFragments) {
+  const normalized = normalizeSqlDefinition(definition)
+  const missing = expectedFragments
+    .map((fragment) => normalizeSqlDefinition(fragment))
+    .filter((fragment) => !normalized.includes(fragment))
+  if (missing.length) {
+    throw new Error(`${label} definition mismatch: missing ${missing.join(', ')}`)
+  }
+}
+
 async function migrationFileNames() {
   const entries = await fs.readdir(config.migrationsDir, { withFileTypes: true })
   return entries
@@ -1622,7 +1640,7 @@ async function verifyEmailAssistantSchema() {
       'sender_hash', 'received_at', 'tier', 'urgency', 'deterministic_signature',
       'event_signature', 'state_signature', 'duplicate_of',
       'classification_status', 'provider', 'model', 'content_encrypted',
-      'notified_at', 'digested_at', 'created_at', 'updated_at'
+      'notified_at', 'digested_at', 'created_at', 'updated_at', 'email_message_id'
     ]],
     ['assistant_conversations', [
       'id', 'user_id', 'title', 'model_mode', 'model', 'reasoning_effort',
@@ -1667,7 +1685,8 @@ async function verifyEmailAssistantSchema() {
       'email_events_state_signature_check',
       'email_events_classification_status_check',
       'email_events_content_size_check',
-      'email_events_source_message_unique'
+      'email_events_source_message_unique',
+      'email_events_message_user_fkey'
     ]],
     ['assistant_conversations', [
       'assistant_conversations_user_id_fkey',
@@ -1704,6 +1723,7 @@ async function verifyEmailAssistantSchema() {
     'idx_email_events_event_state',
     'idx_email_events_deterministic',
     'idx_email_events_pending_digest',
+    'idx_email_events_user_message_unique',
     'idx_assistant_conversations_user_updated',
     'idx_assistant_messages_conversation_created',
     'idx_assistant_messages_user_search'
@@ -1713,6 +1733,213 @@ async function verifyEmailAssistantSchema() {
     WHERE schemaname = current_schema() AND indexname = ANY($1::text[])
   `, [expectedIndexes])
   assertExactSet('email assistant indexes', indexes.rows.map((row) => row.indexname), expectedIndexes)
+}
+
+async function verifyEmailMailboxSchema() {
+  const expectedColumns = new Map([
+    ['email_accounts', [
+      'id', 'user_id', 'source_key', 'label', 'enabled', 'capabilities',
+      'last_connected_at', 'last_error_at', 'last_error_code',
+      'created_at', 'updated_at'
+    ]],
+    ['email_folders', [
+      'id', 'account_id', 'user_id', 'path', 'path_hash', 'delimiter',
+      'special_use', 'selectable', 'subscribed', 'uid_validity', 'uid_next',
+      'highest_modseq', 'last_uid', 'sync_generation',
+      'initial_sync_complete', 'last_listed_at', 'last_synced_at',
+      'last_error_at', 'last_error_code', 'created_at', 'updated_at'
+    ]],
+    ['email_messages', [
+      'id', 'account_id', 'user_id', 'canonical_hash', 'message_id_hash',
+      'thread_key_hash', 'envelope_encrypted', 'content_encrypted',
+      'received_at', 'sent_at', 'size_bytes', 'has_attachments',
+      'attachment_count', 'created_at', 'updated_at'
+    ]],
+    ['email_folder_messages', [
+      'id', 'folder_id', 'message_id', 'account_id', 'user_id',
+      'uid_validity', 'uid', 'modseq', 'seen', 'answered', 'flagged',
+      'draft', 'deleted', 'keywords', 'internal_date', 'size_bytes',
+      'expunged_at', 'created_at', 'updated_at'
+    ]]
+  ])
+  const columns = await query(`
+    SELECT table_name, column_name
+    FROM information_schema.columns
+    WHERE table_schema = current_schema()
+      AND table_name = ANY($1::text[])
+  `, [[...expectedColumns.keys()]])
+  for (const [tableName, names] of expectedColumns) {
+    assertExactSet(
+      `${tableName} columns`,
+      columns.rows.filter((row) => row.table_name === tableName).map((row) => row.column_name),
+      names
+    )
+  }
+
+  const criticalColumnSpecs = [
+    ['email_accounts', 'id', 'uuid', 'NO', 'gen_random_uuid()'],
+    ['email_accounts', 'user_id', 'uuid', 'NO', null],
+    ['email_accounts', 'source_key', 'varchar', 'NO', null],
+    ['email_accounts', 'capabilities', 'jsonb', 'NO', "'{}'::jsonb"],
+    ['email_folders', 'uid_validity', 'int8', 'YES', null],
+    ['email_folders', 'highest_modseq', 'numeric', 'YES', null],
+    ['email_folders', 'last_uid', 'int8', 'NO', '0'],
+    ['email_messages', 'envelope_encrypted', 'bytea', 'NO', null],
+    ['email_messages', 'content_encrypted', 'bytea', 'NO', null],
+    ['email_folder_messages', 'uid_validity', 'int8', 'NO', null],
+    ['email_folder_messages', 'uid', 'int8', 'NO', null],
+    ['email_folder_messages', 'modseq', 'numeric', 'YES', null],
+    ['email_folder_messages', 'keywords', 'jsonb', 'NO', "'[]'::jsonb"]
+  ]
+  const criticalColumns = await query(`
+    SELECT table_name, column_name, udt_name, is_nullable, column_default,
+           numeric_precision, numeric_scale
+    FROM information_schema.columns
+    WHERE table_schema = current_schema()
+      AND (table_name, column_name) IN (
+        SELECT expected.table_name, expected.column_name
+        FROM unnest($1::text[], $2::text[]) AS expected(table_name, column_name)
+      )
+  `, [
+    criticalColumnSpecs.map(([tableName]) => tableName),
+    criticalColumnSpecs.map(([, columnName]) => columnName)
+  ])
+  for (const [tableName, columnName, expectedType, expectedNullable, expectedDefault] of criticalColumnSpecs) {
+    const column = criticalColumns.rows.find(
+      (row) => row.table_name === tableName && row.column_name === columnName
+    )
+    if (!column) throw new Error(`${tableName}.${columnName} column is missing`)
+    if (column.udt_name !== expectedType || column.is_nullable !== expectedNullable) {
+      throw new Error(
+        `${tableName}.${columnName} type mismatch: expected ${expectedType}/${expectedNullable}, `
+        + `received ${column.udt_name}/${column.is_nullable}`
+      )
+    }
+    if (expectedDefault !== null && !normalizeSqlDefinition(column.column_default).includes(expectedDefault)) {
+      throw new Error(`${tableName}.${columnName} default mismatch`)
+    }
+    if (
+      expectedType === 'numeric'
+      && (Number(column.numeric_precision) !== 20 || Number(column.numeric_scale) !== 0)
+    ) {
+      throw new Error(`${tableName}.${columnName} must be NUMERIC(20,0)`)
+    }
+  }
+
+  const expectedConstraintDefinitions = new Map([
+    ['email_accounts_user_id_fkey', [
+      'foreign key (user_id)', 'references users(id)', 'on delete cascade'
+    ]],
+    ['email_accounts_capabilities_check', ['jsonb_typeof', 'capabilities', "'object'"]],
+    ['email_accounts_user_source_unique', ['unique (user_id, source_key)']],
+    ['email_accounts_identity_user_unique', ['unique (id, user_id)']],
+    ['email_folders_account_user_fkey', [
+      'foreign key (account_id, user_id)',
+      'references email_accounts(id, user_id)',
+      'on delete cascade'
+    ]],
+    ['email_folders_uid_validity_check', ['uid_validity', '4294967295']],
+    ['email_folders_highest_modseq_check', ['highest_modseq', '18446744073709551615']],
+    ['email_folders_account_path_unique', ['unique (account_id, path_hash)']],
+    ['email_folders_identity_account_user_unique', ['unique (id, account_id, user_id)']],
+    ['email_messages_account_user_fkey', [
+      'foreign key (account_id, user_id)',
+      'references email_accounts(id, user_id)',
+      'on delete cascade'
+    ]],
+    ['email_messages_account_canonical_unique', ['unique (account_id, canonical_hash)']],
+    ['email_messages_identity_account_user_unique', ['unique (id, account_id, user_id)']],
+    ['email_messages_identity_user_unique', ['unique (id, user_id)']],
+    ['email_folder_messages_folder_account_user_fkey', [
+      'foreign key (folder_id, account_id, user_id)',
+      'references email_folders(id, account_id, user_id)',
+      'on delete cascade'
+    ]],
+    ['email_folder_messages_message_account_user_fkey', [
+      'foreign key (message_id, account_id, user_id)',
+      'references email_messages(id, account_id, user_id)',
+      'on delete cascade'
+    ]],
+    ['email_folder_messages_uid_validity_check', ['uid_validity', '4294967295']],
+    ['email_folder_messages_uid_check', ['uid', '4294967295']],
+    ['email_folder_messages_modseq_check', ['modseq', '18446744073709551615']],
+    ['email_folder_messages_keywords_check', ['jsonb_typeof', 'keywords', "'array'"]],
+    ['email_folder_messages_remote_identity_unique', [
+      'unique (folder_id, uid_validity, uid)'
+    ]],
+    ['email_events_message_user_fkey', [
+      'foreign key (email_message_id, user_id)',
+      'references email_messages(id, user_id)',
+      'on delete cascade'
+    ]]
+  ])
+  const constraints = await query(`
+    SELECT conname, pg_get_constraintdef(oid) AS definition
+    FROM pg_constraint
+    WHERE conname = ANY($1::text[])
+      AND connamespace = current_schema()::regnamespace
+  `, [[...expectedConstraintDefinitions.keys()]])
+  assertExactSet(
+    'email mailbox constraints',
+    constraints.rows.map((row) => row.conname),
+    [...expectedConstraintDefinitions.keys()]
+  )
+  for (const [constraintName, fragments] of expectedConstraintDefinitions) {
+    const constraint = constraints.rows.find((row) => row.conname === constraintName)
+    assertDefinitionIncludes(
+      `email mailbox constraint ${constraintName}`,
+      constraint?.definition,
+      fragments
+    )
+  }
+
+  const expectedIndexDefinitions = new Map([
+    ['idx_email_accounts_user_enabled', [
+      '(user_id, enabled, id)'
+    ]],
+    ['idx_email_folders_user_special_use', [
+      '(user_id, account_id, special_use, id)'
+    ]],
+    ['idx_email_folders_sync_due', [
+      'last_synced_at', 'nulls first', 'where (selectable = true)'
+    ]],
+    ['idx_email_messages_user_received', [
+      'user_id', 'received_at desc', 'id'
+    ]],
+    ['idx_email_messages_account_thread', [
+      'account_id', 'thread_key_hash', 'received_at desc', 'id'
+    ]],
+    ['idx_email_folder_messages_folder_current', [
+      'user_id', 'folder_id', 'internal_date desc', 'where (expunged_at is null)'
+    ]],
+    ['idx_email_folder_messages_unread', [
+      'user_id', 'folder_id', 'internal_date desc', 'expunged_at is null', 'seen = false'
+    ]],
+    ['idx_email_folder_messages_flagged', [
+      'user_id', 'internal_date desc', 'expunged_at is null', 'flagged = true'
+    ]],
+    ['idx_email_folder_messages_message_current', [
+      'user_id', 'message_id', 'folder_id', 'where (expunged_at is null)'
+    ]],
+    ['idx_email_events_user_message_unique', [
+      'unique index', '(user_id, email_message_id)', 'where (email_message_id is not null)'
+    ]]
+  ])
+  const indexes = await query(`
+    SELECT indexname, indexdef
+    FROM pg_indexes
+    WHERE schemaname = current_schema()
+      AND indexname = ANY($1::text[])
+  `, [[...expectedIndexDefinitions.keys()]])
+  assertExactSet(
+    'email mailbox indexes',
+    indexes.rows.map((row) => row.indexname),
+    [...expectedIndexDefinitions.keys()]
+  )
+  for (const [indexName, fragments] of expectedIndexDefinitions) {
+    const index = indexes.rows.find((row) => row.indexname === indexName)
+    assertDefinitionIncludes(`email mailbox index ${indexName}`, index?.indexdef, fragments)
+  }
 }
 
 async function verifyAssistantAgentOperationsSchema() {
@@ -1830,6 +2057,7 @@ async function main() {
   await verifyAiUsageSchema()
   await verifyNotificationMailSchema()
   await verifyEmailAssistantSchema()
+  await verifyEmailMailboxSchema()
   await verifyAssistantAgentOperationsSchema()
   console.log('migration schema verification complete')
 }

@@ -23,6 +23,13 @@ function normalizeLogLevel(value, fallback) {
     : fallback
 }
 
+function normalizeEmailRuntimeRole(value) {
+  const normalized = String(value || '').trim().toLowerCase()
+  return new Set(['combined', 'api', 'worker']).has(normalized)
+    ? normalized
+    : 'combined'
+}
+
 const nodeEnv = process.env.NODE_ENV || 'development'
 
 function normalizeTrustedProxyAddresses(value) {
@@ -265,6 +272,7 @@ export const config = {
     6
   ),
   mailDeliveryEnabled: process.env.NAV_MAIL_DELIVERY_ENABLED === 'true',
+  emailRuntimeRole: normalizeEmailRuntimeRole(process.env.NAV_EMAIL_RUNTIME_ROLE),
   mailDeliveryIntervalSeconds: normalizePositiveInteger(
     process.env.NAV_MAIL_DELIVERY_INTERVAL_SECONDS,
     30
@@ -306,7 +314,7 @@ export const config = {
   ),
   imapInitialLookback: normalizePositiveInteger(
     process.env.NAV_IMAP_INITIAL_LOOKBACK,
-    50
+    1000
   ),
   imapBatchSize: normalizePositiveInteger(
     process.env.NAV_IMAP_BATCH_SIZE,

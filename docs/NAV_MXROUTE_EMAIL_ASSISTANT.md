@@ -61,7 +61,7 @@
 1. 保持所有新开关为 `false`，执行 029、030 迁移并完成隔离 PostgreSQL 恢复演练。
 2. 配置 SMTP 与三份 secret 文件，只打开 `NAV_MAIL_DELIVERY_ENABLED=true`；在“设置 → 用户管理 → MXroute 邮件通道”发送测试邮件，并核对队列正文发送后已清空。
 3. 打开 `NAV_REGISTRATION_EMAIL_ENABLED=true`，用非管理员邮箱完成“申请、验证、审批、结果邮件”闭环。
-4. 配置 IMAP 与邮件属主，只打开 `NAV_EMAIL_INGEST_ENABLED=true`；先保留 `NAV_IMAP_INITIAL_LOOKBACK=50`、`NAV_IMAP_BATCH_SIZE=100`，核对分类、批量游标和重复抑制。
+4. 配置 IMAP 与邮件属主，只打开 `NAV_EMAIL_INGEST_ENABLED=true`；首期默认 `NAV_IMAP_INITIAL_LOOKBACK=1000`、`NAV_IMAP_BATCH_SIZE=100`，核对分类、批量游标和重复抑制。加密邮箱缓存、独立 worker 与只读工作台的完整边界见 `NAV_MAILBOX_SYNC_FOUNDATION.md`。
 5. 已有 Web Push 设备正常后打开 `NAV_EMAIL_DIGEST_ENABLED=true`。
 6. 最后才启用 `NAV_MAINTENANCE_ALERTS_ENABLED=true`。SMTP 任务自身失败时依赖站内通知与 Web Push，不会递归写入自己的发送队列。
 

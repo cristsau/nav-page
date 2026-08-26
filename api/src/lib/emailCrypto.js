@@ -5,7 +5,7 @@ import { readOwnerSecretFile } from './ownerSecretFile.js'
 const VERSION = 1
 const IV_BYTES = 12
 const TAG_BYTES = 16
-const MAX_PLAINTEXT_BYTES = 900_000
+export const EMAIL_ENCRYPTION_MAX_PLAINTEXT_BYTES = 900_000
 const AAD_PREFIX = 'domo-nav-email:v1'
 let cachedKey = null
 let cachedPath = ''
@@ -51,7 +51,7 @@ function aadForContext(context = '') {
 
 export function encryptEmailPayloadWithKey(payload, key, { context = '' } = {}) {
   const plaintext = Buffer.from(JSON.stringify(payload ?? {}), 'utf8')
-  if (!plaintext.length || plaintext.length > MAX_PLAINTEXT_BYTES) {
+  if (!plaintext.length || plaintext.length > EMAIL_ENCRYPTION_MAX_PLAINTEXT_BYTES) {
     throw new Error('Email payload is empty or too large')
   }
   const iv = randomBytes(IV_BYTES)

@@ -26,7 +26,7 @@ test('server, config and Compose keep maintenance and logs bounded', async () =>
   assert.match(server, /configureEmailRuntime/)
   assert.match(server, /stopEmailRuntime/)
   assert.match(emailRuntime, /startMailDeliveryScheduler/)
-  assert.match(emailRuntime, /startEmailIngestScheduler/)
+  assert.match(emailRuntime, /startEmailIngestWorker/)
   assert.match(emailRuntime, /startEmailDigestScheduler/)
   assert.match(emailRuntime, /MAINTENANCE_JOB_NAMES\.MAIL_DELIVERY/)
   assert.match(server, /createMaintenanceJobObserver/)
@@ -43,6 +43,7 @@ test('server, config and Compose keep maintenance and logs bounded', async () =>
   assert.match(config, /NAV_EMBEDDING_SCHEDULER_ENABLED/)
   assert.match(config, /NAV_WEB_PUSH_SCHEDULER_ENABLED/)
   assert.match(config, /NAV_MAIL_DELIVERY_ENABLED/)
+  assert.match(config, /NAV_EMAIL_RUNTIME_ROLE/)
   assert.match(config, /NAV_EMAIL_INGEST_ENABLED/)
   assert.match(config, /NAV_EMAIL_DIGEST_ENABLED/)
   assert.match(envExample, /NAV_SECURITY_EVENT_RETENTION_ENABLED=false/)
@@ -54,6 +55,7 @@ test('server, config and Compose keep maintenance and logs bounded', async () =>
   assert.match(envExample, /NAV_EMBEDDING_SCHEDULER_ENABLED=false/)
   assert.match(envExample, /NAV_WEB_PUSH_SCHEDULER_ENABLED=false/)
   assert.match(envExample, /NAV_MAIL_DELIVERY_ENABLED=false/)
+  assert.match(envExample, /NAV_EMAIL_RUNTIME_ROLE=combined/)
   assert.match(envExample, /NAV_EMAIL_INGEST_ENABLED=false/)
   assert.match(envExample, /NAV_EMAIL_DIGEST_ENABLED=false/)
   assert.match(app, /level: config\.apiLogLevel/)
@@ -64,7 +66,7 @@ test('server, config and Compose keep maintenance and logs bounded', async () =>
   assert.match(app, /req\.body\.query/)
   assert.match(compose, /driver: local/)
   assert.match(compose, /max-size: "10m"/)
-  assert.equal((compose.match(/logging: \*nav-logging/g) || []).length, 2)
+  assert.equal((compose.match(/logging: \*nav-logging/g) || []).length, 3)
 })
 
 test('migration verification keeps all ten maintenance jobs after feature integration', async () => {

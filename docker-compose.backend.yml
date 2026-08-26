@@ -26,6 +26,7 @@ services:
       retries: 10
 
   nav-api:
+    image: "domo-nav-api:${NAV_RELEASE_SHA:-development}"
     build:
       context: ./api
       args:
@@ -40,6 +41,7 @@ services:
       - ./api/.env
     environment:
       NODE_ENV: production
+      NAV_EMAIL_RUNTIME_ROLE: api
       NAV_MANAGED_INTEGRATIONS_DIR: "${NAV_INTEGRATIONS_DIR:-/etc/nav/integrations}"
     ports:
       - "127.0.0.1:3001:3001"
@@ -53,6 +55,36 @@ services:
       - "${NAV_SECRETS_DIR:?set NAV_SECRETS_DIR to the release-local secrets directory}/email-encryption-key:/run/secrets/nav/email-encryption-key:ro"
       - "${NAV_INTEGRATIONS_DIR:-/etc/nav/integrations}:${NAV_INTEGRATIONS_DIR:-/etc/nav/integrations}"
       - nav-model-cache:/var/cache/nav-models
+
+  nav-mail-worker:
+    image: "domo-nav-api:${NAV_RELEASE_SHA:-development}"
+    container_name: nav-mail-worker
+    restart: unless-stopped
+    logging: *nav-logging
+    depends_on:
+      nav-postgres:
+        condition: service_healthy
+      nav-api:
+        condition: service_healthy
+    env_file:
+      - ./api/.env
+    environment:
+      NODE_ENV: production
+      NAV_EMAIL_RUNTIME_ROLE: worker
+      NAV_MANAGED_INTEGRATIONS_DIR: "${NAV_INTEGRATIONS_DIR:-/etc/nav/integrations}"
+      NAV_MAIL_WORKER_HEARTBEAT_FILE: /tmp/nav-mail-worker-heartbeat.json
+    command: ["node", "src/mailWorker.js"]
+    healthcheck:
+      test: ["CMD", "node", "scripts/checkMailWorkerHealth.js"]
+      interval: 20s
+      timeout: 5s
+      start_period: 30s
+      retries: 3
+    volumes:
+      - "${NAV_SECRETS_DIR:?set NAV_SECRETS_DIR to the release-local secrets directory}/cliproxy-api-key:/run/secrets/nav/cli-proxy-api-key:ro"
+      - "${NAV_SECRETS_DIR:?set NAV_SECRETS_DIR to the release-local secrets directory}/imap-password:/run/secrets/nav/imap-password:ro"
+      - "${NAV_SECRETS_DIR:?set NAV_SECRETS_DIR to the release-local secrets directory}/email-encryption-key:/run/secrets/nav/email-encryption-key:ro"
+      - "${NAV_INTEGRATIONS_DIR:-/etc/nav/integrations}:${NAV_INTEGRATIONS_DIR:-/etc/nav/integrations}:ro"
 
 volumes:
   nav-postgres-data:
