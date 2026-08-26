@@ -27,8 +27,10 @@ const question = ref('')
 const loadingConversations = ref(false)
 const loadingConversation = ref(false)
 const sending = ref(false)
+const agentStatus = ref('')
 const preferenceSaving = ref(false)
 const errorMessage = ref('')
+const pendingSend = ref(null)
 const emailDetail = ref(null)
 const emailLoading = ref(false)
 const usageExpanded = ref(false)
@@ -48,6 +50,36 @@ const modelCatalog = ref({
 const modelCatalogLoading = ref(false)
 const modelCatalogError = ref('')
 let streamController = null
+
+const TOOL_LABELS = Object.freeze({
+  get_current_datetime: '读取当前时间',
+  search_workspace: '检索站内资料',
+  list_navigation_groups: '读取导航分组',
+  search_bookmarks: '检索导航书签',
+  create_diary: '创建日记',
+  create_memo: '创建备忘录',
+  create_bookmark: '保存导航书签',
+  create_group: '创建导航分组'
+})
+
+function toolLabel(tool) {
+  return TOOL_LABELS[tool] || '执行助理工具'
+}
+
+function createAssistantOperationId() {
+  return globalThis.crypto?.randomUUID?.()
+    || 'xxxxxxxx-xxxx-4xxx-yxxx-xxxxxxxxxxxx'.replace(/[xy]/g, (token) => {
+      const value = Math.floor(Math.random() * 16)
+      return (token === 'x' ? value : ((value & 0x3) | 0x8)).toString(16)
+    })
+}
+
+function actionOutcome(action) {
+  if (action?.summary?.deduplicated) return '已存在，未重复创建'
+  if (action?.summary?.created) return '创建成功'
+  if (action?.status === 'failed') return '执行失败'
+  return '操作完成'
+}
 
 const canSend = computed(() => Boolean(question.value.trim()) && !sending.value)
 const activeTitle = computed(() => activeConversation.value?.title || '新的对话')
@@ -231,11 +263,24 @@ function exportConversation() {
   window.setTimeout(() => URL.revokeObjectURL(url), 0)
 }
 
-async function sendQuestion() {
-  const text = question.value.trim()
+async function sendQuestion(options = {}) {
+  const retryPendingSend = options?.retry === true && pendingSend.value
+    ? { ...pendingSend.value }
+    : null
+  const text = retryPendingSend?.query || question.value.trim()
   if (!text || sending.value) return
-  question.value = ''
+  if (retryPendingSend) {
+    pendingSend.value = retryPendingSend
+  } else {
+    pendingSend.value = {
+      query: text,
+      operationId: createAssistantOperationId()
+    }
+    question.value = ''
+  }
+  const operationId = pendingSend.value.operationId
   sending.value = true
+  agentStatus.value = ''
   errorMessage.value = ''
   const userMessage = {
     id: `local-user-${Date.now()}`,
@@ -249,6 +294,7 @@ async function sendQuestion() {
     role: 'assistant',
     content: '',
     sources: [],
+    actions: [],
     createdAt: new Date().toISOString(),
     streaming: true
   }
@@ -261,6 +307,7 @@ async function sendQuestion() {
       conversationId: activeConversation.value?.id || '',
       query: text,
       ...assistantPreferences.value,
+      operationId,
       signal: streamController.signal,
       onEvent(event, payload) {
         if (event === 'conversation') {
@@ -274,27 +321,50 @@ async function sendQuestion() {
           void scrollToLatest()
         } else if (event === 'reset') {
           assistantMessage.content = payload.content || ''
+        } else if (event === 'agent_status') {
+          agentStatus.value = payload.label || '助理正在处理…'
+        } else if (event === 'tool_start') {
+          agentStatus.value = `${toolLabel(payload.tool)}…`
+        } else if (event === 'tool_result') {
+          agentStatus.value = payload.ok
+            ? `${toolLabel(payload.tool)}完成`
+            : `${toolLabel(payload.tool)}失败`
+        } else if (event === 'action' && payload.receipt) {
+          if (!assistantMessage.actions.some((item) => item.operationId === payload.receipt.operationId)) {
+            assistantMessage.actions.push(payload.receipt)
+          }
         } else if (event === 'done') {
-          Object.assign(assistantMessage, payload.message || {}, { streaming: false })
+          Object.assign(assistantMessage, payload.message || {}, {
+            actions: payload.actions || payload.message?.actions || assistantMessage.actions,
+            streaming: false
+          })
+          agentStatus.value = ''
         } else if (event === 'error') {
           errorMessage.value = payload.error || '助理回答失败'
         }
       }
     })
     assistantMessage.streaming = false
+    if (pendingSend.value?.operationId === operationId) pendingSend.value = null
     await loadConversations()
   } catch (error) {
     assistantMessage.streaming = false
     if (error.name !== 'AbortError') {
       errorMessage.value = error.message || '助理回答失败，请稍后重试'
-      if (!assistantMessage.content) assistantMessage.content = '本次回答未完成，请重新发送。'
+      if (!assistantMessage.content) assistantMessage.content = '本次回答未完成，可重试本次请求。'
     }
   } finally {
     sending.value = false
+    agentStatus.value = ''
     streamController = null
     await scrollToLatest()
     nextTick(() => composer.value?.focus())
   }
+}
+
+function retryLastQuestion() {
+  if (!pendingSend.value || sending.value) return
+  void sendQuestion({ retry: true })
 }
 
 async function loadLinkedEmail(emailId) {
@@ -475,6 +545,22 @@ onBeforeUnmount(() => streamController?.abort())
               <span v-if="message.role === 'assistant' && message.model" class="assistant-message__model">{{ message.model }}</span>
             </div>
             <div class="assistant-message__content">{{ message.content }}<span v-if="message.streaming" class="assistant-caret" aria-label="正在生成"></span></div>
+            <div v-if="message.actions?.length" class="assistant-actions" aria-label="助理操作回执">
+              <component
+                :is="action.href ? RouterLink : 'span'"
+                v-for="action in message.actions"
+                :key="action.operationId"
+                :to="action.href || undefined"
+                class="assistant-action"
+              >
+                <span class="assistant-action__icon"><Icon name="circle-check" :size="17" /></span>
+                <span>
+                  <strong>{{ toolLabel(action.tool) }}</strong>
+                  <small>{{ actionOutcome(action) }} · ID {{ action.operationId }}</small>
+                </span>
+                <Icon v-if="action.href" name="external-link" :size="15" />
+              </component>
+            </div>
             <div v-if="message.sources?.length" class="assistant-sources" aria-label="回答来源">
               <component
                 :is="source.href?.startsWith('/') ? RouterLink : 'a'"
@@ -494,7 +580,16 @@ onBeforeUnmount(() => streamController?.abort())
         </template>
       </div>
 
-      <p v-if="errorMessage" class="assistant-error" role="alert">{{ errorMessage }}</p>
+      <p v-if="agentStatus" class="assistant-agent-status" role="status">
+        <Icon name="sparkles" :size="15" />{{ agentStatus }}
+      </p>
+      <div v-if="errorMessage" class="assistant-error" role="alert">
+        <span>{{ errorMessage }}</span>
+        <button v-if="pendingSend" type="button" :disabled="sending" @click="retryLastQuestion">
+          <Icon name="refresh-cw" :size="15" />
+          重试本次请求
+        </button>
+      </div>
       <form class="assistant-composer" @submit.prevent="sendQuestion">
         <label for="assistant-question">向 DOMO 助理提问</label>
         <textarea
@@ -507,7 +602,7 @@ onBeforeUnmount(() => streamController?.abort())
           @keydown="handleComposerKeydown"
         ></textarea>
         <div>
-              <span>优先检索你的站内数据，也能回答一般问题；不会执行删除或修改操作</span>
+              <span>可检索站内与网页；明确要求时可安全创建日记、备忘录、书签和分组</span>
           <button type="submit" :disabled="!canSend">
             <Icon name="sparkles" :size="17" />
             {{ sending ? '回答中…' : '发送' }}
@@ -630,6 +725,14 @@ onBeforeUnmount(() => streamController?.abort())
 .assistant-message__content { padding: 17px 19px; white-space: pre-wrap; overflow-wrap: anywhere; line-height: 1.78; background: var(--bg-card); border: 1px solid var(--border-light); border-radius: 18px; }
 .assistant-message.is-user .assistant-message__content { background: var(--accent-bg); border-color: color-mix(in srgb, var(--accent-color) 30%, var(--border-light)); }
 .assistant-caret { display: inline-block; width: 7px; height: 1.1em; margin-left: 3px; vertical-align: -2px; background: var(--accent-color); animation: assistant-blink 0.8s steps(2, start) infinite; }
+.assistant-actions { display: grid; margin-top: 9px; gap: 7px; }
+.assistant-action { display: grid; min-height: 58px; padding: 10px 12px; align-items: center; grid-template-columns: 34px minmax(0, 1fr) auto; gap: 9px; color: var(--text-primary); text-decoration: none; background: color-mix(in srgb, var(--success-color, #4f8a5b) 8%, var(--bg-card)); border: 1px solid color-mix(in srgb, var(--success-color, #4f8a5b) 28%, var(--border-light)); border-radius: 14px; }
+.assistant-action[href]:hover,
+.assistant-action[href]:focus-visible { border-color: var(--success-color, #4f8a5b); }
+.assistant-action__icon { display: grid; width: 32px; height: 32px; place-items: center; color: var(--success-color, #4f8a5b); background: color-mix(in srgb, var(--success-color, #4f8a5b) 12%, transparent); border-radius: 10px; }
+.assistant-action > span:nth-child(2) { display: grid; min-width: 0; gap: 2px; }
+.assistant-action strong { font-size: 0.75rem; }
+.assistant-action small { overflow: hidden; color: var(--text-muted); font-size: 0.65rem; text-overflow: ellipsis; }
 .assistant-sources { display: grid; margin-top: 9px; grid-template-columns: repeat(auto-fit, minmax(190px, 1fr)); gap: 7px; }
 .assistant-sources a { display: grid; min-width: 0; padding: 11px 12px; gap: 4px; color: var(--text-primary); text-decoration: none; background: var(--bg-secondary); border: 1px solid var(--border-light); border-radius: 13px; }
 .assistant-sources a:hover,
@@ -639,7 +742,13 @@ onBeforeUnmount(() => streamController?.abort())
 .assistant-sources strong,
 .assistant-sources small { overflow: hidden; white-space: nowrap; text-overflow: ellipsis; }
 .assistant-sources strong { font-size: 0.75rem; }
-.assistant-error { width: min(760px, calc(100% - 40px)); margin: 0 auto 8px; padding: 10px 13px; color: var(--error-color); background: color-mix(in srgb, var(--error-color) 9%, var(--bg-card)); border: 1px solid color-mix(in srgb, var(--error-color) 28%, transparent); border-radius: 12px; font-size: 0.75rem; }
+.assistant-error { display: flex; width: min(760px, calc(100% - 40px)); min-height: 44px; margin: 0 auto 8px; padding: 8px 9px 8px 13px; align-items: center; justify-content: space-between; gap: 10px; color: var(--error-color); background: color-mix(in srgb, var(--error-color) 9%, var(--bg-card)); border: 1px solid color-mix(in srgb, var(--error-color) 28%, transparent); border-radius: 12px; font-size: 0.75rem; }
+.assistant-error span { min-width: 0; overflow-wrap: anywhere; }
+.assistant-error button { display: inline-flex; min-height: 44px; padding: 0 11px; flex: 0 0 auto; align-items: center; gap: 6px; color: var(--error-color); background: var(--bg-card); border: 1px solid color-mix(in srgb, var(--error-color) 30%, var(--border-light)); border-radius: 10px; cursor: pointer; font: inherit; font-weight: 700; }
+.assistant-error button:hover,
+.assistant-error button:focus-visible { border-color: var(--error-color); }
+.assistant-error button:disabled { opacity: 0.55; cursor: not-allowed; }
+.assistant-agent-status { display: flex; width: min(760px, calc(100% - 40px)); min-height: 34px; margin: 0 auto 8px; padding: 7px 12px; align-items: center; gap: 7px; color: var(--accent-color); background: var(--accent-bg); border: 1px solid color-mix(in srgb, var(--accent-color) 22%, var(--border-light)); border-radius: 12px; font-size: 0.72rem; }
 .assistant-composer { width: min(820px, calc(100% - 40px)); margin: 0 auto 22px; padding: 10px 12px 8px; background: var(--bg-card); border: 1px solid var(--border-color); border-radius: 18px; box-shadow: var(--shadow-md); }
 .assistant-composer:focus-within { border-color: var(--accent-color); box-shadow: 0 0 0 4px color-mix(in srgb, var(--accent-color) 10%, transparent); }
 .assistant-composer > label { position: absolute; width: 1px; height: 1px; overflow: hidden; clip: rect(0, 0, 0, 0); }

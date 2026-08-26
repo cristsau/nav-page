@@ -1,5 +1,3 @@
-import { withTransaction } from '../db/index.js'
-
 const RETRYABLE_NAVIGATION_TRANSACTION_CODES = new Set([
   '40001',
   '40P01',
@@ -35,6 +33,7 @@ export async function acquireNavigationTransactionLock(client, userId) {
 
 export async function withNavigationTransaction(userId, callback) {
   try {
+    const { withTransaction } = await import('../db/index.js')
     return await withTransaction(async (client) => {
       await acquireNavigationTransactionLock(client, userId)
       return callback(client)

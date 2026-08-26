@@ -13,6 +13,7 @@
     "test:restore:integration": "node --test --test-concurrency=1 integration/dataRestorePostgres.integration.js",
     "test:maintenance:integration": "node --test --test-concurrency=1 integration/maintenancePostgres.integration.js",
     "test:advanced:integration": "node --test --test-concurrency=1 integration/advancedFeaturesPostgres.integration.js",
+    "test:assistant-agent:integration": "node --test --test-concurrency=1 integration/assistantAgentPostgres.integration.js",
     "test:collaboration:integration": "node --test --test-concurrency=1 integration/collaborationOfflinePostgres.integration.js",
     "test:release-acceptance:integration": "node --test --test-concurrency=1 integration/releaseAcceptancePostgres.integration.js",
     "test:backup-gate:integration": "node --test --test-concurrency=1 integration/backupGatePostgres.integration.js"
