@@ -2,6 +2,7 @@ import {
   apiRawRequest,
   apiRequest as request
 } from '@/shared/services/apiClient'
+import { consumeAssistantSseBody } from '@/shared/services/assistantStream'
 
 export async function queryWorkspaceAssistant(query) {
   return request('/assistant/query', {
@@ -53,30 +54,24 @@ export async function updateAssistantConversationPreferences(
   )
 }
 
-function parseSseFrame(frame) {
-  let event = 'message'
-  const data = []
-  for (const line of frame.split(/\r?\n/)) {
-    if (line.startsWith('event:')) event = line.slice(6).trim()
-    if (line.startsWith('data:')) data.push(line.slice(5).trimStart())
-  }
-  if (!data.length) return null
-  try {
-    return { event, payload: JSON.parse(data.join('\n')) }
-  } catch {
-    return null
-  }
-}
-
 export async function streamAssistantMessage({
   conversationId = '',
   query,
   modelMode = 'latest',
   model = '',
   reasoningEffort = 'low',
+  operationId,
   signal,
   onEvent = () => {}
 }) {
+  const requestOperationId = String(operationId || '').trim()
+  if (!requestOperationId) throw new Error('助理操作请求 ID 缺失')
+  let timeZone = 'Asia/Shanghai'
+  try {
+    timeZone = Intl.DateTimeFormat().resolvedOptions().timeZone || timeZone
+  } catch {
+    // Keep the server-supported default when the browser omits a time zone.
+  }
   const response = await apiRawRequest('/assistant/chat/stream', {
     method: 'POST',
     body: JSON.stringify({
@@ -84,36 +79,11 @@ export async function streamAssistantMessage({
       query,
       modelMode,
       ...(modelMode === 'pinned' && model ? { model } : {}),
-      reasoningEffort
+      reasoningEffort,
+      operationId: requestOperationId,
+      timeZone
     }),
     signal
   })
-  if (!response.body) throw new Error('当前浏览器不支持流式回答')
-  const reader = response.body.getReader()
-  const decoder = new TextDecoder()
-  let buffer = ''
-  let completed = false
-
-  const dispatch = (parsed) => {
-    if (!parsed) return
-    onEvent(parsed.event, parsed.payload)
-    if (parsed.event === 'error') {
-      throw new Error(parsed.payload?.error || '助理回答失败')
-    }
-  }
-
-  try {
-    while (true) {
-      const { value, done } = await reader.read()
-      buffer += decoder.decode(value || new Uint8Array(), { stream: !done })
-      const frames = buffer.split(/\r?\n\r?\n/)
-      buffer = frames.pop() || ''
-      for (const frame of frames) dispatch(parseSseFrame(frame))
-      if (done) break
-    }
-    if (buffer.trim()) dispatch(parseSseFrame(buffer))
-    completed = true
-  } finally {
-    if (!completed) await reader.cancel().catch(() => {})
-  }
+  await consumeAssistantSseBody(response.body, { onEvent })
 }

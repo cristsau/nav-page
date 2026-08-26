@@ -1,4 +1,4 @@
-const CACHE_VERSION = 'domonav-shell-v4'
+const CACHE_VERSION = 'domonav-shell-v5'
 const OFFLINE_SYNC_DB = 'NavPageOfflineSyncDB'
 const OFFLINE_SYNC_STORE = 'mutations'
 const OFFLINE_SYNC_TAG = 'domo-nav-offline-sync'
@@ -52,13 +52,25 @@ async function cacheApplicationShell(timeoutMs = SHELL_FETCH_TIMEOUT_MS) {
 }
 
 self.addEventListener('install', (event) => {
-  event.waitUntil(cacheApplicationShell())
+  // WebKit can retain a first-install worker in `waiting` even when there is
+  // no active worker to receive our SKIP_WAITING message. Activate immediately
+  // only for that first install. Normal updates keep the existing explicit
+  // updateReady/applyPwaUpdate flow so an open page is never taken over mid-use.
+  const activateFirstInstall = self.registration.active
+    ? Promise.resolve()
+    : self.skipWaiting()
+  event.waitUntil(Promise.all([
+    activateFirstInstall,
+    cacheApplicationShell()
+  ]))
 })
 
 self.addEventListener('activate', (event) => {
   event.waitUntil(
     caches.keys()
-      .then((keys) => Promise.all(keys.filter((key) => key !== CACHE_VERSION).map((key) => caches.delete(key))))
+      .then((keys) => Promise.all(keys.filter((key) => (
+        key.startsWith('domonav-shell-') && key !== CACHE_VERSION
+      )).map((key) => caches.delete(key))))
       .then(() => self.clients.claim())
   )
 })

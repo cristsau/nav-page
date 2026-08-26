@@ -203,7 +203,14 @@ test('Web Push inspection and error recovery cannot leave the settings UI perman
   assert.match(pwaSource, /repairPromise === pendingRepair/)
   assert.match(pwaSource, /isRootServiceWorkerScope\(item\.scope, origin\)/)
   assert.match(pwaSource, /void activeRegistration\.update\(\)\.catch/)
+  assert.match(pwaSource, /void nextRegistration\.update\(\)\.catch/)
+  assert.match(pwaSource, /setInterval\([\s\S]*?checkActivation/)
+  assert.match(pwaSource, /重新创建 Service Worker 注册超时/)
+  assert.match(pwaSource, /await waitForActiveRegistration\(nextRegistration, 12_000, generation\)/)
   assert.match(workerSource, /Promise\.allSettled\([\s\S]*?SHELL_ASSETS\.map/)
+  assert.match(workerSource, /self\.addEventListener\('install'[\s\S]*?self\.skipWaiting\(\)/)
+  assert.match(workerSource, /self\.registration\.active[\s\S]*?Promise\.resolve\(\)[\s\S]*?self\.skipWaiting\(\)/)
+  assert.match(workerSource, /key\.startsWith\('domonav-shell-'\) && key !== CACHE_VERSION/)
   assert.match(workerSource, /SHELL_FETCH_TIMEOUT_MS = 4_000/)
   assert.match(workerSource, /Promise\.race\(/)
   assert.match(workerSource, /controller\.abort\(\)/)
@@ -267,6 +274,33 @@ test('Service Worker activation resolves only after an active worker exists', as
   registration.active = { state: 'activated' }
   worker.state = 'activated'
   worker.dispatchEvent(new Event('statechange'))
+
+  assert.equal(await pending, registration)
+})
+
+test('Service Worker activation polling recovers when WebKit omits statechange', async () => {
+  const worker = new EventTarget()
+  worker.state = 'installed'
+  worker.postMessage = () => {}
+  const registration = { active: null, installing: null, waiting: worker }
+  const pending = waitForActiveRegistration(registration, 200)
+
+  setTimeout(() => {
+    registration.active = { state: 'activated' }
+    registration.waiting = null
+    worker.state = 'activated'
+  }, 20)
+
+  assert.equal(await pending, registration)
+})
+
+test('Service Worker activation polling tolerates an initially empty registration', async () => {
+  const registration = { active: null, installing: null, waiting: null }
+  const pending = waitForActiveRegistration(registration, 200)
+
+  setTimeout(() => {
+    registration.active = { state: 'activated' }
+  }, 20)
 
   assert.equal(await pending, registration)
 })

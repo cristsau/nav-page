@@ -8,6 +8,8 @@ let registrationPromise = null
 let repairPromise = null
 let applyingUpdate = false
 let controllerListenerInstalled = false
+const ACTIVATION_POLL_INTERVAL_MS = 200
+const ACTIVATION_REFRESH_INTERVAL_MS = 1_000
 const listeners = new Set()
 const watchedRegistrationGenerations = new WeakMap()
 const registrationGeneration = createRegistrationGeneration()
@@ -113,32 +115,28 @@ export function waitForActiveRegistration(
     return Promise.resolve(nextRegistration)
   }
 
-  const worker = nextRegistration?.installing || nextRegistration?.waiting
-  if (!worker) {
-    return Promise.reject(pwaError(
-      null,
-      'Service Worker 注册存在，但没有可激活的 worker',
-      'activation'
-    ))
-  }
-
-  let activationRequested = false
+  let observedWorker = nextRegistration?.installing || nextRegistration?.waiting || null
+  let activationRequestedFor = null
   const requestActivationIfWaiting = () => {
+    const waitingWorker = nextRegistration?.waiting
     if (
-      activationRequested
+      !waitingWorker
       || nextRegistration.active
-      || (nextRegistration.waiting !== worker && worker.state !== 'installed')
+      || activationRequestedFor === waitingWorker
     ) return
-    activationRequested = true
-    worker.postMessage?.({ type: 'SKIP_WAITING' })
+    activationRequestedFor = waitingWorker
+    waitingWorker.postMessage?.({ type: 'SKIP_WAITING' })
   }
 
   // A restored iOS Home Screen app can retain a waiting worker without an
-  // active controller. Also repeat this check on state changes below because
-  // an installing worker can transition to waiting after this function starts.
+  // active controller. Poll as well as listening for statechange because
+  // WebKit can omit or delay that event while the registration becomes active.
   requestActivationIfWaiting()
 
   return new Promise((resolve, reject) => {
+    let settled = false
+    let refreshPending = false
+    let lastRefreshAt = 0
     const timeoutId = setTimeout(() => {
       finish()
       if (!registrationGeneration.isCurrent(generation)) {
@@ -151,33 +149,83 @@ export function waitForActiveRegistration(
         'activation'
       ))
     }, timeoutMs)
-    const finish = () => {
-      clearTimeout(timeoutId)
-      worker.removeEventListener('statechange', handleStateChange)
+    const pollId = setInterval(
+      () => checkActivation(),
+      Math.min(ACTIVATION_POLL_INTERVAL_MS, Math.max(10, Math.floor(timeoutMs / 4)))
+    )
+    const detachWorker = () => {
+      observedWorker?.removeEventListener?.('statechange', handleStateChange)
     }
-    const handleStateChange = () => {
+    const attachCurrentWorker = () => {
+      const currentWorker = nextRegistration?.installing || nextRegistration?.waiting || null
+      if (currentWorker === observedWorker) return
+      detachWorker()
+      observedWorker = currentWorker
+      observedWorker?.addEventListener?.('statechange', handleStateChange)
+    }
+    const finish = () => {
+      if (settled) return false
+      settled = true
+      clearTimeout(timeoutId)
+      clearInterval(pollId)
+      detachWorker()
+      return true
+    }
+    const refreshRegistration = async () => {
+      if (
+        refreshPending
+        || settled
+        || typeof navigator === 'undefined'
+        || !navigator.serviceWorker?.getRegistration
+      ) return
+      refreshPending = true
+      try {
+        const refreshed = await navigator.serviceWorker.getRegistration(currentClientUrl())
+        if (settled || !registrationGeneration.isCurrent(generation)) return
+        if (refreshed?.active && finish()) {
+          state.active = true
+          emitState()
+          watchRegistration(refreshed, generation)
+          resolve(refreshed)
+        }
+      } catch {
+        // Keep the bounded activation wait alive. The original registration
+        // may still become active even if this refresh attempt failed.
+      } finally {
+        refreshPending = false
+      }
+    }
+    const checkActivation = () => {
+      if (settled) return
       if (!registrationGeneration.isCurrent(generation)) {
-        finish()
-        reject(staleRegistrationError())
+        if (finish()) reject(staleRegistrationError())
         return
       }
+      attachCurrentWorker()
       state.active = Boolean(nextRegistration.active)
       emitState()
       requestActivationIfWaiting()
       if (nextRegistration.active) {
-        finish()
-        resolve(nextRegistration)
-      } else if (worker.state === 'redundant') {
-        finish()
-        reject(pwaError(
+        if (finish()) resolve(nextRegistration)
+        return
+      }
+      if (observedWorker?.state === 'redundant') {
+        if (finish()) reject(pwaError(
           null,
           'Service Worker 安装已失效，请修复当前站点的通知环境',
           'activation'
         ))
+        return
+      }
+      const now = Date.now()
+      if (now - lastRefreshAt >= ACTIVATION_REFRESH_INTERVAL_MS) {
+        lastRefreshAt = now
+        void refreshRegistration()
       }
     }
-    worker.addEventListener('statechange', handleStateChange)
-    handleStateChange()
+    const handleStateChange = () => checkActivation()
+    observedWorker?.addEventListener?.('statechange', handleStateChange)
+    checkActivation()
   })
 }
 
@@ -232,6 +280,11 @@ export async function registerPwa() {
         generation
       )
     assertCurrentGeneration(generation)
+
+    // Kick WebKit's registration/update state machine before waiting. Do not
+    // await update(): Safari can leave the promise pending while activation is
+    // already progressing, so the bounded poll below remains authoritative.
+    void nextRegistration.update().catch(() => {})
     const activeRegistration = await waitForActiveRegistration(nextRegistration, 10_000, generation)
     assertCurrentGeneration(generation)
 
@@ -340,6 +393,25 @@ export async function repairPwaRegistration() {
     // Re-read once after cache cleanup to catch a timed-out registration call
     // that completed while repair was already in progress.
     await unregisterRootScope()
+
+    // Repair is complete only after a fresh root registration is active. A
+    // reload alone is insufficient on iOS because the old registration can
+    // remain detached from the Home Screen web app process.
+    const generation = registrationGeneration.current()
+    const nextRegistration = watchRegistration(
+      await withPwaTimeout(
+        () => navigator.serviceWorker.register('/sw.js', {
+          scope: '/',
+          updateViaCache: 'none'
+        }),
+        10_000,
+        '重新创建 Service Worker 注册超时',
+        'repair'
+      ),
+      generation
+    )
+    void nextRegistration.update().catch(() => {})
+    await waitForActiveRegistration(nextRegistration, 12_000, generation)
     return true
   })()
   repairPromise = pendingRepair

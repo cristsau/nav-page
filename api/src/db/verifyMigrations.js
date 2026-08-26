@@ -1702,6 +1702,103 @@ async function verifyEmailAssistantSchema() {
   assertExactSet('email assistant indexes', indexes.rows.map((row) => row.indexname), expectedIndexes)
 }
 
+async function verifyAssistantAgentOperationsSchema() {
+  const expectedColumns = [
+    'user_id',
+    'operation_id',
+    'conversation_id',
+    'message_id',
+    'response_message_id',
+    'tool_name',
+    'tool_version',
+    'risk',
+    'authorization_mode',
+    'arguments_hash',
+    'status',
+    'response_status',
+    'resource_type',
+    'resource_id',
+    'result_summary',
+    'error_code',
+    'started_at',
+    'confirmed_at',
+    'completed_at',
+    'undo_until',
+    'created_at',
+    'updated_at'
+  ]
+  const columns = await query(`
+    SELECT column_name
+    FROM information_schema.columns
+    WHERE table_schema = current_schema()
+      AND table_name = 'assistant_agent_operations'
+  `)
+  assertExactSet(
+    'assistant agent operation columns',
+    columns.rows.map((row) => row.column_name),
+    expectedColumns
+  )
+
+  const expectedConstraints = [
+    'assistant_agent_operations_pkey',
+    'assistant_agent_operations_user_id_fkey',
+    'assistant_agent_operations_conversation_id_fkey',
+    'assistant_agent_operations_message_id_fkey',
+    'assistant_agent_operations_response_message_id_fkey',
+    'assistant_agent_operations_tool_name_check',
+    'assistant_agent_operations_tool_version_check',
+    'assistant_agent_operations_risk_check',
+    'assistant_agent_operations_authorization_mode_check',
+    'assistant_agent_operations_arguments_hash_check',
+    'assistant_agent_operations_status_check',
+    'assistant_agent_operations_response_status_check',
+    'assistant_agent_operations_resource_pair_check',
+    'assistant_agent_operations_result_summary_check',
+    'assistant_agent_operations_error_code_check',
+    'assistant_agent_operations_undo_window_check'
+  ]
+  const constraints = await query(
+    `
+      SELECT conname, convalidated
+      FROM pg_constraint
+      WHERE conrelid = 'assistant_agent_operations'::regclass
+        AND conname = ANY($1::text[])
+    `,
+    [expectedConstraints]
+  )
+  assertExactSet(
+    'assistant agent operation constraints',
+    constraints.rows.map((row) => row.conname),
+    expectedConstraints
+  )
+  if (constraints.rows.some((row) => row.convalidated !== true)) {
+    throw new Error('assistant agent operation constraints must be validated')
+  }
+
+  const expectedIndexes = [
+    'idx_assistant_agent_operations_user_created',
+    'idx_assistant_agent_operations_conversation_created',
+    'idx_assistant_agent_operations_message',
+    'idx_assistant_agent_operations_response_message',
+    'idx_assistant_agent_operations_undo'
+  ]
+  const indexes = await query(
+    `
+      SELECT indexname
+      FROM pg_indexes
+      WHERE schemaname = current_schema()
+        AND tablename = 'assistant_agent_operations'
+        AND indexname = ANY($1::text[])
+    `,
+    [expectedIndexes]
+  )
+  assertExactSet(
+    'assistant agent operation indexes',
+    indexes.rows.map((row) => row.indexname),
+    expectedIndexes
+  )
+}
+
 async function main() {
   await verifyMigrationLedger()
   await verifyNavigationMaintenanceSchema()
@@ -1720,6 +1817,7 @@ async function main() {
   await verifyAiUsageSchema()
   await verifyNotificationMailSchema()
   await verifyEmailAssistantSchema()
+  await verifyAssistantAgentOperationsSchema()
   console.log('migration schema verification complete')
 }
 
