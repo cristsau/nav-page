@@ -991,7 +991,11 @@ async function verifyHybridWorkspaceSearchSchema() {
   }
 
   const triggers = await query(`
-    SELECT trigger_row.tgname, trigger_row.tgenabled, function_row.proname
+    SELECT
+      trigger_row.tgname,
+      trigger_row.tgenabled,
+      function_row.proname,
+      function_row.prosrc
     FROM pg_trigger AS trigger_row
     JOIN pg_proc AS function_row ON function_row.oid = trigger_row.tgfoid
     WHERE trigger_row.tgrelid IN ('nav_bookmarks'::regclass, 'notes'::regclass)
@@ -1013,6 +1017,15 @@ async function verifyHybridWorkspaceSearchSchema() {
     row.tgenabled !== 'O' || row.proname !== 'nav_mark_workspace_search_dirty'
   ))) {
     throw new Error('workspace search dirty triggers must be enabled and use the canonical function')
+  }
+  const triggerFunctionSource = String(triggers.rows[0]?.prosrc || '')
+    .replace(/\s+/g, ' ')
+    .toLowerCase()
+  if (
+    !triggerFunctionSource.includes('from users as owner_user where owner_user.id = new.user_id')
+    || !triggerFunctionSource.includes('from users as owner_user where owner_user.id = old.user_id')
+  ) {
+    throw new Error('workspace search dirty trigger must guard deleted user cascades')
   }
 
   const expectedIndexes = [
