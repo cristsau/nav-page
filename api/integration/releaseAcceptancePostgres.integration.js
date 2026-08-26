@@ -11,6 +11,9 @@ const REAL_ADMIN_ID = '10000000-0000-4000-8000-000000000001'
 const REAL_USER_ID = '10000000-0000-4000-8000-000000000002'
 const REAL_SESSION_ID = '20000000-0000-4000-8000-000000000001'
 const EPHEMERAL_SESSION_ID = '30000000-0000-4000-8000-000000000001'
+const EPHEMERAL_GROUP_ID = '40000000-0000-4000-8000-000000000001'
+const EPHEMERAL_BOOKMARK_ID = '50000000-0000-4000-8000-000000000001'
+const EPHEMERAL_NOTE_ID = '60000000-0000-4000-8000-000000000001'
 const CLIENT_IP = '203.0.113.10'
 const SECOND_CLIENT_IP = '2001:db8::10'
 
@@ -186,6 +189,36 @@ async function addEphemeralActivity(account) {
     'auth_login',
     authLoginIdentityKey(account.username, SECOND_CLIENT_IP)
   )
+  await pool.query(
+    `
+      INSERT INTO nav_groups (id, user_id, name, icon, color)
+      VALUES ($1, $2, 'Release acceptance', 'folder', '#5e6ad2')
+    `,
+    [EPHEMERAL_GROUP_ID, account.userId]
+  )
+  await pool.query(
+    `
+      INSERT INTO nav_bookmarks (
+        id, user_id, group_id, title, url, description, tags
+      ) VALUES (
+        $1, $2, $3, 'Ephemeral bookmark', 'https://example.com/',
+        'Release acceptance cleanup fixture', '[]'::jsonb
+      )
+    `,
+    [EPHEMERAL_BOOKMARK_ID, account.userId, EPHEMERAL_GROUP_ID]
+  )
+  await pool.query(
+    `
+      INSERT INTO notes (
+        id, user_id, number_id, type, title, content,
+        encrypted, password_hash, tags, attachments
+      ) VALUES (
+        $1, $2, 9901, 'memo', 'Ephemeral note',
+        'Release acceptance cleanup fixture', FALSE, '', '[]'::jsonb, '[]'::jsonb
+      )
+    `,
+    [EPHEMERAL_NOTE_ID, account.userId]
+  )
 }
 
 function runCli(command, input) {
@@ -275,7 +308,10 @@ test('ephemeral administrator lifecycle preserves real accounts and shared IP bu
         (SELECT COUNT(*) FROM security_events WHERE actor_user_id = $1)::integer AS events,
         (SELECT COUNT(*) FROM rate_limit_buckets)::integer AS buckets,
         (SELECT COUNT(*) FROM user_settings WHERE user_id = $1)::integer AS real_settings,
-        (SELECT COUNT(*) FROM user_settings WHERE user_id NOT IN ($1, $2))::integer AS ephemeral_settings
+        (SELECT COUNT(*) FROM user_settings WHERE user_id NOT IN ($1, $2))::integer AS ephemeral_settings,
+        (SELECT COUNT(*) FROM notes WHERE user_id NOT IN ($1, $2))::integer AS ephemeral_notes,
+        (SELECT COUNT(*) FROM nav_bookmarks WHERE user_id NOT IN ($1, $2))::integer AS ephemeral_bookmarks,
+        (SELECT COUNT(*) FROM workspace_search_index_state WHERE user_id NOT IN ($1, $2))::integer AS ephemeral_search_states
     `,
     [REAL_ADMIN_ID, REAL_USER_ID, REAL_SESSION_ID]
   )
@@ -285,7 +321,10 @@ test('ephemeral administrator lifecycle preserves real accounts and shared IP bu
     events: 1,
     buckets: 2,
     real_settings: 1,
-    ephemeral_settings: 0
+    ephemeral_settings: 0,
+    ephemeral_notes: 0,
+    ephemeral_bookmarks: 0,
+    ephemeral_search_states: 0
   })
 
   const exactBuckets = await pool.query(
@@ -548,7 +587,10 @@ test('marker mismatch and injected post-cleanup failure roll back every delete',
         (SELECT COUNT(*) FROM users WHERE id = $1)::integer AS users,
         (SELECT COUNT(*) FROM sessions WHERE user_id = $1)::integer AS sessions,
         (SELECT COUNT(*) FROM security_events WHERE actor_user_id = $1)::integer AS events,
-        (SELECT COUNT(*) FROM system_settings WHERE key = $2)::integer AS markers
+        (SELECT COUNT(*) FROM system_settings WHERE key = $2)::integer AS markers,
+        (SELECT COUNT(*) FROM notes WHERE user_id = $1)::integer AS notes,
+        (SELECT COUNT(*) FROM nav_bookmarks WHERE user_id = $1)::integer AS bookmarks,
+        (SELECT COUNT(*) FROM workspace_search_index_state WHERE user_id = $1)::integer AS search_states
     `,
     [account.userId, markerKey]
   )
@@ -556,7 +598,10 @@ test('marker mismatch and injected post-cleanup failure roll back every delete',
     users: 1,
     sessions: 1,
     events: 2,
-    markers: 1
+    markers: 1,
+    notes: 1,
+    bookmarks: 1,
+    search_states: 1
   })
 
   await withTransaction((client) => cleanupReleaseAcceptanceAccount(client, {

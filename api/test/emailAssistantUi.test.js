@@ -51,12 +51,14 @@ test('assistant is a first-class responsive destination with sources, history an
   assert.match(view, /历史/)
 })
 
-test('mail is a first-class read-only destination with setup and empty states', async () => {
-  const [route, navigation, mobileNav, view] = await Promise.all([
+test('mail is a first-class read-only destination with setup, cache, and legacy deep-link states', async () => {
+  const [route, navigation, mobileNav, view, store, emailApi] = await Promise.all([
     source('../../app/src/router/index.js'),
     source('../../app/src/shared/navigation/appNavigation.js'),
     source('../../app/src/shared/components/MobileTabBar.vue'),
-    source('../../app/src/modules/mail/MailView.vue')
+    source('../../app/src/modules/mail/MailView.vue'),
+    source('../../app/src/modules/mail/useMailStore.js'),
+    source('../../app/src/shared/services/emailApi.js')
   ])
   assert.match(route, /path: '\/mail'/)
   assert.match(navigation, /id: 'mail'/)
@@ -64,9 +66,10 @@ test('mail is a first-class read-only destination with setup and empty states', 
   assert.match(view, /当前为只读视图/)
   assert.match(view, /还没有启用智能收件/)
   assert.match(view, /邮箱已连接，但 DOMO NAV 还没有收录邮件/)
-  assert.match(view, /历史邮件仍可只读查看/)
-  assert.match(view, /fetchEmailEvents/)
-  assert.match(view, /fetchEmailEvent/)
+  assert.match(view, /已同步内容仍可只读查看/)
+  assert.match(store, /loadLegacyEvent/)
+  assert.match(emailApi, /fetchEmailEvents/)
+  assert.match(emailApi, /fetchEmailEvent/)
 })
 
 test('mail settings describe provider-neutral SMTP and IMAP constraints', async () => {

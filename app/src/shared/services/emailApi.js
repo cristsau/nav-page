@@ -1,4 +1,13 @@
-import { apiRequest as request } from '@/shared/services/apiClient'
+import {
+  apiRawRequest,
+  apiRequest as request
+} from '@/shared/services/apiClient'
+
+function requiredId(value, label) {
+  const normalized = String(value || '').trim()
+  if (!normalized) throw new TypeError(`${label} is required`)
+  return encodeURIComponent(normalized)
+}
 
 export function fetchEmailStatus() {
   return request('/email/status', { method: 'GET', cache: 'no-store' })
@@ -19,6 +28,99 @@ export async function fetchEmailEvent(emailEventId) {
     cache: 'no-store'
   })
   return payload.email
+}
+
+export function fetchEmailAccounts() {
+  return request('/email/accounts', { method: 'GET', cache: 'no-store' })
+}
+
+export function fetchEmailFolders(accountId) {
+  return request(`/email/accounts/${requiredId(accountId, 'Email account id')}/folders`, {
+    method: 'GET',
+    cache: 'no-store'
+  })
+}
+
+export function fetchEmailMessages({
+  accountId,
+  folderId,
+  cursor = '',
+  limit = 40
+} = {}) {
+  const query = new URLSearchParams({
+    folderId: String(folderId || ''),
+    limit: String(limit)
+  })
+  if (String(cursor || '').trim()) query.set('cursor', String(cursor).trim())
+  return request(
+    `/email/accounts/${requiredId(accountId, 'Email account id')}/messages?${query.toString()}`,
+    { method: 'GET', cache: 'no-store' }
+  )
+}
+
+export function fetchEmailMessage({ accountId, locationId, folderId } = {}) {
+  const query = new URLSearchParams({ folderId: String(folderId || '') })
+  return request(
+    `/email/accounts/${requiredId(accountId, 'Email account id')}/messages/${requiredId(locationId, 'Email location id')}?${query.toString()}`,
+    { method: 'GET', cache: 'no-store' }
+  )
+}
+
+export function requestEmailAi(messageId, {
+  action,
+  instruction = '',
+  language = ''
+} = {}) {
+  const payload = { action: String(action || '').trim() }
+  const optionalFields = {
+    instruction: String(instruction || '').trim(),
+    language: String(language || '').trim()
+  }
+  for (const [key, value] of Object.entries(optionalFields)) {
+    if (value) payload[key] = value
+  }
+  return request(`/email/messages/${requiredId(messageId, 'Email message id')}/ai`, {
+    method: 'POST',
+    body: JSON.stringify(payload)
+  })
+}
+
+export function createEmailDraft(payload = {}) {
+  return request('/email/drafts', {
+    method: 'POST',
+    body: JSON.stringify(payload)
+  })
+}
+
+export function fetchEmailDraft(draftId) {
+  return request(`/email/drafts/${requiredId(draftId, 'Email draft id')}`, {
+    method: 'GET',
+    cache: 'no-store'
+  })
+}
+
+export function confirmEmailDraft(draftId, contentHash) {
+  return request(`/email/drafts/${requiredId(draftId, 'Email draft id')}/send`, {
+    method: 'POST',
+    body: JSON.stringify({
+      confirm: true,
+      contentHash: String(contentHash || '').trim()
+    })
+  })
+}
+
+export function openEmailEventStream({ accountId, lastEventId = '', signal } = {}) {
+  const query = new URLSearchParams({ accountId: String(accountId || '') })
+  const headers = { Accept: 'text/event-stream' }
+  if (String(lastEventId || '').trim()) {
+    headers['Last-Event-ID'] = String(lastEventId).trim()
+  }
+  return apiRawRequest(`/email/stream?${query.toString()}`, {
+    method: 'GET',
+    cache: 'no-store',
+    headers,
+    signal
+  })
 }
 
 export function fetchAdminMailStatus() {

@@ -84,6 +84,7 @@ async function ensureTierOneNotification(row, userId, queryFn) {
 export async function processInboundEmail({
   userId,
   sourceKey,
+  emailMessageId = null,
   email: rawEmail,
   logger = null,
   queryFn = query
@@ -96,13 +97,21 @@ export async function processInboundEmail({
   const provisional = buildEmailSignatures(email, fallbackEmailClassification(email))
   const existingMessage = await queryFn(
     `SELECT id, tier, urgency, event_signature, state_signature, duplicate_of,
-            notified_at, received_at
+            notified_at, received_at, email_message_id
      FROM email_events
      WHERE user_id = $1 AND source_key = $2 AND message_id_hash = $3
      LIMIT 1`,
     [userId, normalizedSourceKey, provisional.messageIdHash]
   )
   if (existingMessage.rows[0]) {
+    if (emailMessageId && !existingMessage.rows[0].email_message_id) {
+      await queryFn(
+        `UPDATE email_events
+         SET email_message_id = $3, updated_at = NOW()
+         WHERE id = $1 AND user_id = $2 AND email_message_id IS NULL`,
+        [existingMessage.rows[0].id, userId, emailMessageId]
+      )
+    }
     await ensureTierOneNotification(existingMessage.rows[0], userId, queryFn)
     return { inserted: false, duplicate: true, event: null }
   }
@@ -158,10 +167,11 @@ export async function processInboundEmail({
         user_id, source_key, mailbox_uid, message_id_hash, sender_hash,
         received_at, tier, urgency, deterministic_signature,
         event_signature, state_signature, duplicate_of,
-        classification_status, provider, model, content_encrypted
+        classification_status, provider, model, content_encrypted,
+        email_message_id
       ) VALUES (
         $1, $2, $3, $4, $5, $6, $7, $8, $9,
-        $10, $11, $12, $13, $14, $15, $16
+        $10, $11, $12, $13, $14, $15, $16, $17
       )
       ON CONFLICT (user_id, source_key, message_id_hash) DO NOTHING
       RETURNING *
@@ -182,7 +192,8 @@ export async function processInboundEmail({
       classification.classificationStatus,
       classification.provider || null,
       classification.model || null,
-      encrypted
+      encrypted,
+      emailMessageId || null
     ]
   )
   const inserted = rows[0]

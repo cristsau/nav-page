@@ -62,6 +62,12 @@ const JOB_DEFINITIONS = Object.freeze([
     label: '邮件摘要生成',
     enabled: () => config.emailDigestEnabled,
     intervalSeconds: () => config.emailDigestIntervalSeconds
+  },
+  {
+    name: MAINTENANCE_JOB_NAMES.EMAIL_CACHE_RETENTION,
+    label: '邮箱本地缓存清理',
+    enabled: () => config.emailCacheRetentionEnabled,
+    intervalSeconds: () => config.emailCacheRetentionIntervalSeconds
   }
 ])
 

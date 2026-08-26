@@ -1,10 +1,38 @@
+import { createHash } from 'node:crypto'
 import { ImapFlow } from 'imapflow'
 import { simpleParser } from 'mailparser'
 import { config } from '../config.js'
 import { sanitizeMaintenanceErrorCode } from './maintenanceJobStatus.js'
 import { readOwnerSecretFile } from './ownerSecretFile.js'
 import { processInboundEmail } from './emailEvents.js'
+import { EMAIL_ENCRYPTION_MAX_PLAINTEXT_BYTES } from './emailCrypto.js'
+import {
+  persistEmailMailboxMessage,
+  upsertEmailAccount,
+  upsertEmailFolder
+} from './emailMailboxStore.js'
 import { assertSafeOutboundHost } from './outboundEndpoints.js'
+import {
+  deriveEmailBatchSourceBudget,
+  emailMessageFailureState,
+  normalizeEmailMessageAttempts,
+  truncateUtf8
+} from './emailIngestLimits.js'
+
+// Leave more than half of the encrypted content budget for bounded attachment
+// metadata and JSON overhead. This is byte-based because AES-GCM validates the
+// serialized UTF-8 payload rather than JavaScript character count.
+const MAX_PARSED_TEXT_BYTES = Math.floor(EMAIL_ENCRYPTION_MAX_PLAINTEXT_BYTES * 4 / 9)
+const DEAD_LETTER_KEYWORD = '$nav-ingest-dead-letter'
+
+export const UPDATE_MAILBOX_FAILURE_STATE_SQL = `
+  UPDATE email_mailbox_state AS state
+  SET last_error_at = NOW(), last_error_code = $3, updated_at = NOW()
+  FROM users AS owner
+  WHERE state.source_key = $1
+    AND state.user_id = owner.id
+    AND owner.username = $2
+`
 
 function boundedInteger(value, fallback, minimum, maximum) {
   const parsed = Number(value)
@@ -12,11 +40,14 @@ function boundedInteger(value, fallback, minimum, maximum) {
 }
 
 export function validateEmailIngestPolicy(policy = {}) {
+  const maxMessageBytes = boundedInteger(policy.maxMessageBytes, 512 * 1024, 32 * 1024, 2 * 1024 * 1024)
   const normalized = {
     pollIntervalSeconds: boundedInteger(policy.pollIntervalSeconds, 60, 30, 3600),
-    initialLookback: boundedInteger(policy.initialLookback, 50, 1, 500),
+    initialLookback: boundedInteger(policy.initialLookback, 1000, 1, 1000),
     batchSize: boundedInteger(policy.batchSize, 100, 1, 500),
-    maxMessageBytes: boundedInteger(policy.maxMessageBytes, 512 * 1024, 32 * 1024, 2 * 1024 * 1024)
+    maxMessageBytes,
+    maxBatchSourceBytes: deriveEmailBatchSourceBudget(maxMessageBytes, policy.maxBatchSourceBytes),
+    maxMessageAttempts: normalizeEmailMessageAttempts(policy.maxMessageAttempts)
   }
   return normalized
 }
@@ -88,9 +119,33 @@ function joinAddresses(addresses) {
     .slice(0, 1000)
 }
 
+function addressList(addresses) {
+  return (Array.isArray(addresses) ? addresses : [])
+    .map((address) => ({
+      name: String(address?.name || '').normalize('NFKC').trim().slice(0, 320),
+      address: String(address?.address || '').normalize('NFKC').trim().toLowerCase().slice(0, 320)
+    }))
+    .filter((address) => address.address)
+    .slice(0, 50)
+}
+
+function capabilitiesOf(client) {
+  const capabilities = client?.capabilities instanceof Set
+    ? [...client.capabilities]
+    : Array.isArray(client?.capabilities)
+      ? client.capabilities
+      : []
+  return capabilities.map((value) => String(value || '').toUpperCase())
+}
+
 export async function parseImapMessage(message, maxMessageBytes) {
   const source = Buffer.isBuffer(message.source) ? message.source : Buffer.from(message.source || [])
-  const oversized = Number(message.size || 0) > maxMessageBytes || source.length > maxMessageBytes
+  const rawHash = source.length && !message.sourceTruncated
+    ? createHash('sha256').update(source).digest('hex')
+    : ''
+  const oversized = Boolean(message.sourceTruncated)
+    || Number(message.size || 0) > maxMessageBytes
+    || source.length > maxMessageBytes
   let parsed = null
   if (source.length && !oversized) {
     parsed = await simpleParser(source, {
@@ -105,17 +160,42 @@ export async function parseImapMessage(message, maxMessageBytes) {
     const envelopeFrom = firstAddress(envelope.from)
     const sender = parsedFrom.address ? parsedFrom : envelopeFrom
     const receivedAt = parsed?.date || message.internalDate || envelope.date || new Date()
+    const parsedTo = addressList(parsed?.to?.value || envelope.to)
+    const parsedCc = addressList(parsed?.cc?.value || envelope.cc)
+    const parsedBcc = addressList(parsed?.bcc?.value || envelope.bcc)
     return {
       mailboxUid: Number(message.uid),
       messageId: String(parsed?.messageId || envelope.messageId || '').trim(),
       senderName: sender.name,
       senderAddress: sender.address,
-      recipient: joinAddresses(parsed?.to?.value || envelope.to),
+      sender,
+      to: parsedTo,
+      cc: parsedCc,
+      bcc: parsedBcc,
+      recipient: joinAddresses(parsedTo),
       subject: String(parsed?.subject || envelope.subject || '(无主题)').slice(0, 500),
       text: oversized
         ? '[邮件正文超过安全处理上限，已仅根据发件人和标题分类。]'
-        : String(parsed?.text || '').slice(0, 120_000),
-      receivedAt
+        : truncateUtf8(parsed?.text || '', MAX_PARSED_TEXT_BYTES),
+      receivedAt,
+      internalDate: message.internalDate || receivedAt,
+      sentAt: parsed?.date || envelope.date || null,
+      size: Math.max(0, Number(message.size || source.length || 0)),
+      flags: message.flags || [],
+      modseq: message.modseq == null ? null : String(message.modseq),
+      references: (Array.isArray(parsed?.references) ? parsed.references : [])
+        .map((reference) => String(reference || '').trim().slice(0, 998))
+        .filter(Boolean)
+        .slice(-50),
+      inReplyTo: String(parsed?.inReplyTo || '').trim(),
+      rawHash,
+      attachments: (parsed?.attachments || []).slice(0, 50).map((attachment) => ({
+        filename: String(attachment?.filename || '').slice(0, 240),
+        contentType: String(attachment?.contentType || '').slice(0, 120),
+        contentDisposition: String(attachment?.contentDisposition || '').slice(0, 32),
+        contentId: String(attachment?.contentId || '').slice(0, 240),
+        size: Number(attachment?.size || attachment?.content?.length || 0)
+      }))
     }
   } finally {
     // Attachments are intentionally neither persisted nor sent to AI. Clear
@@ -142,6 +222,7 @@ export function startEmailIngestScheduler({
   ImapClient = ImapFlow,
   readSecretImpl = readOwnerSecretFile,
   processFn = processInboundEmail,
+  assertHostImpl = assertSafeOutboundHost,
   timerApi = globalThis,
   clock = () => Date.now()
 }) {
@@ -153,6 +234,7 @@ export function startEmailIngestScheduler({
   let activeRun = null
   let timer = null
   let reconnectTimer = null
+  let rerunRequested = false
 
   const scheduleSoon = (delay = 250) => {
     if (stopped || reconnectTimer) return
@@ -166,6 +248,7 @@ export function startEmailIngestScheduler({
   const ensureConnected = async () => {
     if (imap?.usable) return imap
     try { imap?.close?.() } catch {}
+    await assertHostImpl(runtimeConfig.imapHost, { label: 'IMAP ' })
     const password = await readSecretImpl(runtimeConfig.imapPasswordFile, {
       label: 'IMAP password',
       maxBytes: 4096
@@ -199,106 +282,376 @@ export function startEmailIngestScheduler({
     if (!user.rows[0]) throw new Error('Configured email owner user was not found')
     const userId = user.rows[0].id
     const client = await ensureConnected()
+    const capabilities = capabilitiesOf(client)
+    let listedFolders = []
+    let folderCatalogSucceeded = false
+    try {
+      listedFolders = await client.list()
+      folderCatalogSucceeded = true
+    } catch (error) {
+      logger?.warn?.({ errorCode: sanitizeMaintenanceErrorCode(error) }, 'IMAP folder catalog could not be refreshed')
+    }
+    const catalogClient = await poolInstance.connect()
+    let account
+    try {
+      await catalogClient.query('BEGIN')
+      account = await upsertEmailAccount(catalogClient, {
+        userId,
+        sourceKey,
+        label: '个人邮箱',
+        capabilities
+      })
+      for (const listed of listedFolders) {
+        await upsertEmailFolder(catalogClient, {
+          accountId: account.id,
+          userId,
+          path: listed.path,
+          delimiter: listed.delimiter || null,
+          specialUse: listed.specialUse || null,
+          selectable: !listed.flags?.has?.('\\Noselect'),
+          subscribed: listed.subscribed !== false
+        })
+      }
+      if (!listedFolders.some((listed) => listed.path === runtimeConfig.imapMailbox)) {
+        await upsertEmailFolder(catalogClient, {
+          accountId: account.id,
+          userId,
+          path: runtimeConfig.imapMailbox,
+          specialUse: runtimeConfig.imapMailbox.toUpperCase() === 'INBOX' ? 'inbox' : null,
+          selectable: true,
+          subscribed: true
+        })
+      }
+      if (folderCatalogSucceeded) {
+        const currentPaths = [...new Set(listedFolders
+          .map((listed) => String(listed?.path || '').normalize('NFKC').trim())
+          .filter(Boolean))]
+        // A successful LIST is authoritative for discoverability. Never apply
+        // this on LIST failure, and never hide the explicitly configured
+        // mailbox even if the upstream omitted it from the catalog response.
+        await catalogClient.query(
+          `UPDATE email_folders
+           SET selectable = FALSE, subscribed = FALSE, updated_at = NOW()
+           WHERE account_id = $1 AND user_id = $2
+             AND path <> $3
+             AND NOT (path = ANY($4::text[]))`,
+          [account.id, userId, runtimeConfig.imapMailbox, currentPaths]
+        )
+      }
+      await catalogClient.query('COMMIT')
+    } catch (error) {
+      await catalogClient.query('ROLLBACK')
+      throw error
+    } finally {
+      catalogClient.release()
+    }
     const lock = await client.getMailboxLock(runtimeConfig.imapMailbox)
     let messages
     let uidValidity
     let lastUid
+    let candidateEndUid = null
+    let currentFolder
+    let initialSyncComplete = false
+    let mailboxErrorCode = null
+    let mailboxUidNext = null
+    let mailboxHighestModseq = null
     try {
       uidValidity = String(client.mailbox?.uidValidity || '')
-      const state = await poolInstance.query(
-        `SELECT uid_validity, last_uid FROM email_mailbox_state WHERE source_key = $1 LIMIT 1`,
-        [sourceKey]
-      )
       const uidNext = Number(client.mailbox?.uidNext || 1)
-      lastUid = Number(state.rows[0]?.last_uid || 0)
-      if (!state.rows[0] || String(state.rows[0].uid_validity || '') !== uidValidity) {
-        lastUid = Math.max(0, uidNext - validated.initialLookback - 1)
+      mailboxUidNext = uidNext
+      mailboxHighestModseq = client.mailbox?.highestModseq || null
+      const folderClient = await poolInstance.connect()
+      try {
+        await folderClient.query('BEGIN')
+        currentFolder = await upsertEmailFolder(folderClient, {
+          accountId: account.id,
+          userId,
+          path: runtimeConfig.imapMailbox,
+          delimiter: client.mailbox?.delimiter || null,
+          specialUse: runtimeConfig.imapMailbox.toUpperCase() === 'INBOX' ? 'inbox' : null,
+          selectable: true,
+          subscribed: true,
+          uidValidity,
+          uidNext,
+          highestModseq: client.mailbox?.highestModseq || null,
+          lastUid: 0
+        })
+        await folderClient.query('COMMIT')
+      } catch (error) {
+        await folderClient.query('ROLLBACK')
+        throw error
+      } finally {
+        folderClient.release()
+      }
+      const locationState = await poolInstance.query(
+        `SELECT folder.uid_validity, folder.last_uid, folder.initial_sync_complete,
+                COUNT(location.id) FILTER (WHERE location.expunged_at IS NULL)::integer AS current_count
+         FROM email_folders AS folder
+         LEFT JOIN email_folder_messages AS location
+           ON location.folder_id = folder.id AND location.user_id = folder.user_id
+         WHERE folder.id = $1 AND folder.user_id = $2
+         GROUP BY folder.id`,
+        [currentFolder.id, userId]
+      )
+      const state = locationState.rows[0]
+      const mailboxState = await poolInstance.query(
+        `SELECT uid_validity, last_error_code
+         FROM email_mailbox_state
+         WHERE source_key = $1 AND user_id = $2
+         LIMIT 1`,
+        [sourceKey, userId]
+      )
+      const previousMailboxState = mailboxState.rows[0]
+      mailboxErrorCode = previousMailboxState
+        && String(previousMailboxState.uid_validity || '') === uidValidity
+        ? previousMailboxState.last_error_code || null
+        : null
+      initialSyncComplete = Boolean(state?.initial_sync_complete)
+      lastUid = Number(state?.last_uid || 0)
+      if (!initialSyncComplete && Number(state?.current_count || 0) === 0) {
+        try {
+          const since = new Date(Date.now() - 90 * 24 * 60 * 60 * 1000)
+          const recentUids = (await client.search({ since }, { uid: true }))
+            .map(Number)
+            .filter((uid) => Number.isSafeInteger(uid) && uid > 0 && uid < uidNext)
+            .sort((left, right) => left - right)
+            .slice(-validated.initialLookback)
+          lastUid = recentUids.length ? Math.max(0, recentUids[0] - 1) : Math.max(0, uidNext - 1)
+        } catch (error) {
+          logger?.warn?.({ errorCode: sanitizeMaintenanceErrorCode(error) }, 'IMAP 90-day backfill search failed; using bounded UID fallback')
+          lastUid = Math.max(0, uidNext - validated.initialLookback - 1)
+        }
+        await poolInstance.query(
+          `UPDATE email_folders
+           SET last_uid = $2, initial_sync_complete = FALSE, updated_at = NOW()
+           WHERE id = $1 AND user_id = $3`,
+          [currentFolder.id, lastUid, userId]
+        )
       }
       const startUid = Math.max(1, lastUid + 1)
       if (uidNext > 0 && startUid >= uidNext) messages = []
       else {
         const endUid = Math.min(uidNext - 1, startUid + validated.batchSize - 1)
+        candidateEndUid = endUid
         messages = await client.fetchAll(
           `${startUid}:${endUid}`,
-          { uid: true, envelope: true, internalDate: true, size: true },
+          { uid: true, envelope: true, internalDate: true, size: true, flags: true, modseq: true },
           { uid: true }
         )
-        for (const message of messages) {
-          if (Number(message.size || 0) > validated.maxMessageBytes) continue
-          const sourceMessage = await client.fetchOne(
-            Number(message.uid),
-            { source: true },
-            { uid: true }
-          )
-          message.source = sourceMessage?.source || null
-        }
       }
     } finally {
       lock.release()
     }
 
     const summary = { processed: 0, inserted: 0, duplicates: 0, tier1: 0, tier2: 0, tier3: 0 }
+    const listedCurrent = listedFolders.find((folder) => folder.path === runtimeConfig.imapMailbox)
+    let sourceBytes = 0
+    let sourceBudgetExhausted = false
+
+    const persistOptions = (message) => ({
+      poolInstance,
+      userId,
+      sourceKey,
+      accountLabel: '个人邮箱',
+      capabilities,
+      folder: {
+        path: runtimeConfig.imapMailbox,
+        delimiter: listedCurrent?.delimiter || null,
+        specialUse: listedCurrent?.specialUse || null,
+        selectable: true,
+        subscribed: listedCurrent?.subscribed !== false,
+        uidValidity,
+        uidNext: mailboxUidNext,
+        highestModseq: mailboxHighestModseq
+      },
+      message
+    })
+
+    const writeMailboxState = async ({ uid, errorCode = null, messageAt = true }) => {
+      lastUid = Math.max(lastUid, Number(uid || 0))
+      mailboxErrorCode = errorCode
+      await poolInstance.query(
+        `INSERT INTO email_mailbox_state (
+           source_key, user_id, uid_validity, last_uid,
+           last_connected_at, last_message_at, last_error_at,
+           last_error_code, updated_at
+         ) VALUES (
+           $1, $2, $3, $4, NOW(), CASE WHEN $5 THEN NOW() ELSE NULL END,
+           CASE WHEN $6::text IS NULL THEN NULL ELSE NOW() END, $6, NOW()
+         )
+         ON CONFLICT (user_id, source_key) DO UPDATE SET
+           uid_validity = EXCLUDED.uid_validity,
+           last_uid = CASE
+             WHEN email_mailbox_state.uid_validity IS DISTINCT FROM EXCLUDED.uid_validity
+               THEN EXCLUDED.last_uid
+             ELSE GREATEST(email_mailbox_state.last_uid, EXCLUDED.last_uid)
+           END,
+           last_connected_at = NOW(),
+           last_message_at = CASE WHEN $5 THEN NOW() ELSE email_mailbox_state.last_message_at END,
+           last_error_at = CASE WHEN $6::text IS NULL THEN NULL ELSE NOW() END,
+           last_error_code = $6,
+           updated_at = NOW()`,
+        [sourceKey, userId, uidValidity, lastUid, Boolean(messageAt), errorCode]
+      )
+    }
+
+    const recordMessageFailure = async (uid, errorCode) => {
+      mailboxErrorCode = errorCode
+      // The source-level retry identity is the durable gate. Persist it first;
+      // the per-folder status is diagnostic and must not erase a successful
+      // retry reservation if that secondary update is temporarily unavailable.
+      await poolInstance.query(
+        `INSERT INTO email_mailbox_state (
+           source_key, user_id, uid_validity, last_uid, last_connected_at,
+           last_error_at, last_error_code, updated_at
+         ) VALUES ($1, $2, $3, $4, NOW(), NOW(), $5, NOW())
+         ON CONFLICT (user_id, source_key) DO UPDATE SET
+           last_connected_at = NOW(), last_error_at = NOW(),
+           last_error_code = EXCLUDED.last_error_code, updated_at = NOW()`,
+        [sourceKey, userId, uidValidity, lastUid, errorCode]
+      )
+      try {
+        await poolInstance.query(
+          `UPDATE email_folders
+           SET last_error_at = NOW(), last_error_code = $3, updated_at = NOW()
+           WHERE id = $1 AND user_id = $2`,
+          [currentFolder.id, userId, errorCode]
+        )
+      } catch {
+        logger?.warn?.({ uid: Number(uid), errorCode }, 'email folder failure status could not be recorded')
+      }
+      logger?.warn?.({ uid: Number(uid), errorCode }, 'email message processing deferred')
+    }
+
+    const markDeadLetter = async (stored) => {
+      await poolInstance.query(
+        `UPDATE email_folder_messages
+         SET keywords = CASE
+               WHEN keywords @> $3::jsonb THEN keywords
+               ELSE keywords || $3::jsonb
+             END,
+             updated_at = NOW()
+         WHERE id = $1 AND user_id = $2`,
+        [stored.location.id, userId, JSON.stringify([DEAD_LETTER_KEYWORD])]
+      )
+    }
+
     for (const message of messages.sort((left, right) => Number(left.uid) - Number(right.uid))) {
-      const parsed = await parseImapMessage(message, validated.maxMessageBytes)
-      const result = await processFn({ userId, sourceKey, email: parsed, logger })
-      summary.processed += 1
-      if (result.inserted) {
-        summary.inserted += 1
-        summary[`tier${result.event.tier}`] += 1
-        if (result.duplicate) summary.duplicates += 1
-      } else summary.duplicates += 1
-      lastUid = Math.max(lastUid, Number(message.uid || 0))
-      await poolInstance.query(
-        `
-          INSERT INTO email_mailbox_state (
-            source_key, user_id, uid_validity, last_uid,
-            last_connected_at, last_message_at, last_error_at,
-            last_error_code, updated_at
-          ) VALUES ($1, $2, $3, $4, NOW(), NOW(), NULL, NULL, NOW())
-          ON CONFLICT (source_key) DO UPDATE SET
-            user_id = EXCLUDED.user_id,
-            uid_validity = EXCLUDED.uid_validity,
-            last_uid = CASE
-              WHEN email_mailbox_state.uid_validity IS DISTINCT FROM EXCLUDED.uid_validity
-                THEN EXCLUDED.last_uid
-              ELSE GREATEST(email_mailbox_state.last_uid, EXCLUDED.last_uid)
-            END,
-            last_connected_at = NOW(),
-            last_message_at = NOW(),
-            last_error_at = NULL,
-            last_error_code = NULL,
-            updated_at = NOW()
-        `,
-        [sourceKey, userId, uidValidity, lastUid]
-      )
+      const uid = Number(message.uid)
+      let stored = null
+      let parsed = null
+      try {
+        const declaredSize = Math.max(0, Number(message.size || 0))
+        if (declaredSize <= validated.maxMessageBytes) {
+          const fetchLimit = declaredSize > 0
+            ? Math.min(validated.maxMessageBytes + 1, declaredSize + 1)
+            : validated.maxMessageBytes + 1
+          if (sourceBytes + fetchLimit > validated.maxBatchSourceBytes) {
+            sourceBudgetExhausted = true
+            break
+          }
+          const messageLock = await client.getMailboxLock(runtimeConfig.imapMailbox)
+          try {
+            const sourceMessage = await client.fetchOne(
+              uid,
+              { source: { start: 0, maxLength: fetchLimit } },
+              { uid: true }
+            )
+            message.source = Buffer.isBuffer(sourceMessage?.source)
+              ? sourceMessage.source
+              : Buffer.from(sourceMessage?.source || [])
+            sourceBytes += message.source.length
+            message.sourceTruncated = message.source.length >= fetchLimit
+          } finally {
+            messageLock.release()
+          }
+        }
+
+        try {
+          parsed = await parseImapMessage(message, validated.maxMessageBytes)
+          stored = await persistEmailMailboxMessage(persistOptions(parsed))
+          const result = await processFn({
+            userId,
+            sourceKey,
+            emailMessageId: stored.message.id,
+            email: parsed,
+            logger
+          })
+          summary.processed += 1
+          if (result.inserted) {
+            summary.inserted += 1
+            summary[`tier${result.event.tier}`] += 1
+            if (result.duplicate) summary.duplicates += 1
+          } else summary.duplicates += 1
+          await writeMailboxState({ uid })
+        } catch (error) {
+          const failure = emailMessageFailureState({
+            errorCode: mailboxErrorCode,
+            uid,
+            maxAttempts: validated.maxMessageAttempts
+          })
+          await recordMessageFailure(uid, failure.code)
+          if (!failure.deadLetter) {
+            const retryError = new Error('Email message processing will be retried')
+            retryError.code = failure.code
+            throw retryError
+          }
+
+          // A terminal message-level failure must remain visible without
+          // retaining its raw source or leaking parser/provider details. If
+          // the canonical cache was not written, persist an encrypted generic
+          // placeholder based only on the IMAP envelope and bounded metadata.
+          try {
+            if (!stored) {
+              const placeholder = await parseImapMessage(message, 0)
+              placeholder.text = '[此邮件无法安全处理，已保留死信占位；请在原邮箱中查看。]'
+              stored = await persistEmailMailboxMessage(persistOptions(placeholder))
+            }
+            await markDeadLetter(stored)
+            summary.processed += 1
+            await writeMailboxState({ uid, errorCode: failure.code })
+            logger?.warn?.({ uid, errorCode: failure.code }, 'email message moved to the encrypted dead-letter cache')
+          } catch {
+            // Do not skip the UID unless the encrypted placeholder/marker was
+            // durably committed. Preserve the retry identity without exposing
+            // the underlying parser, crypto, database or provider error.
+            const deadLetterError = new Error('Email dead-letter persistence will be retried')
+            deadLetterError.code = failure.code
+            throw deadLetterError
+          }
+        }
+      } finally {
+        if (Buffer.isBuffer(message.source)) message.source.fill(0)
+        message.source = null
+        message.sourceTruncated = false
+      }
     }
-    if (!messages.length) {
-      await poolInstance.query(
-        `
-          INSERT INTO email_mailbox_state (
-            source_key, user_id, uid_validity, last_uid, last_connected_at, updated_at
-          ) VALUES ($1, $2, $3, $4, NOW(), NOW())
-          ON CONFLICT (source_key) DO UPDATE SET
-            user_id = EXCLUDED.user_id,
-            last_uid = CASE
-              WHEN email_mailbox_state.uid_validity IS DISTINCT FROM EXCLUDED.uid_validity
-                THEN EXCLUDED.last_uid
-              ELSE GREATEST(email_mailbox_state.last_uid, EXCLUDED.last_uid)
-            END,
-            uid_validity = EXCLUDED.uid_validity,
-            last_connected_at = NOW(),
-            last_error_at = NULL,
-            last_error_code = NULL,
-            updated_at = NOW()
-        `,
-        [sourceKey, userId, uidValidity, lastUid]
-      )
+
+    if (!sourceBudgetExhausted && candidateEndUid != null) {
+      lastUid = Math.max(lastUid, candidateEndUid)
     }
+    const caughtUp = lastUid >= Math.max(0, Number(mailboxUidNext || 1) - 1)
+    await poolInstance.query(
+      `UPDATE email_folders
+       SET last_uid = GREATEST(last_uid, $2),
+           initial_sync_complete = CASE WHEN $3 THEN TRUE ELSE initial_sync_complete END,
+           last_synced_at = NOW(),
+           last_error_at = CASE WHEN $5::text IS NULL THEN NULL ELSE COALESCE(last_error_at, NOW()) END,
+           last_error_code = $5,
+           updated_at = NOW()
+       WHERE id = $1 AND user_id = $4`,
+      [currentFolder.id, lastUid, caughtUp || initialSyncComplete, userId, mailboxErrorCode]
+    )
+    await writeMailboxState({ uid: lastUid, errorCode: mailboxErrorCode, messageAt: false })
     return summary
   }
 
   const run = () => {
-    if (stopped || activeRun) return activeRun
+    if (stopped) return activeRun
+    if (activeRun) {
+      rerunRequested = true
+      return activeRun
+    }
     const startedAtMs = clock()
     activeRun = syncMailbox()
       .then(async (result) => {
@@ -313,11 +666,31 @@ export function startEmailIngestScheduler({
       })
       .catch(async (error) => {
         const finishedAtMs = clock()
-        await poolInstance.query(
-          `UPDATE email_mailbox_state SET last_error_at = NOW(), last_error_code = $2, updated_at = NOW()
-           WHERE source_key = $1`,
-          [sourceKey, sanitizeMaintenanceErrorCode(error)]
-        ).catch(() => {})
+        const errorCode = sanitizeMaintenanceErrorCode(error)
+        await Promise.allSettled([
+          poolInstance.query(UPDATE_MAILBOX_FAILURE_STATE_SQL, [
+            sourceKey,
+            runtimeConfig.emailOwnerUsername,
+            errorCode
+          ]),
+          poolInstance.query(
+            `WITH affected_accounts AS (
+               UPDATE email_accounts AS account
+               SET last_error_at = NOW(), last_error_code = $3, updated_at = NOW()
+               FROM users AS owner
+               WHERE account.user_id = owner.id
+                 AND account.source_key = $1
+                 AND owner.username = $2
+               RETURNING account.id, account.user_id
+             )
+             UPDATE email_folders AS folder
+             SET last_error_at = NOW(), last_error_code = $3, updated_at = NOW()
+             FROM affected_accounts AS account
+             WHERE folder.account_id = account.id
+               AND folder.user_id = account.user_id`,
+            [sourceKey, runtimeConfig.emailOwnerUsername, errorCode]
+          )
+        ])
         await notifyObserver(observer, 'failed', {
           error,
           result: {},
@@ -325,9 +698,15 @@ export function startEmailIngestScheduler({
           finishedAt: new Date(finishedAtMs),
           durationMs: Math.max(0, finishedAtMs - startedAtMs)
         }, logger)
-      logger?.error?.({ errorCode: sanitizeMaintenanceErrorCode(error) }, 'email ingestion failed')
+        logger?.error?.({ errorCode }, 'email ingestion failed')
       })
-      .finally(() => { activeRun = null })
+      .finally(() => {
+        activeRun = null
+        if (rerunRequested && !stopped) {
+          rerunRequested = false
+          scheduleSoon(0)
+        }
+      })
     return activeRun
   }
 
@@ -338,6 +717,9 @@ export function startEmailIngestScheduler({
     stopped = true
     if (timer) timerApi.clearInterval(timer)
     if (reconnectTimer) timerApi.clearTimeout(reconnectTimer)
+    const activeClient = imap
+    imap = null
+    try { activeClient?.close?.() } catch {}
     if (activeRun) await activeRun
     const client = imap
     imap = null

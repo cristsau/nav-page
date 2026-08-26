@@ -8,6 +8,17 @@ function normalizePositiveInteger(value, fallback) {
   return Number.isSafeInteger(parsed) && parsed > 0 ? parsed : fallback
 }
 
+function normalizeBoundedPositiveInteger(
+  value,
+  fallback,
+  { minimum = 1, maximum }
+) {
+  const parsed = Number(value)
+  return Number.isSafeInteger(parsed) && parsed >= minimum && parsed <= maximum
+    ? parsed
+    : fallback
+}
+
 function normalizeLogLevel(value, fallback) {
   const normalized = String(value || '').trim().toLowerCase()
   return new Set([
@@ -23,7 +34,15 @@ function normalizeLogLevel(value, fallback) {
     : fallback
 }
 
+function normalizeEmailRuntimeRole(value) {
+  const normalized = String(value || '').trim().toLowerCase()
+  return new Set(['combined', 'api', 'worker']).has(normalized)
+    ? normalized
+    : 'combined'
+}
+
 const nodeEnv = process.env.NODE_ENV || 'development'
+const emailRuntimeRole = normalizeEmailRuntimeRole(process.env.NAV_EMAIL_RUNTIME_ROLE)
 
 function normalizeTrustedProxyAddresses(value) {
   return String(value || '')
@@ -55,6 +74,11 @@ export const config = {
   port: Number(process.env.PORT || 3001),
   host: process.env.HOST || '0.0.0.0',
   databaseUrl: process.env.DATABASE_URL || 'postgres://nav:nav_password@127.0.0.1:5432/nav',
+  databasePoolMax: normalizeBoundedPositiveInteger(
+    process.env.NAV_DATABASE_POOL_MAX,
+    emailRuntimeRole === 'worker' ? 2 : 6,
+    { maximum: 32 }
+  ),
   sessionCookieName: process.env.SESSION_COOKIE_NAME || 'nav_session',
   sessionTtlDays: Number(process.env.SESSION_TTL_DAYS || 14),
   sessionCookieSecure: process.env.SESSION_COOKIE_SECURE === 'true',
@@ -265,6 +289,7 @@ export const config = {
     6
   ),
   mailDeliveryEnabled: process.env.NAV_MAIL_DELIVERY_ENABLED === 'true',
+  emailRuntimeRole,
   mailDeliveryIntervalSeconds: normalizePositiveInteger(
     process.env.NAV_MAIL_DELIVERY_INTERVAL_SECONDS,
     30
@@ -306,7 +331,7 @@ export const config = {
   ),
   imapInitialLookback: normalizePositiveInteger(
     process.env.NAV_IMAP_INITIAL_LOOKBACK,
-    50
+    1000
   ),
   imapBatchSize: normalizePositiveInteger(
     process.env.NAV_IMAP_BATCH_SIZE,
@@ -315,6 +340,38 @@ export const config = {
   imapMaxMessageBytes: normalizePositiveInteger(
     process.env.NAV_IMAP_MAX_MESSAGE_BYTES,
     512 * 1024
+  ),
+  emailCacheRetentionEnabled:
+    process.env.NAV_EMAIL_CACHE_RETENTION_ENABLED !== 'false',
+  emailCacheRetentionDays: normalizeBoundedPositiveInteger(
+    process.env.NAV_EMAIL_CACHE_RETENTION_DAYS,
+    180,
+    { maximum: 3_650 }
+  ),
+  emailCacheMaxMessagesPerAccount: normalizeBoundedPositiveInteger(
+    process.env.NAV_EMAIL_CACHE_MAX_MESSAGES_PER_ACCOUNT,
+    5_000,
+    { maximum: 100_000 }
+  ),
+  emailCacheRetentionBatchSize: normalizeBoundedPositiveInteger(
+    process.env.NAV_EMAIL_CACHE_RETENTION_BATCH_SIZE,
+    200,
+    { maximum: 200 }
+  ),
+  emailCacheRetentionMaxDeletesPerRun: normalizeBoundedPositiveInteger(
+    process.env.NAV_EMAIL_CACHE_RETENTION_MAX_DELETES_PER_RUN,
+    200,
+    { maximum: 200 }
+  ),
+  emailCacheRetentionIntervalSeconds: normalizeBoundedPositiveInteger(
+    process.env.NAV_EMAIL_CACHE_RETENTION_INTERVAL_SECONDS,
+    21_600,
+    { minimum: 300, maximum: 7 * 24 * 60 * 60 }
+  ),
+  emailOutboxRetentionDays: normalizeBoundedPositiveInteger(
+    process.env.NAV_EMAIL_OUTBOX_RETENTION_DAYS,
+    30,
+    { maximum: 3_650 }
   ),
   emailDigestEnabled: process.env.NAV_EMAIL_DIGEST_ENABLED === 'true',
   emailDigestIntervalSeconds: normalizePositiveInteger(

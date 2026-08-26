@@ -8,7 +8,8 @@ export const MAINTENANCE_JOB_NAMES = Object.freeze({
   WEB_PUSH_DELIVERY: 'web_push_delivery',
   MAIL_DELIVERY: 'mail_delivery',
   EMAIL_INGEST: 'email_ingest',
-  EMAIL_DIGEST: 'email_digest'
+  EMAIL_DIGEST: 'email_digest',
+  EMAIL_CACHE_RETENTION: 'email_cache_retention'
 })
 
 const KNOWN_JOB_NAMES = new Set(Object.values(MAINTENANCE_JOB_NAMES))
@@ -173,6 +174,17 @@ const RESULT_FIELDS = Object.freeze({
     'generated',
     'emails',
     'remaining'
+  ],
+  [MAINTENANCE_JOB_NAMES.EMAIL_CACHE_RETENTION]: [
+    'messagesDeleted',
+    'messageBytesDeleted',
+    'draftsDeleted',
+    'outboxDeleted',
+    'accountsTouched',
+    'accountsOverQuota',
+    'cachedMessages',
+    'cachedBytes',
+    'batches'
   ]
 })
 

@@ -68,18 +68,19 @@ test('mail and notification surfaces keep secrets server-side and Web Push gener
 })
 
 test('mail ingestion ignores attachments and bounds source/body sizes', async () => {
-  const [ingest, classifier, migration] = await Promise.all([
+  const [ingest, classifier, privacy, migration] = await Promise.all([
     source('../src/lib/emailIngestScheduler.js'),
     source('../src/lib/emailClassifier.js'),
+    source('../src/lib/emailPrivacy.js'),
     source('../src/db/migrations/030_email_assistant.sql')
   ])
   assert.match(ingest, /attachments/i)
   assert.match(ingest, /maxMessageBytes/)
-  assert.match(classifier, /\[OTP_REDACTED\]/)
-  assert.match(classifier, /\[LINK_REDACTED\]/)
-  assert.match(classifier, /\[EMAIL_REDACTED\]/)
-  assert.match(classifier, /\[PHONE_REDACTED\]/)
-  assert.match(classifier, /\[NUMERIC_CODE_REDACTED\]/)
+  assert.match(privacy, /\[OTP_REDACTED\]/)
+  assert.match(privacy, /\[LINK_REDACTED\]/)
+  assert.match(privacy, /\[EMAIL_REDACTED\]/)
+  assert.match(privacy, /\[PHONE_REDACTED\]/)
+  assert.match(privacy, /\[NUMERIC_CODE_REDACTED\]/)
   assert.match(classifier, /AI 暂不可用.*Tier 2/s)
   assert.match(migration, /content_encrypted BYTEA NOT NULL/)
   assert.doesNotMatch(migration, /subject\s+TEXT|body\s+TEXT|sender_address\s+TEXT/i)
