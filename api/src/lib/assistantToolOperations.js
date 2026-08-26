@@ -249,8 +249,8 @@ export async function executeAssistantToolOperation({
           tool_name, tool_version, risk, authorization_mode,
           arguments_hash, status, started_at, confirmed_at
         ) VALUES (
-          $1, $2, $3, $4, $5, $6, $7, $8, $9,
-          'running', NOW(), CASE WHEN $8 = 'confirmation' THEN NOW() ELSE NULL END
+          $1, $2, $3, $4, $5, $6, $7, $8::varchar(24), $9,
+          'running', NOW(), CASE WHEN $8::varchar(24) = 'confirmation'::varchar(24) THEN NOW() ELSE NULL END
         )
       `,
       [
