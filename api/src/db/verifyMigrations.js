@@ -864,6 +864,7 @@ async function verifyMaintenanceObservabilitySchema() {
     [
       'ai_usage_retention',
       'bookmark_health_check',
+      'email_cache_retention',
       'email_digest',
       'email_ingest',
       'mail_delivery',
@@ -1548,6 +1549,12 @@ async function verifyNotificationMailSchema() {
       'id', 'message_type', 'recipient', 'subject', 'text_body', 'html_body',
       'dedupe_key', 'sensitive', 'status', 'attempt_count', 'next_attempt_at',
       'last_attempt_at', 'sent_at', 'scrubbed_at', 'last_error_code',
+      'created_at', 'updated_at', 'user_id', 'account_id', 'source_message_id',
+      'payload_encrypted', 'content_hash', 'confirmed_at'
+    ]],
+    ['email_drafts', [
+      'id', 'user_id', 'account_id', 'source_message_id', 'payload_encrypted',
+      'content_hash', 'status', 'outbox_id', 'expires_at', 'confirmed_at',
       'created_at', 'updated_at'
     ]]
   ])
@@ -1594,7 +1601,23 @@ async function verifyNotificationMailSchema() {
       'mail_outbox_recipient_length_check',
       'mail_outbox_subject_length_check',
       'mail_outbox_dedupe_key_length_check',
-      'mail_outbox_error_code_check'
+      'mail_outbox_error_code_check',
+      'mail_outbox_user_id_fkey',
+      'mail_outbox_account_user_fkey',
+      'mail_outbox_payload_size_check',
+      'mail_outbox_content_hash_check',
+      'mail_outbox_user_payload_check'
+    ]],
+    ['email_drafts', [
+      'email_drafts_pkey',
+      'email_drafts_user_id_fkey',
+      'email_drafts_outbox_id_fkey',
+      'email_drafts_outbox_id_key',
+      'email_drafts_account_user_fkey',
+      'email_drafts_payload_size_check',
+      'email_drafts_content_hash_check',
+      'email_drafts_status_check',
+      'email_drafts_confirmation_check'
     ]]
   ])
   for (const [tableName, names] of expectedConstraints) {
@@ -1610,6 +1633,18 @@ async function verifyNotificationMailSchema() {
     )
   }
 
+  const draftOutboxUnique = await query(`
+    SELECT pg_get_constraintdef(oid) AS definition
+    FROM pg_constraint
+    WHERE conrelid = 'email_drafts'::regclass
+      AND conname = 'email_drafts_outbox_id_key'
+  `)
+  assertDefinitionIncludes(
+    'email draft outbox unique binding',
+    draftOutboxUnique.rows[0]?.definition,
+    ['unique (outbox_id)']
+  )
+
   const expectedIndexes = [
     'idx_users_email_unique',
     'idx_registration_requests_email',
@@ -1620,13 +1655,27 @@ async function verifyNotificationMailSchema() {
     'idx_notifications_user_unread',
     'idx_notifications_user_created',
     'idx_notification_push_deliveries_pending',
-    'idx_mail_outbox_pending'
+    'idx_mail_outbox_pending',
+    'idx_mail_outbox_user_created',
+    'idx_email_drafts_user_updated',
+    'idx_email_drafts_expiry'
   ]
   const indexes = await query(`
     SELECT indexname FROM pg_indexes
     WHERE schemaname = current_schema() AND indexname = ANY($1::text[])
   `, [expectedIndexes])
   assertExactSet('notification and mail indexes', indexes.rows.map((row) => row.indexname), expectedIndexes)
+
+  const retentionJob = await query(`
+    SELECT job_name
+    FROM maintenance_job_status
+    WHERE job_name = 'email_cache_retention'
+  `)
+  assertExactSet(
+    'email cache retention maintenance job',
+    retentionJob.rows.map((row) => row.job_name),
+    ['email_cache_retention']
+  )
 }
 
 async function verifyEmailAssistantSchema() {
@@ -1666,6 +1715,7 @@ async function verifyEmailAssistantSchema() {
 
   const expectedConstraints = new Map([
     ['email_mailbox_state', [
+      'email_mailbox_state_pkey',
       'email_mailbox_state_user_id_fkey',
       'email_mailbox_state_source_key_check',
       'email_mailbox_state_last_uid_check',
@@ -1717,6 +1767,18 @@ async function verifyEmailAssistantSchema() {
       names
     )
   }
+
+  const mailboxStatePrimaryKey = await query(`
+    SELECT pg_get_constraintdef(oid) AS definition
+    FROM pg_constraint
+    WHERE conrelid = 'email_mailbox_state'::regclass
+      AND conname = 'email_mailbox_state_pkey'
+  `)
+  assertDefinitionIncludes(
+    'email mailbox state primary key',
+    mailboxStatePrimaryKey.rows[0]?.definition,
+    ['primary key (user_id, source_key)']
+  )
 
   const expectedIndexes = [
     'idx_email_events_user_received',

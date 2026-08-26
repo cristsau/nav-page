@@ -1,4 +1,5 @@
 import { config } from '../config.js'
+import { startEmailCacheRetention } from './emailRetention.js'
 import { startEmailDigestScheduler } from './emailDigestScheduler.js'
 import { startEmailIngestWorker } from './emailIngestWorker.js'
 import { MAINTENANCE_JOB_NAMES } from './maintenanceJobStatus.js'
@@ -48,6 +49,23 @@ async function startCurrent() {
     poolInstance,
     logger,
     observer: observerFactory(MAINTENANCE_JOB_NAMES.EMAIL_INGEST, '邮件接收与分类')
+  }))
+  if (workerRuntimeEnabled) starters.push(() => startEmailCacheRetention({
+    enabled: config.emailCacheRetentionEnabled,
+    policy: {
+      retentionDays: config.emailCacheRetentionDays,
+      maxMessagesPerAccount: config.emailCacheMaxMessagesPerAccount,
+      batchSize: config.emailCacheRetentionBatchSize,
+      maxDeletesPerRun: config.emailCacheRetentionMaxDeletesPerRun,
+      outboxRetentionDays: config.emailOutboxRetentionDays,
+      intervalSeconds: config.emailCacheRetentionIntervalSeconds
+    },
+    poolInstance,
+    logger,
+    observer: observerFactory(
+      MAINTENANCE_JOB_NAMES.EMAIL_CACHE_RETENTION,
+      '邮箱本地缓存清理'
+    )
   }))
   if (apiRuntimeEnabled) starters.push(() => startEmailDigestScheduler({
     enabled: config.emailDigestEnabled,

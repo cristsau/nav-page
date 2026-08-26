@@ -27,6 +27,7 @@ test('server, config and Compose keep maintenance and logs bounded', async () =>
   assert.match(server, /stopEmailRuntime/)
   assert.match(emailRuntime, /startMailDeliveryScheduler/)
   assert.match(emailRuntime, /startEmailIngestWorker/)
+  assert.match(emailRuntime, /startEmailCacheRetention/)
   assert.match(emailRuntime, /startEmailDigestScheduler/)
   assert.match(emailRuntime, /MAINTENANCE_JOB_NAMES\.MAIL_DELIVERY/)
   assert.match(server, /createMaintenanceJobObserver/)
@@ -46,6 +47,7 @@ test('server, config and Compose keep maintenance and logs bounded', async () =>
   assert.match(config, /NAV_EMAIL_RUNTIME_ROLE/)
   assert.match(config, /NAV_EMAIL_INGEST_ENABLED/)
   assert.match(config, /NAV_EMAIL_DIGEST_ENABLED/)
+  assert.match(config, /NAV_EMAIL_CACHE_RETENTION_ENABLED/)
   assert.match(envExample, /NAV_SECURITY_EVENT_RETENTION_ENABLED=false/)
   assert.match(envExample, /NAV_MEDIA_DELETE_RETRY_ENABLED=false/)
   assert.match(envExample, /NAV_AI_USAGE_RETENTION_ENABLED=false/)
@@ -58,6 +60,7 @@ test('server, config and Compose keep maintenance and logs bounded', async () =>
   assert.match(envExample, /NAV_EMAIL_RUNTIME_ROLE=combined/)
   assert.match(envExample, /NAV_EMAIL_INGEST_ENABLED=false/)
   assert.match(envExample, /NAV_EMAIL_DIGEST_ENABLED=false/)
+  assert.match(envExample, /NAV_EMAIL_CACHE_RETENTION_ENABLED=true/)
   assert.match(app, /level: config\.apiLogLevel/)
   assert.match(app, /req\.headers\.authorization/)
   assert.match(app, /req\.headers\.cookie/)
@@ -69,7 +72,7 @@ test('server, config and Compose keep maintenance and logs bounded', async () =>
   assert.equal((compose.match(/logging: \*nav-logging/g) || []).length, 3)
 })
 
-test('migration verification keeps all ten maintenance jobs after feature integration', async () => {
+test('migration verification keeps all eleven maintenance jobs after feature integration', async () => {
   const [verifier, statusService, maintenanceRoute] = await Promise.all([
     source('../src/db/verifyMigrations.js'),
     source('../src/lib/maintenanceJobStatus.js'),
@@ -86,7 +89,8 @@ test('migration verification keeps all ten maintenance jobs after feature integr
     'web_push_delivery',
     'mail_delivery',
     'email_ingest',
-    'email_digest'
+    'email_digest',
+    'email_cache_retention'
   ]
 
   for (const job of expectedJobs) {
@@ -97,6 +101,7 @@ test('migration verification keeps all ten maintenance jobs after feature integr
   assert.match(maintenanceRoute, /AI_USAGE_RETENTION/)
   assert.match(maintenanceRoute, /NOTE_REMINDER_GENERATION/)
   assert.match(maintenanceRoute, /BOOKMARK_HEALTH_CHECK/)
+  assert.match(maintenanceRoute, /EMAIL_CACHE_RETENTION/)
 })
 
 test('routes expose retention, export and media retry status without secrets', async () => {

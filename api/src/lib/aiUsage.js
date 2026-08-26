@@ -9,6 +9,7 @@ export const AI_USAGE_FEATURES = Object.freeze({
   NOTE_TAGS: 'note_tags',
   ASSISTANT: 'assistant',
   EMAIL_CLASSIFICATION: 'email_classification',
+  EMAIL_ASSIST: 'email_assist',
   PROVIDER_TEST: 'provider_test'
 })
 

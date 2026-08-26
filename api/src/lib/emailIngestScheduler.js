@@ -25,6 +25,15 @@ import {
 const MAX_PARSED_TEXT_BYTES = Math.floor(EMAIL_ENCRYPTION_MAX_PLAINTEXT_BYTES * 4 / 9)
 const DEAD_LETTER_KEYWORD = '$nav-ingest-dead-letter'
 
+export const UPDATE_MAILBOX_FAILURE_STATE_SQL = `
+  UPDATE email_mailbox_state AS state
+  SET last_error_at = NOW(), last_error_code = $3, updated_at = NOW()
+  FROM users AS owner
+  WHERE state.source_key = $1
+    AND state.user_id = owner.id
+    AND owner.username = $2
+`
+
 function boundedInteger(value, fallback, minimum, maximum) {
   const parsed = Number(value)
   return Number.isSafeInteger(parsed) && parsed >= minimum && parsed <= maximum ? parsed : fallback
@@ -470,8 +479,7 @@ export function startEmailIngestScheduler({
            $1, $2, $3, $4, NOW(), CASE WHEN $5 THEN NOW() ELSE NULL END,
            CASE WHEN $6::text IS NULL THEN NULL ELSE NOW() END, $6, NOW()
          )
-         ON CONFLICT (source_key) DO UPDATE SET
-           user_id = EXCLUDED.user_id,
+         ON CONFLICT (user_id, source_key) DO UPDATE SET
            uid_validity = EXCLUDED.uid_validity,
            last_uid = CASE
              WHEN email_mailbox_state.uid_validity IS DISTINCT FROM EXCLUDED.uid_validity
@@ -497,8 +505,7 @@ export function startEmailIngestScheduler({
            source_key, user_id, uid_validity, last_uid, last_connected_at,
            last_error_at, last_error_code, updated_at
          ) VALUES ($1, $2, $3, $4, NOW(), NOW(), $5, NOW())
-         ON CONFLICT (source_key) DO UPDATE SET
-           user_id = EXCLUDED.user_id,
+         ON CONFLICT (user_id, source_key) DO UPDATE SET
            last_connected_at = NOW(), last_error_at = NOW(),
            last_error_code = EXCLUDED.last_error_code, updated_at = NOW()`,
         [sourceKey, userId, uidValidity, lastUid, errorCode]
@@ -661,12 +668,11 @@ export function startEmailIngestScheduler({
         const finishedAtMs = clock()
         const errorCode = sanitizeMaintenanceErrorCode(error)
         await Promise.allSettled([
-          poolInstance.query(
-            `UPDATE email_mailbox_state
-             SET last_error_at = NOW(), last_error_code = $2, updated_at = NOW()
-             WHERE source_key = $1`,
-            [sourceKey, errorCode]
-          ),
+          poolInstance.query(UPDATE_MAILBOX_FAILURE_STATE_SQL, [
+            sourceKey,
+            runtimeConfig.emailOwnerUsername,
+            errorCode
+          ]),
           poolInstance.query(
             `WITH affected_accounts AS (
                UPDATE email_accounts AS account

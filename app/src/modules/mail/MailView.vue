@@ -2,6 +2,7 @@
 import { computed, nextTick, onBeforeUnmount, onMounted, ref, watch } from 'vue'
 import { RouterLink, useRoute, useRouter } from 'vue-router'
 import Icon from '@/shared/components/Icon.vue'
+import MailComposeDialog from './components/MailComposeDialog.vue'
 import MailFolderSheet from './components/MailFolderSheet.vue'
 import MailFolderSidebar from './components/MailFolderSidebar.vue'
 import MailMessageDetail from './components/MailMessageDetail.vue'
@@ -18,6 +19,9 @@ const featureStatus = ref(null)
 const initialLoading = ref(true)
 const localError = ref('')
 const folderSheetOpen = ref(false)
+const composeOpen = ref(false)
+const composeInitial = ref({})
+const composeSourceMessageId = ref('')
 const lastMessageTrigger = ref(null)
 let updatingRoute = false
 
@@ -180,6 +184,22 @@ async function loadMore() {
   }
 }
 
+function openCompose(initial = {}) {
+  composeInitial.value = { ...initial }
+  composeSourceMessageId.value = String(initial?.sourceMessageId || '').trim()
+  composeOpen.value = true
+}
+
+function closeCompose() {
+  composeOpen.value = false
+  composeInitial.value = {}
+  composeSourceMessageId.value = ''
+}
+
+function onDraftSent() {
+  void refreshWorkspace().catch(() => {})
+}
+
 watch(() => route.fullPath, async () => {
   if (updatingRoute || initialLoading.value) return
   const requestedAccountId = queryText(route.query.account)
@@ -214,14 +234,20 @@ onBeforeUnmount(mail.deactivate)
   <main class="mail-page">
     <header class="mail-hero">
       <div>
-        <span>只读邮箱</span>
+        <span>智能邮箱</span>
         <h1>邮件</h1>
-        <p>当前为只读视图，仅显示已实际同步的配置文件夹；不会删除、移动、标记或回复原邮箱内容。</p>
+        <p>当前为只读视图的安全邮件缓存；支持 AI 摘要、待办提取、翻译和回信草稿。原邮箱不会被删除或移动，任何外发都必须先保存预览并由你再次确认。</p>
       </div>
-      <button type="button" :disabled="initialLoading || state.loadingMessages" @click="refreshWorkspace">
-        <Icon name="refresh" :size="17" />
-        <span>{{ initialLoading || state.loadingMessages ? '读取中…' : '刷新' }}</span>
-      </button>
+      <div class="mail-hero__actions">
+        <button type="button" :disabled="!hasAccounts" @click="openCompose()">
+          <Icon name="plus" :size="17" />
+          <span>写邮件</span>
+        </button>
+        <button type="button" :disabled="initialLoading || state.loadingMessages" @click="refreshWorkspace">
+          <Icon name="refresh" :size="17" />
+          <span>{{ initialLoading || state.loadingMessages ? '读取中…' : '刷新' }}</span>
+        </button>
+      </div>
     </header>
 
     <p v-if="errorMessage" class="mail-notice is-error" role="alert">{{ errorMessage }}</p>
@@ -271,7 +297,13 @@ onBeforeUnmount(mail.deactivate)
       </div>
 
       <div class="mail-workspace__detail">
-        <MailMessageDetail :message="state.selectedMessage" :loading="state.loadingDetail" @close="closeMessage" />
+        <MailMessageDetail
+          :message="state.selectedMessage"
+          :message-id="state.selectedMessageId"
+          :loading="state.loadingDetail"
+          @close="closeMessage"
+          @reply="openCompose"
+        />
       </div>
     </section>
 
@@ -286,6 +318,14 @@ onBeforeUnmount(mail.deactivate)
       @select-account="chooseAccount"
       @select-folder="chooseFolder"
     />
+    <MailComposeDialog
+      :show="composeOpen"
+      :account-id="state.activeAccountId"
+      :source-message-id="composeSourceMessageId"
+      :initial="composeInitial"
+      @close="closeCompose"
+      @sent="onDraftSent"
+    />
   </main>
 </template>
 
@@ -295,8 +335,10 @@ onBeforeUnmount(mail.deactivate)
 .mail-hero > div > span { color: var(--accent-color); font-size: .66rem; font-weight: 760; letter-spacing: .08em; text-transform: uppercase; }
 .mail-hero h1 { margin: 5px 0 0; font-size: clamp(1.5rem, 3vw, 2.15rem); }
 .mail-hero p { max-width: 760px; margin: 8px 0 0; color: var(--text-muted); font-size: .75rem; line-height: 1.65; }
-.mail-hero > button { display: inline-flex; min-width: 44px; min-height: 44px; padding: 0 13px; align-items: center; justify-content: center; gap: 7px; color: var(--text-secondary); font: inherit; font-size: .72rem; background: var(--bg-card); border: 1px solid var(--border-light); border-radius: 13px; cursor: pointer; }
-.mail-hero > button:disabled { opacity: .5; cursor: wait; }
+.mail-hero__actions { display: flex; gap: 8px; }
+.mail-hero__actions button { display: inline-flex; min-width: 44px; min-height: 44px; padding: 0 13px; align-items: center; justify-content: center; gap: 7px; color: var(--text-secondary); font: inherit; font-size: .72rem; background: var(--bg-card); border: 1px solid var(--border-light); border-radius: 13px; cursor: pointer; }
+.mail-hero__actions button:first-child { color: var(--accent-contrast, #fff); background: var(--accent-color); border-color: transparent; }
+.mail-hero__actions button:disabled { opacity: .5; cursor: not-allowed; }
 .mail-notice { margin: 0 0 14px; padding: 11px 13px; border-radius: 12px; font-size: .71rem; line-height: 1.55; }
 .mail-notice.is-error { color: var(--error-color); background: color-mix(in srgb, var(--error-color) 9%, var(--bg-card)); border: 1px solid color-mix(in srgb, var(--error-color) 28%, transparent); }
 .mail-notice.is-warning { color: var(--warning-color); background: color-mix(in srgb, var(--warning-color) 9%, var(--bg-card)); border: 1px solid color-mix(in srgb, var(--warning-color) 28%, transparent); }
@@ -319,8 +361,8 @@ onBeforeUnmount(mail.deactivate)
 @media (max-width: 820px), (pointer: coarse) and (max-width: 1024px) {
   .mail-page { padding: 15px 11px 96px; }
   .mail-hero { align-items: flex-start; }
-  .mail-hero > button { width: 44px; padding: 0; }
-  .mail-hero > button span { display: none; }
+  .mail-hero__actions button { width: 44px; padding: 0; }
+  .mail-hero__actions button span { display: none; }
   .mail-loading { min-height: 520px; grid-template-columns: 1fr; }
   .mail-loading span:not(:first-child) { display: none; }
   .mail-setup { margin-top: 5vh; padding: 19px; grid-template-columns: auto minmax(0, 1fr); }

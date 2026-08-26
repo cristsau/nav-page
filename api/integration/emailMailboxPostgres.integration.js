@@ -31,6 +31,11 @@ let pool
 let persistEmailMailboxMessage
 let decryptStoredMailboxMessage
 let clearEmailEncryptionKeyCache
+let createEmailDraft
+let getEmailDraftForUser
+let queueEmailDraft
+let deliverMailOutbox
+let updateMailboxFailureStateSql
 let temporaryDirectory
 
 before(async () => {
@@ -41,6 +46,9 @@ before(async () => {
   ;({ pool } = await import('../src/db/index.js'))
   ;({ persistEmailMailboxMessage, decryptStoredMailboxMessage } = await import('../src/lib/emailMailboxStore.js'))
   ;({ clearEmailEncryptionKeyCache } = await import('../src/lib/emailCrypto.js'))
+  ;({ createEmailDraft, getEmailDraftForUser, queueEmailDraft } = await import('../src/lib/emailDrafts.js'))
+  ;({ deliverMailOutbox } = await import('../src/lib/mailOutbox.js'))
+  ;({ UPDATE_MAILBOX_FAILURE_STATE_SQL: updateMailboxFailureStateSql } = await import('../src/lib/emailIngestScheduler.js'))
 })
 
 beforeEach(async () => {
@@ -168,6 +176,34 @@ test('UIDVALIDITY reset expires old remote locations without deleting canonical 
   )
 })
 
+test('mailbox failure state is isolated by owner when users share a source key', async () => {
+  await pool.query(
+    `INSERT INTO email_mailbox_state (
+       source_key, user_id, last_uid, updated_at
+     ) VALUES
+       ('shared-source', $1, 10, NOW()),
+       ('shared-source', $2, 20, NOW())`,
+    [OWNER_ID, OTHER_USER_ID]
+  )
+
+  await pool.query(updateMailboxFailureStateSql, [
+    'shared-source',
+    'mail-owner',
+    'IMAP_SYNC_FAILED'
+  ])
+
+  const states = await pool.query(
+    `SELECT user_id, last_error_code
+     FROM email_mailbox_state
+     WHERE source_key = 'shared-source'
+     ORDER BY user_id`
+  )
+  assert.deepEqual(states.rows, [
+    { user_id: OWNER_ID, last_error_code: 'IMAP_SYNC_FAILED' },
+    { user_id: OTHER_USER_ID, last_error_code: null }
+  ])
+})
+
 test('composite ownership constraints reject cross-user mailbox rows and user deletion cascades', async () => {
   const saved = await persistEmailMailboxMessage(mailboxFixture())
   await assert.rejects(
@@ -185,4 +221,195 @@ test('composite ownership constraints reject cross-user mailbox rows and user de
     const count = await pool.query(`SELECT COUNT(*) FROM ${table} WHERE user_id = $1`, [OWNER_ID])
     assert.equal(Number(count.rows[0].count), 0)
   }
+})
+
+test('confirmed encrypted draft is delivered once, scrubbed and never sent twice', async () => {
+  const saved = await persistEmailMailboxMessage(mailboxFixture())
+  const draft = await createEmailDraft({
+    userId: OWNER_ID,
+    accountId: saved.account.id,
+    sourceMessageId: saved.message.id,
+    payload: {
+      to: ['recipient@example.test'],
+      cc: ['copy@example.test'],
+      subject: 'Integration delivery subject',
+      text: 'Integration delivery body marker'
+    },
+    replyHeaders: {
+      inReplyTo: '<mailbox-integration@example.test>',
+      references: ['<older@example.test>']
+    }
+  }, { poolInstance: pool })
+
+  const storedDraft = await pool.query(
+    `SELECT payload_encrypted, content_hash, status, confirmed_at, outbox_id
+     FROM email_drafts WHERE id = $1 AND user_id = $2`,
+    [draft.id, OWNER_ID]
+  )
+  assert.equal(storedDraft.rowCount, 1)
+  assert.equal(storedDraft.rows[0].payload_encrypted.includes(Buffer.from('Integration delivery body marker')), false)
+  assert.equal(storedDraft.rows[0].status, 'draft')
+  assert.equal(storedDraft.rows[0].confirmed_at, null)
+  assert.equal(storedDraft.rows[0].outbox_id, null)
+
+  const reread = await getEmailDraftForUser(OWNER_ID, draft.id)
+  assert.equal(reread.payload.subject, 'Integration delivery subject')
+  assert.equal(reread.payload.inReplyTo, '<mailbox-integration@example.test>')
+  assert.deepEqual(reread.payload.references, [
+    '<older@example.test>',
+    '<mailbox-integration@example.test>'
+  ])
+  await assert.rejects(
+    queueEmailDraft({
+      userId: OWNER_ID,
+      draftId: draft.id,
+      contentHash: draft.contentHash,
+      confirmed: false
+    }, { poolInstance: pool }),
+    /Explicit email send confirmation is required/
+  )
+  await assert.rejects(
+    queueEmailDraft({
+      userId: OWNER_ID,
+      draftId: draft.id,
+      contentHash: '0'.repeat(64),
+      confirmed: true
+    }, { poolInstance: pool }),
+    /preview it again before sending/
+  )
+
+  const queued = await queueEmailDraft({
+    userId: OWNER_ID,
+    draftId: draft.id,
+    contentHash: draft.contentHash,
+    confirmed: true
+  }, { poolInstance: pool })
+  assert.equal(queued.status, 'queued')
+  assert.ok(queued.outboxId)
+  assert.ok(queued.confirmedAt)
+
+  const queuedOutbox = await pool.query(
+    `SELECT status, recipient, subject, text_body, html_body,
+            payload_encrypted, content_hash, confirmed_at
+     FROM mail_outbox WHERE id = $1`,
+    [queued.outboxId]
+  )
+  assert.equal(queuedOutbox.rows[0].status, 'pending')
+  assert.equal(queuedOutbox.rows[0].recipient, 'redacted@invalid.local')
+  assert.equal(queuedOutbox.rows[0].subject, '[加密用户邮件]')
+  assert.equal(queuedOutbox.rows[0].text_body, '')
+  assert.equal(queuedOutbox.rows[0].html_body, '')
+  assert.ok(Buffer.isBuffer(queuedOutbox.rows[0].payload_encrypted))
+  assert.equal(queuedOutbox.rows[0].content_hash, draft.contentHash)
+  assert.ok(queuedOutbox.rows[0].confirmed_at)
+
+  const deliveries = []
+  let transportCreations = 0
+  const transportFactory = async () => {
+    transportCreations += 1
+    return {
+      async sendMail(message) { deliveries.push(message) },
+      close() {}
+    }
+  }
+  const deliveryOptions = {
+    poolInstance: pool,
+    policy: { batchSize: 10, maxAttempts: 3, intervalSeconds: 30 },
+    runtimeConfig: {
+      smtpFromAddress: 'nav@example.test',
+      smtpFromName: 'DOMO NAV'
+    },
+    transportFactory
+  }
+  const firstDelivery = await deliverMailOutbox(deliveryOptions)
+  assert.equal(firstDelivery.processed, 1)
+  assert.equal(firstDelivery.sent, 1)
+  assert.equal(deliveries.length, 1)
+  assert.deepEqual(deliveries[0].to, ['recipient@example.test'])
+  assert.deepEqual(deliveries[0].cc, ['copy@example.test'])
+  assert.equal(deliveries[0].subject, 'Integration delivery subject')
+  assert.equal(deliveries[0].text, 'Integration delivery body marker')
+
+  const terminal = await pool.query(
+    `SELECT outbox.status AS outbox_status, outbox.payload_encrypted,
+            outbox.scrubbed_at, draft.status AS draft_status
+     FROM mail_outbox AS outbox
+     JOIN email_drafts AS draft ON draft.outbox_id = outbox.id
+     WHERE outbox.id = $1`,
+    [queued.outboxId]
+  )
+  assert.equal(terminal.rows[0].outbox_status, 'sent')
+  assert.equal(terminal.rows[0].payload_encrypted, null)
+  assert.ok(terminal.rows[0].scrubbed_at)
+  assert.equal(terminal.rows[0].draft_status, 'sent')
+
+  const replay = await deliverMailOutbox(deliveryOptions)
+  assert.equal(replay.processed, 0)
+  assert.equal(replay.sent, 0)
+  assert.equal(deliveries.length, 1)
+  assert.equal(transportCreations, 1)
+})
+
+test('stale sending lease expires as ambiguous without another SMTP attempt', async () => {
+  const saved = await persistEmailMailboxMessage(mailboxFixture())
+  const draft = await createEmailDraft({
+    userId: OWNER_ID,
+    accountId: saved.account.id,
+    payload: {
+      to: ['recipient@example.test'],
+      subject: 'Ambiguous delivery subject',
+      text: 'Never send this stale lease again'
+    }
+  }, { poolInstance: pool })
+  const queued = await queueEmailDraft({
+    userId: OWNER_ID,
+    draftId: draft.id,
+    contentHash: draft.contentHash,
+    confirmed: true
+  }, { poolInstance: pool })
+  await pool.query(
+    `UPDATE mail_outbox
+     SET status = 'sending', updated_at = NOW() - INTERVAL '16 minutes'
+     WHERE id = $1`,
+    [queued.outboxId]
+  )
+
+  let smtpCalls = 0
+  let transportCreations = 0
+  const summary = await deliverMailOutbox({
+    poolInstance: pool,
+    policy: { batchSize: 10, maxAttempts: 3, intervalSeconds: 30 },
+    runtimeConfig: {
+      smtpFromAddress: 'nav@example.test',
+      smtpFromName: 'DOMO NAV'
+    },
+    transportFactory: async () => {
+      transportCreations += 1
+      return {
+        async sendMail() { smtpCalls += 1 },
+        close() {}
+      }
+    }
+  })
+
+  assert.equal(summary.processed, 0)
+  assert.equal(summary.sent, 0)
+  assert.equal(summary.expired, 1)
+  assert.equal(transportCreations, 0)
+  assert.equal(smtpCalls, 0)
+
+  const terminal = await pool.query(
+    `SELECT outbox.status AS outbox_status, outbox.payload_encrypted,
+            outbox.last_error_code, outbox.scrubbed_at,
+            draft.status AS draft_status
+     FROM mail_outbox AS outbox
+     JOIN email_drafts AS draft ON draft.outbox_id = outbox.id
+     WHERE outbox.id = $1`,
+    [queued.outboxId]
+  )
+  assert.equal(terminal.rows[0].outbox_status, 'expired')
+  assert.equal(terminal.rows[0].payload_encrypted, null)
+  assert.equal(terminal.rows[0].last_error_code, 'AMBIGUOUS_DELIVERY_STATE')
+  assert.ok(terminal.rows[0].scrubbed_at)
+  assert.equal(terminal.rows[0].draft_status, 'failed')
 })

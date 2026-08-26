@@ -1,23 +1,22 @@
-import { createHash } from 'node:crypto'
+import { createHash, randomUUID } from 'node:crypto'
 import nodemailer from 'nodemailer'
 import { config } from '../config.js'
 import { query } from '../db/index.js'
 import { sanitizeMaintenanceErrorCode } from './maintenanceJobStatus.js'
 import { readOwnerSecretFile } from './ownerSecretFile.js'
 import { assertSafeOutboundHost } from './outboundEndpoints.js'
+import { decryptEmailPayload, encryptEmailPayload } from './emailCrypto.js'
+import {
+  hashUserMailPayload,
+  normalizeEmailAddress,
+  normalizeUserMailPayload
+} from './emailUserMail.js'
 
-const EMAIL_PATTERN = /^[^\s@<>]+@[^\s@<>]+\.[^\s@<>]+$/u
 const MESSAGE_TYPE_PATTERN = /^[a-z0-9_.-]+$/
 const LOCK_SQL = `SELECT pg_try_advisory_lock(hashtext(current_database()), hashtext('nav_mail_delivery')) AS acquired`
 const UNLOCK_SQL = `SELECT pg_advisory_unlock(hashtext(current_database()), hashtext('nav_mail_delivery')) AS released`
 
-export function normalizeEmailAddress(value) {
-  const email = String(value || '').normalize('NFKC').trim().toLowerCase()
-  if (!EMAIL_PATTERN.test(email) || email.length > 320 || /[\r\n]/.test(email)) {
-    throw new TypeError('Email address is invalid')
-  }
-  return email
-}
+export { normalizeEmailAddress }
 
 function normalizeMessageType(value) {
   const type = String(value || '').trim().toLowerCase()
@@ -133,6 +132,54 @@ export async function enqueueMail({
   return rows[0]
 }
 
+function userMailOutboxContext(userId, outboxId) {
+  return `outbox:${String(userId)}:${String(outboxId)}`
+}
+
+export async function enqueueUserMail({
+  userId,
+  accountId,
+  sourceMessageId = null,
+  draftId,
+  payload,
+  expectedContentHash,
+  queryFn = query,
+  encryptPayloadFn = encryptEmailPayload,
+  outboxId = randomUUID()
+}) {
+  const normalized = normalizeUserMailPayload(payload)
+  const contentHash = hashUserMailPayload(normalized)
+  if (expectedContentHash && contentHash !== String(expectedContentHash)) {
+    throw new Error('Email draft changed; preview it again before sending')
+  }
+  const encrypted = await encryptPayloadFn(normalized, {
+    context: userMailOutboxContext(userId, outboxId)
+  })
+  const dedupeKey = normalizeDedupeKey(`user-mail:${userId}:${draftId}:${contentHash}`)
+  const { rows } = await queryFn(
+    `INSERT INTO mail_outbox (
+       id, message_type, recipient, subject, text_body, html_body,
+       dedupe_key, sensitive, user_id, account_id, source_message_id,
+       payload_encrypted, content_hash, confirmed_at
+     ) VALUES (
+       $1, 'user.mail', 'redacted@invalid.local', '[加密用户邮件]', '', '',
+       $2, TRUE, $3, $4, $5, $6, $7, NOW()
+     )
+     ON CONFLICT (dedupe_key) DO UPDATE SET updated_at = mail_outbox.updated_at
+     RETURNING id, status, content_hash, confirmed_at, created_at`,
+    [
+      outboxId,
+      dedupeKey,
+      userId,
+      accountId,
+      sourceMessageId || null,
+      encrypted,
+      contentHash
+    ]
+  )
+  return rows[0]
+}
+
 async function createSmtpTransport(runtimeConfig = config, readSecretImpl = readOwnerSecretFile) {
   validateSmtpConfig(runtimeConfig)
   const password = await readSecretImpl(runtimeConfig.smtpPasswordFile, {
@@ -189,24 +236,44 @@ export async function deliverMailOutbox({
     lockAcquired = lock.rows[0]?.acquired === true
     if (!lockAcquired) return { processed: 0, sent: 0, failed: 0, remaining: 0, skipped: 'already-running' }
 
-    await client.query(
+    const ambiguousDeliveries = await client.query(
       `UPDATE mail_outbox
-       SET status = 'failed', next_attempt_at = NOW(), updated_at = NOW(),
-           last_error_code = 'STALE_DELIVERY_LEASE'
-       WHERE status = 'sending' AND updated_at < NOW() - INTERVAL '15 minutes'`
+       SET status = 'expired',
+           recipient = CASE WHEN sensitive THEN 'redacted@invalid.local' ELSE recipient END,
+           subject = CASE WHEN sensitive THEN '[投递状态不确定，内容已清除]' ELSE subject END,
+           text_body = '', html_body = '', payload_encrypted = NULL,
+           scrubbed_at = COALESCE(scrubbed_at, NOW()), updated_at = NOW(),
+           last_error_code = 'AMBIGUOUS_DELIVERY_STATE'
+       WHERE status = 'sending' AND updated_at < NOW() - INTERVAL '15 minutes'
+       RETURNING id`
     )
+    if (ambiguousDeliveries.rows.length) {
+      await client.query(
+        `UPDATE email_drafts SET status = 'failed', updated_at = NOW()
+         WHERE outbox_id = ANY($1::uuid[]) AND status = 'queued'`,
+        [ambiguousDeliveries.rows.map((row) => row.id)]
+      )
+    }
 
     const expiredBeforeRun = await client.query(
       `UPDATE mail_outbox
        SET status = 'expired',
            recipient = CASE WHEN sensitive THEN 'redacted@invalid.local' ELSE recipient END,
            subject = CASE WHEN sensitive THEN '[未送达，内容已清除]' ELSE subject END,
-           text_body = '', html_body = '', scrubbed_at = COALESCE(scrubbed_at, NOW()),
+           text_body = '', html_body = '', payload_encrypted = NULL,
+           scrubbed_at = COALESCE(scrubbed_at, NOW()),
            updated_at = NOW()
        WHERE status IN ('pending', 'failed') AND attempt_count >= $1
        RETURNING id`,
       [validated.maxAttempts]
     )
+    if (expiredBeforeRun.rows.length) {
+      await client.query(
+        `UPDATE email_drafts SET status = 'failed', updated_at = NOW()
+         WHERE outbox_id = ANY($1::uuid[]) AND status = 'queued'`,
+        [expiredBeforeRun.rows.map((row) => row.id)]
+      )
+    }
 
     const candidates = await client.query(
       `
@@ -223,7 +290,7 @@ export async function deliverMailOutbox({
       processed: 0,
       sent: 0,
       failed: 0,
-      expired: expiredBeforeRun.rowCount,
+      expired: expiredBeforeRun.rowCount + ambiguousDeliveries.rowCount,
       remaining: 0,
       skipped: null
     }
@@ -237,39 +304,101 @@ export async function deliverMailOutbox({
         [message.id]
       )
       if (!reserved.rowCount) continue
+      let smtpAccepted = false
       try {
+        let userPayload = null
+        if (message.message_type === 'user.mail') {
+          if (!message.user_id || !message.payload_encrypted) {
+            throw new Error('Encrypted user mail payload is unavailable')
+          }
+          userPayload = normalizeUserMailPayload(await decryptEmailPayload(
+            message.payload_encrypted,
+            { context: userMailOutboxContext(message.user_id, message.id) }
+          ))
+          if (hashUserMailPayload(userPayload) !== message.content_hash) {
+            throw new Error('Encrypted user mail payload hash mismatch')
+          }
+        }
+        const messageId = `<domo-nav-${createHash('sha256').update(String(message.id)).digest('hex').slice(0, 32)}@nav.skrskr.net>`
         await transport.sendMail({
           from: {
             name: String(runtimeConfig.smtpFromName || 'DOMO NAV').replace(/[\r\n]/g, '').slice(0, 120),
             address: normalizeEmailAddress(runtimeConfig.smtpFromAddress)
           },
-          to: normalizeEmailAddress(message.recipient),
-          subject: normalizeSubject(message.subject),
-          text: message.text_body || undefined,
-          html: message.html_body || undefined,
+          to: userPayload?.to || normalizeEmailAddress(message.recipient),
+          cc: userPayload?.cc?.length ? userPayload.cc : undefined,
+          bcc: userPayload?.bcc?.length ? userPayload.bcc : undefined,
+          subject: userPayload?.subject || normalizeSubject(message.subject),
+          text: userPayload?.text || message.text_body || undefined,
+          inReplyTo: userPayload?.inReplyTo || undefined,
+          references: userPayload?.references?.length ? userPayload.references : undefined,
+          messageId,
+          html: userPayload ? undefined : (message.html_body || undefined),
           headers: {
             'X-DOMO-NAV-Message-Type': message.message_type,
             'X-DOMO-NAV-Id': createHash('sha256').update(String(message.id)).digest('hex').slice(0, 24)
           }
         })
+        smtpAccepted = true
         await client.query(
-          `UPDATE mail_outbox
-           SET status = 'sent', attempt_count = attempt_count + 1,
-               last_attempt_at = NOW(), sent_at = NOW(),
-               recipient = CASE WHEN sensitive THEN 'redacted@invalid.local' ELSE recipient END,
-               subject = CASE WHEN sensitive THEN '[已发送，内容已清除]' ELSE subject END,
-               text_body = '', html_body = '', scrubbed_at = NOW(),
-               last_error_code = NULL, updated_at = NOW()
-           WHERE id = $1`,
+          `WITH delivered AS (
+             UPDATE mail_outbox
+             SET status = 'sent', attempt_count = attempt_count + 1,
+                 last_attempt_at = NOW(), sent_at = NOW(),
+                 recipient = CASE WHEN sensitive THEN 'redacted@invalid.local' ELSE recipient END,
+                 subject = CASE WHEN sensitive THEN '[已发送，内容已清除]' ELSE subject END,
+                 text_body = '', html_body = '', payload_encrypted = NULL,
+                 scrubbed_at = NOW(), last_error_code = NULL, updated_at = NOW()
+             WHERE id = $1
+             RETURNING id
+           )
+           UPDATE email_drafts SET status = 'sent', updated_at = NOW()
+           WHERE outbox_id IN (SELECT id FROM delivered)`,
           [message.id]
         )
         summary.sent += 1
       } catch (error) {
+        // SMTP and PostgreSQL cannot participate in one transaction. Once the
+        // remote SMTP server has accepted a message, never put it back into an
+        // automatic retry path: doing so can duplicate external mail. Retry
+        // only the local finalization once; if that also fails the row stays
+        // in `sending` and the stale-lease guard expires it for manual review.
+        if (smtpAccepted) {
+          try {
+            await client.query(
+              `WITH delivered AS (
+                 UPDATE mail_outbox
+                 SET status = 'sent', attempt_count = attempt_count + 1,
+                     last_attempt_at = NOW(), sent_at = COALESCE(sent_at, NOW()),
+                     recipient = CASE WHEN sensitive THEN 'redacted@invalid.local' ELSE recipient END,
+                     subject = CASE WHEN sensitive THEN '[已发送，内容已清除]' ELSE subject END,
+                     text_body = '', html_body = '', payload_encrypted = NULL,
+                     scrubbed_at = COALESCE(scrubbed_at, NOW()),
+                     last_error_code = 'DELIVERY_FINALIZE_RECOVERED', updated_at = NOW()
+                 WHERE id = $1 AND status = 'sending'
+                 RETURNING id
+               )
+               UPDATE email_drafts SET status = 'sent', updated_at = NOW()
+               WHERE outbox_id IN (SELECT id FROM delivered)`,
+              [message.id]
+            )
+            summary.sent += 1
+            continue
+          } catch (finalizeError) {
+            const ambiguousError = new Error(
+              'SMTP accepted the message but local delivery state could not be finalized',
+              { cause: finalizeError }
+            )
+            ambiguousError.code = 'AMBIGUOUS_DELIVERY_STATE'
+            throw ambiguousError
+          }
+        }
         const nextAttempt = Math.min(86_400, 60 * (2 ** Math.min(Number(message.attempt_count || 0), 10)))
         const willExpire = Number(message.attempt_count || 0) + 1 >= validated.maxAttempts
         await client.query(
-          `UPDATE mail_outbox
-           SET status = CASE WHEN attempt_count + 1 >= $4 THEN 'expired' ELSE 'failed' END,
+          `WITH delivery_failure AS (
+             UPDATE mail_outbox
+             SET status = CASE WHEN attempt_count + 1 >= $4 THEN 'expired' ELSE 'failed' END,
                attempt_count = attempt_count + 1,
                last_attempt_at = NOW(), next_attempt_at = NOW() + ($2::integer * INTERVAL '1 second'),
                recipient = CASE
@@ -282,9 +411,16 @@ export async function deliverMailOutbox({
                END,
                text_body = CASE WHEN attempt_count + 1 >= $4 THEN '' ELSE text_body END,
                html_body = CASE WHEN attempt_count + 1 >= $4 THEN '' ELSE html_body END,
+               payload_encrypted = CASE WHEN attempt_count + 1 >= $4 THEN NULL ELSE payload_encrypted END,
                scrubbed_at = CASE WHEN attempt_count + 1 >= $4 THEN NOW() ELSE scrubbed_at END,
                last_error_code = $3, updated_at = NOW()
-           WHERE id = $1`,
+             WHERE id = $1
+             RETURNING id, status
+           )
+           UPDATE email_drafts SET status = 'failed', updated_at = NOW()
+           WHERE outbox_id IN (
+             SELECT id FROM delivery_failure WHERE status = 'expired'
+           )`,
           [message.id, nextAttempt, sanitizeMaintenanceErrorCode(error), validated.maxAttempts]
         )
         summary.failed += 1

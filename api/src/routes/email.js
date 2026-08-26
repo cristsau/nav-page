@@ -1,7 +1,22 @@
 import { randomUUID } from 'node:crypto'
 import { config } from '../config.js'
 import { pool, query } from '../db/index.js'
+import { getUserSettingValue } from '../lib/userSettings.js'
+import { enforceAiRateLimit } from '../lib/aiRateLimit.js'
+import { resolveChatProviderModel } from '../lib/aiModelCatalog.js'
+import { AI_USAGE_FEATURES } from '../lib/aiUsage.js'
+import { recordRuntimeAiUsageSafely } from '../lib/aiUsageRuntime.js'
+import {
+  EMAIL_AI_ACTIONS,
+  runEmailAi,
+  selectEmailAiProvider
+} from '../lib/emailAi.js'
 import { loadEmailEncryptionKey } from '../lib/emailCrypto.js'
+import {
+  createEmailDraft,
+  getEmailDraftForUser,
+  queueEmailDraft
+} from '../lib/emailDrafts.js'
 import { getEmailEventForUser, getEmailNotificationDetails } from '../lib/emailEvents.js'
 import { validateImapConfig } from '../lib/emailIngestScheduler.js'
 import { createEmailMailboxEventBroker } from '../lib/emailMailboxEventBroker.js'
@@ -55,6 +70,23 @@ function mapAddress(value) {
   return value && typeof value === 'object'
     ? { name: String(value.name || ''), address: String(value.address || '') }
     : { name: '', address: '' }
+}
+
+async function getCanonicalMailboxRowForUser(messageId, userId) {
+  if (!UUID_PATTERN.test(String(messageId || ''))) return null
+  const { rows } = await query(
+    `SELECT message.id AS message_id, message.account_id, message.user_id,
+            account.source_key, message.envelope_encrypted,
+            message.content_encrypted, message.received_at,
+            message.has_attachments, message.attachment_count
+     FROM email_messages AS message
+     JOIN email_accounts AS account
+       ON account.id = message.account_id AND account.user_id = message.user_id
+     WHERE message.id = $1 AND message.user_id = $2
+     LIMIT 1`,
+    [messageId, userId]
+  )
+  return rows[0] || null
 }
 
 async function mapMailboxRow(row, { includeBody = false } = {}) {
@@ -400,6 +432,221 @@ export default async function emailRoutes(fastify) {
     try { return { message: await mapMailboxRow(rows[0], { includeBody: true }) } } catch {
       reply.code(503)
       return { error: 'Email content could not be decrypted' }
+    }
+  })
+
+  fastify.post('/email/messages/:messageId/ai', async (request, reply) => {
+    await fastify.requireAuth(request, reply)
+    reply.header('Cache-Control', 'private, no-store')
+    const messageId = String(request.params.messageId || '')
+    const action = String(request.body?.action || '').trim().toLowerCase()
+    if (!UUID_PATTERN.test(messageId) || !Object.hasOwn(EMAIL_AI_ACTIONS, action)) {
+      reply.code(400)
+      return { error: 'Invalid email AI request' }
+    }
+    const rateLimited = await enforceAiRateLimit(request, reply, {
+      deniedError: '邮件 AI 请求过于频繁，请稍后再试'
+    })
+    if (rateLimited) return rateLimited
+
+    const row = await getCanonicalMailboxRowForUser(messageId, request.currentUser.id)
+    if (!row) {
+      reply.code(404)
+      return { error: 'Email message not found' }
+    }
+    let stored
+    try {
+      stored = await decryptStoredMailboxMessage(row, {
+        userId: row.user_id,
+        sourceKey: row.source_key
+      })
+    } catch {
+      reply.code(503)
+      return { error: 'Email content could not be decrypted' }
+    }
+
+    const appConfig = await getUserSettingValue(request.currentUser.id, 'appConfig', {})
+    const startedAt = Date.now()
+    let provider = null
+    try {
+      const resolution = await resolveChatProviderModel(
+        appConfig?.search?.providers?.chatgpt || {}
+      )
+      provider = selectEmailAiProvider({ chatgpt: resolution.provider })
+      if (!provider) {
+        reply.code(503)
+        return { error: '请先在设置中启用 ChatGPT / OpenAI' }
+      }
+      const result = await runEmailAi(provider, {
+        action,
+        subject: stored.envelope.subject,
+        sender: stored.envelope.sender?.address || stored.envelope.sender?.name,
+        to: stored.envelope.to,
+        cc: stored.envelope.cc,
+        receivedAt: row.received_at,
+        text: stored.content.text,
+        userInstruction: request.body?.instruction,
+        targetLanguage: request.body?.language
+      }, request.currentUser.id)
+      await recordRuntimeAiUsageSafely({
+        userId: request.currentUser.id,
+        feature: AI_USAGE_FEATURES.EMAIL_ASSIST,
+        provider: result.provider,
+        model: result.model,
+        apiMode: result.apiMode,
+        success: true,
+        usage: result.usage,
+        latencyMs: result.latencyMs
+      }, request.log)
+      const {
+        usage: _usage,
+        apiMode: _apiMode,
+        latencyMs: _latencyMs,
+        ...publicResult
+      } = result
+      return { result: publicResult }
+    } catch (error) {
+      await recordRuntimeAiUsageSafely({
+        userId: request.currentUser.id,
+        feature: AI_USAGE_FEATURES.EMAIL_ASSIST,
+        provider: provider?.id || 'chatgpt',
+        model: provider?.config?.model || 'unknown',
+        apiMode: provider?.config?.apiMode || 'unknown',
+        success: false,
+        usage: null,
+        latencyMs: Math.max(0, Date.now() - startedAt)
+      }, request.log)
+      reply.code(502)
+      return { error: error.message || '邮件 AI 执行失败' }
+    }
+  })
+
+  fastify.post('/email/drafts', async (request, reply) => {
+    await fastify.requireAuth(request, reply)
+    reply.header('Cache-Control', 'private, no-store')
+    const accountId = String(request.body?.accountId || '')
+    const sourceMessageId = request.body?.sourceMessageId
+      ? String(request.body.sourceMessageId)
+      : null
+    if (!UUID_PATTERN.test(accountId) || (sourceMessageId && !UUID_PATTERN.test(sourceMessageId))) {
+      reply.code(400)
+      return { error: 'Invalid email draft identity' }
+    }
+    let replyHeaders = null
+    if (sourceMessageId) {
+      const source = await getCanonicalMailboxRowForUser(sourceMessageId, request.currentUser.id)
+      if (!source || String(source.account_id) !== accountId) {
+        reply.code(404)
+        return { error: 'Source email message not found' }
+      }
+      try {
+        const { envelope } = await decryptStoredMailboxMessage(source, {
+          userId: source.user_id,
+          sourceKey: source.source_key
+        })
+        replyHeaders = {
+          inReplyTo: envelope.messageId || '',
+          references: [
+            ...(Array.isArray(envelope.references) ? envelope.references : []),
+            ...(envelope.messageId ? [envelope.messageId] : [])
+          ]
+        }
+      } catch {
+        reply.code(503)
+        return { error: 'Source email headers could not be decrypted' }
+      }
+    }
+    try {
+      const draft = await createEmailDraft({
+        userId: request.currentUser.id,
+        accountId,
+        sourceMessageId,
+        // Reply threading headers are trusted only when decrypted from the
+        // owned source message above. Never accept client-supplied Message-ID
+        // or References values.
+        payload: {
+          to: request.body?.to,
+          cc: request.body?.cc,
+          bcc: request.body?.bcc,
+          subject: request.body?.subject,
+          text: request.body?.text
+        },
+        replyHeaders
+      })
+      await recordSecurityEventBestEffort({
+        request,
+        eventType: 'email.draft.create',
+        outcome: 'success',
+        actorUserId: request.currentUser.id,
+        subjectUserId: request.currentUser.id,
+        resourceType: 'email_draft',
+        resourceId: draft.id,
+        affectedCount: 1
+      }, request.log)
+      reply.code(201)
+      return { draft }
+    } catch (error) {
+      reply.code(error instanceof TypeError ? 400 : 409)
+      return { error: error.message || 'Email draft could not be saved' }
+    }
+  })
+
+  fastify.get('/email/drafts/:draftId', async (request, reply) => {
+    await fastify.requireAuth(request, reply)
+    reply.header('Cache-Control', 'private, no-store')
+    const draftId = String(request.params.draftId || '')
+    if (!UUID_PATTERN.test(draftId)) {
+      reply.code(400)
+      return { error: 'Invalid email draft id' }
+    }
+    try {
+      const draft = await getEmailDraftForUser(request.currentUser.id, draftId)
+      if (!draft) {
+        reply.code(404)
+        return { error: 'Email draft not found' }
+      }
+      return { draft }
+    } catch {
+      reply.code(503)
+      return { error: 'Email draft could not be decrypted' }
+    }
+  })
+
+  fastify.post('/email/drafts/:draftId/send', async (request, reply) => {
+    await fastify.requireAuth(request, reply)
+    reply.header('Cache-Control', 'private, no-store')
+    const draftId = String(request.params.draftId || '')
+    if (!UUID_PATTERN.test(draftId)) {
+      reply.code(400)
+      return { error: 'Invalid email draft id' }
+    }
+    const mailStatus = await verifiedMailConfigurationStatus()
+    if (!mailStatus.configured || !mailStatus.enabled) {
+      reply.code(503)
+      return { error: 'Mail delivery is not configured and enabled' }
+    }
+    try {
+      const draft = await queueEmailDraft({
+        userId: request.currentUser.id,
+        draftId,
+        contentHash: request.body?.contentHash,
+        confirmed: request.body?.confirm
+      })
+      await recordSecurityEventBestEffort({
+        request,
+        eventType: 'email.send.queued',
+        outcome: 'success',
+        actorUserId: request.currentUser.id,
+        subjectUserId: request.currentUser.id,
+        resourceType: 'email_draft',
+        resourceId: draft.id,
+        affectedCount: 1
+      }, request.log)
+      reply.code(202)
+      return { queued: true, draft }
+    } catch (error) {
+      reply.code(error instanceof TypeError ? 400 : 409)
+      return { error: error.message || 'Email could not be queued' }
     }
   })
 

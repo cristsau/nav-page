@@ -1,12 +1,21 @@
 import { createCipheriv, createDecipheriv, randomBytes } from 'node:crypto'
+import {
+  brotliCompressSync,
+  brotliDecompressSync,
+  constants as zlibConstants
+} from 'node:zlib'
 import { config } from '../config.js'
 import { readOwnerSecretFile } from './ownerSecretFile.js'
 
-const VERSION = 1
+const LEGACY_VERSION = 1
+const VERSION = 2
 const IV_BYTES = 12
 const TAG_BYTES = 16
 export const EMAIL_ENCRYPTION_MAX_PLAINTEXT_BYTES = 900_000
-const AAD_PREFIX = 'domo-nav-email:v1'
+const AAD_PREFIXES = Object.freeze({
+  [LEGACY_VERSION]: 'domo-nav-email:v1',
+  [VERSION]: 'domo-nav-email:v2'
+})
 let cachedKey = null
 let cachedPath = ''
 
@@ -41,12 +50,14 @@ export async function loadEmailEncryptionKey(
   return key
 }
 
-function aadForContext(context = '') {
+function aadForContext(context = '', version = VERSION) {
   const normalized = String(context || '').normalize('NFKC').trim()
   if (normalized.length > 240 || /[\u0000-\u001F\u007F]/.test(normalized)) {
     throw new TypeError('Email encryption context is invalid')
   }
-  return Buffer.from(`${AAD_PREFIX}:${normalized}`, 'utf8')
+  const prefix = AAD_PREFIXES[version]
+  if (!prefix) throw new Error('Email ciphertext version is unsupported')
+  return Buffer.from(`${prefix}:${normalized}`, 'utf8')
 }
 
 export function encryptEmailPayloadWithKey(payload, key, { context = '' } = {}) {
@@ -54,26 +65,40 @@ export function encryptEmailPayloadWithKey(payload, key, { context = '' } = {}) 
   if (!plaintext.length || plaintext.length > EMAIL_ENCRYPTION_MAX_PLAINTEXT_BYTES) {
     throw new Error('Email payload is empty or too large')
   }
+  const compressed = brotliCompressSync(plaintext, {
+    params: {
+      [zlibConstants.BROTLI_PARAM_QUALITY]: 4,
+      [zlibConstants.BROTLI_PARAM_SIZE_HINT]: plaintext.length
+    }
+  })
   const iv = randomBytes(IV_BYTES)
   const cipher = createCipheriv('aes-256-gcm', key, iv)
-  cipher.setAAD(aadForContext(context))
-  const ciphertext = Buffer.concat([cipher.update(plaintext), cipher.final()])
+  cipher.setAAD(aadForContext(context, VERSION))
+  const ciphertext = Buffer.concat([cipher.update(compressed), cipher.final()])
   const tag = cipher.getAuthTag()
   return Buffer.concat([Buffer.from([VERSION]), iv, tag, ciphertext])
 }
 
 export function decryptEmailPayloadWithKey(encrypted, key, { context = '' } = {}) {
   const input = Buffer.isBuffer(encrypted) ? encrypted : Buffer.from(encrypted || [])
-  if (input.length < 1 + IV_BYTES + TAG_BYTES + 2 || input[0] !== VERSION) {
+  const version = input[0]
+  if (
+    input.length < 1 + IV_BYTES + TAG_BYTES + 2
+    || ![LEGACY_VERSION, VERSION].includes(version)
+  ) {
     throw new Error('Email ciphertext format is invalid')
   }
   const iv = input.subarray(1, 1 + IV_BYTES)
   const tag = input.subarray(1 + IV_BYTES, 1 + IV_BYTES + TAG_BYTES)
   const ciphertext = input.subarray(1 + IV_BYTES + TAG_BYTES)
   const decipher = createDecipheriv('aes-256-gcm', key, iv)
-  decipher.setAAD(aadForContext(context))
+  decipher.setAAD(aadForContext(context, version))
   decipher.setAuthTag(tag)
-  const plaintext = Buffer.concat([decipher.update(ciphertext), decipher.final()])
+  const decrypted = Buffer.concat([decipher.update(ciphertext), decipher.final()])
+  const plaintext = version === VERSION ? brotliDecompressSync(decrypted) : decrypted
+  if (plaintext.length > EMAIL_ENCRYPTION_MAX_PLAINTEXT_BYTES) {
+    throw new Error('Email decrypted payload is too large')
+  }
   return JSON.parse(plaintext.toString('utf8'))
 }
 

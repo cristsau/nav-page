@@ -66,6 +66,49 @@ export function fetchEmailMessage({ accountId, locationId, folderId } = {}) {
   )
 }
 
+export function requestEmailAi(messageId, {
+  action,
+  instruction = '',
+  language = ''
+} = {}) {
+  const payload = { action: String(action || '').trim() }
+  const optionalFields = {
+    instruction: String(instruction || '').trim(),
+    language: String(language || '').trim()
+  }
+  for (const [key, value] of Object.entries(optionalFields)) {
+    if (value) payload[key] = value
+  }
+  return request(`/email/messages/${requiredId(messageId, 'Email message id')}/ai`, {
+    method: 'POST',
+    body: JSON.stringify(payload)
+  })
+}
+
+export function createEmailDraft(payload = {}) {
+  return request('/email/drafts', {
+    method: 'POST',
+    body: JSON.stringify(payload)
+  })
+}
+
+export function fetchEmailDraft(draftId) {
+  return request(`/email/drafts/${requiredId(draftId, 'Email draft id')}`, {
+    method: 'GET',
+    cache: 'no-store'
+  })
+}
+
+export function confirmEmailDraft(draftId, contentHash) {
+  return request(`/email/drafts/${requiredId(draftId, 'Email draft id')}/send`, {
+    method: 'POST',
+    body: JSON.stringify({
+      confirm: true,
+      contentHash: String(contentHash || '').trim()
+    })
+  })
+}
+
 export function openEmailEventStream({ accountId, lastEventId = '', signal } = {}) {
   const query = new URLSearchParams({ accountId: String(accountId || '') })
   const headers = { Accept: 'text/event-stream' }

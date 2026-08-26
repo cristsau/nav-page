@@ -5,6 +5,9 @@ import { assertSafeOutboundEndpoint } from './outboundEndpoints.js'
 import { getUserSettingValue } from './userSettings.js'
 import { AI_USAGE_FEATURES } from './aiUsage.js'
 import { recordRuntimeAiUsageSafely } from './aiUsageRuntime.js'
+import { redactEmailForAi } from './emailPrivacy.js'
+
+export { redactEmailForAi } from './emailPrivacy.js'
 
 const MAX_SUBJECT_LENGTH = 500
 const MAX_BODY_LENGTH = 6000
@@ -19,19 +22,6 @@ function normalizeText(value, maximum) {
     .replace(/[\u0000-\u0008\u000B\u000C\u000E-\u001F\u007F]/g, ' ')
     .replace(/\s+/g, ' ')
     .trim()
-    .slice(0, maximum)
-}
-
-export function redactEmailForAi(value, maximum = MAX_BODY_LENGTH) {
-  return normalizeText(value, maximum * 2)
-    .replace(/https?:\/\/[^\s<>'"]+/giu, '[LINK_REDACTED]')
-    .replace(/\b[A-Z0-9._%+-]+@[A-Z0-9.-]+\.[A-Z]{2,}\b/giu, '[EMAIL_REDACTED]')
-    .replace(/\b(?:Bearer\s+)?(?:sk|rk|pk)-[A-Za-z0-9_-]{8,}\b/giu, '[SECRET_REDACTED]')
-    .replace(/\b(?:api[ _-]?key|password|passwd|token|secret|authorization)\b\s*[:=]\s*\S+/giu, '[SECRET_REDACTED]')
-    .replace(/\b(?:验证码|verification code|one[- ]time code|otp)\D{0,12}\d{4,10}\b/giu, '[OTP_REDACTED]')
-    .replace(/(?<!\d)1[3-9]\d{9}(?!\d)/g, '[PHONE_REDACTED]')
-    .replace(/\b\d{6,8}\b/g, '[NUMERIC_CODE_REDACTED]')
-    .replace(/\b(?:\d[ -]*?){13,19}\b/g, '[CARD_REDACTED]')
     .slice(0, maximum)
 }
 

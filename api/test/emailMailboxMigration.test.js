@@ -6,6 +6,10 @@ const migrationUrl = new URL(
   '../src/db/migrations/035_email_mailbox_foundation.sql',
   import.meta.url
 )
+const smartMailMigrationUrl = new URL(
+  '../src/db/migrations/036_email_ai_drafts_retention.sql',
+  import.meta.url
+)
 const verifierUrl = new URL('../src/db/verifyMigrations.js', import.meta.url)
 
 test('mailbox foundation models accounts, folders, messages and remote identities', async () => {
@@ -75,4 +79,45 @@ test('migration verifier checks mailbox definitions instead of names alone', asy
   assert.match(verifier, /email_events_message_user_fkey/)
   assert.match(verifier, /expectedType === 'numeric'/)
   assert.match(verifier, /await verifyEmailMailboxSchema\(\)/)
+})
+
+test('smart mail migration scopes mailbox cursors per user and stores encrypted drafts', async () => {
+  const migration = await readFile(smartMailMigrationUrl, 'utf8')
+
+  assert.match(
+    migration,
+    /ADD CONSTRAINT email_mailbox_state_pkey PRIMARY KEY \(user_id, source_key\)/
+  )
+  assert.match(migration, /CREATE TABLE IF NOT EXISTS email_drafts \(/)
+  assert.match(migration, /payload_encrypted BYTEA NOT NULL/)
+  assert.match(migration, /content_hash CHAR\(64\) NOT NULL/)
+  assert.match(migration, /FOREIGN KEY \(account_id, user_id\)[\s\S]*REFERENCES email_accounts\(id, user_id\) ON DELETE CASCADE/)
+  assert.match(migration, /status IN \('draft', 'queued', 'sent', 'failed'\)/)
+  assert.match(migration, /status = 'queued' AND confirmed_at IS NOT NULL AND outbox_id IS NOT NULL/)
+  assert.doesNotMatch(migration, /\n\s*(?:to|cc|bcc|subject|body|text_body|html_body)\s+(?:TEXT|VARCHAR)/i)
+})
+
+test('smart mail outbox requires encrypted confirmed user payloads and bounded retention', async () => {
+  const [migration, verifier] = await Promise.all([
+    readFile(smartMailMigrationUrl, 'utf8'),
+    readFile(verifierUrl, 'utf8')
+  ])
+
+  for (const column of [
+    'user_id UUID',
+    'account_id UUID',
+    'payload_encrypted BYTEA',
+    'content_hash CHAR(64)',
+    'confirmed_at TIMESTAMPTZ'
+  ]) {
+    assert.match(migration, new RegExp(column.replace(/[()]/g, '\\$&')))
+  }
+  assert.match(migration, /message_type <> 'user\.mail'[\s\S]*confirmed_at IS NOT NULL[\s\S]*sensitive = TRUE/)
+  assert.match(migration, /status IN \('pending', 'sending', 'failed'\)[\s\S]*payload_encrypted IS NOT NULL/)
+  assert.match(migration, /status IN \('sent', 'expired'\)[\s\S]*payload_encrypted IS NULL/)
+  assert.match(migration, /octet_length\(payload_encrypted\) BETWEEN 32 AND 1048576/)
+  assert.match(migration, /VALUES \('email_cache_retention'\)/)
+  assert.match(verifier, /email_drafts_outbox_id_key/)
+  assert.match(verifier, /email draft outbox unique binding/)
+  assert.match(verifier, /unique \(outbox_id\)/)
 })
