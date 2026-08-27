@@ -88,6 +88,9 @@ export function classifySmtpRecipientOutcome(result) {
   if (rejectedCount > 0) {
     return { status: 'rejected', acceptedCount, rejectedCount }
   }
+  if (acceptedCount === 0) {
+    return { status: 'ambiguous', acceptedCount, rejectedCount }
+  }
   return { status: 'accepted', acceptedCount, rejectedCount }
 }
 
@@ -633,6 +636,11 @@ export async function deliverMailOutbox({
           rejectedError.code = SMTP_DELIVERY_ERROR_CODES.allRecipientsRejected
           rejectedError.command = 'RCPT TO'
           throw rejectedError
+        }
+        if (recipientOutcome.status === 'ambiguous') {
+          const ambiguousError = new Error('SMTP returned no accepted or rejected recipients')
+          ambiguousError.code = SMTP_DELIVERY_ERROR_CODES.ambiguous
+          throw ambiguousError
         }
         smtpAccepted = true
         smtpOutcome = recipientOutcome.status

@@ -2277,7 +2277,7 @@ async function verifyEmailSentAppendSchema() {
       'appended', 'blocked', 'cancelled', 'expired'
     ]],
     ['email_sent_append_jobs_message_id_check', [
-      'char_length(message_id)', '3', '998', 'message_id', '^<'
+      'char_length', 'message_id', '3', '998', '^<'
     ]],
     ['email_sent_append_jobs_nav_id_check', ['nav_id', '[0-9a-f]{24}']],
     ['email_sent_append_jobs_mime_sha256_check', ['mime_sha256', '[0-9a-f]{64}']],
@@ -2289,7 +2289,7 @@ async function verifyEmailSentAppendSchema() {
       'append_attempt_count', '>= 0', 'reconcile_count'
     ]],
     ['email_sent_append_jobs_folder_path_check', [
-      'sent_folder_path is null', 'char_length(sent_folder_path)',
+      'sent_folder_path is null', 'char_length', 'sent_folder_path',
       '1', '512', '[:cntrl:]'
     ]],
     ['email_sent_append_jobs_uid_validity_check', [

@@ -485,6 +485,58 @@ test('a rejected sendMail promise becomes ambiguous and is never returned to ret
   )), false)
 })
 
+test('an empty resolved SMTP result is ambiguous and is never reported as sent', async () => {
+  const message = {
+    id: OUTBOX_ID,
+    user_id: null,
+    message_type: 'registration.approved',
+    status: 'pending',
+    attempt_count: 0,
+    recipient: 'recipient@example.test',
+    subject: 'Approved',
+    text_body: 'Body',
+    html_body: '',
+    sensitive: true
+  }
+  const client = outboxClient(async (sql) => {
+    if (/pg_try_advisory_lock/.test(sql)) return { rows: [{ acquired: true }] }
+    if (/WHERE status = 'sending' AND updated_at/.test(sql)) return { rowCount: 0, rows: [] }
+    if (/WHERE status IN \('pending', 'failed'\) AND attempt_count >=/.test(sql)) return { rowCount: 0, rows: [] }
+    if (/SELECT \* FROM mail_outbox/.test(sql)) return { rowCount: 1, rows: [message] }
+    if (/SET status = 'sending'/.test(sql)) return { rowCount: 1, rows: [{ id: OUTBOX_ID }] }
+    if (/SET status = 'expired', attempt_count = attempt_count \+ 1/.test(sql)) return { rowCount: 1, rows: [] }
+    if (/SELECT COUNT\(\*\)::integer AS count FROM mail_outbox/.test(sql)) return { rows: [{ count: 0 }] }
+    if (/pg_advisory_unlock/.test(sql)) return { rows: [{ released: true }] }
+    return { rowCount: 1, rows: [] }
+  })
+  let sendCalls = 0
+  const transport = {
+    async sendMail() {
+      sendCalls += 1
+      return { accepted: [], rejected: [] }
+    },
+    close() {}
+  }
+  const summary = await deliverMailOutbox({
+    poolInstance: { async connect() { return client } },
+    policy: { maxAttempts: 3, batchSize: 5, intervalSeconds: 30 },
+    runtimeConfig: {
+      smtpFromAddress: 'sender@example.test',
+      smtpFromName: 'DOMO NAV'
+    },
+    transportFactory: async () => transport
+  })
+  assert.equal(sendCalls, 1)
+  assert.equal(summary.sent, 0)
+  assert.equal(summary.failed, 1)
+  assert.equal(summary.expired, 1)
+  const ambiguousUpdate = client.queries.find(({ sql }) => /AMBIGUOUS_DELIVERY_STATE/.test(sql))
+  assert.ok(ambiguousUpdate)
+  assert.equal(client.queries.some(({ sql }) => (
+    /UPDATE mail_outbox/.test(sql) && /SET status = 'failed'/.test(sql)
+  )), false)
+})
+
 test('a partially accepted SMTP result becomes terminal manual review without whole-message retry', async () => {
   const message = {
     id: OUTBOX_ID,
@@ -557,6 +609,14 @@ test('SMTP recipient result classification never exposes recipient values', () =
   assert.deepEqual(
     classifySmtpRecipientOutcome({ accepted: [], rejected: ['rejected@example.test'] }),
     { status: 'rejected', acceptedCount: 0, rejectedCount: 1 }
+  )
+  assert.deepEqual(
+    classifySmtpRecipientOutcome({ accepted: [], rejected: [] }),
+    { status: 'ambiguous', acceptedCount: 0, rejectedCount: 0 }
+  )
+  assert.deepEqual(
+    classifySmtpRecipientOutcome({}),
+    { status: 'ambiguous', acceptedCount: 0, rejectedCount: 0 }
   )
 })
 
