@@ -211,6 +211,10 @@ test('CLI and orchestrator keep secrets out of argv, environment values and outp
   ])
   assert.match(cli, /MAX_STDIN_BYTES/)
   assert.match(cli, /MAIL_ACCEPTANCE_FIXTURE_ERROR\|code=/)
+  assert.match(cli, /applyManagedIntegrationsToRuntime\(\)/)
+  assert.ok(
+    cli.indexOf('applyManagedIntegrationsToRuntime()') < cli.indexOf('withTransaction((client)')
+  )
   assert.match(cli, /withTransaction/)
   assert.doesNotMatch(cli, /process\.env\.(?:PASSWORD|USERNAME)/)
   assert.match(shell, /--rawfile username "\$NAV_ACCEPTANCE_USERNAME_FILE"/)

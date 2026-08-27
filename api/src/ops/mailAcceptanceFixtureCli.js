@@ -4,6 +4,7 @@ import {
   MailAcceptanceFixtureError,
   prepareMailAcceptanceFixture
 } from './mailAcceptanceFixture.js'
+import { applyManagedIntegrationsToRuntime } from '../lib/managedIntegrations.js'
 
 const MAX_STDIN_BYTES = 8 * 1024
 
@@ -29,6 +30,12 @@ async function main() {
   if (!['prepare', 'cleanup'].includes(command)) {
     throw new MailAcceptanceFixtureError('INVALID_COMMAND')
   }
+  // The API server and mail worker load settings stored under
+  // NAV_MANAGED_INTEGRATIONS_DIR during startup. This CLI runs as a separate
+  // Node process inside the same image, so it must apply that document too;
+  // otherwise production installations that keep the mailbox encryption key
+  // in the managed integration directory cannot create the encrypted fixture.
+  await applyManagedIntegrationsToRuntime()
   const input = await readJsonInput()
   const result = await withTransaction((client) => (
     command === 'prepare'
