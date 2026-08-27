@@ -240,6 +240,7 @@ test('migration verifier validates notification rule ownership, encryption and d
   assert.match(verifier, /email_events_notification_rule_fkey/)
   assert.match(verifier, /idx_email_notification_rules_active/)
   assert.match(verifier, /idx_email_events_pending_notification_digest/)
+  assert.match(verifier, /notification_action = 'digest'::text/)
   assert.match(verifier, /\['notification_reason', 'text', 'NO', "''::text"\]/)
   assert.match(verifier, /\['notification_rule_id', 'uuid', 'YES', null\]/)
   assert.match(verifier, /\['notification_evaluated_at', 'timestamptz', 'NO', 'now\(\)'\]/)
