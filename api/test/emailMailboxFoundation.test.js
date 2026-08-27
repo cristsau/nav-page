@@ -109,9 +109,16 @@ test('mailbox REST uses user isolation, keyset pagination and metadata-only SSE'
   assert.match(route, /refreshEmailDraftContentHash/)
   assert.match(route, /id: row\.location_id/)
   assert.match(route, /canonicalMessageId: row\.message_id/)
+  const unavailableSubjectAt = route.indexOf(
+    "subject: '邮件内容暂时无法解密'",
+    route.indexOf("fastify.get('/email/accounts/:accountId/messages'")
+  )
+  const unavailableFallbackStart = route.lastIndexOf('message: {', unavailableSubjectAt)
+  const unavailableFallbackEnd = route.indexOf('receivedAt: row.received_at', unavailableSubjectAt)
+  assert.ok(unavailableSubjectAt >= 0 && unavailableFallbackStart >= 0 && unavailableFallbackEnd > unavailableSubjectAt)
   const unavailableFallback = route.slice(
-    route.indexOf("subject: '邮件内容暂时无法解密'", route.indexOf("fastify.get('/email/accounts/:accountId/messages'")) - 160,
-    route.indexOf('receivedAt: row.received_at', route.indexOf("subject: '邮件内容暂时无法解密'"))
+    unavailableFallbackStart,
+    unavailableFallbackEnd
   )
   assert.match(unavailableFallback, /id: row\.location_id/)
   assert.match(unavailableFallback, /canonicalMessageId: row\.message_id/)
