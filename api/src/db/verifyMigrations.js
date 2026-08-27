@@ -1924,7 +1924,7 @@ async function verifyEmailNotificationRuleSchema() {
       'expires_at', 'where ((enabled = true)', 'expires_at is not null'
     ]],
     ['idx_email_events_pending_notification_digest', [
-      'user_id', 'received_at', 'id', "notification_action = 'digest'::text", 'digested_at is null'
+      'user_id', 'received_at', 'id', 'notification_action', "'digest'::text", 'digested_at is null'
     ]],
     ['idx_email_events_user_category', [
       'user_id', 'category', 'received_at desc', 'id'
