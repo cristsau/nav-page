@@ -338,6 +338,7 @@ test('confirmed encrypted draft is delivered once, scrubbed and never sent twice
             if (Buffer.isBuffer(attachment.content)) attachment.content.fill(0)
           }
         }
+        return { accepted: message.envelope.to, rejected: [] }
       },
       close() {}
     }
@@ -559,6 +560,7 @@ test('attachment ciphertext lifecycle reaches an encrypted pending Sent job and 
               if (Buffer.isBuffer(item.content)) item.content.fill(0)
             }
           }
+          return { accepted: message.envelope.to, rejected: [] }
         },
         close() {}
       })
