@@ -78,6 +78,12 @@ The acceptance command receives only credential file paths:
   NAV_ACCEPTANCE_RUN_ID
   NAV_ACCEPTANCE_EPHEMERAL=true
 
+It also receives the already verified non-secret container/database targets:
+  NAV_ACCEPTANCE_API_CONTAINER
+  NAV_ACCEPTANCE_DATABASE_CONTAINER
+  NAV_ACCEPTANCE_DATABASE_NAME
+  NAV_ACCEPTANCE_DATABASE_USER
+
 The wrapper never reads or overwrites the real administrator credential files.
 EOF
 }
@@ -673,6 +679,10 @@ export NAV_ACCEPTANCE_USERNAME_FILE="$USERNAME_FILE"
 export NAV_ACCEPTANCE_PASSWORD_FILE="$PASSWORD_FILE"
 export NAV_ACCEPTANCE_RUN_ID="$run_id"
 export NAV_ACCEPTANCE_EPHEMERAL=true
+export NAV_ACCEPTANCE_API_CONTAINER="$API_CONTAINER"
+export NAV_ACCEPTANCE_DATABASE_CONTAINER="$DATABASE_CONTAINER"
+export NAV_ACCEPTANCE_DATABASE_NAME="$DATABASE_NAME"
+export NAV_ACCEPTANCE_DATABASE_USER="$DATABASE_USER"
 
 set +e
 setsid timeout \

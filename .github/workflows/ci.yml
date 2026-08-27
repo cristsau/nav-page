@@ -97,8 +97,11 @@ jobs:
           bash -n scripts/release/nav-with-ephemeral-admin.sh
           bash -n scripts/release/test-nav-with-ephemeral-admin.sh
           bash -n scripts/release/accept-mail-workspace.sh
+          bash -n scripts/release/prepare-mail-fixture-and-accept.sh
           bash -n scripts/release/check-email-notification-migration.sh
-          shellcheck --severity=warning scripts/release/accept-mail-workspace.sh
+          shellcheck --severity=warning \
+            scripts/release/accept-mail-workspace.sh \
+            scripts/release/prepare-mail-fixture-and-accept.sh
           shellcheck --severity=warning scripts/release/check-email-notification-migration.sh
 
       - name: Validate backup and recovery shell
