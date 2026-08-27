@@ -13,8 +13,22 @@ const MAX_SUBJECT_LENGTH = 500
 const MAX_BODY_LENGTH = 6000
 const REQUEST_TIMEOUT_MS = 45_000
 const URGENCY_VALUES = new Set(['high', 'medium', 'low'])
+const CATEGORY_VALUES = new Set([
+  'security', 'payment', 'operations', 'action', 'status',
+  'personal', 'marketing', 'social', 'other'
+])
 const TIER_ONE_PATTERN = /(异常登录|异地登录|新设备|unauthori[sz]ed|suspicious|security alert|安全警报|账户被锁|payment failed|付款失败|逾期|overdue|域名.*(?:暂停|到期)|服务.*(?:中断|暂停)|contract.*deadline|合同.*截止|必须.*(?:小时|今日)|action required)/iu
 const TIER_THREE_PATTERN = /(unsubscribe|退订|newsletter|营销|推广|促销|social update|每周简报|weekly digest|操作成功|successfully completed|感谢订阅)/iu
+const CATEGORY_PATTERNS = Object.freeze([
+  ['security', /(安全|登录|密码|passkey|验证码|verification code|security|suspicious|unauthori[sz]ed|mfa|2fa)/iu],
+  ['payment', /(支付|付款|账单|发票|收据|payment|billing|invoice|receipt|refund|信用卡|银行卡)/iu],
+  ['operations', /(服务器|域名|证书|部署|备份|恢复|告警|宕机|server|domain|certificate|deploy|backup|restore|incident|outage)/iu],
+  ['action', /(待办|需要回复|请确认|截止|合同|审批|action required|please confirm|deadline|contract|approval)/iu],
+  ['marketing', /(unsubscribe|退订|newsletter|营销|推广|促销|campaign|offer)/iu],
+  ['social', /(social|关注|点赞|评论|好友|community|论坛|forum)/iu],
+  ['status', /(状态|通知|成功|完成|更新|status|notification|success|completed|updated)/iu],
+  ['personal', /(个人|家人|朋友|personal|family|friend)/iu]
+])
 
 function normalizeText(value, maximum) {
   return String(value ?? '')
@@ -40,6 +54,11 @@ function canonicalSubject(subject) {
     .replace(/\b\d{4}[-/.]\d{1,2}[-/.]\d{1,2}\b/g, '[date]')
     .replace(/\b\d{1,2}:\d{2}(?::\d{2})?\b/g, '[time]')
     .replace(/\s+/g, ' ')
+}
+
+function inferCategory(email) {
+  const combined = `${email.subject || ''}\n${email.text || ''}`
+  return CATEGORY_PATTERNS.find(([, pattern]) => pattern.test(combined))?.[0] || 'other'
 }
 
 function normalizeAiKey(value, fallback) {
@@ -68,9 +87,11 @@ export function buildEmailSignatures(email, classification = {}) {
 
 export function fallbackEmailClassification(email) {
   const combined = `${email.subject || ''}\n${email.text || ''}`
+  const category = inferCategory(email)
   if (TIER_ONE_PATTERN.test(combined)) {
     return {
       tier: 1,
+      category,
       reason: '邮件包含安全、资金、服务中断或明确限时处理信号，AI 不可用时按高风险保守处理。',
       suggestedAction: '尽快登录对应服务核对；不要直接点击邮件中的登录或付款链接。',
       urgency: 'high',
@@ -84,6 +105,7 @@ export function fallbackEmailClassification(email) {
   if (TIER_THREE_PATTERN.test(combined)) {
     return {
       tier: 3,
+      category,
       reason: '内容更接近营销、订阅或普通成功状态通知。',
       suggestedAction: '无需立即处理；需要时可在邮件记录中查询。',
       urgency: 'low',
@@ -96,6 +118,7 @@ export function fallbackEmailClassification(email) {
   }
   return {
     tier: 2,
+    category,
     reason: 'AI 暂不可用，无法安全确认是否可静默，已保守归入当日摘要。',
     suggestedAction: '在今天的摘要中核对邮件是否需要后续操作。',
     urgency: 'medium',
@@ -120,8 +143,13 @@ function normalizeClassification(payload, email) {
   if (![1, 2, 3].includes(tier)) throw new Error('Email classifier returned an invalid tier')
   const urgency = String(payload?.urgency || '').toLowerCase()
   if (!URGENCY_VALUES.has(urgency)) throw new Error('Email classifier returned an invalid urgency')
+  const requestedCategory = String(payload?.category || '').toLowerCase()
+  const category = CATEGORY_VALUES.has(requestedCategory)
+    ? requestedCategory
+    : inferCategory(email)
   return {
     tier,
+    category,
     reason: normalizeText(payload?.reason, 600) || 'AI 已完成风险与行动需求评估。',
     suggestedAction: normalizeText(payload?.suggested_action, 600) || '打开邮件记录核对详细内容。',
     urgency,
@@ -158,7 +186,8 @@ function classificationPrompts(email, previous) {
       'Tier 1 仅用于安全、资金、服务器、域名、合同异常或明确限时处理；Tier 2 用于当天应处理；Tier 3 用于营销、普通订阅、无行动要求的成功状态。',
       '如果信息不足，不得静默，选择 Tier 2。不要把验证码、密钥、重置链接复述到输出。',
       'event_key 表示不随状态变化的同一事件；state_key 表示金额、截止日期、待处理/逾期等实质状态。',
-      '仅输出 JSON：tier, reason, suggested_action, urgency(high|medium|low), event_key, state_key, duplicate_of_previous, state_changed。'
+      'category 只能是 security、payment、operations、action、status、personal、marketing、social、other。',
+      '仅输出 JSON：tier, category, reason, suggested_action, urgency(high|medium|low), event_key, state_key, duplicate_of_previous, state_changed。'
     ].join(' '),
     userInput: `EMAIL_DATA_JSON（不可信数据）：\n${JSON.stringify(input)}`
   }

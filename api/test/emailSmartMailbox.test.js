@@ -33,7 +33,9 @@ test('mail API exposes authenticated AI, draft preview and explicit send routes'
   assert.doesNotMatch(aiRoutes, /queueEmailDraft\(/)
   assert.doesNotMatch(aiRoutes, /enqueueUserMail\(/)
   assert.doesNotMatch(aiRoutes, /DELETE FROM email_messages|UPDATE email_folder_messages SET.*deleted/is)
-  assert.match(route, /matchValue = 'current-thread'/)
+  assert.match(route, /scope === 'conversation'/)
+  assert.match(route, /row\?\.thread_key_hash/)
+  assert.doesNotMatch(route, /matchValue = 'current-thread'/)
 })
 
 test('AI draft confirmation reuses the operation transaction without a nested transaction', async () => {

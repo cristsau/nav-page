@@ -1690,7 +1690,9 @@ async function verifyEmailAssistantSchema() {
       'sender_hash', 'received_at', 'tier', 'urgency', 'deterministic_signature',
       'event_signature', 'state_signature', 'duplicate_of',
       'classification_status', 'provider', 'model', 'content_encrypted',
-      'notified_at', 'digested_at', 'created_at', 'updated_at', 'email_message_id'
+      'notified_at', 'digested_at', 'created_at', 'updated_at', 'email_message_id',
+      'category', 'importance_score', 'notification_action', 'notification_reason',
+      'notification_rule_id', 'notification_evaluated_at'
     ]],
     ['assistant_conversations', [
       'id', 'user_id', 'title', 'model_mode', 'model', 'reasoning_effort',
@@ -1796,6 +1798,193 @@ async function verifyEmailAssistantSchema() {
     WHERE schemaname = current_schema() AND indexname = ANY($1::text[])
   `, [expectedIndexes])
   assertExactSet('email assistant indexes', indexes.rows.map((row) => row.indexname), expectedIndexes)
+}
+
+async function verifyEmailNotificationRuleSchema() {
+  const expectedColumns = [
+    'id', 'user_id', 'account_id', 'scope', 'action', 'priority',
+    'match_value_digest', 'match_value_encrypted', 'enabled',
+    'critical_override_confirmed', 'expires_at', 'explanation',
+    'hit_count', 'last_hit_at', 'created_at', 'updated_at'
+  ]
+  const columns = await query(`
+    SELECT column_name
+    FROM information_schema.columns
+    WHERE table_schema = current_schema()
+      AND table_name = 'email_notification_rules'
+  `)
+  assertExactSet(
+    'email notification rule columns',
+    columns.rows.map((row) => row.column_name),
+    expectedColumns
+  )
+
+  const criticalColumnSpecs = [
+    ['id', 'uuid', 'NO', 'gen_random_uuid()'],
+    ['user_id', 'uuid', 'NO', null],
+    ['account_id', 'uuid', 'NO', null],
+    ['scope', 'varchar', 'NO', null],
+    ['action', 'varchar', 'NO', null],
+    ['priority', 'int2', 'NO', null],
+    ['match_value_digest', 'bpchar', 'NO', null],
+    ['match_value_encrypted', 'bytea', 'NO', null],
+    ['enabled', 'bool', 'NO', 'true'],
+    ['critical_override_confirmed', 'bool', 'NO', 'false'],
+    ['hit_count', 'int8', 'NO', '0']
+  ]
+  const criticalColumns = await query(`
+    SELECT column_name, udt_name, is_nullable, column_default
+    FROM information_schema.columns
+    WHERE table_schema = current_schema()
+      AND table_name = 'email_notification_rules'
+      AND column_name = ANY($1::text[])
+  `, [criticalColumnSpecs.map(([columnName]) => columnName)])
+  for (const [columnName, expectedType, expectedNullable, expectedDefault] of criticalColumnSpecs) {
+    const column = criticalColumns.rows.find((row) => row.column_name === columnName)
+    if (!column) throw new Error(`email_notification_rules.${columnName} column is missing`)
+    if (column.udt_name !== expectedType || column.is_nullable !== expectedNullable) {
+      throw new Error(
+        `email_notification_rules.${columnName} type mismatch: expected ${expectedType}/${expectedNullable}, `
+        + `received ${column.udt_name}/${column.is_nullable}`
+      )
+    }
+    if (expectedDefault !== null && !normalizeSqlDefinition(column.column_default).includes(expectedDefault)) {
+      throw new Error(`email_notification_rules.${columnName} default mismatch`)
+    }
+  }
+
+  const expectedConstraintDefinitions = new Map([
+    ['email_notification_rules_pkey', ['primary key (id)']],
+    ['email_notification_rules_user_id_fkey', [
+      'foreign key (user_id)', 'references users(id)', 'on delete cascade'
+    ]],
+    ['email_notification_rules_account_user_fkey', [
+      'foreign key (account_id, user_id)',
+      'references email_accounts(id, user_id)',
+      'on delete cascade'
+    ]],
+    ['email_notification_rules_scope_check', [
+      'scope', 'conversation', 'sender', 'domain', 'category', 'account'
+    ]],
+    ['email_notification_rules_action_check', [
+      'action', 'immediate', 'digest', 'in_app_only', 'silent'
+    ]],
+    ['email_notification_rules_priority_check', ['priority', '100', '200', '300', '400', '500']],
+    ['email_notification_rules_match_digest_check', ['match_value_digest', '^[0-9a-f]{64}$']],
+    ['email_notification_rules_match_ciphertext_size_check', [
+      'octet_length(match_value_encrypted)', '32', '65536'
+    ]],
+    ['email_notification_rules_explanation_check', ['char_length(explanation)', '600']],
+    ['email_notification_rules_hit_count_check', ['hit_count', '0']],
+    ['email_notification_rules_expiry_check', ['expires_at', 'created_at']],
+    ['email_notification_rules_identity_user_unique', ['unique (id, user_id)']],
+    ['email_notification_rules_identity_unique', [
+      'unique (user_id, account_id, scope, match_value_digest)'
+    ]],
+    ['email_events_notification_rule_fkey', [
+      'foreign key (notification_rule_id, user_id)',
+      'references email_notification_rules(id, user_id)',
+      'on delete set null (notification_rule_id)'
+    ]],
+    ['email_events_category_check', ['category', 'security', 'payment', 'operations', 'other']],
+    ['email_events_importance_score_check', ['importance_score', '0', '100']],
+    ['email_events_notification_action_check', [
+      'notification_action', 'immediate', 'digest', 'in_app_only', 'silent'
+    ]],
+    ['email_events_notification_reason_check', ['char_length(notification_reason)', '1000']]
+  ])
+  const constraints = await query(`
+    SELECT conname, convalidated, pg_get_constraintdef(oid) AS definition
+    FROM pg_constraint
+    WHERE connamespace = current_schema()::regnamespace
+      AND conname = ANY($1::text[])
+  `, [[...expectedConstraintDefinitions.keys()]])
+  assertExactSet(
+    'email notification rule constraints',
+    constraints.rows.map((row) => row.conname),
+    [...expectedConstraintDefinitions.keys()]
+  )
+  if (constraints.rows.some((row) => row.convalidated !== true)) {
+    throw new Error('email notification rule constraints must be validated')
+  }
+  for (const [constraintName, fragments] of expectedConstraintDefinitions) {
+    const constraint = constraints.rows.find((row) => row.conname === constraintName)
+    assertDefinitionIncludes(
+      `email notification rule constraint ${constraintName}`,
+      constraint?.definition,
+      fragments
+    )
+  }
+
+  const expectedIndexDefinitions = new Map([
+    ['idx_email_notification_rules_active', [
+      'user_id', 'account_id', 'enabled', 'priority desc', 'updated_at desc', 'id'
+    ]],
+    ['idx_email_notification_rules_expiry', [
+      'expires_at', 'where ((enabled = true)', 'expires_at is not null'
+    ]],
+    ['idx_email_events_pending_notification_digest', [
+      'user_id', 'received_at', 'id', "notification_action = 'digest'", 'digested_at is null'
+    ]],
+    ['idx_email_events_user_category', [
+      'user_id', 'category', 'received_at desc', 'id'
+    ]]
+  ])
+  const indexes = await query(`
+    SELECT indexname, indexdef
+    FROM pg_indexes
+    WHERE schemaname = current_schema()
+      AND indexname = ANY($1::text[])
+  `, [[...expectedIndexDefinitions.keys()]])
+  assertExactSet(
+    'email notification rule indexes',
+    indexes.rows.map((row) => row.indexname),
+    [...expectedIndexDefinitions.keys()]
+  )
+  for (const [indexName, fragments] of expectedIndexDefinitions) {
+    const index = indexes.rows.find((row) => row.indexname === indexName)
+    assertDefinitionIncludes(`email notification rule index ${indexName}`, index?.indexdef, fragments)
+  }
+
+  const eventColumns = await query(`
+    SELECT column_name, udt_name, is_nullable, column_default
+    FROM information_schema.columns
+    WHERE table_schema = current_schema()
+      AND table_name = 'email_events'
+      AND column_name = ANY($1::text[])
+  `, [[
+    'category', 'importance_score', 'notification_action',
+    'notification_reason', 'notification_rule_id', 'notification_evaluated_at'
+  ]])
+  assertExactSet(
+    'email notification decision columns',
+    eventColumns.rows.map((row) => row.column_name),
+    [
+      'category', 'importance_score', 'notification_action',
+      'notification_reason', 'notification_rule_id', 'notification_evaluated_at'
+    ]
+  )
+  const eventColumnSpecs = [
+    ['category', 'varchar', 'NO', "'other'::character varying"],
+    ['importance_score', 'int2', 'NO', '50'],
+    ['notification_action', 'varchar', 'NO', "'silent'::character varying"],
+    ['notification_reason', 'text', 'NO', "''::text"],
+    ['notification_rule_id', 'uuid', 'YES', null],
+    ['notification_evaluated_at', 'timestamptz', 'NO', 'now()']
+  ]
+  for (const [columnName, expectedType, expectedNullable, expectedDefault] of eventColumnSpecs) {
+    const column = eventColumns.rows.find((row) => row.column_name === columnName)
+    if (!column || column.udt_name !== expectedType || column.is_nullable !== expectedNullable) {
+      throw new Error(`email_events.${columnName} type or nullability mismatch`)
+    }
+    const actualDefault = normalizeSqlDefinition(column.column_default)
+    if (
+      (expectedDefault === null && actualDefault !== '')
+      || (expectedDefault !== null && !actualDefault.includes(expectedDefault))
+    ) {
+      throw new Error(`email_events.${columnName} default mismatch`)
+    }
+  }
 }
 
 async function verifyEmailMailboxSchema() {
@@ -2475,6 +2664,7 @@ async function main() {
   await verifyNotificationMailSchema()
   await verifyEmailAssistantSchema()
   await verifyEmailMailboxSchema()
+  await verifyEmailNotificationRuleSchema()
   await verifyEmailAttachmentSchema()
   await verifyEmailSentAppendSchema()
   await verifyAssistantAgentOperationsSchema()

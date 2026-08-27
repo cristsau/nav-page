@@ -41,6 +41,14 @@ import {
   EMAIL_ATTACHMENT_LIMITS
 } from '../lib/emailAttachmentStore.js'
 import { getEmailEventForUser, getEmailNotificationDetails } from '../lib/emailEvents.js'
+import {
+  deleteEmailNotificationRule,
+  listEmailNotificationRules,
+  previewEmailNotificationRule,
+  publicEmailNotificationDecision,
+  updateEmailNotificationRule,
+  upsertEmailNotificationRule
+} from '../lib/emailNotificationRules.js'
 import { validateImapConfig } from '../lib/emailIngestScheduler.js'
 import {
   decorateIncomingAttachmentMetadata,
@@ -247,16 +255,29 @@ function publicEmailAiResult(result, { cached = false } = {}) {
 }
 
 function boundedRuleProposal(data, { row, stored }) {
-  const scope = String(data?.scope || 'sender')
+  const requestedScope = String(data?.scope || 'sender').trim().toLowerCase()
+  const scope = requestedScope === 'thread' ? 'conversation' : requestedScope
   const sender = String(stored?.envelope?.sender?.address || '').trim().toLowerCase()
   const domain = sender.includes('@') ? sender.split('@').pop() : ''
   let matchValue = String(data?.matchValue || '').trim().slice(0, 320)
   if (scope === 'sender') matchValue = sender
   else if (scope === 'domain') matchValue = domain
-  else if (scope === 'thread') matchValue = 'current-thread'
+  else if (scope === 'conversation') matchValue = String(row?.thread_key_hash || '').trim().toLowerCase()
+  else if (scope === 'category') {
+    const categoryAliases = {
+      billing: 'payment',
+      receipt: 'payment',
+      ops: 'operations',
+      server: 'operations',
+      system: 'status'
+    }
+    matchValue = categoryAliases[matchValue.toLowerCase()] || matchValue.toLowerCase()
+  }
   return {
     scope,
-    action: String(data?.action || 'in_app_only'),
+    action: String(data?.action || 'in_app_only').trim().toLowerCase() === 'mute'
+      ? 'silent'
+      : String(data?.action || 'in_app_only').trim().toLowerCase(),
     matchValue,
     reason: String(data?.reason || '').trim().slice(0, 1_000),
     persisted: false
@@ -287,6 +308,9 @@ async function mapMailboxRow(row, { includeBody = false } = {}) {
       : undefined,
     receivedAt: row.received_at,
     internalDate: row.internal_date,
+    threadKey: row.thread_key_hash || null,
+    threadMessageCount: Number(row.thread_message_count || 1),
+    ...publicEmailNotificationDecision(row),
     sizeBytes: Number(row.size_bytes || 0),
     hasAttachments: Boolean(row.has_attachments),
     attachmentCount: Number(row.attachment_count || 0),
@@ -421,6 +445,138 @@ export default async function emailRoutes(fastify) {
     return { email }
   })
 
+  fastify.get('/email/notification-rules', async (request, reply) => {
+    await fastify.requireAuth(request, reply)
+    reply.header('Cache-Control', 'private, no-store')
+    const accountId = request.query?.accountId ? String(request.query.accountId) : null
+    try {
+      return {
+        rules: await listEmailNotificationRules({
+          userId: request.currentUser.id,
+          accountId
+        })
+      }
+    } catch (error) {
+      reply.code(Number(error?.statusCode) || (error instanceof TypeError ? 400 : 503))
+      return { error: error.message || 'Email notification rules could not be loaded' }
+    }
+  })
+
+  fastify.post('/email/notification-rules/preview', async (request, reply) => {
+    await fastify.requireAuth(request, reply)
+    reply.header('Cache-Control', 'private, no-store')
+    try {
+      const preview = await previewEmailNotificationRule({
+        userId: request.currentUser.id,
+        payload: request.body || {}
+      })
+      await recordSecurityEventBestEffort({
+        request,
+        eventType: 'email.notification_rule.preview',
+        outcome: 'success',
+        actorUserId: request.currentUser.id,
+        subjectUserId: request.currentUser.id,
+        resourceType: 'email_notification_rule',
+        affectedCount: preview.matchCount
+      }, request.log)
+      return preview
+    } catch (error) {
+      reply.code(Number(error?.statusCode) || (error instanceof TypeError ? 400 : 503))
+      return { error: error.message || 'Email notification rule could not be previewed' }
+    }
+  })
+
+  fastify.post('/email/notification-rules', async (request, reply) => {
+    await fastify.requireAuth(request, reply)
+    reply.header('Cache-Control', 'private, no-store')
+    try {
+      const result = await upsertEmailNotificationRule({
+        userId: request.currentUser.id,
+        payload: request.body || {}
+      })
+      await recordSecurityEventBestEffort({
+        request,
+        eventType: result.created
+          ? 'email.notification_rule.create'
+          : 'email.notification_rule.update',
+        outcome: 'success',
+        actorUserId: request.currentUser.id,
+        subjectUserId: request.currentUser.id,
+        resourceType: 'email_notification_rule',
+        resourceId: result.rule.id,
+        affectedCount: 1,
+        metadata: {
+          scope: result.rule.scope,
+          action: result.rule.action,
+          enabled: result.rule.enabled
+        }
+      }, request.log)
+      reply.code(result.created ? 201 : 200)
+      return result
+    } catch (error) {
+      reply.code(Number(error?.statusCode) || (error instanceof TypeError ? 400 : 503))
+      return {
+        error: error.message || 'Email notification rule could not be saved',
+        code: error?.code || undefined
+      }
+    }
+  })
+
+  fastify.patch('/email/notification-rules/:ruleId', async (request, reply) => {
+    await fastify.requireAuth(request, reply)
+    reply.header('Cache-Control', 'private, no-store')
+    try {
+      const rule = await updateEmailNotificationRule({
+        userId: request.currentUser.id,
+        ruleId: String(request.params.ruleId || ''),
+        payload: request.body || {}
+      })
+      await recordSecurityEventBestEffort({
+        request,
+        eventType: 'email.notification_rule.update',
+        outcome: 'success',
+        actorUserId: request.currentUser.id,
+        subjectUserId: request.currentUser.id,
+        resourceType: 'email_notification_rule',
+        resourceId: rule.id,
+        affectedCount: 1,
+        metadata: { action: rule.action, enabled: rule.enabled }
+      }, request.log)
+      return { rule }
+    } catch (error) {
+      reply.code(Number(error?.statusCode) || (error instanceof TypeError ? 400 : 503))
+      return {
+        error: error.message || 'Email notification rule could not be updated',
+        code: error?.code || undefined
+      }
+    }
+  })
+
+  fastify.delete('/email/notification-rules/:ruleId', async (request, reply) => {
+    await fastify.requireAuth(request, reply)
+    reply.header('Cache-Control', 'private, no-store')
+    try {
+      const result = await deleteEmailNotificationRule({
+        userId: request.currentUser.id,
+        ruleId: String(request.params.ruleId || '')
+      })
+      await recordSecurityEventBestEffort({
+        request,
+        eventType: 'email.notification_rule.delete',
+        outcome: 'success',
+        actorUserId: request.currentUser.id,
+        subjectUserId: request.currentUser.id,
+        resourceType: 'email_notification_rule',
+        resourceId: result.id,
+        affectedCount: 1
+      }, request.log)
+      return result
+    } catch (error) {
+      reply.code(Number(error?.statusCode) || (error instanceof TypeError ? 400 : 503))
+      return { error: error.message || 'Email notification rule could not be deleted' }
+    }
+  })
+
   fastify.get('/email/accounts', async (request, reply) => {
     await fastify.requireAuth(request, reply)
     reply.header('Cache-Control', 'private, no-store')
@@ -542,6 +698,14 @@ export default async function emailRoutes(fastify) {
         `SELECT message.id AS message_id, message.user_id, account.source_key,
                message.envelope_encrypted, message.content_encrypted,
                message.received_at, message.has_attachments, message.attachment_count,
+               message.thread_key_hash,
+               (SELECT COUNT(*)::integer
+                FROM email_messages AS thread_message
+                WHERE thread_message.account_id = message.account_id
+                  AND thread_message.user_id = message.user_id
+                  AND thread_message.thread_key_hash = message.thread_key_hash) AS thread_message_count,
+               event.tier, event.urgency, event.category, event.importance_score,
+               event.notification_action, event.notification_reason, event.notification_rule_id,
                location.id AS location_id, location.folder_id, location.internal_date,
               location.size_bytes, location.seen, location.answered, location.flagged,
               location.draft, location.deleted, location.keywords, location.updated_at
@@ -550,14 +714,24 @@ export default async function emailRoutes(fastify) {
          ON message.id = location.message_id
         AND message.account_id = location.account_id
         AND message.user_id = location.user_id
-        JOIN email_accounts AS account
+       JOIN email_accounts AS account
           ON account.id = location.account_id AND account.user_id = location.user_id
-        WHERE location.account_id = $1 AND location.folder_id = $2
-          AND location.user_id = $3 AND location.expunged_at IS NULL
-          ${filterSql}
-          AND ($4::timestamptz IS NULL OR (location.internal_date, location.id) < ($4::timestamptz, $5::uuid))
-        ORDER BY location.internal_date DESC, location.id DESC
-        LIMIT $6`,
+       LEFT JOIN LATERAL (
+         SELECT email_event.tier, email_event.urgency, email_event.category,
+                email_event.importance_score, email_event.notification_action,
+                email_event.notification_reason, email_event.notification_rule_id
+         FROM email_events AS email_event
+         WHERE email_event.email_message_id = message.id
+           AND email_event.user_id = message.user_id
+         ORDER BY email_event.received_at DESC, email_event.id DESC
+         LIMIT 1
+       ) AS event ON TRUE
+       WHERE location.account_id = $1 AND location.folder_id = $2
+         AND location.user_id = $3 AND location.expunged_at IS NULL
+         ${filterSql}
+         AND ($4::timestamptz IS NULL OR (location.internal_date, location.id) < ($4::timestamptz, $5::uuid))
+       ORDER BY location.internal_date DESC, location.id DESC
+       LIMIT $6`,
         [
           accountId,
           folderId,
@@ -607,6 +781,9 @@ export default async function emailRoutes(fastify) {
                 preview: '请检查服务器邮件加密密钥。',
                 receivedAt: row.received_at,
                 internalDate: row.internal_date,
+                threadKey: row.thread_key_hash || null,
+                threadMessageCount: Number(row.thread_message_count || 1),
+                ...publicEmailNotificationDecision(row),
                 flags: { seen: Boolean(row.seen), flagged: Boolean(row.flagged) },
                 unavailable: true
               }
@@ -659,6 +836,14 @@ export default async function emailRoutes(fastify) {
       `SELECT message.id AS message_id, message.user_id, account.source_key,
               message.envelope_encrypted, message.content_encrypted,
               message.received_at, message.has_attachments, message.attachment_count,
+              message.thread_key_hash,
+              (SELECT COUNT(*)::integer
+               FROM email_messages AS thread_message
+               WHERE thread_message.account_id = message.account_id
+                 AND thread_message.user_id = message.user_id
+                 AND thread_message.thread_key_hash = message.thread_key_hash) AS thread_message_count,
+              event.tier, event.urgency, event.category, event.importance_score,
+              event.notification_action, event.notification_reason, event.notification_rule_id,
               location.id AS location_id, location.folder_id, location.internal_date,
               location.size_bytes, location.seen, location.answered, location.flagged,
               location.draft, location.deleted, location.keywords
@@ -668,7 +853,17 @@ export default async function emailRoutes(fastify) {
        JOIN email_folder_messages AS location
          ON location.message_id = message.id
         AND location.account_id = message.account_id
-        AND location.user_id = message.user_id
+         AND location.user_id = message.user_id
+       LEFT JOIN LATERAL (
+         SELECT email_event.tier, email_event.urgency, email_event.category,
+                email_event.importance_score, email_event.notification_action,
+                email_event.notification_reason, email_event.notification_rule_id
+         FROM email_events AS email_event
+         WHERE email_event.email_message_id = message.id
+           AND email_event.user_id = message.user_id
+         ORDER BY email_event.received_at DESC, email_event.id DESC
+         LIMIT 1
+       ) AS event ON TRUE
        WHERE location.id = $1 AND location.account_id = $2 AND location.user_id = $3
          AND location.folder_id = $4 AND location.expunged_at IS NULL
        LIMIT 1`,

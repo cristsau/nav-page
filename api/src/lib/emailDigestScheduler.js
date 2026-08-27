@@ -49,14 +49,17 @@ export async function generateEmailDigests({ poolInstance, policy, now = new Dat
 
     const users = await client.query(
       `SELECT DISTINCT user_id FROM email_events
-       WHERE tier = 2 AND digested_at IS NULL AND duplicate_of IS NULL
+       WHERE COALESCE(notification_action, CASE WHEN tier = 2 THEN 'digest' ELSE 'silent' END) = 'digest'
+         AND digested_at IS NULL AND duplicate_of IS NULL
        ORDER BY user_id`
     )
     const summary = { generated: 0, emails: 0, remaining: 0, skipped: null }
     for (const user of users.rows) {
       const events = await client.query(
         `SELECT id FROM email_events
-         WHERE user_id = $1 AND tier = 2 AND digested_at IS NULL AND duplicate_of IS NULL
+         WHERE user_id = $1
+           AND COALESCE(notification_action, CASE WHEN tier = 2 THEN 'digest' ELSE 'silent' END) = 'digest'
+           AND digested_at IS NULL AND duplicate_of IS NULL
          ORDER BY received_at ASC, id ASC LIMIT $2`,
         [user.user_id, validated.batchSize]
       )
@@ -97,7 +100,8 @@ export async function generateEmailDigests({ poolInstance, policy, now = new Dat
     }
     const remaining = await client.query(
       `SELECT COUNT(*)::integer AS count FROM email_events
-       WHERE tier = 2 AND digested_at IS NULL AND duplicate_of IS NULL`
+       WHERE COALESCE(notification_action, CASE WHEN tier = 2 THEN 'digest' ELSE 'silent' END) = 'digest'
+         AND digested_at IS NULL AND duplicate_of IS NULL`
     )
     summary.remaining = Number(remaining.rows[0]?.count || 0)
     return summary

@@ -145,13 +145,13 @@ test('email AI normalizes structured analysis and constrained rule proposals', (
   assert.deepEqual(
     normalizeEmailAiStructuredResult('propose_notification_rule', JSON.stringify({
       scope: 'sender',
-      action: 'mute',
+      action: 'silent',
       matchValue: 'sender@example.test',
       reason: '低价值通知'
     })),
     {
       scope: 'sender',
-      action: 'mute',
+      action: 'silent',
       matchValue: 'sender@example.test',
       reason: '低价值通知'
     }

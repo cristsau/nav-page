@@ -70,7 +70,7 @@ export const EMAIL_AI_ACTIONS = Object.freeze({
   },
   propose_notification_rule: {
     label: '生成通知规则提议',
-    instruction: '仅返回 JSON 对象，字段为 scope、action、matchValue、reason。scope 只能是 thread、sender、domain、category；action 只能是 immediate、digest、in_app_only、mute。只生成受限规则预览，不保存、不启用规则。',
+    instruction: '仅返回 JSON 对象，字段为 scope、action、matchValue、reason。scope 只能是 conversation、sender、domain、category；action 只能是 immediate、digest、in_app_only、silent。只生成受限规则预览，不保存、不启用规则。',
     maxOutputTokens: 1_600,
     structured: true
   }
@@ -98,8 +98,8 @@ const STRUCTURED_CATEGORIES = new Set([
   'personal', 'marketing', 'system', 'other'
 ])
 const STRUCTURED_IMPORTANCE = new Set(['critical', 'important', 'normal', 'low'])
-const RULE_SCOPES = new Set(['thread', 'sender', 'domain', 'category'])
-const RULE_ACTIONS = new Set(['immediate', 'digest', 'in_app_only', 'mute'])
+const RULE_SCOPES = new Set(['conversation', 'sender', 'domain', 'category'])
+const RULE_ACTIONS = new Set(['immediate', 'digest', 'in_app_only', 'silent'])
 
 const REQUEST_TIMEOUT_MS = 45_000
 const CONTROL_CHARACTERS = /[\u0000-\u0008\u000B\u000C\u000E-\u001F\u007F]/g
