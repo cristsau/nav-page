@@ -13,6 +13,8 @@ function row(index, overrides = {}) {
   return {
     message_id: `00000000-0000-4000-8000-${String(index).padStart(12, '0')}`,
     account_id: '11111111-1111-4111-8111-111111111111',
+    folder_id: `33333333-3333-4333-8333-${String(index).padStart(12, '0')}`,
+    location_id: `44444444-4444-4444-8444-${String(index).padStart(12, '0')}`,
     user_id: '22222222-2222-4222-8222-222222222222',
     source_key: 'primary',
     canonical_hash: String(index).padStart(64, 'a').slice(-64),
@@ -81,10 +83,14 @@ test('cross-mail search scans a hard bounded recent window and returns cited sou
   })
 
   assert.match(calls[0].sql, /WHERE message\.user_id = \$1/)
+  assert.match(calls[0].sql, /LEFT JOIN LATERAL/)
+  assert.match(calls[0].sql, /candidate\.expunged_at IS NULL/)
   assert.equal(calls[0].params[1], 200)
   assert.equal(sources.length, 1)
   assert.equal(sources[0].sourceId, 'M1')
   assert.equal(sources[0].messageId, rows[1].message_id)
+  assert.equal(sources[0].folderId, rows[1].folder_id)
+  assert.equal(sources[0].locationId, rows[1].location_id)
   assert.doesNotMatch(sources[0].text, /123456/)
 })
 

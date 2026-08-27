@@ -191,4 +191,7 @@ test('mail AI UI follows the bounded server actions, citations and confirm-befor
   assert.match(searchDialog, /event\.key !== 'Tab'/)
   assert.match(searchDialog, /restoreTarget\?\.focus/)
   assert.match(searchDialog, /依据来源/)
+  assert.match(searchDialog, /emit\('open-source', source\)/)
+  assert.match(view, /async function openAiSearchSource/)
+  assert.match(view, /@open-source="openAiSearchSource"/)
 })

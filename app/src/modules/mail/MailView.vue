@@ -179,6 +179,30 @@ async function openMessage(messageId, trigger) {
   }
 }
 
+async function openAiSearchSource(source) {
+  const accountId = String(source?.accountId || '').trim()
+  const folderId = String(source?.folderId || '').trim()
+  const locationId = String(source?.locationId || '').trim()
+  if (!accountId || !folderId || !locationId) {
+    localError.value = '这个来源暂时没有可打开的邮箱位置。'
+    return
+  }
+  aiSearchOpen.value = false
+  localError.value = ''
+  state.errorMessage = ''
+  try {
+    if (accountId !== state.activeAccountId) {
+      await mail.selectAccount(accountId, { preferredFolderId: folderId })
+      mail.startRealtime()
+    } else if (folderId !== state.activeFolderId) {
+      await mail.selectFolder(folderId)
+    }
+    await openMessage(locationId)
+  } catch (error) {
+    localError.value = error?.message || '邮件来源打开失败'
+  }
+}
+
 async function closeMessage() {
   mail.clearSelection()
   await replaceMailQuery()
@@ -397,6 +421,7 @@ onBeforeUnmount(mail.deactivate)
     <MailAiSearchDialog
       :open="aiSearchOpen"
       @close="aiSearchOpen = false"
+      @open-source="openAiSearchSource"
     />
     <MailNotificationRuleDialog
       :open="ruleDialogOpen"

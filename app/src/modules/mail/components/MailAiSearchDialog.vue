@@ -7,7 +7,7 @@ const props = defineProps({
   open: { type: Boolean, default: false }
 })
 
-const emit = defineEmits(['close'])
+const emit = defineEmits(['close', 'open-source'])
 const dialogRef = ref(null)
 const inputRef = ref(null)
 const question = ref('')
@@ -28,6 +28,9 @@ function normalizeSources(value) {
   return (Array.isArray(value) ? value : []).slice(0, 8).map((source, index) => ({
     sourceId: String(source?.sourceId || `M${index + 1}`).slice(0, 12),
     messageId: String(source?.messageId || ''),
+    accountId: String(source?.accountId || ''),
+    folderId: String(source?.folderId || ''),
+    locationId: String(source?.locationId || ''),
     subject: String(source?.subject || '（无主题）').slice(0, 500),
     sender: String(source?.sender || '').slice(0, 320),
     receivedAt: source?.receivedAt || '',
@@ -153,12 +156,20 @@ onBeforeUnmount(() => {
             <h3 id="mail-ai-search-sources-title">依据来源 · {{ sources.length }}</h3>
             <ol>
               <li v-for="source in sources" :key="`${source.sourceId}-${source.messageId}`">
-                <span>{{ source.sourceId }}</span>
-                <div>
-                  <strong>{{ source.subject }}</strong>
-                  <small>{{ source.sender || '未知发件人' }}<template v-if="formatDate(source.receivedAt)"> · {{ formatDate(source.receivedAt) }}</template></small>
-                  <p>{{ source.preview || '没有可显示的正文摘录。' }}</p>
-                </div>
+                <button
+                  type="button"
+                  :disabled="!source.accountId || !source.folderId || !source.locationId"
+                  :aria-label="source.locationId ? `打开来源 ${source.sourceId}：${source.subject}` : `来源 ${source.sourceId} 暂时无法直接打开`"
+                  @click="emit('open-source', source)"
+                >
+                  <span>{{ source.sourceId }}</span>
+                  <div>
+                    <strong>{{ source.subject }}</strong>
+                    <small>{{ source.sender || '未知发件人' }}<template v-if="formatDate(source.receivedAt)"> · {{ formatDate(source.receivedAt) }}</template></small>
+                    <p>{{ source.preview || '没有可显示的正文摘录。' }}</p>
+                  </div>
+                  <Icon v-if="source.locationId" name="arrow-right" :size="16" />
+                </button>
               </li>
             </ol>
           </section>
@@ -199,9 +210,13 @@ onBeforeUnmount(() => {
 .mail-ai-search-dialog__result h3 { font-size: .68rem; }
 .mail-ai-search-dialog__result pre { margin: 0; white-space: pre-wrap; overflow-wrap: anywhere; color: var(--text-secondary); font: inherit; font-size: .68rem; line-height: 1.72; }
 .mail-ai-search-dialog__result ol { display: grid; margin: 0; padding: 0; gap: 7px; list-style: none; }
-.mail-ai-search-dialog__result li { display: grid; padding: 10px; grid-template-columns: auto minmax(0, 1fr); gap: 9px; background: var(--bg-secondary); border: 1px solid var(--border-light); border-radius: 12px; }
-.mail-ai-search-dialog__result li > span { display: grid; min-width: 34px; height: 28px; padding-inline: 5px; place-items: center; color: var(--accent-color); font-size: .57rem; font-weight: 760; background: var(--accent-bg); border-radius: 8px; }
-.mail-ai-search-dialog__result li > div { display: grid; min-width: 0; gap: 3px; }
+.mail-ai-search-dialog__result li { min-width: 0; }
+.mail-ai-search-dialog__result li > button { display: grid; width: 100%; min-height: 58px; padding: 10px; align-items: start; grid-template-columns: auto minmax(0, 1fr) auto; gap: 9px; text-align: left; color: inherit; font: inherit; background: var(--bg-secondary); border: 1px solid var(--border-light); border-radius: 12px; cursor: pointer; }
+.mail-ai-search-dialog__result li > button:hover:not(:disabled), .mail-ai-search-dialog__result li > button:focus-visible { background: var(--bg-hover); border-color: color-mix(in srgb, var(--accent-color) 30%, var(--border-light)); }
+.mail-ai-search-dialog__result li > button:disabled { cursor: default; }
+.mail-ai-search-dialog__result li > button > span { display: grid; min-width: 34px; height: 28px; padding-inline: 5px; place-items: center; color: var(--accent-color); font-size: .57rem; font-weight: 760; background: var(--accent-bg); border-radius: 8px; }
+.mail-ai-search-dialog__result li > button > div { display: grid; min-width: 0; gap: 3px; }
+.mail-ai-search-dialog__result li > button > svg { margin-top: 6px; color: var(--text-muted); }
 .mail-ai-search-dialog__result strong { overflow-wrap: anywhere; font-size: .65rem; }
 .mail-ai-search-dialog__result small, .mail-ai-search-dialog__result p { color: var(--text-muted); font-size: .57rem; line-height: 1.5; }
 .mail-ai-search-dialog__result li p { display: -webkit-box; margin: 2px 0 0; overflow: hidden; -webkit-box-orient: vertical; -webkit-line-clamp: 2; }
