@@ -9,6 +9,7 @@ import MailFolderSidebar from './components/MailFolderSidebar.vue'
 import MailMessageDetail from './components/MailMessageDetail.vue'
 import MailMessageList from './components/MailMessageList.vue'
 import MailNotificationRuleDialog from './components/MailNotificationRuleDialog.vue'
+import MailNotificationRulesManagerDialog from './components/MailNotificationRulesManagerDialog.vue'
 import { fetchEmailStatus } from '@/shared/services/emailApi'
 import { useMailStore } from './useMailStore'
 
@@ -26,6 +27,7 @@ const aiSearchOpen = ref(false)
 const composeInitial = ref({})
 const composeSourceMessageId = ref('')
 const ruleDialogOpen = ref(false)
+const rulesManagerOpen = ref(false)
 const ruleMessage = ref(null)
 const ruleNotice = ref('')
 const lastMessageTrigger = ref(null)
@@ -50,6 +52,10 @@ const mailboxNotice = computed(() => {
   if (!ingestConfigured.value) return '当前邮箱连接不可用；已同步内容仍可只读查看。'
   if (!ingestEnabled.value) return '邮箱已配置，但后台自动同步当前处于关闭状态。'
   return ''
+})
+const activeAccountLabel = computed(() => {
+  const account = state.accounts.find((item) => String(item.id) === state.activeAccountId)
+  return account?.label || account?.displayName || account?.address || account?.email || '当前邮箱'
 })
 
 function queryText(value) {
@@ -237,6 +243,18 @@ function onNotificationRuleSaved(rule) {
   void refreshWorkspace().catch(() => {})
 }
 
+async function openRulesManager() {
+  folderSheetOpen.value = false
+  await nextTick()
+  rulesManagerOpen.value = true
+}
+
+function onRulesManagerChanged() {
+  ruleNotice.value = '邮件提醒规则已更新；邮件仍会正常同步。'
+  window.setTimeout(() => { ruleNotice.value = '' }, 5_000)
+  void refreshWorkspace().catch(() => {})
+}
+
 watch(() => route.fullPath, async () => {
   if (updatingRoute || initialLoading.value) return
   const requestedAccountId = queryText(route.query.account)
@@ -319,6 +337,7 @@ onBeforeUnmount(mail.deactivate)
           :loading="state.loadingFolders"
           @select-account="chooseAccount"
           @select-folder="chooseFolder"
+          @manage-rules="openRulesManager"
         />
       </aside>
 
@@ -365,6 +384,7 @@ onBeforeUnmount(mail.deactivate)
       @close="folderSheetOpen = false"
       @select-account="chooseAccount"
       @select-folder="chooseFolder"
+      @manage-rules="openRulesManager"
     />
     <MailComposeDialog
       :show="composeOpen"
@@ -384,6 +404,13 @@ onBeforeUnmount(mail.deactivate)
       :account-id="state.activeAccountId"
       @close="closeNotificationRule"
       @saved="onNotificationRuleSaved"
+    />
+    <MailNotificationRulesManagerDialog
+      :open="rulesManagerOpen"
+      :account-id="state.activeAccountId"
+      :account-label="activeAccountLabel"
+      @close="rulesManagerOpen = false"
+      @changed="onRulesManagerChanged"
     />
   </main>
 </template>

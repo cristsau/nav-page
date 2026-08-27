@@ -10,7 +10,7 @@ defineProps({
   loading: { type: Boolean, default: false }
 })
 
-const emit = defineEmits(['select-account', 'select-folder'])
+const emit = defineEmits(['select-account', 'select-folder', 'manage-rules'])
 
 function folderName(folder) {
   return folder?.displayName || folder?.name || folder?.path || '未命名文件夹'
@@ -75,11 +75,22 @@ function folderIcon(folder) {
         </li>
       </ul>
     </nav>
+
+    <footer>
+      <button type="button" class="mail-rules-entry" @click="emit('manage-rules')">
+        <Icon name="bell" :size="17" />
+        <span>
+          <strong>提醒规则</strong>
+          <small>发件人、类别与邮箱默认</small>
+        </span>
+        <Icon class="mail-rules-entry__chevron" name="chevron-down" :size="16" aria-hidden="true" />
+      </button>
+    </footer>
   </section>
 </template>
 
 <style scoped>
-.mail-folders { min-width: 0; height: 100%; padding: 16px 12px; color: var(--text-primary); background: var(--bg-secondary); }
+.mail-folders { display: flex; min-width: 0; height: 100%; padding: 16px 12px; overflow-y: auto; flex-direction: column; color: var(--text-primary); background: var(--bg-secondary); }
 .mail-folders > header { display: flex; min-height: 54px; padding: 0 8px 12px; align-items: center; gap: 10px; }
 .mail-folders__icon { display: grid; width: 36px; height: 36px; flex: 0 0 auto; place-items: center; color: var(--accent-color); background: var(--accent-bg); border-radius: 11px; }
 .mail-folders h2 { margin: 0; font-size: .86rem; }
@@ -95,4 +106,10 @@ function folderIcon(folder) {
 .mail-folders button:hover,
 .mail-folders button:focus-visible { color: var(--text-primary); background: var(--bg-hover); }
 .mail-folders button.is-active { color: var(--accent-color); background: var(--accent-bg); border-color: color-mix(in srgb, var(--accent-color) 22%, var(--border-light)); }
+.mail-folders > footer { margin: auto 4px 0; padding-top: 18px; border-top: 1px solid var(--border-light); }
+.mail-folders .mail-rules-entry { grid-template-columns: 20px minmax(0, 1fr) auto; color: var(--text-muted); }
+.mail-rules-entry > span { display: grid; min-width: 0; gap: 2px; }
+.mail-rules-entry strong { color: var(--text-secondary); font-size: .68rem; font-weight: 710; }
+.mail-rules-entry small { overflow: hidden; color: var(--text-muted); font-size: .57rem; font-weight: 500; text-overflow: ellipsis; white-space: nowrap; }
+.mail-rules-entry__chevron { transform: rotate(-90deg); }
 </style>
