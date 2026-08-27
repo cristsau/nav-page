@@ -127,6 +127,9 @@ export function buildEmailAiCacheKey({
 function toAiMessage(row, decrypted) {
   return {
     messageId: row.message_id,
+    accountId: row.account_id,
+    folderId: row.folder_id || null,
+    locationId: row.location_id || null,
     subject: decrypted.envelope?.subject,
     sender: addressText(decrypted.envelope?.sender),
     to: decrypted.envelope?.to,
@@ -150,13 +153,35 @@ export async function loadOwnedEmailThread({
   const limit = Math.min(Math.max(1, Number(maximum) || 1), EMAIL_AI_COPILOT_LIMITS.threadMessages)
   const { rows } = await queryFn(
     `SELECT message.id AS message_id, message.account_id, message.user_id,
-            account.source_key, message.canonical_hash, message.thread_key_hash,
-            message.envelope_encrypted, message.content_encrypted,
-            message.received_at, message.updated_at
-     FROM email_messages AS message
-     JOIN email_accounts AS account
-       ON account.id = message.account_id AND account.user_id = message.user_id
-     WHERE message.user_id = $1 AND message.account_id = $2
+             account.source_key, message.canonical_hash, message.thread_key_hash,
+             message.envelope_encrypted, message.content_encrypted,
+             message.received_at, message.updated_at,
+             location.location_id, location.folder_id
+      FROM email_messages AS message
+      JOIN email_accounts AS account
+        ON account.id = message.account_id AND account.user_id = message.user_id
+      LEFT JOIN LATERAL (
+        SELECT candidate.id AS location_id, candidate.folder_id
+        FROM email_folder_messages AS candidate
+        JOIN email_folders AS folder
+          ON folder.id = candidate.folder_id
+         AND folder.account_id = candidate.account_id
+         AND folder.user_id = candidate.user_id
+        WHERE candidate.message_id = message.id
+          AND candidate.account_id = message.account_id
+          AND candidate.user_id = message.user_id
+          AND candidate.expunged_at IS NULL
+        ORDER BY
+          CASE folder.special_use
+            WHEN 'inbox' THEN 0 WHEN 'flagged' THEN 1 WHEN 'sent' THEN 2
+            WHEN 'drafts' THEN 3 WHEN 'archive' THEN 4 WHEN 'trash' THEN 8
+            WHEN 'junk' THEN 9 ELSE 6
+          END,
+          candidate.internal_date DESC,
+          candidate.id DESC
+        LIMIT 1
+      ) AS location ON TRUE
+      WHERE message.user_id = $1 AND message.account_id = $2
        AND message.thread_key_hash = $3
      ORDER BY message.received_at DESC, message.id DESC
      LIMIT $4`,

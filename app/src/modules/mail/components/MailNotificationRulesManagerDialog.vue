@@ -25,10 +25,12 @@ const error = ref('')
 const notice = ref('')
 const deleteConfirmId = ref('')
 const criticalConfirmRuleId = ref('')
+const inlineConfirmButton = ref(null)
 const defaultAction = ref('immediate')
 const defaultPreview = ref(null)
 const defaultCriticalConfirmed = ref(false)
 let restoreTarget = null
+let inlineRestoreTarget = null
 
 const actionOptions = [
   { value: 'immediate', label: '立即提醒', icon: 'bell' },
@@ -142,6 +144,8 @@ async function loadRules() {
 
 async function toggleRule(rule, { criticalConfirmed = false } = {}) {
   if (!rule?.id || busyRuleId.value) return
+  let focusCriticalConfirmation = false
+  const restoreActionAfterRequest = criticalConfirmed
   busyRuleId.value = rule.id
   error.value = ''
   notice.value = ''
@@ -160,13 +164,17 @@ async function toggleRule(rule, { criticalConfirmed = false } = {}) {
     emit('changed', updated)
   } catch (requestError) {
     if (requestError?.code === 'EMAIL_CRITICAL_NOTIFICATION_CONFIRMATION_REQUIRED') {
+      deleteConfirmId.value = ''
       criticalConfirmRuleId.value = rule.id
+      focusCriticalConfirmation = true
       error.value = '这条规则可能降低关键邮件提醒。请明确确认后再启用。'
     } else {
       error.value = requestError?.message || '提醒规则更新失败'
     }
   } finally {
     busyRuleId.value = ''
+    if (focusCriticalConfirmation) await focusInlineConfirmation('toggle', rule.id)
+    else if (restoreActionAfterRequest) await restoreInlineActionFocus()
   }
 }
 
@@ -182,6 +190,10 @@ async function removeRule(rule) {
     criticalConfirmRuleId.value = ''
     notice.value = '规则已删除；原邮件不受影响。'
     emit('changed', { id: rule.id, deleted: true })
+    inlineRestoreTarget = null
+    inlineConfirmButton.value = null
+    await nextTick()
+    closeButton.value?.focus?.()
   } catch (requestError) {
     error.value = requestError?.message || '提醒规则删除失败'
   } finally {
@@ -226,6 +238,46 @@ function close() {
   emit('close')
 }
 
+function setInlineConfirmButton(element) {
+  if (element) inlineConfirmButton.value = element
+}
+
+function findRuleActionButton(target = inlineRestoreTarget) {
+  if (!target) return null
+  return Array.from(dialog.value?.querySelectorAll('[data-rule-action][data-rule-id]') || [])
+    .find((element) => (
+      element.dataset.ruleAction === target.kind
+      && element.dataset.ruleId === String(target.ruleId)
+    )) || null
+}
+
+async function focusInlineConfirmation(kind, ruleId) {
+  inlineRestoreTarget = { kind, ruleId: String(ruleId) }
+  await nextTick()
+  inlineConfirmButton.value?.focus?.()
+}
+
+async function restoreInlineActionFocus() {
+  const target = inlineRestoreTarget
+  inlineRestoreTarget = null
+  inlineConfirmButton.value = null
+  await nextTick()
+  findRuleActionButton(target)?.focus?.()
+}
+
+async function cancelInlineConfirmation() {
+  deleteConfirmId.value = ''
+  criticalConfirmRuleId.value = ''
+  await restoreInlineActionFocus()
+}
+
+async function openDeleteConfirmation(rule) {
+  if (!rule?.id || busyRuleId.value) return
+  criticalConfirmRuleId.value = ''
+  deleteConfirmId.value = rule.id
+  await focusInlineConfirmation('delete', rule.id)
+}
+
 function focusableElements() {
   return Array.from(dialog.value?.querySelectorAll(
     'button:not([disabled]), select:not([disabled]), input:not([disabled]), [tabindex]:not([tabindex="-1"])'
@@ -236,6 +288,11 @@ function onKeydown(event) {
   if (!props.open) return
   if (event.key === 'Escape') {
     event.preventDefault()
+    event.stopImmediatePropagation()
+    if (deleteConfirmId.value || criticalConfirmRuleId.value) {
+      void cancelInlineConfirmation()
+      return
+    }
     close()
     return
   }
@@ -265,6 +322,8 @@ watch(() => props.open, async (open) => {
   notice.value = ''
   deleteConfirmId.value = ''
   criticalConfirmRuleId.value = ''
+  inlineRestoreTarget = null
+  inlineConfirmButton.value = null
   defaultPreview.value = null
   defaultCriticalConfirmed.value = false
   document.addEventListener('keydown', onKeydown)
@@ -390,25 +449,25 @@ onBeforeUnmount(() => document.removeEventListener('keydown', onKeydown))
               <div v-if="criticalConfirmRuleId === rule.id" class="mail-rule-card__confirm is-warning">
                 <p>确认降低关键邮件提醒？邮件仍会保留，并可随时重新启用即时提醒。</p>
                 <div>
-                  <button type="button" :disabled="Boolean(busyRuleId)" @click="criticalConfirmRuleId = ''">取消</button>
-                  <button type="button" :disabled="Boolean(busyRuleId)" @click="toggleRule(rule, { criticalConfirmed: true })">确认启用</button>
+                  <button type="button" :disabled="Boolean(busyRuleId)" @click="cancelInlineConfirmation">取消</button>
+                  <button :ref="setInlineConfirmButton" type="button" :disabled="Boolean(busyRuleId)" @click="toggleRule(rule, { criticalConfirmed: true })">确认启用</button>
                 </div>
               </div>
               <div v-else-if="deleteConfirmId === rule.id" class="mail-rule-card__confirm is-danger">
                 <p>确认删除“{{ ruleScope(rule) }}”规则？此操作不会删除任何邮件。</p>
                 <div>
-                  <button type="button" :disabled="Boolean(busyRuleId)" @click="deleteConfirmId = ''">取消</button>
-                  <button type="button" :disabled="Boolean(busyRuleId)" @click="removeRule(rule)">
+                  <button type="button" :disabled="Boolean(busyRuleId)" @click="cancelInlineConfirmation">取消</button>
+                  <button :ref="setInlineConfirmButton" type="button" :disabled="Boolean(busyRuleId)" @click="removeRule(rule)">
                     {{ busyRuleId === rule.id ? '删除中…' : '确认删除' }}
                   </button>
                 </div>
               </div>
               <div v-else class="mail-rule-card__actions">
-                <button type="button" :disabled="Boolean(busyRuleId)" @click="toggleRule(rule)">
+                <button type="button" data-rule-action="toggle" :data-rule-id="rule.id" :disabled="Boolean(busyRuleId)" @click="toggleRule(rule)">
                   <Icon :name="ruleIsActive(rule) ? 'bell-off' : 'bell'" :size="17" />
                   {{ busyRuleId === rule.id ? '处理中…' : ruleIsActive(rule) ? '暂停' : '启用' }}
                 </button>
-                <button type="button" class="is-danger" :disabled="Boolean(busyRuleId)" @click="deleteConfirmId = rule.id">
+                <button type="button" class="is-danger" data-rule-action="delete" :data-rule-id="rule.id" :disabled="Boolean(busyRuleId)" @click="openDeleteConfirmation(rule)">
                   <Icon name="trash" :size="17" />
                   删除
                 </button>

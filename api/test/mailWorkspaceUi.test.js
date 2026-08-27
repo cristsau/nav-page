@@ -147,12 +147,13 @@ test('mail workspace exposes server search, notification controls and one AI ass
 })
 
 test('mail AI UI follows the bounded server actions, citations and confirm-before-write contract', async () => {
-  const [api, view, list, detail, searchDialog] = await Promise.all([
+  const [api, view, list, detail, searchDialog, server] = await Promise.all([
     source('app/src/shared/services/emailApi.js'),
     source('app/src/modules/mail/MailView.vue'),
     source('app/src/modules/mail/components/MailMessageList.vue'),
     source('app/src/modules/mail/components/MailMessageDetail.vue'),
-    source('app/src/modules/mail/components/MailAiSearchDialog.vue')
+    source('app/src/modules/mail/components/MailAiSearchDialog.vue'),
+    source('api/src/routes/email.js')
   ])
 
   for (const action of ['summarize', 'thread_summary', 'thread_changes', 'tasks', 'analyze', 'draft_reply', 'translate', 'ask', 'propose_notification_rule']) {
@@ -181,6 +182,13 @@ test('mail AI UI follows the bounded server actions, citations and confirm-befor
   assert.match(detail, /确认保存日记/)
   assert.match(detail, /确认保存备忘录/)
   assert.match(detail, /确认创建加密草稿/)
+  assert.match(detail, /aiProposal\.value = null[\s\S]*?createEmailAiProposal/)
+  assert.match(detail, /if \(!aiProposal\.value \|\| aiBusyAction\.value \|\| aiProposalBusyKind\.value \|\| aiProposalConfirming\.value\) return/)
+  assert.match(detail, /if \(aiProposalBusyKind\.value === kind\) aiProposalBusyKind\.value = ''/)
+  assert.match(detail, /if \(!aiAvailable\.value \|\| aiBusyAction\.value \|\| aiProposalBusyKind\.value \|\| aiProposalConfirming\.value\) return/)
+  assert.match(detail, /if \(aiBusyAction\.value === action\) aiBusyAction\.value = ''/)
+  assert.match(detail, /aiProposalConfirming\.value = false/)
+  assert.match(detail, /Boolean\(aiBusyAction \|\| aiProposalBusyKind \|\| aiProposalConfirming\)/)
 
   assert.match(api, /\/email\/ai\/search/)
   assert.match(view, /问整个邮箱/)
@@ -194,4 +202,25 @@ test('mail AI UI follows the bounded server actions, citations and confirm-befor
   assert.match(searchDialog, /emit\('open-source', source\)/)
   assert.match(view, /async function openAiSearchSource/)
   assert.match(view, /@open-source="openAiSearchSource"/)
+  assert.match(detail, /emit\('open-source', source\)/)
+  assert.match(detail, /accountId: String\(source\?\.accountId/)
+  assert.match(server, /accountId: message\.accountId \|\| null/)
+  assert.match(server, /candidate\.user_id = message\.user_id/)
+})
+
+test('mail detail focus, modal layering and mobile action bar stay accessible', async () => {
+  const [view, detail, shell] = await Promise.all([
+    source('app/src/modules/mail/MailView.vue'),
+    source('app/src/modules/mail/components/MailMessageDetail.vue'),
+    source('app/src/shared/components/MobileTabBar.vue')
+  ])
+
+  assert.match(view, /ref="detailRef"/)
+  assert.match(view, /detailRef\.value\?\.focusInitial\?\.\(\)/)
+  assert.match(detail, /defineExpose\(\{ focusInitial \}\)/)
+  assert.match(detail, /tabindex="-1"/)
+  assert.match(detail, /document\.querySelector\('\[role="dialog"\]\[aria-modal="true"\]'\)/)
+  assert.match(detail, /bottom: calc\(86px \+ env\(safe-area-inset-bottom\)\)/)
+  assert.match(detail, /z-index: 620/)
+  assert.match(shell, /z-index: 640/)
 })

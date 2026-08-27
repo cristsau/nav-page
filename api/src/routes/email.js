@@ -197,14 +197,36 @@ async function getCanonicalMailboxRowForUser(messageId, userId) {
   if (!UUID_PATTERN.test(String(messageId || ''))) return null
   const { rows } = await query(
     `SELECT message.id AS message_id, message.account_id, message.user_id,
-            account.source_key, message.canonical_hash, message.thread_key_hash,
-            message.updated_at, message.envelope_encrypted,
-            message.content_encrypted, message.received_at,
-            message.has_attachments, message.attachment_count
-     FROM email_messages AS message
-     JOIN email_accounts AS account
-       ON account.id = message.account_id AND account.user_id = message.user_id
-     WHERE message.id = $1 AND message.user_id = $2
+             account.source_key, message.canonical_hash, message.thread_key_hash,
+             message.updated_at, message.envelope_encrypted,
+             message.content_encrypted, message.received_at,
+             message.has_attachments, message.attachment_count,
+             location.location_id, location.folder_id
+      FROM email_messages AS message
+      JOIN email_accounts AS account
+        ON account.id = message.account_id AND account.user_id = message.user_id
+      LEFT JOIN LATERAL (
+        SELECT candidate.id AS location_id, candidate.folder_id
+        FROM email_folder_messages AS candidate
+        JOIN email_folders AS folder
+          ON folder.id = candidate.folder_id
+         AND folder.account_id = candidate.account_id
+         AND folder.user_id = candidate.user_id
+        WHERE candidate.message_id = message.id
+          AND candidate.account_id = message.account_id
+          AND candidate.user_id = message.user_id
+          AND candidate.expunged_at IS NULL
+        ORDER BY
+          CASE folder.special_use
+            WHEN 'inbox' THEN 0 WHEN 'flagged' THEN 1 WHEN 'sent' THEN 2
+            WHEN 'drafts' THEN 3 WHEN 'archive' THEN 4 WHEN 'trash' THEN 8
+            WHEN 'junk' THEN 9 ELSE 6
+          END,
+          candidate.internal_date DESC,
+          candidate.id DESC
+        LIMIT 1
+      ) AS location ON TRUE
+      WHERE message.id = $1 AND message.user_id = $2
      LIMIT 1`,
     [messageId, userId]
   )
@@ -251,6 +273,9 @@ function emailAiSourceMetadata(messages) {
   return (Array.isArray(messages) ? messages : []).slice(0, 20).map((message, index) => ({
     sourceId: `M${index + 1}`,
     messageId: message.messageId || null,
+    accountId: message.accountId || null,
+    folderId: message.folderId || null,
+    locationId: message.locationId || null,
     subject: String(message.subject || '（无主题）').slice(0, 500),
     sender: String(message.sender || '').slice(0, 320),
     receivedAt: message.receivedAt || null
@@ -989,6 +1014,9 @@ export default async function emailRoutes(fastify) {
           })
         : [{
             messageId: row.message_id,
+            accountId: row.account_id,
+            folderId: row.folder_id || null,
+            locationId: row.location_id || null,
             subject: stored.envelope.subject,
             sender: stored.envelope.sender?.address || stored.envelope.sender?.name,
             to: stored.envelope.to,

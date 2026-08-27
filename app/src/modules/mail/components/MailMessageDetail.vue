@@ -17,8 +17,10 @@ const props = defineProps({
   loading: { type: Boolean, default: false }
 })
 
-const emit = defineEmits(['close', 'reply', 'notification'])
+const emit = defineEmits(['close', 'reply', 'notification', 'open-source'])
 
+const detailRoot = ref(null)
+const mobileBackButton = ref(null)
 const aiBusyAction = ref('')
 const aiResult = ref(null)
 const aiError = ref('')
@@ -311,6 +313,9 @@ function normalizeAiSources(value) {
   return (Array.isArray(value) ? value : []).slice(0, 20).map((source, index) => ({
     sourceId: String(source?.sourceId || `M${index + 1}`).slice(0, 12),
     messageId: String(source?.messageId || ''),
+    accountId: String(source?.accountId || ''),
+    folderId: String(source?.folderId || ''),
+    locationId: String(source?.locationId || ''),
     subject: String(source?.subject || '（无主题）').slice(0, 500),
     sender: String(source?.sender || '').slice(0, 320),
     receivedAt: source?.receivedAt || ''
@@ -353,7 +358,7 @@ function titleForAiAction(action) {
 }
 
 async function runAi(action, instruction = '', overrides = {}) {
-  if (!aiAvailable.value || aiBusyAction.value) return
+  if (!aiAvailable.value || aiBusyAction.value || aiProposalBusyKind.value || aiProposalConfirming.value) return
   const requestMessageId = safeMessageId.value
   const requestSequence = ++aiRequestSequence
   aiBusyAction.value = action
@@ -385,17 +390,18 @@ async function runAi(action, instruction = '', overrides = {}) {
     if (requestSequence !== aiRequestSequence || requestMessageId !== safeMessageId.value) return
     aiError.value = error?.message || 'AI 邮件处理失败'
   } finally {
-    if (requestSequence === aiRequestSequence) aiBusyAction.value = ''
+    if (aiBusyAction.value === action) aiBusyAction.value = ''
   }
 }
 
 async function buildAiProposal(kind) {
-  if (!aiAvailable.value || aiProposalBusyKind.value || aiProposalConfirming.value) return
+  if (!aiAvailable.value || aiBusyAction.value || aiProposalBusyKind.value || aiProposalConfirming.value) return
   const requestMessageId = safeMessageId.value
   const requestSequence = ++aiRequestSequence
   aiProposalBusyKind.value = kind
   aiError.value = ''
   aiOperationResult.value = null
+  aiProposal.value = null
   try {
     const payload = await createEmailAiProposal(requestMessageId, {
       kind,
@@ -412,12 +418,12 @@ async function buildAiProposal(kind) {
     if (requestSequence !== aiRequestSequence || requestMessageId !== safeMessageId.value) return
     aiError.value = error?.message || 'AI 操作预览生成失败'
   } finally {
-    if (requestSequence === aiRequestSequence) aiProposalBusyKind.value = ''
+    if (aiProposalBusyKind.value === kind) aiProposalBusyKind.value = ''
   }
 }
 
 async function confirmAiProposal() {
-  if (!aiProposal.value || aiProposalConfirming.value) return
+  if (!aiProposal.value || aiBusyAction.value || aiProposalBusyKind.value || aiProposalConfirming.value) return
   const requestMessageId = safeMessageId.value
   const requestSequence = ++aiRequestSequence
   aiProposalConfirming.value = true
@@ -432,14 +438,33 @@ async function confirmAiProposal() {
     if (requestSequence !== aiRequestSequence || requestMessageId !== safeMessageId.value) return
     aiError.value = error?.message || 'AI 操作确认失败'
   } finally {
-    if (requestSequence === aiRequestSequence) aiProposalConfirming.value = false
+    aiProposalConfirming.value = false
   }
 }
 
 function cancelAiProposal() {
-  if (aiProposalConfirming.value) return
+  if (aiBusyAction.value || aiProposalBusyKind.value || aiProposalConfirming.value) return
   aiProposal.value = null
 }
+
+function canOpenAiSource(source) {
+  return Boolean(source?.accountId && source?.folderId && source?.locationId)
+}
+
+function openAiSource(source) {
+  if (!canOpenAiSource(source)) return
+  emit('open-source', source)
+}
+
+function focusInitial() {
+  const visibleMobileBack = mobileBackButton.value
+    && typeof window !== 'undefined'
+    && window.getComputedStyle(mobileBackButton.value).display !== 'none'
+  const target = visibleMobileBack ? mobileBackButton.value : detailRoot.value
+  target?.focus?.({ preventScroll: true })
+}
+
+defineExpose({ focusInitial })
 
 function replyPayload(text = '', mode = 'reply') {
   const originalSubject = String(props.message?.subject || '').trim()
@@ -467,6 +492,7 @@ function openReply(text = '', mode = 'reply') {
 
 function onDocumentKeydown(event) {
   if (event.key === 'Escape' && aiPanelOpen.value) {
+    if (event.defaultPrevented || document.querySelector('[role="dialog"][aria-modal="true"]')) return
     aiPanelOpen.value = false
     event.preventDefault()
   }
@@ -496,7 +522,7 @@ watch(() => safeMessageId.value, () => {
 </script>
 
 <template>
-  <article class="mail-message-detail" :aria-labelledby="message ? 'mail-message-detail-title' : undefined">
+  <article ref="detailRoot" class="mail-message-detail" tabindex="-1" :aria-labelledby="message ? 'mail-message-detail-title' : undefined">
     <div v-if="loading" class="mail-message-detail__empty" role="status">
       <span><Icon name="mail" :size="27" /></span>
       <p>正在安全读取邮件…</p>
@@ -508,7 +534,7 @@ watch(() => safeMessageId.value, () => {
     </div>
     <template v-else>
       <header class="mail-message-detail__header">
-        <button type="button" aria-label="返回邮件列表" @click="$emit('close')">
+        <button ref="mobileBackButton" type="button" aria-label="返回邮件列表" @click="$emit('close')">
           <Icon name="arrow-left" :size="19" />
         </button>
         <div>
@@ -569,7 +595,7 @@ watch(() => safeMessageId.value, () => {
           </div>
           <label for="mail-ai-instruction">向邮件 AI 提问</label>
           <textarea id="mail-ai-instruction" v-model="aiInstruction" rows="3" placeholder="例如：这封邮件需要我在什么时候回复？"></textarea>
-          <button type="submit" :disabled="!aiInstruction.trim() || Boolean(aiBusyAction)"><Icon name="sparkles" :size="17" />{{ aiBusyAction === 'ask' ? '思考中…' : '询问 AI' }}</button>
+          <button type="submit" :disabled="!aiInstruction.trim() || Boolean(aiBusyAction || aiProposalBusyKind || aiProposalConfirming)"><Icon name="sparkles" :size="17" />{{ aiBusyAction === 'ask' ? '思考中…' : '询问 AI' }}</button>
         </form>
 
         <section class="mail-message-detail__ai-operations" aria-labelledby="mail-ai-operations-title">
@@ -595,8 +621,8 @@ watch(() => safeMessageId.value, () => {
             </dl>
             <pre>{{ aiProposalPreview.content || '没有正文内容' }}</pre>
             <div class="mail-message-detail__ai-proposal-actions">
-              <button type="button" :disabled="aiProposalConfirming" @click="cancelAiProposal">取消</button>
-              <button type="button" :disabled="aiProposalConfirming" @click="confirmAiProposal"><Icon name="check" :size="17" />{{ aiProposalConfirming ? '正在写入…' : aiProposalPreview.confirmLabel }}</button>
+              <button type="button" :disabled="Boolean(aiBusyAction || aiProposalBusyKind || aiProposalConfirming)" @click="cancelAiProposal">取消</button>
+              <button type="button" :disabled="Boolean(aiBusyAction || aiProposalBusyKind || aiProposalConfirming)" @click="confirmAiProposal"><Icon name="check" :size="17" />{{ aiProposalConfirming ? '正在写入…' : aiProposalPreview.confirmLabel }}</button>
             </div>
           </section>
           <div v-if="aiOperationResult" class="mail-message-detail__ai-operation-success" role="status">
@@ -681,8 +707,10 @@ watch(() => safeMessageId.value, () => {
           <h4 id="mail-ai-sources-title">依据来源</h4>
           <ol>
             <li v-for="source in aiResult.sources" :key="`${source.sourceId}-${source.messageId}`">
-              <span>{{ source.sourceId }}</span>
-              <div><strong>{{ source.subject }}</strong><small>{{ source.sender || '未知发件人' }}<template v-if="source.receivedAt"> · {{ formatLongDate(source.receivedAt) }}</template></small></div>
+              <button type="button" :disabled="!canOpenAiSource(source)" :aria-label="canOpenAiSource(source) ? `打开来源 ${source.sourceId}：${source.subject}` : `来源 ${source.sourceId} 暂无可打开位置`" @click="openAiSource(source)">
+                <span>{{ source.sourceId }}</span>
+                <span><strong>{{ source.subject }}</strong><small>{{ source.sender || '未知发件人' }}<template v-if="source.receivedAt"> · {{ formatLongDate(source.receivedAt) }}</template></small></span>
+              </button>
             </li>
           </ol>
         </section>
@@ -857,9 +885,12 @@ watch(() => safeMessageId.value, () => {
 .mail-message-detail__ai .mail-message-detail__open-rule { width: fit-content; color: var(--accent-color); }
 .mail-message-detail__ai-sources { display: grid; margin-top: 13px; gap: 7px; }
 .mail-message-detail__ai-sources ol { display: grid; margin: 0; padding: 0; gap: 5px; list-style: none; }
-.mail-message-detail__ai-sources li { display: grid; min-height: 46px; padding: 7px 9px; align-items: center; grid-template-columns: auto minmax(0, 1fr); gap: 8px; background: var(--bg-card); border: 1px solid var(--border-light); border-radius: 10px; }
-.mail-message-detail__ai-sources li > span { display: grid; min-width: 31px; height: 26px; padding-inline: 5px; place-items: center; color: var(--accent-color); font-size: .56rem; font-weight: 760; background: var(--accent-bg); border-radius: 7px; }
-.mail-message-detail__ai-sources li > div { display: grid; min-width: 0; gap: 2px; }
+.mail-message-detail__ai-sources li { min-width: 0; }
+.mail-message-detail__ai-sources li > button { display: grid; width: 100%; min-height: 46px; padding: 7px 9px; align-items: center; grid-template-columns: auto minmax(0, 1fr); gap: 8px; text-align: left; color: var(--text-primary); font: inherit; background: var(--bg-card); border: 1px solid var(--border-light); border-radius: 10px; cursor: pointer; }
+.mail-message-detail__ai-sources li > button:hover:not(:disabled), .mail-message-detail__ai-sources li > button:focus-visible { border-color: color-mix(in srgb, var(--accent-color) 46%, var(--border-light)); }
+.mail-message-detail__ai-sources li > button:disabled { cursor: default; opacity: .74; }
+.mail-message-detail__ai-sources li > button > span:first-child { display: grid; min-width: 31px; height: 26px; padding-inline: 5px; place-items: center; color: var(--accent-color); font-size: .56rem; font-weight: 760; background: var(--accent-bg); border-radius: 7px; }
+.mail-message-detail__ai-sources li > button > span:last-child { display: grid; min-width: 0; gap: 2px; }
 .mail-message-detail__ai-sources strong, .mail-message-detail__ai-sources small { overflow: hidden; white-space: nowrap; text-overflow: ellipsis; }
 .mail-message-detail__ai-sources strong { font-size: .61rem; }
 .mail-message-detail__ai-sources small { color: var(--text-muted); font-size: .54rem; }
@@ -877,7 +908,7 @@ watch(() => safeMessageId.value, () => {
 .mail-message-detail__html iframe { width: 100%; min-height: 420px; background: transparent; border: 0; }
 .mail-message-detail__mobile-actions { display: none; }
 @media (max-width: 820px), (pointer: coarse) and (max-width: 1024px) {
-  .mail-message-detail { padding-bottom: calc(74px + env(safe-area-inset-bottom)); overflow: visible; }
+  .mail-message-detail { padding-bottom: calc(158px + env(safe-area-inset-bottom)); overflow: visible; }
   .mail-message-detail__header { top: var(--app-shell-header-height, 64px); min-height: 76px; padding: 10px 12px; }
   .mail-message-detail__header > button:first-child { display: grid; }
   .mail-message-detail__close { display: none !important; }
@@ -893,7 +924,7 @@ watch(() => safeMessageId.value, () => {
   .mail-message-detail__sender { grid-template-columns: auto minmax(0, 1fr); }
   .mail-message-detail__sender time { grid-column: 2; }
   .mail-message-detail__recipients dl { grid-template-columns: 1fr; }
-  .mail-message-detail__mobile-actions { position: fixed; z-index: 50; right: 14px; bottom: max(12px, env(safe-area-inset-bottom)); left: 14px; display: grid; min-height: 64px; padding: 6px; grid-template-columns: repeat(4, minmax(0, 1fr)); gap: 3px; background: color-mix(in srgb, var(--bg-card) 94%, transparent); border: 1px solid var(--border-light); border-radius: 18px; box-shadow: var(--shadow-card); backdrop-filter: blur(18px); }
+  .mail-message-detail__mobile-actions { position: fixed; z-index: 620; right: 14px; bottom: calc(86px + env(safe-area-inset-bottom)); left: 14px; display: grid; min-height: 64px; padding: 6px; grid-template-columns: repeat(4, minmax(0, 1fr)); gap: 3px; background: color-mix(in srgb, var(--bg-card) 94%, transparent); border: 1px solid var(--border-light); border-radius: 18px; box-shadow: var(--shadow-card); backdrop-filter: blur(18px); }
   .mail-message-detail__mobile-actions button { display: grid; min-width: 44px; min-height: 50px; place-content: center; justify-items: center; gap: 3px; color: var(--text-secondary); font: inherit; font-size: .55rem; background: transparent; border: 0; border-radius: 12px; }
   .mail-message-detail__mobile-actions button:active { color: var(--accent-color); background: var(--accent-bg); }
 }

@@ -31,6 +31,7 @@ const rulesManagerOpen = ref(false)
 const ruleMessage = ref(null)
 const ruleNotice = ref('')
 const lastMessageTrigger = ref(null)
+const detailRef = ref(null)
 let updatingRoute = false
 
 const errorMessage = computed(() => localError.value || state.errorMessage)
@@ -172,11 +173,20 @@ async function openMessage(messageId, trigger) {
   localError.value = ''
   state.errorMessage = ''
   try {
-    await mail.loadMessage(messageId)
+    const request = mail.loadMessage(messageId)
+    await nextTick()
+    focusMailDetail()
+    await request
     await replaceMailQuery({ messageId })
+    await nextTick()
+    focusMailDetail()
   } catch (error) {
     localError.value = error?.message || '邮件详情加载失败'
   }
+}
+
+function focusMailDetail() {
+  detailRef.value?.focusInitial?.()
 }
 
 async function openAiSearchSource(source) {
@@ -385,6 +395,7 @@ onBeforeUnmount(mail.deactivate)
 
       <div class="mail-workspace__detail">
         <MailMessageDetail
+          ref="detailRef"
           :message="state.selectedMessage"
           :message-id="state.selectedMessageId"
           :account-id="state.activeAccountId"
@@ -394,6 +405,7 @@ onBeforeUnmount(mail.deactivate)
           @close="closeMessage"
           @reply="openCompose"
           @notification="openNotificationRule"
+          @open-source="openAiSearchSource"
         />
       </div>
     </section>
