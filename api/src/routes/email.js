@@ -46,6 +46,7 @@ import {
   listEmailNotificationRules,
   previewEmailNotificationRule,
   publicEmailNotificationDecision,
+  normalizeEmailNotificationCategory,
   updateEmailNotificationRule,
   upsertEmailNotificationRule
 } from '../lib/emailNotificationRules.js'
@@ -271,7 +272,9 @@ function boundedRuleProposal(data, { row, stored }) {
       server: 'operations',
       system: 'status'
     }
-    matchValue = categoryAliases[matchValue.toLowerCase()] || matchValue.toLowerCase()
+    matchValue = normalizeEmailNotificationCategory(
+      categoryAliases[matchValue.toLowerCase()] || matchValue.toLowerCase()
+    )
   }
   return {
     scope,
