@@ -325,6 +325,23 @@ export const config = {
   imapUsername: String(process.env.NAV_IMAP_USERNAME || '').trim(),
   imapPasswordFile: String(process.env.NAV_IMAP_PASSWORD_FILE || '').trim(),
   imapMailbox: String(process.env.NAV_IMAP_MAILBOX || 'INBOX').trim(),
+  emailSentAppendEnabled: process.env.NAV_EMAIL_SENT_APPEND_ENABLED === 'true',
+  imapSentMailbox: String(process.env.NAV_IMAP_SENT_MAILBOX || '').trim(),
+  emailSentAppendIntervalSeconds: normalizeBoundedPositiveInteger(
+    process.env.NAV_EMAIL_SENT_APPEND_INTERVAL_SECONDS,
+    30,
+    { minimum: 15, maximum: 3600 }
+  ),
+  emailSentAppendBatchSize: normalizeBoundedPositiveInteger(
+    process.env.NAV_EMAIL_SENT_APPEND_BATCH_SIZE,
+    5,
+    { maximum: 25 }
+  ),
+  emailSentAppendRetentionDays: normalizeBoundedPositiveInteger(
+    process.env.NAV_EMAIL_SENT_APPEND_RETENTION_DAYS,
+    30,
+    { maximum: 365 }
+  ),
   imapPollIntervalSeconds: normalizePositiveInteger(
     process.env.NAV_IMAP_POLL_INTERVAL_SECONDS,
     60

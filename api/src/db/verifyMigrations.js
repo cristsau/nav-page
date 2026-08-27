@@ -867,6 +867,7 @@ async function verifyMaintenanceObservabilitySchema() {
       'email_cache_retention',
       'email_digest',
       'email_ingest',
+      'email_sent_append',
       'mail_delivery',
       'media_delete_retry',
       'note_reminder_generation',
@@ -2004,6 +2005,360 @@ async function verifyEmailMailboxSchema() {
   }
 }
 
+async function verifyEmailAttachmentSchema() {
+  const expectedColumns = new Map([
+    ['email_attachment_objects', [
+      'id', 'user_id', 'draft_id', 'outbox_id', 'state', 'ordinal',
+      'sha256', 'size_bytes', 'chunk_count', 'metadata_encrypted',
+      'metadata_digest', 'scrubbed_at', 'created_at', 'updated_at'
+    ]],
+    ['email_attachment_chunks', [
+      'attachment_id', 'user_id', 'chunk_index', 'plaintext_size',
+      'ciphertext_encrypted', 'created_at'
+    ]]
+  ])
+  const columns = await query(`
+    SELECT table_name, column_name
+    FROM information_schema.columns
+    WHERE table_schema = current_schema()
+      AND table_name = ANY($1::text[])
+  `, [[...expectedColumns.keys()]])
+  for (const [tableName, names] of expectedColumns) {
+    assertExactSet(
+      `${tableName} columns`,
+      columns.rows.filter((row) => row.table_name === tableName).map((row) => row.column_name),
+      names
+    )
+  }
+
+  const criticalColumnSpecs = [
+    ['email_attachment_objects', 'id', 'uuid', 'NO', 'gen_random_uuid()'],
+    ['email_attachment_objects', 'user_id', 'uuid', 'NO', null],
+    ['email_attachment_objects', 'draft_id', 'uuid', 'NO', null],
+    ['email_attachment_objects', 'outbox_id', 'uuid', 'YES', null],
+    ['email_attachment_objects', 'state', 'varchar', 'NO', "'draft'"],
+    ['email_attachment_objects', 'ordinal', 'int2', 'NO', null],
+    ['email_attachment_objects', 'sha256', 'bpchar', 'NO', null],
+    ['email_attachment_objects', 'size_bytes', 'int8', 'NO', null],
+    ['email_attachment_objects', 'chunk_count', 'int2', 'NO', null],
+    ['email_attachment_objects', 'metadata_encrypted', 'bytea', 'YES', null],
+    ['email_attachment_objects', 'metadata_digest', 'bpchar', 'NO', null],
+    ['email_attachment_chunks', 'attachment_id', 'uuid', 'NO', null],
+    ['email_attachment_chunks', 'user_id', 'uuid', 'NO', null],
+    ['email_attachment_chunks', 'chunk_index', 'int2', 'NO', null],
+    ['email_attachment_chunks', 'plaintext_size', 'int4', 'NO', null],
+    ['email_attachment_chunks', 'ciphertext_encrypted', 'bytea', 'NO', null]
+  ]
+  const criticalColumns = await query(`
+    SELECT table_name, column_name, udt_name, is_nullable, column_default
+    FROM information_schema.columns
+    WHERE table_schema = current_schema()
+      AND (table_name, column_name) IN (
+        SELECT expected.table_name, expected.column_name
+        FROM unnest($1::text[], $2::text[]) AS expected(table_name, column_name)
+      )
+  `, [
+    criticalColumnSpecs.map(([tableName]) => tableName),
+    criticalColumnSpecs.map(([, columnName]) => columnName)
+  ])
+  for (const [tableName, columnName, expectedType, expectedNullable, expectedDefault] of criticalColumnSpecs) {
+    const column = criticalColumns.rows.find(
+      (row) => row.table_name === tableName && row.column_name === columnName
+    )
+    if (!column) throw new Error(`${tableName}.${columnName} column is missing`)
+    if (column.udt_name !== expectedType || column.is_nullable !== expectedNullable) {
+      throw new Error(
+        `${tableName}.${columnName} type mismatch: expected ${expectedType}/${expectedNullable}, `
+        + `received ${column.udt_name}/${column.is_nullable}`
+      )
+    }
+    if (
+      expectedDefault !== null
+      && !normalizeSqlDefinition(column.column_default).includes(normalizeSqlDefinition(expectedDefault))
+    ) {
+      throw new Error(`${tableName}.${columnName} default mismatch`)
+    }
+  }
+
+  const expectedConstraintDefinitions = new Map([
+    ['email_drafts_identity_user_unique', ['unique (id, user_id)']],
+    ['mail_outbox_identity_user_unique', ['unique (id, user_id)']],
+    ['email_attachment_objects_pkey', ['primary key (id)']],
+    ['email_attachment_objects_user_id_fkey', [
+      'foreign key (user_id)', 'references users(id)', 'on delete cascade'
+    ]],
+    ['email_attachment_objects_draft_user_fkey', [
+      'foreign key (draft_id, user_id)',
+      'references email_drafts(id, user_id)',
+      'on delete cascade'
+    ]],
+    ['email_attachment_objects_outbox_user_fkey', [
+      'foreign key (outbox_id, user_id)',
+      'references mail_outbox(id, user_id)',
+      'on delete cascade'
+    ]],
+    ['email_attachment_objects_identity_user_unique', ['unique (id, user_id)']],
+    ['email_attachment_objects_state_check', ['state', 'draft', 'claimed', 'scrubbed']],
+    ['email_attachment_objects_ordinal_check', ['ordinal', '0', '9']],
+    ['email_attachment_objects_sha256_check', ['sha256', '[0-9a-f]{64}']],
+    ['email_attachment_objects_size_check', ['size_bytes', '1', '10485760']],
+    ['email_attachment_objects_chunk_count_check', ['chunk_count', '1', '40']],
+    ['email_attachment_objects_metadata_size_check', [
+      'metadata_encrypted is null', 'octet_length(metadata_encrypted)', '32', '32768'
+    ]],
+    ['email_attachment_objects_metadata_digest_check', ['metadata_digest', '[0-9a-f]{64}']],
+    ['email_attachment_objects_lifecycle_check', [
+      'state', 'draft', 'claimed', 'scrubbed',
+      'metadata_encrypted is not null', 'metadata_encrypted is null', 'scrubbed_at'
+    ]],
+    ['email_attachment_chunks_pkey', ['primary key (attachment_id, chunk_index)']],
+    ['email_attachment_chunks_attachment_user_fkey', [
+      'foreign key (attachment_id, user_id)',
+      'references email_attachment_objects(id, user_id)',
+      'on delete cascade'
+    ]],
+    ['email_attachment_chunks_index_check', ['chunk_index', '0', '39']],
+    ['email_attachment_chunks_plaintext_size_check', ['plaintext_size', '1', '262144']],
+    ['email_attachment_chunks_ciphertext_size_check', [
+      'octet_length(ciphertext_encrypted)', 'plaintext_size', '29'
+    ]]
+  ])
+  const constraints = await query(`
+    SELECT conname, convalidated, pg_get_constraintdef(oid) AS definition
+    FROM pg_constraint
+    WHERE conname = ANY($1::text[])
+      AND connamespace = current_schema()::regnamespace
+  `, [[...expectedConstraintDefinitions.keys()]])
+  assertExactSet(
+    'email attachment constraints',
+    constraints.rows.map((row) => row.conname),
+    [...expectedConstraintDefinitions.keys()]
+  )
+  if (constraints.rows.some((row) => row.convalidated !== true)) {
+    throw new Error('email attachment constraints must be validated')
+  }
+  for (const [constraintName, fragments] of expectedConstraintDefinitions) {
+    const constraint = constraints.rows.find((row) => row.conname === constraintName)
+    assertDefinitionIncludes(
+      `email attachment constraint ${constraintName}`,
+      constraint?.definition,
+      fragments
+    )
+  }
+
+  const expectedIndexDefinitions = new Map([
+    ['idx_email_attachment_objects_draft_ordinal', [
+      'unique index', '(draft_id, ordinal)'
+    ]],
+    ['idx_email_attachment_objects_outbox_ordinal', [
+      'unique index', '(outbox_id, ordinal)', 'where (outbox_id is not null)'
+    ]],
+    ['idx_email_attachment_objects_user_staged', [
+      '(user_id, state, created_at, id)', 'where', 'state', 'draft', 'claimed'
+    ]],
+    ['idx_email_attachment_objects_outbox_state', [
+      '(outbox_id, state, ordinal, id)', 'where (outbox_id is not null)'
+    ]],
+    ['idx_email_attachment_chunks_user_attachment', [
+      '(user_id, attachment_id, chunk_index)'
+    ]]
+  ])
+  const indexes = await query(`
+    SELECT indexname, indexdef
+    FROM pg_indexes
+    WHERE schemaname = current_schema()
+      AND indexname = ANY($1::text[])
+  `, [[...expectedIndexDefinitions.keys()]])
+  assertExactSet(
+    'email attachment indexes',
+    indexes.rows.map((row) => row.indexname),
+    [...expectedIndexDefinitions.keys()]
+  )
+  for (const [indexName, fragments] of expectedIndexDefinitions) {
+    const index = indexes.rows.find((row) => row.indexname === indexName)
+    assertDefinitionIncludes(`email attachment index ${indexName}`, index?.indexdef, fragments)
+  }
+}
+
+async function verifyEmailSentAppendSchema() {
+  const expectedColumns = [
+    'id', 'outbox_id', 'user_id', 'account_id', 'status', 'message_id',
+    'nav_id', 'mime_encrypted', 'mime_sha256', 'mime_size_bytes',
+    'append_attempted', 'append_attempt_count', 'reconcile_count',
+    'next_attempt_at', 'smtp_accepted_at', 'append_started_at',
+    'appended_at', 'sent_folder_path', 'uid_validity', 'uid',
+    'last_error_code', 'scrubbed_at', 'created_at', 'updated_at'
+  ]
+  const columns = await query(`
+    SELECT column_name
+    FROM information_schema.columns
+    WHERE table_schema = current_schema()
+      AND table_name = 'email_sent_append_jobs'
+  `)
+  assertExactSet(
+    'email Sent append job columns',
+    columns.rows.map((row) => row.column_name),
+    expectedColumns
+  )
+
+  const criticalColumnSpecs = [
+    ['id', 'uuid', 'NO', 'gen_random_uuid()'],
+    ['outbox_id', 'uuid', 'NO', null],
+    ['user_id', 'uuid', 'NO', null],
+    ['account_id', 'uuid', 'NO', null],
+    ['status', 'varchar', 'NO', "'prepared'"],
+    ['message_id', 'varchar', 'NO', null],
+    ['nav_id', 'bpchar', 'NO', null],
+    ['mime_encrypted', 'bytea', 'YES', null],
+    ['mime_sha256', 'bpchar', 'NO', null],
+    ['mime_size_bytes', 'int4', 'NO', null],
+    ['append_attempted', 'bool', 'NO', 'false'],
+    ['append_attempt_count', 'int4', 'NO', '0'],
+    ['reconcile_count', 'int4', 'NO', '0'],
+    ['next_attempt_at', 'timestamptz', 'NO', 'now()'],
+    ['smtp_accepted_at', 'timestamptz', 'YES', null],
+    ['append_started_at', 'timestamptz', 'YES', null],
+    ['appended_at', 'timestamptz', 'YES', null],
+    ['sent_folder_path', 'varchar', 'YES', null],
+    ['uid_validity', 'int8', 'YES', null],
+    ['uid', 'int8', 'YES', null],
+    ['last_error_code', 'varchar', 'YES', null],
+    ['scrubbed_at', 'timestamptz', 'YES', null],
+    ['created_at', 'timestamptz', 'NO', 'now()'],
+    ['updated_at', 'timestamptz', 'NO', 'now()']
+  ]
+  const criticalColumns = await query(`
+    SELECT column_name, udt_name, is_nullable, column_default
+    FROM information_schema.columns
+    WHERE table_schema = current_schema()
+      AND table_name = 'email_sent_append_jobs'
+      AND column_name = ANY($1::text[])
+  `, [criticalColumnSpecs.map(([columnName]) => columnName)])
+  assertExactSet(
+    'email Sent append critical columns',
+    criticalColumns.rows.map((row) => row.column_name),
+    criticalColumnSpecs.map(([columnName]) => columnName)
+  )
+  for (const [columnName, expectedType, expectedNullable, expectedDefault] of criticalColumnSpecs) {
+    const column = criticalColumns.rows.find((row) => row.column_name === columnName)
+    if (column.udt_name !== expectedType || column.is_nullable !== expectedNullable) {
+      throw new Error(
+        `email_sent_append_jobs.${columnName} type mismatch: `
+        + `expected ${expectedType}/${expectedNullable}, `
+        + `received ${column.udt_name}/${column.is_nullable}`
+      )
+    }
+    if (expectedDefault === null) {
+      if (column.column_default !== null) {
+        throw new Error(`email_sent_append_jobs.${columnName} must not have a default`)
+      }
+    } else if (
+      !normalizeSqlDefinition(column.column_default).includes(normalizeSqlDefinition(expectedDefault))
+    ) {
+      throw new Error(`email_sent_append_jobs.${columnName} default mismatch`)
+    }
+  }
+
+  const expectedConstraintDefinitions = new Map([
+    ['email_sent_append_jobs_pkey', ['primary key (id)']],
+    ['email_sent_append_jobs_outbox_id_key', ['unique (outbox_id)']],
+    ['email_sent_append_jobs_outbox_user_fkey', [
+      'foreign key (outbox_id, user_id)',
+      'references mail_outbox(id, user_id)',
+      'on delete cascade'
+    ]],
+    ['email_sent_append_jobs_account_user_fkey', [
+      'foreign key (account_id, user_id)',
+      'references email_accounts(id, user_id)',
+      'on delete cascade'
+    ]],
+    ['email_sent_append_jobs_status_check', [
+      'prepared', 'pending', 'appending', 'reconcile',
+      'appended', 'blocked', 'cancelled', 'expired'
+    ]],
+    ['email_sent_append_jobs_message_id_check', [
+      'char_length(message_id)', '3', '998', 'message_id', '^<'
+    ]],
+    ['email_sent_append_jobs_nav_id_check', ['nav_id', '[0-9a-f]{24}']],
+    ['email_sent_append_jobs_mime_sha256_check', ['mime_sha256', '[0-9a-f]{64}']],
+    ['email_sent_append_jobs_mime_size_check', ['mime_size_bytes', '1', '41943040']],
+    ['email_sent_append_jobs_mime_ciphertext_size_check', [
+      'mime_encrypted is null', 'octet_length(mime_encrypted)', '30', '41943069'
+    ]],
+    ['email_sent_append_jobs_attempt_count_check', [
+      'append_attempt_count', '>= 0', 'reconcile_count'
+    ]],
+    ['email_sent_append_jobs_folder_path_check', [
+      'sent_folder_path is null', 'char_length(sent_folder_path)',
+      '1', '512', '[:cntrl:]'
+    ]],
+    ['email_sent_append_jobs_uid_validity_check', [
+      'uid_validity is null', 'uid_validity', '1', '4294967295'
+    ]],
+    ['email_sent_append_jobs_uid_check', [
+      'uid is null', 'uid', '1', '4294967295'
+    ]],
+    ['email_sent_append_jobs_error_code_check', [
+      'last_error_code is null', 'last_error_code', '[A-Z0-9_.-]+'
+    ]],
+    ['email_sent_append_jobs_lifecycle_check', [
+      'prepared', 'pending', 'appending', 'reconcile', 'blocked',
+      'appended', 'cancelled', 'expired', 'append_attempted',
+      'append_attempt_count = 0', 'append_attempt_count >= 1',
+      'append_started_at is null', 'append_started_at is not null',
+      'mime_encrypted', 'smtp_accepted_at', 'appended_at',
+      'sent_folder_path', 'uid_validity', 'uid', 'scrubbed_at'
+    ]]
+  ])
+  const constraints = await query(`
+    SELECT conname, convalidated, pg_get_constraintdef(oid) AS definition
+    FROM pg_constraint
+    WHERE conname = ANY($1::text[])
+      AND connamespace = current_schema()::regnamespace
+  `, [[...expectedConstraintDefinitions.keys()]])
+  assertExactSet(
+    'email Sent append constraints',
+    constraints.rows.map((row) => row.conname),
+    [...expectedConstraintDefinitions.keys()]
+  )
+  if (constraints.rows.some((row) => row.convalidated !== true)) {
+    throw new Error('email Sent append constraints must be validated')
+  }
+  for (const [constraintName, fragments] of expectedConstraintDefinitions) {
+    const constraint = constraints.rows.find((row) => row.conname === constraintName)
+    assertDefinitionIncludes(
+      `email Sent append constraint ${constraintName}`,
+      constraint?.definition,
+      fragments
+    )
+  }
+
+  const expectedIndexDefinitions = new Map([
+    ['idx_email_sent_append_jobs_due', [
+      '(next_attempt_at, created_at, id)', 'where',
+      'pending', 'appending', 'reconcile', 'blocked'
+    ]],
+    ['idx_email_sent_append_jobs_user_created', [
+      '(user_id, created_at desc, id)'
+    ]]
+  ])
+  const indexes = await query(`
+    SELECT indexname, indexdef
+    FROM pg_indexes
+    WHERE schemaname = current_schema()
+      AND indexname = ANY($1::text[])
+  `, [[...expectedIndexDefinitions.keys()]])
+  assertExactSet(
+    'email Sent append indexes',
+    indexes.rows.map((row) => row.indexname),
+    [...expectedIndexDefinitions.keys()]
+  )
+  for (const [indexName, fragments] of expectedIndexDefinitions) {
+    const index = indexes.rows.find((row) => row.indexname === indexName)
+    assertDefinitionIncludes(`email Sent append index ${indexName}`, index?.indexdef, fragments)
+  }
+}
+
 async function verifyAssistantAgentOperationsSchema() {
   const expectedColumns = [
     'user_id',
@@ -2120,6 +2475,8 @@ async function main() {
   await verifyNotificationMailSchema()
   await verifyEmailAssistantSchema()
   await verifyEmailMailboxSchema()
+  await verifyEmailAttachmentSchema()
+  await verifyEmailSentAppendSchema()
   await verifyAssistantAgentOperationsSchema()
   console.log('migration schema verification complete')
 }

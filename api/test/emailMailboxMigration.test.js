@@ -10,6 +10,14 @@ const smartMailMigrationUrl = new URL(
   '../src/db/migrations/036_email_ai_drafts_retention.sql',
   import.meta.url
 )
+const attachmentMigrationUrl = new URL(
+  '../src/db/migrations/037_email_attachments_sent_sync.sql',
+  import.meta.url
+)
+const sentAppendMigrationUrl = new URL(
+  '../src/db/migrations/038_email_sent_append_jobs.sql',
+  import.meta.url
+)
 const verifierUrl = new URL('../src/db/verifyMigrations.js', import.meta.url)
 
 test('mailbox foundation models accounts, folders, messages and remote identities', async () => {
@@ -120,4 +128,74 @@ test('smart mail outbox requires encrypted confirmed user payloads and bounded r
   assert.match(verifier, /email_drafts_outbox_id_key/)
   assert.match(verifier, /email draft outbox unique binding/)
   assert.match(verifier, /unique \(outbox_id\)/)
+})
+
+test('email attachment migration stores owner-bound encrypted chunks with lifecycle limits', async () => {
+  const migration = await readFile(attachmentMigrationUrl, 'utf8')
+
+  for (const table of ['email_attachment_objects', 'email_attachment_chunks']) {
+    assert.match(migration, new RegExp(`CREATE TABLE IF NOT EXISTS ${table} \\(`))
+  }
+  assert.match(migration, /FOREIGN KEY \(draft_id, user_id\)[\s\S]*REFERENCES email_drafts\(id, user_id\) ON DELETE CASCADE/)
+  assert.match(migration, /FOREIGN KEY \(outbox_id, user_id\)[\s\S]*REFERENCES mail_outbox\(id, user_id\) ON DELETE CASCADE/)
+  assert.match(migration, /FOREIGN KEY \(attachment_id, user_id\)[\s\S]*REFERENCES email_attachment_objects\(id, user_id\) ON DELETE CASCADE/)
+  assert.match(migration, /state IN \('draft', 'claimed', 'scrubbed'\)/)
+  assert.match(migration, /size_bytes BETWEEN 1 AND 10485760/)
+  assert.match(migration, /chunk_count BETWEEN 1 AND 40/)
+  assert.match(migration, /plaintext_size BETWEEN 1 AND 262144/)
+  assert.match(migration, /octet_length\(ciphertext_encrypted\) = plaintext_size \+ 29/)
+  assert.match(migration, /state = 'scrubbed'[\s\S]*metadata_encrypted IS NULL[\s\S]*scrubbed_at IS NOT NULL/)
+  assert.match(migration, /UNIQUE \(id, user_id\)/)
+  assert.doesNotMatch(migration, /\n\s*(?:filename|content_type|content_id|content)\s+(?:TEXT|VARCHAR|BYTEA)/i)
+})
+
+test('migration verifier validates attachment columns, constraints and partial indexes', async () => {
+  const verifier = await readFile(verifierUrl, 'utf8')
+
+  assert.match(verifier, /async function verifyEmailAttachmentSchema\(\)/)
+  assert.match(verifier, /email_attachment_objects_lifecycle_check/)
+  assert.match(verifier, /email_attachment_chunks_ciphertext_size_check/)
+  assert.match(verifier, /idx_email_attachment_objects_outbox_ordinal/)
+  assert.match(verifier, /idx_email_attachment_objects_user_staged/)
+  assert.match(verifier, /constraints must be validated/)
+  assert.match(verifier, /await verifyEmailAttachmentSchema\(\)/)
+})
+
+test('Sent append migration preserves encrypted MIME until a terminal lifecycle state', async () => {
+  const migration = await readFile(sentAppendMigrationUrl, 'utf8')
+
+  assert.match(migration, /CREATE TABLE IF NOT EXISTS email_sent_append_jobs \(/)
+  assert.match(migration, /FOREIGN KEY \(outbox_id, user_id\)[\s\S]*REFERENCES mail_outbox\(id, user_id\) ON DELETE CASCADE/)
+  assert.match(migration, /FOREIGN KEY \(account_id, user_id\)[\s\S]*REFERENCES email_accounts\(id, user_id\) ON DELETE CASCADE/)
+  assert.match(migration, /status VARCHAR\(16\) NOT NULL DEFAULT 'prepared'/)
+  assert.match(migration, /mime_encrypted BYTEA/)
+  assert.match(migration, /mime_size_bytes BETWEEN 1 AND 41943040/)
+  assert.match(migration, /sent_folder_path IS NULL[\s\S]*char_length\(sent_folder_path\) BETWEEN 1 AND 512[\s\S]*\[:cntrl:\]/)
+  assert.match(migration, /uid_validity IS NULL OR uid_validity BETWEEN 1 AND 4294967295/)
+  assert.match(migration, /uid IS NULL OR uid BETWEEN 1 AND 4294967295/)
+  assert.match(migration, /last_error_code IS NULL OR last_error_code ~ '\^\[A-Z0-9_\.\-\]\+\$'/)
+  assert.match(migration, /append_attempted = FALSE[\s\S]*append_attempt_count = 0[\s\S]*append_started_at IS NULL/)
+  assert.match(migration, /append_attempted = TRUE[\s\S]*append_attempt_count >= 1[\s\S]*append_started_at IS NOT NULL/)
+  assert.match(migration, /status = 'appended'[\s\S]*mime_encrypted IS NULL[\s\S]*sent_folder_path IS NOT NULL[\s\S]*uid_validity IS NOT NULL[\s\S]*uid IS NOT NULL[\s\S]*scrubbed_at IS NOT NULL/)
+  assert.match(migration, /WHERE status IN \('pending', 'appending', 'reconcile', 'blocked'\)/)
+  assert.match(migration, /VALUES \('email_sent_append'\)/)
+})
+
+test('migration verifier validates Sent append types, defaults and remote identity guards', async () => {
+  const verifier = await readFile(verifierUrl, 'utf8')
+
+  assert.match(verifier, /async function verifyEmailSentAppendSchema\(\)/)
+  assert.match(verifier, /email Sent append critical columns/)
+  assert.match(verifier, /expectedDefault === null/)
+  assert.match(verifier, /email_sent_append_jobs_folder_path_check/)
+  assert.match(verifier, /email_sent_append_jobs_uid_validity_check/)
+  assert.match(verifier, /email_sent_append_jobs_uid_check/)
+  assert.match(verifier, /email_sent_append_jobs_error_code_check/)
+  assert.match(verifier, /append_attempt_count = 0/)
+  assert.match(verifier, /append_attempt_count >= 1/)
+  assert.match(verifier, /append_started_at is null/)
+  assert.match(verifier, /append_started_at is not null/)
+  assert.match(verifier, /\(next_attempt_at, created_at, id\)/)
+  assert.match(verifier, /\(user_id, created_at desc, id\)/)
+  assert.match(verifier, /await verifyEmailSentAppendSchema\(\)/)
 })

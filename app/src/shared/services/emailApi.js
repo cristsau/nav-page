@@ -99,6 +99,70 @@ export function fetchEmailDraft(draftId) {
   })
 }
 
+export function uploadEmailDraftAttachment(draftId, file) {
+  if (!(file instanceof Blob)) {
+    throw new TypeError('Attachment file is required')
+  }
+  const query = new URLSearchParams({
+    filename: String(file.name || 'attachment').trim() || 'attachment',
+    contentType: String(file.type || 'application/octet-stream').trim() || 'application/octet-stream'
+  })
+  return request(
+    `/email/drafts/${requiredId(draftId, 'Email draft id')}/attachments?${query.toString()}`,
+    {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/octet-stream' },
+      body: file
+    }
+  )
+}
+
+export function deleteEmailDraftAttachment(draftId, attachmentId) {
+  return request(
+    `/email/drafts/${requiredId(draftId, 'Email draft id')}/attachments/${requiredId(attachmentId, 'Email attachment id')}`,
+    { method: 'DELETE' }
+  )
+}
+
+function responseFilename(response, fallback = 'attachment') {
+  const disposition = response.headers.get('content-disposition') || ''
+  const encoded = disposition.match(/filename\*=UTF-8''([^;]+)/i)?.[1]
+  if (encoded) {
+    try {
+      return decodeURIComponent(encoded.trim())
+    } catch {
+      return encoded.trim()
+    }
+  }
+  return (
+    disposition.match(/filename="([^"]+)"/i)?.[1]
+    || disposition.match(/filename=([^;]+)/i)?.[1]
+    || fallback
+  ).trim()
+}
+
+export async function downloadEmailAttachment({
+  accountId,
+  locationId,
+  attachmentId,
+  folderId,
+  filename = 'attachment'
+} = {}) {
+  const query = new URLSearchParams({ folderId: String(folderId || '') })
+  const response = await apiRawRequest(
+    `/email/accounts/${requiredId(accountId, 'Email account id')}/messages/${requiredId(locationId, 'Email location id')}/attachments/${requiredId(attachmentId, 'Email attachment id')}?${query.toString()}`,
+    {
+      method: 'GET',
+      cache: 'no-store',
+      headers: { Accept: 'application/octet-stream' }
+    }
+  )
+  return {
+    blob: await response.blob(),
+    filename: responseFilename(response, filename)
+  }
+}
+
 export function confirmEmailDraft(draftId, contentHash) {
   return request(`/email/drafts/${requiredId(draftId, 'Email draft id')}/send`, {
     method: 'POST',

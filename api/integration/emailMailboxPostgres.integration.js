@@ -1,9 +1,10 @@
 import assert from 'node:assert/strict'
-import { randomBytes } from 'node:crypto'
+import { createHash, randomBytes, randomUUID } from 'node:crypto'
 import fs from 'node:fs/promises'
 import os from 'node:os'
 import path from 'node:path'
 import test, { after, before, beforeEach } from 'node:test'
+import { simpleParser } from 'mailparser'
 
 const EXPECTED_DATABASE_NAME = 'nav_email_mailbox_test'
 const ALLOWED_DATABASE_HOSTS = new Set(['127.0.0.1', 'localhost'])
@@ -34,7 +35,12 @@ let clearEmailEncryptionKeyCache
 let createEmailDraft
 let getEmailDraftForUser
 let queueEmailDraft
+let refreshEmailDraftContentHash
+let createDraftEmailAttachment
+let listDraftEmailAttachments
 let deliverMailOutbox
+let processEmailSentAppendJob
+let decryptEmailSentMime
 let updateMailboxFailureStateSql
 let temporaryDirectory
 
@@ -46,8 +52,19 @@ before(async () => {
   ;({ pool } = await import('../src/db/index.js'))
   ;({ persistEmailMailboxMessage, decryptStoredMailboxMessage } = await import('../src/lib/emailMailboxStore.js'))
   ;({ clearEmailEncryptionKeyCache } = await import('../src/lib/emailCrypto.js'))
-  ;({ createEmailDraft, getEmailDraftForUser, queueEmailDraft } = await import('../src/lib/emailDrafts.js'))
+  ;({
+    createEmailDraft,
+    getEmailDraftForUser,
+    queueEmailDraft,
+    refreshEmailDraftContentHash
+  } = await import('../src/lib/emailDrafts.js'))
+  ;({
+    createDraftEmailAttachment,
+    listDraftEmailAttachments
+  } = await import('../src/lib/emailAttachmentStore.js'))
   ;({ deliverMailOutbox } = await import('../src/lib/mailOutbox.js'))
+  ;({ processEmailSentAppendJob } = await import('../src/lib/emailSentAppend.js'))
+  ;({ decryptEmailSentMime } = await import('../src/lib/emailSentMimeCrypto.js'))
   ;({ UPDATE_MAILBOX_FAILURE_STATE_SQL: updateMailboxFailureStateSql } = await import('../src/lib/emailIngestScheduler.js'))
 })
 
@@ -308,7 +325,20 @@ test('confirmed encrypted draft is delivered once, scrubbed and never sent twice
   const transportFactory = async () => {
     transportCreations += 1
     return {
-      async sendMail(message) { deliveries.push(message) },
+      async sendMail(message) {
+        const parsed = await simpleParser(message.raw)
+        try {
+          deliveries.push({
+            envelope: message.envelope,
+            subject: parsed.subject,
+            text: parsed.text?.trim()
+          })
+        } finally {
+          for (const attachment of parsed.attachments || []) {
+            if (Buffer.isBuffer(attachment.content)) attachment.content.fill(0)
+          }
+        }
+      },
       close() {}
     }
   }
@@ -325,8 +355,10 @@ test('confirmed encrypted draft is delivered once, scrubbed and never sent twice
   assert.equal(firstDelivery.processed, 1)
   assert.equal(firstDelivery.sent, 1)
   assert.equal(deliveries.length, 1)
-  assert.deepEqual(deliveries[0].to, ['recipient@example.test'])
-  assert.deepEqual(deliveries[0].cc, ['copy@example.test'])
+  assert.deepEqual(deliveries[0].envelope.to, [
+    'recipient@example.test',
+    'copy@example.test'
+  ])
   assert.equal(deliveries[0].subject, 'Integration delivery subject')
   assert.equal(deliveries[0].text, 'Integration delivery body marker')
 
@@ -348,6 +380,327 @@ test('confirmed encrypted draft is delivered once, scrubbed and never sent twice
   assert.equal(replay.sent, 0)
   assert.equal(deliveries.length, 1)
   assert.equal(transportCreations, 1)
+})
+
+test('attachment ciphertext lifecycle reaches an encrypted pending Sent job and terminal scrub', async () => {
+  const attachmentMarker = Buffer.from('ATTACHMENT-PLAINTEXT-MARKER-037-038', 'utf8')
+  const attachmentPlaintext = Buffer.alloc((256 * 1024) + 4096, 0x61)
+  attachmentMarker.copy(attachmentPlaintext)
+  const attachmentSha256 = createHash('sha256').update(attachmentPlaintext).digest('hex')
+  const filename = 'private-attachment-marker-037-038.txt'
+  const subject = 'Sent lifecycle subject marker 038'
+  const body = 'Sent lifecycle body marker 038'
+  let smtpSnapshot = null
+  let appendedSnapshot = null
+
+  try {
+    const saved = await persistEmailMailboxMessage(mailboxFixture())
+    const draft = await createEmailDraft({
+      userId: OWNER_ID,
+      accountId: saved.account.id,
+      payload: {
+        to: ['recipient@example.test'],
+        cc: ['copy@example.test'],
+        subject,
+        text: body
+      }
+    }, { poolInstance: pool })
+
+    const attachment = await createDraftEmailAttachment({
+      userId: OWNER_ID,
+      draftId: draft.id,
+      metadata: {
+        filename,
+        contentType: 'text/plain',
+        disposition: 'attachment'
+      },
+      content: attachmentPlaintext
+    }, { poolInstance: pool })
+    assert.equal(attachment.sha256, attachmentSha256)
+    assert.equal(attachment.size, attachmentPlaintext.length)
+    assert.equal(attachment.ordinal, 0)
+
+    const listed = await listDraftEmailAttachments(
+      { userId: OWNER_ID, draftId: draft.id },
+      { queryFn: pool.query.bind(pool) }
+    )
+    assert.equal(listed.length, 1)
+    assert.equal(listed[0].id, attachment.id)
+    assert.equal(listed[0].filename, filename)
+    assert.equal(listed[0].contentType, 'text/plain')
+    assert.deepEqual(
+      await listDraftEmailAttachments(
+        { userId: OTHER_USER_ID, draftId: draft.id },
+        { queryFn: pool.query.bind(pool) }
+      ),
+      []
+    )
+
+    const storedObject = await pool.query(
+      `SELECT * FROM email_attachment_objects
+       WHERE id = $1 AND user_id = $2`,
+      [attachment.id, OWNER_ID]
+    )
+    assert.equal(storedObject.rowCount, 1)
+    assert.equal(storedObject.rows[0].state, 'draft')
+    assert.equal(storedObject.rows[0].outbox_id, null)
+    assert.equal(storedObject.rows[0].sha256, attachmentSha256)
+    assert.equal(Number(storedObject.rows[0].size_bytes), attachmentPlaintext.length)
+    assert.equal(Number(storedObject.rows[0].chunk_count), 2)
+    assert.ok(Buffer.isBuffer(storedObject.rows[0].metadata_encrypted))
+    assert.equal(
+      storedObject.rows[0].metadata_encrypted.includes(Buffer.from(filename, 'utf8')),
+      false
+    )
+
+    const storedChunks = await pool.query(
+      `SELECT chunk_index, plaintext_size, ciphertext_encrypted
+       FROM email_attachment_chunks
+       WHERE attachment_id = $1 AND user_id = $2
+       ORDER BY chunk_index`,
+      [attachment.id, OWNER_ID]
+    )
+    assert.equal(storedChunks.rowCount, 2)
+    assert.deepEqual(storedChunks.rows.map((row) => Number(row.chunk_index)), [0, 1])
+    assert.equal(
+      storedChunks.rows.reduce((total, row) => total + Number(row.plaintext_size), 0),
+      attachmentPlaintext.length
+    )
+    for (const row of storedChunks.rows) {
+      assert.ok(Buffer.isBuffer(row.ciphertext_encrypted))
+      assert.equal(
+        row.ciphertext_encrypted.length,
+        Number(row.plaintext_size) + 29
+      )
+      assert.equal(row.ciphertext_encrypted.includes(attachmentMarker), false)
+    }
+
+    await assert.rejects(
+      pool.query(
+        `INSERT INTO email_attachment_objects (
+           id, user_id, draft_id, state, ordinal, sha256, size_bytes,
+           chunk_count, metadata_encrypted, metadata_digest
+         ) VALUES ($1,$2,$3,'draft',1,$4,1,1,$5,$6)`,
+        [
+          randomUUID(),
+          OTHER_USER_ID,
+          draft.id,
+          'b'.repeat(64),
+          Buffer.alloc(32, 0x31),
+          'c'.repeat(64)
+        ]
+      ),
+      (error) => error?.code === '23503'
+    )
+    await assert.rejects(
+      pool.query(
+        `INSERT INTO email_attachment_chunks (
+           attachment_id, user_id, chunk_index, plaintext_size, ciphertext_encrypted
+         ) VALUES ($1,$2,39,1,$3)`,
+        [attachment.id, OTHER_USER_ID, Buffer.alloc(30, 0x32)]
+      ),
+      (error) => error?.code === '23503'
+    )
+
+    const refreshedDraft = await refreshEmailDraftContentHash(
+      { userId: OWNER_ID, draftId: draft.id },
+      { poolInstance: pool }
+    )
+    assert.notEqual(refreshedDraft.contentHash, draft.contentHash)
+    assert.equal(refreshedDraft.attachments.length, 1)
+
+    const queued = await queueEmailDraft({
+      userId: OWNER_ID,
+      draftId: draft.id,
+      contentHash: refreshedDraft.contentHash,
+      confirmed: true
+    }, { poolInstance: pool })
+    assert.ok(queued.outboxId)
+
+    const claimed = await pool.query(
+      `SELECT state, outbox_id, metadata_encrypted, scrubbed_at
+       FROM email_attachment_objects
+       WHERE id = $1 AND user_id = $2`,
+      [attachment.id, OWNER_ID]
+    )
+    assert.equal(claimed.rows[0].state, 'claimed')
+    assert.equal(claimed.rows[0].outbox_id, queued.outboxId)
+    assert.ok(Buffer.isBuffer(claimed.rows[0].metadata_encrypted))
+    assert.equal(claimed.rows[0].scrubbed_at, null)
+
+    const runtimeConfig = {
+      emailEncryptionKeyFile: process.env.NAV_EMAIL_ENCRYPTION_KEY_FILE,
+      emailSentAppendEnabled: true,
+      smtpFromAddress: 'nav@example.test',
+      smtpFromName: 'DOMO NAV'
+    }
+    const delivery = await deliverMailOutbox({
+      poolInstance: pool,
+      policy: { batchSize: 10, maxAttempts: 3, intervalSeconds: 30 },
+      runtimeConfig,
+      transportFactory: async () => ({
+        async sendMail(message) {
+          const parsed = await simpleParser(message.raw)
+          try {
+            smtpSnapshot = {
+              envelope: message.envelope,
+              mimeSha256: createHash('sha256').update(message.raw).digest('hex'),
+              mimeSizeBytes: message.raw.length,
+              subject: parsed.subject,
+              text: parsed.text?.trim(),
+              attachments: (parsed.attachments || []).map((item) => ({
+                filename: item.filename,
+                contentType: item.contentType,
+                sha256: createHash('sha256').update(item.content).digest('hex')
+              }))
+            }
+          } finally {
+            for (const item of parsed.attachments || []) {
+              if (Buffer.isBuffer(item.content)) item.content.fill(0)
+            }
+          }
+        },
+        close() {}
+      })
+    })
+    assert.equal(delivery.processed, 1)
+    assert.equal(delivery.sent, 1)
+    assert.deepEqual(smtpSnapshot.envelope.to, [
+      'recipient@example.test',
+      'copy@example.test'
+    ])
+    assert.equal(smtpSnapshot.subject, subject)
+    assert.equal(smtpSnapshot.text, body)
+    assert.deepEqual(smtpSnapshot.attachments, [{
+      filename,
+      contentType: 'text/plain',
+      sha256: attachmentSha256
+    }])
+
+    const afterSmtp = await pool.query(
+      `SELECT job.*, outbox.status AS outbox_status,
+              outbox.payload_encrypted AS outbox_payload_encrypted,
+              outbox.scrubbed_at AS outbox_scrubbed_at
+       FROM email_sent_append_jobs AS job
+       JOIN mail_outbox AS outbox ON outbox.id = job.outbox_id
+       WHERE job.outbox_id = $1 AND job.user_id = $2`,
+      [queued.outboxId, OWNER_ID]
+    )
+    assert.equal(afterSmtp.rowCount, 1)
+    const sentJob = afterSmtp.rows[0]
+    assert.equal(sentJob.status, 'pending')
+    assert.equal(sentJob.outbox_status, 'sent')
+    assert.ok(sentJob.smtp_accepted_at)
+    assert.equal(sentJob.append_attempted, false)
+    assert.equal(Number(sentJob.append_attempt_count), 0)
+    assert.equal(sentJob.append_started_at, null)
+    assert.equal(sentJob.appended_at, null)
+    assert.equal(sentJob.scrubbed_at, null)
+    assert.ok(Buffer.isBuffer(sentJob.mime_encrypted))
+    assert.equal(sentJob.mime_sha256, smtpSnapshot.mimeSha256)
+    assert.equal(Number(sentJob.mime_size_bytes), smtpSnapshot.mimeSizeBytes)
+    assert.equal(sentJob.mime_encrypted.length, smtpSnapshot.mimeSizeBytes + 29)
+    assert.equal(sentJob.outbox_payload_encrypted, null)
+    assert.ok(sentJob.outbox_scrubbed_at)
+    for (const marker of [subject, body, filename, attachmentMarker.toString('utf8')]) {
+      assert.equal(sentJob.mime_encrypted.includes(Buffer.from(marker, 'utf8')), false)
+    }
+
+    const scrubbedAttachment = await pool.query(
+      `SELECT state, outbox_id, metadata_encrypted, scrubbed_at,
+              sha256, size_bytes, chunk_count, metadata_digest
+       FROM email_attachment_objects
+       WHERE id = $1 AND user_id = $2`,
+      [attachment.id, OWNER_ID]
+    )
+    assert.equal(scrubbedAttachment.rows[0].state, 'scrubbed')
+    assert.equal(scrubbedAttachment.rows[0].outbox_id, queued.outboxId)
+    assert.equal(scrubbedAttachment.rows[0].metadata_encrypted, null)
+    assert.ok(scrubbedAttachment.rows[0].scrubbed_at)
+    assert.equal(scrubbedAttachment.rows[0].sha256, attachmentSha256)
+    assert.equal(Number(scrubbedAttachment.rows[0].size_bytes), attachmentPlaintext.length)
+    assert.equal(Number(scrubbedAttachment.rows[0].chunk_count), 2)
+    assert.match(scrubbedAttachment.rows[0].metadata_digest, /^[0-9a-f]{64}$/)
+    assert.equal(
+      Number((await pool.query(
+        'SELECT COUNT(*) FROM email_attachment_chunks WHERE attachment_id = $1',
+        [attachment.id]
+      )).rows[0].count),
+      0
+    )
+
+    const dbClient = await pool.connect()
+    try {
+      const fakeImap = {
+        async search() { return [] },
+        async append(folderPath, raw, flags, date) {
+          const parsed = await simpleParser(raw)
+          try {
+            appendedSnapshot = {
+              folderPath,
+              flags,
+              date,
+              mimeSha256: createHash('sha256').update(raw).digest('hex'),
+              attachmentSha256: createHash('sha256')
+                .update(parsed.attachments[0].content)
+                .digest('hex')
+            }
+          } finally {
+            for (const item of parsed.attachments || []) {
+              if (Buffer.isBuffer(item.content)) item.content.fill(0)
+            }
+          }
+          return { uid: 4242, uidValidity: 9001 }
+        }
+      }
+      const outcome = await processEmailSentAppendJob({
+        dbClient,
+        imap: fakeImap,
+        job: sentJob,
+        folder: { path: 'Sent', delimiter: '/', specialUse: '\\Sent' },
+        uidValidity: 9001,
+        policy: { reconcileDelaySeconds: 30, blockedDelaySeconds: 300 },
+        runtimeConfig,
+        decryptMimeFn: decryptEmailSentMime,
+        poolInstance: pool,
+        cacheFn: async () => {}
+      })
+      assert.equal(outcome, 'appended')
+    } finally {
+      dbClient.release()
+    }
+    assert.equal(appendedSnapshot.folderPath, 'Sent')
+    assert.deepEqual(appendedSnapshot.flags, ['\\Seen'])
+    assert.ok(appendedSnapshot.date instanceof Date)
+    assert.equal(appendedSnapshot.mimeSha256, smtpSnapshot.mimeSha256)
+    assert.equal(appendedSnapshot.attachmentSha256, attachmentSha256)
+
+    const terminalSent = await pool.query(
+      `SELECT status, mime_encrypted, append_attempted,
+              append_attempt_count, reconcile_count, smtp_accepted_at,
+              append_started_at,
+              appended_at, sent_folder_path, uid_validity, uid,
+              last_error_code, scrubbed_at
+       FROM email_sent_append_jobs
+       WHERE outbox_id = $1 AND user_id = $2`,
+      [queued.outboxId, OWNER_ID]
+    )
+    assert.equal(terminalSent.rows[0].status, 'appended')
+    assert.equal(terminalSent.rows[0].mime_encrypted, null)
+    assert.equal(terminalSent.rows[0].append_attempted, true)
+    assert.equal(Number(terminalSent.rows[0].append_attempt_count), 1)
+    assert.equal(Number(terminalSent.rows[0].reconcile_count), 0)
+    assert.ok(terminalSent.rows[0].smtp_accepted_at)
+    assert.ok(terminalSent.rows[0].append_started_at)
+    assert.ok(terminalSent.rows[0].appended_at)
+    assert.equal(terminalSent.rows[0].sent_folder_path, 'Sent')
+    assert.equal(Number(terminalSent.rows[0].uid_validity), 9001)
+    assert.equal(Number(terminalSent.rows[0].uid), 4242)
+    assert.equal(terminalSent.rows[0].last_error_code, null)
+    assert.ok(terminalSent.rows[0].scrubbed_at)
+  } finally {
+    attachmentPlaintext.fill(0)
+  }
 })
 
 test('stale sending lease expires as ambiguous without another SMTP attempt', async () => {

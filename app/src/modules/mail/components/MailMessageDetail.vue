@@ -1,11 +1,14 @@
 <script setup>
-import { computed, ref, watch } from 'vue'
+import { computed, reactive, ref, watch } from 'vue'
 import Icon from '@/shared/components/Icon.vue'
-import { requestEmailAi } from '@/shared/services/emailApi'
+import { downloadEmailAttachment, requestEmailAi } from '@/shared/services/emailApi'
 
 const props = defineProps({
   message: { type: Object, default: null },
   messageId: { type: String, default: '' },
+  accountId: { type: String, default: '' },
+  folderId: { type: String, default: '' },
+  locationId: { type: String, default: '' },
   loading: { type: Boolean, default: false }
 })
 
@@ -14,6 +17,7 @@ const emit = defineEmits(['close', 'reply'])
 const aiBusyAction = ref('')
 const aiResult = ref(null)
 const aiError = ref('')
+const attachmentDownloads = reactive({})
 let aiRequestSequence = 0
 
 const safeMessageId = computed(() => String(
@@ -66,6 +70,50 @@ function formatLongDate(value) {
 
 function attachmentName(attachment, index) {
   return attachment?.filename || attachment?.name || `附件 ${index + 1}`
+}
+
+function attachmentId(attachment) {
+  return String(attachment?.id || attachment?.attachmentId || '').trim()
+}
+
+function attachmentDownloadState(attachment) {
+  return attachmentDownloads[attachmentId(attachment)] || { status: 'idle', error: '' }
+}
+
+function safeDownloadName(value) {
+  return String(value || 'attachment').replace(/[\\/:*?"<>|\r\n]+/g, '_') || 'attachment'
+}
+
+async function downloadAttachment(attachment, index) {
+  const id = attachmentId(attachment)
+  if (!id || attachmentDownloads[id]?.status === 'loading') return
+  attachmentDownloads[id] = { status: 'loading', error: '' }
+  let objectUrl = ''
+  try {
+    const file = await downloadEmailAttachment({
+      accountId: props.accountId,
+      locationId: props.locationId || props.messageId,
+      attachmentId: id,
+      folderId: props.folderId,
+      filename: attachmentName(attachment, index)
+    })
+    objectUrl = URL.createObjectURL(file.blob)
+    const anchor = document.createElement('a')
+    anchor.href = objectUrl
+    anchor.download = safeDownloadName(file.filename || attachmentName(attachment, index))
+    anchor.rel = 'noopener'
+    document.body.appendChild(anchor)
+    anchor.click()
+    anchor.remove()
+    attachmentDownloads[id] = { status: 'complete', error: '' }
+  } catch (error) {
+    attachmentDownloads[id] = {
+      status: 'error',
+      error: error?.message || '附件下载失败'
+    }
+  } finally {
+    if (objectUrl) window.setTimeout(() => URL.revokeObjectURL(objectUrl), 1_000)
+  }
 }
 
 function formatSize(value) {
@@ -143,6 +191,7 @@ watch(() => safeMessageId.value, () => {
   aiBusyAction.value = ''
   aiResult.value = null
   aiError.value = ''
+  for (const key of Object.keys(attachmentDownloads)) delete attachmentDownloads[key]
 })
 </script>
 
@@ -243,13 +292,25 @@ watch(() => safeMessageId.value, () => {
 
       <section v-if="Array.isArray(message.attachments) && message.attachments.length" class="mail-message-detail__attachments" aria-labelledby="mail-attachments-title">
         <h3 id="mail-attachments-title">附件</h3>
-        <ul>
-          <li v-for="(attachment, index) in message.attachments" :key="`${attachmentName(attachment, index)}-${index}`">
-            <span>{{ attachmentName(attachment, index) }}</span>
-            <small>{{ attachment.contentType || '文件' }}<template v-if="formatSize(attachment.size)"> · {{ formatSize(attachment.size) }}</template></small>
+        <ul aria-live="polite">
+          <li v-for="(attachment, index) in message.attachments" :key="attachmentId(attachment) || `${attachmentName(attachment, index)}-${index}`">
+            <div>
+              <span>{{ attachmentName(attachment, index) }}</span>
+              <small>{{ attachment.contentType || '文件' }}<template v-if="formatSize(attachment.size)"> · {{ formatSize(attachment.size) }}</template></small>
+              <small v-if="attachmentDownloadState(attachment).error" class="is-error" role="alert">{{ attachmentDownloadState(attachment).error }}</small>
+            </div>
+            <button
+              type="button"
+              :disabled="!attachmentId(attachment) || attachmentDownloadState(attachment).status === 'loading'"
+              :aria-label="`${attachmentDownloadState(attachment).status === 'error' ? '重试下载' : '下载'} ${attachmentName(attachment, index)}`"
+              @click="downloadAttachment(attachment, index)"
+            >
+              <Icon :name="attachmentDownloadState(attachment).status === 'error' ? 'refresh' : 'download'" :size="17" />
+              <span>{{ attachmentDownloadState(attachment).status === 'loading' ? '下载中…' : attachmentDownloadState(attachment).status === 'error' ? '重试' : '下载' }}</span>
+            </button>
           </li>
         </ul>
-        <p>当前阶段只显示附件元数据，不会自动下载。</p>
+        <p>附件只会在你点击下载后读取；页面不会自动预览或执行附件。</p>
       </section>
 
       <section class="mail-message-detail__body" aria-labelledby="mail-body-title">
@@ -296,10 +357,15 @@ watch(() => safeMessageId.value, () => {
 .mail-message-detail__ai-error { color: var(--error-color); font-size: .68rem; line-height: 1.55; background: color-mix(in srgb, var(--error-color) 8%, var(--bg-card)); border: 1px solid color-mix(in srgb, var(--error-color) 24%, transparent); }
 .mail-message-detail h3 { margin: 0 0 12px; font-size: .75rem; }
 .mail-message-detail__attachments ul { display: grid; margin: 0; padding: 0; gap: 7px; list-style: none; }
-.mail-message-detail__attachments li { display: grid; min-height: 44px; padding: 8px 11px; align-content: center; gap: 3px; background: var(--bg-secondary); border: 1px solid var(--border-light); border-radius: 11px; }
+.mail-message-detail__attachments li { display: grid; min-height: 60px; padding: 8px 9px 8px 11px; align-items: center; grid-template-columns: minmax(0, 1fr) auto; gap: 10px; background: var(--bg-secondary); border: 1px solid var(--border-light); border-radius: 11px; }
+.mail-message-detail__attachments li > div { display: grid; min-width: 0; gap: 3px; }
 .mail-message-detail__attachments li span { overflow-wrap: anywhere; color: var(--text-secondary); font-size: .7rem; }
+.mail-message-detail__attachments li button { display: inline-flex; min-width: 92px; min-height: 44px; padding: 0 12px; align-items: center; justify-content: center; gap: 6px; color: var(--text-secondary); font: inherit; font-size: .66rem; font-weight: 700; background: var(--bg-card); border: 1px solid var(--border-light); border-radius: 10px; cursor: pointer; }
+.mail-message-detail__attachments li button:disabled { opacity: .48; cursor: wait; }
+.mail-message-detail__attachments li button span { font-size: .66rem; white-space: nowrap; }
 .mail-message-detail__attachments li small,
 .mail-message-detail__attachments > p { color: var(--text-muted); font-size: .61rem; }
+.mail-message-detail__attachments li small.is-error { color: var(--error-color); }
 .mail-message-detail__attachments > p { margin: 10px 0 0; }
 .mail-message-detail__body { min-height: 220px; padding-bottom: 40px; }
 .mail-message-detail__body pre { margin: 0; white-space: pre-wrap; overflow-wrap: anywhere; color: var(--text-secondary); font: inherit; font-size: .74rem; line-height: 1.8; }

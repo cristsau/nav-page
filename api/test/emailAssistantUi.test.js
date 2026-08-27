@@ -63,7 +63,7 @@ test('mail is a first-class read-only destination with setup, cache, and legacy 
   assert.match(route, /path: '\/mail'/)
   assert.match(navigation, /id: 'mail'/)
   assert.match(mobileNav, /flex: 1 1 0/)
-  assert.match(view, /当前为只读视图/)
+  assert.match(view, /已同步邮件保持只读/)
   assert.match(view, /还没有启用智能收件/)
   assert.match(view, /邮箱已连接，但 DOMO NAV 还没有收录邮件/)
   assert.match(view, /已同步内容仍可只读查看/)

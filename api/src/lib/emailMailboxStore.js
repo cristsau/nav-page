@@ -1,5 +1,6 @@
 import { createHash } from 'node:crypto'
 import { decryptEmailPayload, encryptEmailPayload } from './emailCrypto.js'
+import { decorateIncomingAttachmentMetadata } from './emailIncomingAttachmentMetadata.js'
 
 export const EMAIL_MAILBOX_CHANGE_CHANNEL = 'nav_email_mailbox_changes'
 
@@ -159,15 +160,7 @@ export function buildCanonicalMailboxMessage(raw = {}) {
   ].join('\u0000')
   const canonicalHash = sha256(rawHash ? `raw:${rawHash}` : `envelope:${fallbackFingerprint}`)
   const threadSeed = references[0] || inReplyTo || messageId || canonicalHash
-  const attachments = (Array.isArray(raw.attachments) ? raw.attachments : [])
-    .map((attachment) => ({
-      filename: boundedText(attachment?.filename, 500),
-      contentType: boundedText(attachment?.contentType, 160).toLowerCase(),
-      contentDisposition: boundedText(attachment?.contentDisposition, 32).toLowerCase(),
-      contentId: boundedText(attachment?.contentId, 998),
-      size: nonNegativeSafeInteger(attachment?.size)
-    }))
-    .slice(0, 100)
+  const attachments = decorateIncomingAttachmentMetadata(raw.attachments)
   return {
     canonicalHash,
     messageIdHash: messageId ? sha256(messageId) : null,
