@@ -4,6 +4,7 @@ import {
   hashUserMailPayload,
   normalizeEmailAddress,
   normalizeEmailAddressList,
+  normalizeUserMailAttachmentManifest,
   normalizeUserMailPayload
 } from '../src/lib/emailUserMail.js'
 
@@ -27,6 +28,26 @@ test('user mail normalization canonicalizes, deduplicates and bounds recipient f
     }),
     /Too many/i
   )
+})
+
+test('user mail content hash binds an ordered attachment manifest without changing legacy empty hashes', () => {
+  const payload = { to: 'user@example.com', subject: 'Report', text: 'Attached.' }
+  const legacy = hashUserMailPayload(payload)
+  assert.equal(legacy, hashUserMailPayload(payload, []))
+  const manifest = [{
+    id: '11111111-1111-4111-8111-111111111111',
+    sha256: 'a'.repeat(64),
+    size: 4096,
+    ordinal: 0,
+    metadataDigest: 'b'.repeat(64)
+  }]
+  assert.deepEqual(normalizeUserMailAttachmentManifest(manifest), manifest)
+  const withAttachment = hashUserMailPayload(payload, manifest)
+  assert.match(withAttachment, /^[0-9a-f]{64}$/)
+  assert.notEqual(withAttachment, legacy)
+  assert.notEqual(withAttachment, hashUserMailPayload(payload, [{
+    ...manifest[0], sha256: 'c'.repeat(64)
+  }]))
 })
 
 test('user mail normalization strips header injection and validates reply message ids', () => {

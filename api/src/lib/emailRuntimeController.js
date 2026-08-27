@@ -2,6 +2,7 @@ import { config } from '../config.js'
 import { startEmailCacheRetention } from './emailRetention.js'
 import { startEmailDigestScheduler } from './emailDigestScheduler.js'
 import { startEmailIngestWorker } from './emailIngestWorker.js'
+import { startEmailSentAppendScheduler } from './emailSentAppend.js'
 import { MAINTENANCE_JOB_NAMES } from './maintenanceJobStatus.js'
 import { startMailDeliveryScheduler } from './mailOutbox.js'
 import {
@@ -49,6 +50,20 @@ async function startCurrent() {
     poolInstance,
     logger,
     observer: observerFactory(MAINTENANCE_JOB_NAMES.EMAIL_INGEST, '邮件接收与分类')
+  }))
+  if (workerRuntimeEnabled) starters.push(() => startEmailSentAppendScheduler({
+    enabled: config.emailSentAppendEnabled,
+    policy: {
+      intervalSeconds: config.emailSentAppendIntervalSeconds,
+      batchSize: config.emailSentAppendBatchSize,
+      retentionDays: config.emailSentAppendRetentionDays
+    },
+    poolInstance,
+    logger,
+    observer: observerFactory(
+      MAINTENANCE_JOB_NAMES.EMAIL_SENT_APPEND,
+      '已发送邮件同步'
+    )
   }))
   if (workerRuntimeEnabled) starters.push(() => startEmailCacheRetention({
     enabled: config.emailCacheRetentionEnabled,

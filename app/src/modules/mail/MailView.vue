@@ -196,7 +196,7 @@ function closeCompose() {
   composeSourceMessageId.value = ''
 }
 
-function onDraftSent() {
+function onDraftQueued() {
   void refreshWorkspace().catch(() => {})
 }
 
@@ -236,7 +236,7 @@ onBeforeUnmount(mail.deactivate)
       <div>
         <span>智能邮箱</span>
         <h1>邮件</h1>
-        <p>当前为只读视图的安全邮件缓存；支持 AI 摘要、待办提取、翻译和回信草稿。原邮箱不会被删除或移动，任何外发都必须先保存预览并由你再次确认。</p>
+        <p>已同步邮件保持只读；支持按需下载附件、AI 摘要、待办提取、翻译和安全回信。原邮箱不会被删除或移动，任何外发都必须先保存预览并由你再次确认。</p>
       </div>
       <div class="mail-hero__actions">
         <button type="button" :disabled="!hasAccounts" @click="openCompose()">
@@ -300,6 +300,9 @@ onBeforeUnmount(mail.deactivate)
         <MailMessageDetail
           :message="state.selectedMessage"
           :message-id="state.selectedMessageId"
+          :account-id="state.activeAccountId"
+          :folder-id="state.activeFolderId"
+          :location-id="state.selectedMessageId"
           :loading="state.loadingDetail"
           @close="closeMessage"
           @reply="openCompose"
@@ -324,7 +327,7 @@ onBeforeUnmount(mail.deactivate)
       :source-message-id="composeSourceMessageId"
       :initial="composeInitial"
       @close="closeCompose"
-      @sent="onDraftSent"
+      @queued="onDraftQueued"
     />
   </main>
 </template>

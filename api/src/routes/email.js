@@ -15,10 +15,21 @@ import { loadEmailEncryptionKey } from '../lib/emailCrypto.js'
 import {
   createEmailDraft,
   getEmailDraftForUser,
-  queueEmailDraft
+  queueEmailDraft,
+  refreshEmailDraftContentHash
 } from '../lib/emailDrafts.js'
+import {
+  createDraftEmailAttachment,
+  deleteDraftEmailAttachment,
+  EMAIL_ATTACHMENT_LIMITS
+} from '../lib/emailAttachmentStore.js'
 import { getEmailEventForUser, getEmailNotificationDetails } from '../lib/emailEvents.js'
 import { validateImapConfig } from '../lib/emailIngestScheduler.js'
+import {
+  decorateIncomingAttachmentMetadata,
+  fetchIncomingAttachment,
+  safeAttachmentDownloadName
+} from '../lib/emailIncomingAttachments.js'
 import { createEmailMailboxEventBroker } from '../lib/emailMailboxEventBroker.js'
 import { createEmailSseConnectionLimiter, writeEmailSse } from '../lib/emailSse.js'
 import {
@@ -28,6 +39,7 @@ import {
 import {
   enqueueMail,
   normalizeEmailAddress,
+  SMTP_DELIVERY_ERROR_CODES,
   verifiedMailConfigurationStatus
 } from '../lib/mailOutbox.js'
 import { readOwnerSecretFile } from '../lib/ownerSecretFile.js'
@@ -72,6 +84,68 @@ function mapAddress(value) {
     : { name: '', address: '' }
 }
 
+export function mapDraftDeliveryState(outboxStatus, sentStatus, {
+  sentAppendEnabled = config.emailSentAppendEnabled === true,
+  deliveryErrorCode = null
+} = {}) {
+  const normalizedDeliveryErrorCode = String(deliveryErrorCode || '').trim().toUpperCase()
+  const deliveryStatus = normalizedDeliveryErrorCode === SMTP_DELIVERY_ERROR_CODES.ambiguous
+    ? 'ambiguous'
+    : normalizedDeliveryErrorCode === SMTP_DELIVERY_ERROR_CODES.partial
+      ? 'partial'
+      : ({
+          pending: 'queued',
+          sending: 'sending',
+          sent: 'accepted',
+          failed: 'failed',
+          expired: 'failed'
+      })[String(outboxStatus || '')] || 'queued'
+  const mappedSentStatus = ({
+    prepared: 'pending',
+    pending: 'pending',
+    appending: 'syncing',
+    reconcile: 'reconciling',
+    appended: 'synced',
+    blocked: 'blocked',
+    cancelled: 'failed',
+    expired: 'failed'
+  })[String(sentStatus || '')]
+  const sentSyncStatus = mappedSentStatus
+    || (!sentAppendEnabled
+      ? 'disabled'
+      : String(outboxStatus || '') === 'sent'
+        ? 'unavailable'
+        : 'pending')
+  return { deliveryStatus, sentSyncStatus }
+}
+
+async function attachDraftDeliveryState(draft, userId) {
+  if (!draft?.outboxId) {
+    return { ...draft, deliveryStatus: draft?.status === 'failed' ? 'failed' : 'draft', sentSyncStatus: 'not-started' }
+  }
+  const { rows } = await query(
+    `SELECT outbox.status AS outbox_status, outbox.last_error_code AS delivery_error_code,
+            sent.status AS sent_status, sent.last_error_code AS sent_error_code,
+            sent.smtp_accepted_at, sent.appended_at
+     FROM mail_outbox AS outbox
+     LEFT JOIN email_sent_append_jobs AS sent ON sent.outbox_id = outbox.id
+     WHERE outbox.id = $1 AND outbox.user_id = $2
+     LIMIT 1`,
+    [draft.outboxId, userId]
+  )
+  if (!rows[0]) return { ...draft, deliveryStatus: 'unavailable', sentSyncStatus: 'unavailable' }
+  return {
+    ...draft,
+    ...mapDraftDeliveryState(rows[0].outbox_status, rows[0].sent_status, {
+      deliveryErrorCode: rows[0].delivery_error_code
+    }),
+    deliveryErrorCode: rows[0].delivery_error_code || null,
+    sentSyncErrorCode: rows[0].sent_error_code || null,
+    smtpAcceptedAt: rows[0].smtp_accepted_at || null,
+    sentCopyAppendedAt: rows[0].appended_at || null
+  }
+}
+
 async function getCanonicalMailboxRowForUser(messageId, userId) {
   if (!UUID_PATTERN.test(String(messageId || ''))) return null
   const { rows } = await query(
@@ -108,7 +182,9 @@ async function mapMailboxRow(row, { includeBody = false } = {}) {
     subject: String(envelope.subject || '(无主题)'),
     preview: String(content.text || '').slice(0, 320),
     body: includeBody ? String(content.text || '') : undefined,
-    attachments: includeBody && Array.isArray(content.attachments) ? content.attachments : undefined,
+    attachments: includeBody
+      ? decorateIncomingAttachmentMetadata(content.attachments)
+      : undefined,
     receivedAt: row.received_at,
     internalDate: row.internal_date,
     sizeBytes: Number(row.size_bytes || 0),
@@ -163,6 +239,11 @@ async function emailFeatureStatus({ includeTransportDetails = false } = {}) {
 }
 
 export default async function emailRoutes(fastify) {
+  fastify.addContentTypeParser(
+    'application/octet-stream',
+    { parseAs: 'buffer', bodyLimit: EMAIL_ATTACHMENT_LIMITS.maximumSingleBytes },
+    (_request, body, done) => done(null, body)
+  )
   const mailboxEventBroker = createEmailMailboxEventBroker({
     poolInstance: pool,
     channel: EMAIL_MAILBOX_CHANGE_CHANNEL,
@@ -435,6 +516,59 @@ export default async function emailRoutes(fastify) {
     }
   })
 
+  fastify.get('/email/accounts/:accountId/messages/:locationId/attachments/:attachmentId', async (request, reply) => {
+    await fastify.requireAuth(request, reply)
+    reply.header('Cache-Control', 'private, no-store')
+    const accountId = String(request.params.accountId || '')
+    const locationId = String(request.params.locationId || '')
+    const attachmentId = String(request.params.attachmentId || '')
+    const folderId = String(request.query?.folderId || '')
+    if (![accountId, locationId, folderId].every((value) => UUID_PATTERN.test(value))
+      || !/^[0-9a-f]{32}$/i.test(attachmentId)) {
+      reply.code(400)
+      return { error: 'Invalid email attachment identity' }
+    }
+    const { rows } = await query(
+      `SELECT folder.path AS folder_path, location.uid_validity, location.uid,
+              location.size_bytes
+       FROM email_folder_messages AS location
+       JOIN email_folders AS folder
+         ON folder.id = location.folder_id
+        AND folder.account_id = location.account_id
+        AND folder.user_id = location.user_id
+       WHERE location.id = $1 AND location.account_id = $2
+         AND location.user_id = $3 AND location.folder_id = $4
+         AND location.expunged_at IS NULL
+       LIMIT 1`,
+      [locationId, accountId, request.currentUser.id, folderId]
+    )
+    if (!rows[0]) {
+      reply.code(404)
+      return { error: 'Email attachment location not found' }
+    }
+    try {
+      const attachment = await fetchIncomingAttachment(rows[0], attachmentId)
+      const filename = safeAttachmentDownloadName(attachment.filename)
+      const contentType = /^[a-z0-9!#$&^_.+-]+\/[a-z0-9!#$&^_.+-]+$/i.test(attachment.contentType)
+        ? attachment.contentType
+        : 'application/octet-stream'
+      reply.header('Content-Type', contentType)
+      reply.header('Content-Length', String(attachment.content.length))
+      reply.header('Content-Disposition', `attachment; filename="attachment"; filename*=UTF-8''${encodeURIComponent(filename)}`)
+      reply.header('Content-Security-Policy', 'sandbox')
+      reply.header('Cross-Origin-Resource-Policy', 'same-origin')
+      reply.header('X-Content-Type-Options', 'nosniff')
+      return reply.send(attachment.content)
+    } catch (error) {
+      const code = String(error?.code || '')
+      if (code === 'EMAIL_ATTACHMENT_NOT_FOUND') reply.code(404)
+      else if (code === 'EMAIL_UIDVALIDITY_CHANGED') reply.code(409)
+      else if (code === 'EMAIL_SOURCE_TOO_LARGE' || code === 'EMAIL_ATTACHMENT_TOO_LARGE') reply.code(413)
+      else reply.code(503)
+      return { error: code || 'Email attachment could not be downloaded' }
+    }
+  })
+
   fastify.post('/email/messages/:messageId/ai', async (request, reply) => {
     await fastify.requireAuth(request, reply)
     reply.header('Cache-Control', 'private, no-store')
@@ -584,7 +718,7 @@ export default async function emailRoutes(fastify) {
         affectedCount: 1
       }, request.log)
       reply.code(201)
-      return { draft }
+      return { draft: await attachDraftDeliveryState(draft, request.currentUser.id) }
     } catch (error) {
       reply.code(error instanceof TypeError ? 400 : 409)
       return { error: error.message || 'Email draft could not be saved' }
@@ -605,10 +739,84 @@ export default async function emailRoutes(fastify) {
         reply.code(404)
         return { error: 'Email draft not found' }
       }
-      return { draft }
+      return { draft: await attachDraftDeliveryState(draft, request.currentUser.id) }
     } catch {
       reply.code(503)
       return { error: 'Email draft could not be decrypted' }
+    }
+  })
+
+  fastify.post('/email/drafts/:draftId/attachments', async (request, reply) => {
+    await fastify.requireAuth(request, reply)
+    reply.header('Cache-Control', 'private, no-store')
+    const draftId = String(request.params.draftId || '')
+    if (!UUID_PATTERN.test(draftId) || !Buffer.isBuffer(request.body) || !request.body.length) {
+      reply.code(400)
+      return { error: 'Invalid email attachment upload' }
+    }
+    let createdAttachment = null
+    try {
+      createdAttachment = await createDraftEmailAttachment({
+        userId: request.currentUser.id,
+        draftId,
+        metadata: {
+          filename: request.query?.filename,
+          contentType: request.query?.contentType || 'application/octet-stream',
+          disposition: 'attachment'
+        },
+        content: request.body
+      })
+      let draft
+      try {
+        draft = await refreshEmailDraftContentHash({
+          userId: request.currentUser.id,
+          draftId
+        })
+      } catch (error) {
+        try {
+          await deleteDraftEmailAttachment({
+            userId: request.currentUser.id,
+            draftId,
+            attachmentId: createdAttachment.id
+          })
+        } catch {}
+        throw error
+      }
+      reply.code(201)
+      return { draft }
+    } catch (error) {
+      const statusCode = Number(error?.statusCode)
+      reply.code(Number.isSafeInteger(statusCode) ? statusCode : (error instanceof TypeError ? 400 : 409))
+      return { error: error?.code || error?.message || 'Email attachment could not be uploaded' }
+    } finally {
+      request.body.fill(0)
+    }
+  })
+
+  fastify.delete('/email/drafts/:draftId/attachments/:attachmentId', async (request, reply) => {
+    await fastify.requireAuth(request, reply)
+    reply.header('Cache-Control', 'private, no-store')
+    const draftId = String(request.params.draftId || '')
+    const attachmentId = String(request.params.attachmentId || '')
+    if (![draftId, attachmentId].every((value) => UUID_PATTERN.test(value))) {
+      reply.code(400)
+      return { error: 'Invalid email attachment identity' }
+    }
+    try {
+      await deleteDraftEmailAttachment({
+        userId: request.currentUser.id,
+        draftId,
+        attachmentId
+      })
+      const draft = await refreshEmailDraftContentHash({
+        userId: request.currentUser.id,
+        draftId
+      })
+      return { draft }
+    } catch (error) {
+      const statusCode = Number(error?.statusCode)
+      reply.code(Number.isSafeInteger(statusCode) ? statusCode : (error instanceof TypeError ? 400 : 409))
+      return { error: error?.code || error?.message || 'Email attachment could not be removed' }
     }
   })
 
@@ -643,7 +851,10 @@ export default async function emailRoutes(fastify) {
         affectedCount: 1
       }, request.log)
       reply.code(202)
-      return { queued: true, draft }
+      return {
+        queued: true,
+        draft: await attachDraftDeliveryState(draft, request.currentUser.id)
+      }
     } catch (error) {
       reply.code(error instanceof TypeError ? 400 : 409)
       return { error: error.message || 'Email could not be queued' }

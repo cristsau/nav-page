@@ -7,8 +7,17 @@ import { readOwnerSecretFile } from './ownerSecretFile.js'
 import { assertSafeOutboundHost } from './outboundEndpoints.js'
 import { decryptEmailPayload, encryptEmailPayload } from './emailCrypto.js'
 import {
+  disposeLoadedEmailAttachments,
+  loadOutboxEmailAttachments
+} from './emailAttachmentStore.js'
+import {
+  freezeOutgoingMime,
+  getOrCreateFrozenSentAppend
+} from './emailSentMessage.js'
+import {
   hashUserMailPayload,
   normalizeEmailAddress,
+  normalizeUserMailAttachmentManifest,
   normalizeUserMailPayload
 } from './emailUserMail.js'
 
@@ -45,6 +54,245 @@ function normalizeDedupeKey(value) {
 function boundedInteger(value, fallback, minimum, maximum) {
   const parsed = Number(value)
   return Number.isSafeInteger(parsed) && parsed >= minimum && parsed <= maximum ? parsed : fallback
+}
+
+export function isDefinitiveSmtpRejection(error) {
+  const responseCode = Number(error?.responseCode)
+  if (Number.isSafeInteger(responseCode) && responseCode >= 400 && responseCode <= 599) {
+    return true
+  }
+  const code = String(error?.code || '').trim().toUpperCase()
+  const command = String(error?.command || '').trim().toUpperCase()
+  // Authentication fails before the message transaction begins. Network,
+  // timeout and connection-close failures remain ambiguous because the
+  // remote server may have accepted DATA before the client observed them.
+  return code === 'EAUTH'
+    || code === 'SMTP_ALL_RECIPIENTS_REJECTED'
+    || command === 'AUTH'
+}
+
+export const SMTP_DELIVERY_ERROR_CODES = Object.freeze({
+  ambiguous: 'AMBIGUOUS_DELIVERY_STATE',
+  partial: 'PARTIAL_RECIPIENT_REJECTION',
+  allRecipientsRejected: 'SMTP_ALL_RECIPIENTS_REJECTED'
+})
+
+export function classifySmtpRecipientOutcome(result) {
+  // Retain only counts for control flow. Recipient addresses must not enter
+  // outbox status, maintenance logs or structured error codes.
+  const acceptedCount = Array.isArray(result?.accepted) ? result.accepted.length : 0
+  const rejectedCount = Array.isArray(result?.rejected) ? result.rejected.length : 0
+  if (acceptedCount > 0 && rejectedCount > 0) {
+    return { status: 'partial', acceptedCount, rejectedCount }
+  }
+  if (rejectedCount > 0) {
+    return { status: 'rejected', acceptedCount, rejectedCount }
+  }
+  if (acceptedCount === 0) {
+    return { status: 'ambiguous', acceptedCount, rejectedCount }
+  }
+  return { status: 'accepted', acceptedCount, rejectedCount }
+}
+
+async function scrubOutboxAttachmentsInTransaction(client, message) {
+  if (!message?.user_id) return
+  await client.query(
+    `DELETE FROM email_attachment_chunks AS chunk
+     USING email_attachment_objects AS object
+     WHERE object.outbox_id = $1 AND object.user_id = $2
+       AND object.state = 'claimed'
+       AND chunk.attachment_id = object.id
+       AND chunk.user_id = object.user_id`,
+    [message.id, message.user_id]
+  )
+  await client.query(
+    `UPDATE email_attachment_objects
+     SET state = 'scrubbed', metadata_encrypted = NULL,
+         scrubbed_at = NOW(), updated_at = NOW()
+     WHERE outbox_id = $1 AND user_id = $2 AND state = 'claimed'`,
+    [message.id, message.user_id]
+  )
+}
+
+async function withOutboxTransaction(client, operation) {
+  await client.query('BEGIN')
+  try {
+    const result = await operation()
+    await client.query('COMMIT')
+    return result
+  } catch (error) {
+    try { await client.query('ROLLBACK') } catch {}
+    throw error
+  }
+}
+
+async function scrubExpiredOutboxArtifactsInTransaction(client, rows, errorCode) {
+  const ownedRows = (Array.isArray(rows) ? rows : [])
+    .filter((row) => row?.id && row?.user_id)
+  if (!ownedRows.length) return
+  const outboxIds = ownedRows.map((row) => row.id)
+
+  // A prepared Sent job has not been handed to the APPEND state machine yet.
+  // Once SMTP delivery becomes ambiguous or the outbox is permanently
+  // expired, retaining that encrypted RFC822 source would be both misleading
+  // and an unbounded sensitive-data leak.
+  await client.query(
+    `UPDATE email_sent_append_jobs
+     SET status = 'cancelled', mime_encrypted = NULL,
+         last_error_code = $2, scrubbed_at = NOW(), updated_at = NOW()
+     WHERE outbox_id = ANY($1::uuid[]) AND status = 'prepared'`,
+    [outboxIds, errorCode]
+  )
+
+  await client.query(
+    `DELETE FROM email_attachment_chunks AS chunk
+     USING email_attachment_objects AS object
+     WHERE object.outbox_id = ANY($1::uuid[])
+       AND object.state = 'claimed'
+       AND chunk.attachment_id = object.id
+       AND chunk.user_id = object.user_id`,
+    [outboxIds]
+  )
+  await client.query(
+    `UPDATE email_attachment_objects
+     SET state = 'scrubbed', metadata_encrypted = NULL,
+         scrubbed_at = NOW(), updated_at = NOW()
+     WHERE outbox_id = ANY($1::uuid[]) AND state = 'claimed'`,
+    [outboxIds]
+  )
+  await client.query(
+    `UPDATE email_drafts SET status = 'failed', updated_at = NOW()
+     WHERE outbox_id = ANY($1::uuid[]) AND status = 'queued'`,
+    [outboxIds]
+  )
+}
+
+async function finalizeAcceptedDelivery(client, message, { sentAppendJobId = null } = {}) {
+  await client.query('BEGIN')
+  try {
+    if (sentAppendJobId) {
+      const job = await client.query(
+        `UPDATE email_sent_append_jobs
+         SET status = 'pending', smtp_accepted_at = COALESCE(smtp_accepted_at, NOW()),
+             next_attempt_at = NOW(), last_error_code = NULL, updated_at = NOW()
+         WHERE id = $1 AND outbox_id = $2 AND user_id = $3
+           AND status IN ('prepared', 'pending')
+         RETURNING id`,
+        [sentAppendJobId, message.id, message.user_id]
+      )
+      if (!job.rowCount) throw new Error('Sent append job could not be activated')
+    }
+    const delivered = await client.query(
+      `UPDATE mail_outbox
+       SET status = 'sent',
+           attempt_count = attempt_count + CASE WHEN status = 'sending' THEN 1 ELSE 0 END,
+           last_attempt_at = NOW(), sent_at = COALESCE(sent_at, NOW()),
+           recipient = CASE WHEN sensitive THEN 'redacted@invalid.local' ELSE recipient END,
+           subject = CASE WHEN sensitive THEN '[已发送，内容已清除]' ELSE subject END,
+           text_body = '', html_body = '', payload_encrypted = NULL,
+           scrubbed_at = NOW(), last_error_code = NULL, updated_at = NOW()
+       WHERE id = $1 AND status IN ('sending', 'sent')
+       RETURNING id`,
+      [message.id]
+    )
+    if (!delivered.rowCount) throw new Error('Mail outbox state could not be finalized')
+    await scrubOutboxAttachmentsInTransaction(client, message)
+    await client.query(
+      `UPDATE email_drafts SET status = 'sent', updated_at = NOW()
+       WHERE outbox_id = $1`,
+      [message.id]
+    )
+    await client.query('COMMIT')
+  } catch (error) {
+    try { await client.query('ROLLBACK') } catch {}
+    throw error
+  }
+}
+
+async function finalizePartialDelivery(client, message, { sentAppendJobId = null } = {}) {
+  await client.query('BEGIN')
+  try {
+    // Some recipients accepted DATA, so a whole-message retry is unsafe. The
+    // already-frozen MIME may still be appended once to Sent, independently
+    // of the terminal manual-review delivery state.
+    if (sentAppendJobId) {
+      const job = await client.query(
+        `UPDATE email_sent_append_jobs
+         SET status = 'pending', smtp_accepted_at = COALESCE(smtp_accepted_at, NOW()),
+             next_attempt_at = NOW(), last_error_code = NULL, updated_at = NOW()
+         WHERE id = $1 AND outbox_id = $2 AND user_id = $3
+           AND status IN ('prepared', 'pending')
+         RETURNING id`,
+        [sentAppendJobId, message.id, message.user_id]
+      )
+      if (!job.rowCount) throw new Error('Partial delivery Sent append job could not be activated')
+    }
+    const delivered = await client.query(
+      `UPDATE mail_outbox
+       SET status = 'expired',
+           attempt_count = attempt_count + CASE WHEN status = 'sending' THEN 1 ELSE 0 END,
+           last_attempt_at = NOW(), sent_at = COALESCE(sent_at, NOW()),
+           recipient = CASE WHEN sensitive THEN 'redacted@invalid.local' ELSE recipient END,
+           subject = CASE WHEN sensitive THEN '[部分收件人拒收，内容已清除]' ELSE subject END,
+           text_body = '', html_body = '', payload_encrypted = NULL,
+           scrubbed_at = NOW(), last_error_code = $2, updated_at = NOW()
+       WHERE id = $1
+         AND (
+           status = 'sending'
+           OR (status = 'expired' AND last_error_code = $2)
+         )
+       RETURNING id`,
+      [message.id, SMTP_DELIVERY_ERROR_CODES.partial]
+    )
+    if (!delivered.rowCount) throw new Error('Partial mail delivery state could not be finalized')
+    await scrubOutboxAttachmentsInTransaction(client, message)
+    await client.query(
+      `UPDATE email_drafts SET status = 'failed', updated_at = NOW()
+       WHERE outbox_id = $1 AND status IN ('queued', 'failed')`,
+      [message.id]
+    )
+    await client.query('COMMIT')
+  } catch (error) {
+    try { await client.query('ROLLBACK') } catch {}
+    throw error
+  }
+}
+
+async function recordAmbiguousSmtpAttempt(client, message, sentAppendJobId) {
+  await client.query('BEGIN')
+  try {
+    if (sentAppendJobId) {
+      await client.query(
+        `UPDATE email_sent_append_jobs
+         SET status = 'cancelled', mime_encrypted = NULL,
+             last_error_code = $2,
+             scrubbed_at = NOW(), updated_at = NOW()
+         WHERE id = $1 AND status = 'prepared'`,
+        [sentAppendJobId, SMTP_DELIVERY_ERROR_CODES.ambiguous]
+      )
+    }
+    await client.query(
+      `UPDATE mail_outbox
+       SET status = 'expired', attempt_count = attempt_count + 1,
+           last_attempt_at = NOW(),
+           recipient = CASE WHEN sensitive THEN 'redacted@invalid.local' ELSE recipient END,
+           subject = CASE WHEN sensitive THEN '[投递状态不确定，内容已清除]' ELSE subject END,
+           text_body = '', html_body = '', payload_encrypted = NULL,
+           scrubbed_at = NOW(), last_error_code = $2, updated_at = NOW()
+       WHERE id = $1 AND status = 'sending'`,
+      [message.id, SMTP_DELIVERY_ERROR_CODES.ambiguous]
+    )
+    await scrubOutboxAttachmentsInTransaction(client, message)
+    await client.query(
+      `UPDATE email_drafts SET status = 'failed', updated_at = NOW()
+       WHERE outbox_id = $1 AND status = 'queued'`,
+      [message.id]
+    )
+    await client.query('COMMIT')
+  } catch (recordError) {
+    try { await client.query('ROLLBACK') } catch {}
+    throw recordError
+  }
 }
 
 export function validateMailDeliveryPolicy(policy = {}) {
@@ -142,13 +390,15 @@ export async function enqueueUserMail({
   sourceMessageId = null,
   draftId,
   payload,
+  attachmentManifest = [],
   expectedContentHash,
   queryFn = query,
   encryptPayloadFn = encryptEmailPayload,
   outboxId = randomUUID()
 }) {
   const normalized = normalizeUserMailPayload(payload)
-  const contentHash = hashUserMailPayload(normalized)
+  const normalizedAttachmentManifest = normalizeUserMailAttachmentManifest(attachmentManifest)
+  const contentHash = hashUserMailPayload(normalized, normalizedAttachmentManifest)
   if (expectedContentHash && contentHash !== String(expectedContentHash)) {
     throw new Error('Email draft changed; preview it again before sending')
   }
@@ -236,44 +486,46 @@ export async function deliverMailOutbox({
     lockAcquired = lock.rows[0]?.acquired === true
     if (!lockAcquired) return { processed: 0, sent: 0, failed: 0, remaining: 0, skipped: 'already-running' }
 
-    const ambiguousDeliveries = await client.query(
-      `UPDATE mail_outbox
-       SET status = 'expired',
-           recipient = CASE WHEN sensitive THEN 'redacted@invalid.local' ELSE recipient END,
-           subject = CASE WHEN sensitive THEN '[投递状态不确定，内容已清除]' ELSE subject END,
-           text_body = '', html_body = '', payload_encrypted = NULL,
-           scrubbed_at = COALESCE(scrubbed_at, NOW()), updated_at = NOW(),
-           last_error_code = 'AMBIGUOUS_DELIVERY_STATE'
-       WHERE status = 'sending' AND updated_at < NOW() - INTERVAL '15 minutes'
-       RETURNING id`
-    )
-    if (ambiguousDeliveries.rows.length) {
-      await client.query(
-        `UPDATE email_drafts SET status = 'failed', updated_at = NOW()
-         WHERE outbox_id = ANY($1::uuid[]) AND status = 'queued'`,
-        [ambiguousDeliveries.rows.map((row) => row.id)]
+    const ambiguousDeliveries = await withOutboxTransaction(client, async () => {
+      const result = await client.query(
+        `UPDATE mail_outbox
+         SET status = 'expired',
+             recipient = CASE WHEN sensitive THEN 'redacted@invalid.local' ELSE recipient END,
+             subject = CASE WHEN sensitive THEN '[投递状态不确定，内容已清除]' ELSE subject END,
+             text_body = '', html_body = '', payload_encrypted = NULL,
+             scrubbed_at = COALESCE(scrubbed_at, NOW()), updated_at = NOW(),
+             last_error_code = 'AMBIGUOUS_DELIVERY_STATE'
+         WHERE status = 'sending' AND updated_at < NOW() - INTERVAL '15 minutes'
+         RETURNING id, user_id`
       )
-    }
+      await scrubExpiredOutboxArtifactsInTransaction(
+        client,
+        result.rows,
+        'AMBIGUOUS_DELIVERY_STATE'
+      )
+      return result
+    })
 
-    const expiredBeforeRun = await client.query(
-      `UPDATE mail_outbox
-       SET status = 'expired',
-           recipient = CASE WHEN sensitive THEN 'redacted@invalid.local' ELSE recipient END,
-           subject = CASE WHEN sensitive THEN '[未送达，内容已清除]' ELSE subject END,
-           text_body = '', html_body = '', payload_encrypted = NULL,
-           scrubbed_at = COALESCE(scrubbed_at, NOW()),
-           updated_at = NOW()
-       WHERE status IN ('pending', 'failed') AND attempt_count >= $1
-       RETURNING id`,
-      [validated.maxAttempts]
-    )
-    if (expiredBeforeRun.rows.length) {
-      await client.query(
-        `UPDATE email_drafts SET status = 'failed', updated_at = NOW()
-         WHERE outbox_id = ANY($1::uuid[]) AND status = 'queued'`,
-        [expiredBeforeRun.rows.map((row) => row.id)]
+    const expiredBeforeRun = await withOutboxTransaction(client, async () => {
+      const result = await client.query(
+        `UPDATE mail_outbox
+         SET status = 'expired',
+             recipient = CASE WHEN sensitive THEN 'redacted@invalid.local' ELSE recipient END,
+             subject = CASE WHEN sensitive THEN '[未送达，内容已清除]' ELSE subject END,
+             text_body = '', html_body = '', payload_encrypted = NULL,
+             scrubbed_at = COALESCE(scrubbed_at, NOW()),
+             last_error_code = 'MAX_ATTEMPTS_EXCEEDED', updated_at = NOW()
+         WHERE status IN ('pending', 'failed') AND attempt_count >= $1
+         RETURNING id, user_id`,
+        [validated.maxAttempts]
       )
-    }
+      await scrubExpiredOutboxArtifactsInTransaction(
+        client,
+        result.rows,
+        'MAX_ATTEMPTS_EXCEEDED'
+      )
+      return result
+    })
 
     const candidates = await client.query(
       `
@@ -305,7 +557,13 @@ export async function deliverMailOutbox({
       )
       if (!reserved.rowCount) continue
       let smtpAccepted = false
+      let smtpOutcome = null
+      let smtpAttempted = false
+      let sentAppendJob = null
+      let outgoingMime = null
+      let loadedAttachments = []
       try {
+        let smtpResult = null
         let userPayload = null
         if (message.message_type === 'user.mail') {
           if (!message.user_id || !message.payload_encrypted) {
@@ -315,47 +573,88 @@ export async function deliverMailOutbox({
             message.payload_encrypted,
             { context: userMailOutboxContext(message.user_id, message.id) }
           ))
-          if (hashUserMailPayload(userPayload) !== message.content_hash) {
+          const attachmentBundle = await loadOutboxEmailAttachments({
+            userId: message.user_id,
+            outboxId: message.id
+          }, { runtimeConfig })
+          loadedAttachments = attachmentBundle.attachments
+          if (hashUserMailPayload(userPayload, attachmentBundle.manifest) !== message.content_hash) {
             throw new Error('Encrypted user mail payload hash mismatch')
           }
-        }
-        const messageId = `<domo-nav-${createHash('sha256').update(String(message.id)).digest('hex').slice(0, 32)}@nav.skrskr.net>`
-        await transport.sendMail({
-          from: {
-            name: String(runtimeConfig.smtpFromName || 'DOMO NAV').replace(/[\r\n]/g, '').slice(0, 120),
-            address: normalizeEmailAddress(runtimeConfig.smtpFromAddress)
-          },
-          to: userPayload?.to || normalizeEmailAddress(message.recipient),
-          cc: userPayload?.cc?.length ? userPayload.cc : undefined,
-          bcc: userPayload?.bcc?.length ? userPayload.bcc : undefined,
-          subject: userPayload?.subject || normalizeSubject(message.subject),
-          text: userPayload?.text || message.text_body || undefined,
-          inReplyTo: userPayload?.inReplyTo || undefined,
-          references: userPayload?.references?.length ? userPayload.references : undefined,
-          messageId,
-          html: userPayload ? undefined : (message.html_body || undefined),
-          headers: {
-            'X-DOMO-NAV-Message-Type': message.message_type,
-            'X-DOMO-NAV-Id': createHash('sha256').update(String(message.id)).digest('hex').slice(0, 24)
+          if (runtimeConfig.emailSentAppendEnabled === true) {
+            const prepared = await getOrCreateFrozenSentAppend({
+              client,
+              message,
+              payload: userPayload,
+              attachments: loadedAttachments,
+              runtimeConfig
+            })
+            sentAppendJob = prepared.job
+            outgoingMime = prepared.mime
+            // The RFC822 copy now owns the attachment bytes. Clear the
+            // decrypted attachment buffers before the network operation.
+            disposeLoadedEmailAttachments(loadedAttachments)
+            loadedAttachments = []
+            smtpAttempted = true
+            smtpResult = await transport.sendMail({ raw: outgoingMime, envelope: prepared.envelope })
+          } else {
+            const frozen = await freezeOutgoingMime({
+              outboxId: message.id,
+              payload: userPayload,
+              attachments: loadedAttachments,
+              date: message.confirmed_at || message.created_at,
+              runtimeConfig
+            })
+            outgoingMime = frozen.mime
+            disposeLoadedEmailAttachments(loadedAttachments)
+            loadedAttachments = []
+            smtpAttempted = true
+            smtpResult = await transport.sendMail({ raw: outgoingMime, envelope: frozen.envelope })
           }
-        })
+        } else {
+          const messageId = `<domo-nav-${createHash('sha256').update(String(message.id)).digest('hex').slice(0, 32)}@nav.skrskr.net>`
+          smtpAttempted = true
+          smtpResult = await transport.sendMail({
+            from: {
+              name: String(runtimeConfig.smtpFromName || 'DOMO NAV').replace(/[\r\n]/g, '').slice(0, 120),
+              address: normalizeEmailAddress(runtimeConfig.smtpFromAddress)
+            },
+            to: normalizeEmailAddress(message.recipient),
+            subject: normalizeSubject(message.subject),
+            text: message.text_body || undefined,
+            messageId,
+            html: message.html_body || undefined,
+            headers: {
+              'X-DOMO-NAV-Message-Type': message.message_type,
+              'X-DOMO-NAV-Id': createHash('sha256').update(String(message.id)).digest('hex').slice(0, 24)
+            }
+          })
+        }
+        const recipientOutcome = classifySmtpRecipientOutcome(smtpResult)
+        if (recipientOutcome.status === 'rejected') {
+          const rejectedError = new Error('SMTP explicitly rejected every recipient')
+          rejectedError.code = SMTP_DELIVERY_ERROR_CODES.allRecipientsRejected
+          rejectedError.command = 'RCPT TO'
+          throw rejectedError
+        }
+        if (recipientOutcome.status === 'ambiguous') {
+          const ambiguousError = new Error('SMTP returned no accepted or rejected recipients')
+          ambiguousError.code = SMTP_DELIVERY_ERROR_CODES.ambiguous
+          throw ambiguousError
+        }
         smtpAccepted = true
-        await client.query(
-          `WITH delivered AS (
-             UPDATE mail_outbox
-             SET status = 'sent', attempt_count = attempt_count + 1,
-                 last_attempt_at = NOW(), sent_at = NOW(),
-                 recipient = CASE WHEN sensitive THEN 'redacted@invalid.local' ELSE recipient END,
-                 subject = CASE WHEN sensitive THEN '[已发送，内容已清除]' ELSE subject END,
-                 text_body = '', html_body = '', payload_encrypted = NULL,
-                 scrubbed_at = NOW(), last_error_code = NULL, updated_at = NOW()
-             WHERE id = $1
-             RETURNING id
-           )
-           UPDATE email_drafts SET status = 'sent', updated_at = NOW()
-           WHERE outbox_id IN (SELECT id FROM delivered)`,
-          [message.id]
-        )
+        smtpOutcome = recipientOutcome.status
+        if (smtpOutcome === 'partial') {
+          await finalizePartialDelivery(client, message, {
+            sentAppendJobId: sentAppendJob?.id || null
+          })
+          summary.failed += 1
+          summary.expired += 1
+          continue
+        }
+        await finalizeAcceptedDelivery(client, message, {
+          sentAppendJobId: sentAppendJob?.id || null
+        })
         summary.sent += 1
       } catch (error) {
         // SMTP and PostgreSQL cannot participate in one transaction. Once the
@@ -365,24 +664,18 @@ export async function deliverMailOutbox({
         // in `sending` and the stale-lease guard expires it for manual review.
         if (smtpAccepted) {
           try {
-            await client.query(
-              `WITH delivered AS (
-                 UPDATE mail_outbox
-                 SET status = 'sent', attempt_count = attempt_count + 1,
-                     last_attempt_at = NOW(), sent_at = COALESCE(sent_at, NOW()),
-                     recipient = CASE WHEN sensitive THEN 'redacted@invalid.local' ELSE recipient END,
-                     subject = CASE WHEN sensitive THEN '[已发送，内容已清除]' ELSE subject END,
-                     text_body = '', html_body = '', payload_encrypted = NULL,
-                     scrubbed_at = COALESCE(scrubbed_at, NOW()),
-                     last_error_code = 'DELIVERY_FINALIZE_RECOVERED', updated_at = NOW()
-                 WHERE id = $1 AND status = 'sending'
-                 RETURNING id
-               )
-               UPDATE email_drafts SET status = 'sent', updated_at = NOW()
-               WHERE outbox_id IN (SELECT id FROM delivered)`,
-              [message.id]
-            )
-            summary.sent += 1
+            if (smtpOutcome === 'partial') {
+              await finalizePartialDelivery(client, message, {
+                sentAppendJobId: sentAppendJob?.id || null
+              })
+              summary.failed += 1
+              summary.expired += 1
+            } else {
+              await finalizeAcceptedDelivery(client, message, {
+                sentAppendJobId: sentAppendJob?.id || null
+              })
+              summary.sent += 1
+            }
             continue
           } catch (finalizeError) {
             const ambiguousError = new Error(
@@ -393,38 +686,53 @@ export async function deliverMailOutbox({
             throw ambiguousError
           }
         }
+        // A rejected sendMail() promise is not proof that the remote SMTP
+        // server rejected DATA. Never return that message to an automatic
+        // retry path: a retry can duplicate externally delivered mail.
+        if (smtpAttempted && !isDefinitiveSmtpRejection(error)) {
+          await recordAmbiguousSmtpAttempt(client, message, sentAppendJob?.id || null)
+          summary.failed += 1
+          summary.expired += 1
+          continue
+        }
         const nextAttempt = Math.min(86_400, 60 * (2 ** Math.min(Number(message.attempt_count || 0), 10)))
         const willExpire = Number(message.attempt_count || 0) + 1 >= validated.maxAttempts
-        await client.query(
-          `WITH delivery_failure AS (
-             UPDATE mail_outbox
-             SET status = CASE WHEN attempt_count + 1 >= $4 THEN 'expired' ELSE 'failed' END,
-               attempt_count = attempt_count + 1,
-               last_attempt_at = NOW(), next_attempt_at = NOW() + ($2::integer * INTERVAL '1 second'),
-               recipient = CASE
-                 WHEN sensitive AND attempt_count + 1 >= $4 THEN 'redacted@invalid.local'
-                 ELSE recipient
-               END,
-               subject = CASE
-                 WHEN sensitive AND attempt_count + 1 >= $4 THEN '[未送达，内容已清除]'
-                 ELSE subject
-               END,
-               text_body = CASE WHEN attempt_count + 1 >= $4 THEN '' ELSE text_body END,
-               html_body = CASE WHEN attempt_count + 1 >= $4 THEN '' ELSE html_body END,
-               payload_encrypted = CASE WHEN attempt_count + 1 >= $4 THEN NULL ELSE payload_encrypted END,
-               scrubbed_at = CASE WHEN attempt_count + 1 >= $4 THEN NOW() ELSE scrubbed_at END,
-               last_error_code = $3, updated_at = NOW()
-             WHERE id = $1
-             RETURNING id, status
-           )
-           UPDATE email_drafts SET status = 'failed', updated_at = NOW()
-           WHERE outbox_id IN (
-             SELECT id FROM delivery_failure WHERE status = 'expired'
-           )`,
-          [message.id, nextAttempt, sanitizeMaintenanceErrorCode(error), validated.maxAttempts]
-        )
+        const errorCode = sanitizeMaintenanceErrorCode(error)
+        if (willExpire) {
+          await withOutboxTransaction(client, async () => {
+            const expired = await client.query(
+              `UPDATE mail_outbox
+               SET status = 'expired', attempt_count = attempt_count + 1,
+                   last_attempt_at = NOW(), next_attempt_at = NOW() + ($2::integer * INTERVAL '1 second'),
+                   recipient = CASE WHEN sensitive THEN 'redacted@invalid.local' ELSE recipient END,
+                   subject = CASE WHEN sensitive THEN '[未送达，内容已清除]' ELSE subject END,
+                   text_body = '', html_body = '', payload_encrypted = NULL,
+                   scrubbed_at = NOW(), last_error_code = $3, updated_at = NOW()
+               WHERE id = $1 AND status = 'sending'
+               RETURNING id, user_id`,
+              [message.id, nextAttempt, errorCode]
+            )
+            await scrubExpiredOutboxArtifactsInTransaction(
+              client,
+              expired.rows,
+              errorCode
+            )
+          })
+        } else {
+          await client.query(
+            `UPDATE mail_outbox
+             SET status = 'failed', attempt_count = attempt_count + 1,
+                 last_attempt_at = NOW(), next_attempt_at = NOW() + ($2::integer * INTERVAL '1 second'),
+                 last_error_code = $3, updated_at = NOW()
+             WHERE id = $1 AND status = 'sending'`,
+            [message.id, nextAttempt, errorCode]
+          )
+        }
         summary.failed += 1
         if (willExpire) summary.expired += 1
+      } finally {
+        if (Buffer.isBuffer(outgoingMime)) outgoingMime.fill(0)
+        disposeLoadedEmailAttachments(loadedAttachments)
       }
     }
 

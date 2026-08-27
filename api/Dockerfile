@@ -1,4 +1,4 @@
-FROM node:24-bookworm-slim
+FROM node:24-bookworm-slim@sha256:a9f5f7c91a432850b2a8a7797adf5eadb6c733ceed61167806cee7ea7fbc29df
 
 ARG NAV_RELEASE_SHA=development
 
@@ -11,6 +11,14 @@ WORKDIR /app
 
 COPY package*.json ./
 RUN npm ci --omit=dev
+
+# The local embedding runtime ships a glibc-linked native library.  Refuse to
+# build if a stale or incorrectly tagged musl/Alpine base image is supplied,
+# and prove that the exact production dependency can be loaded before release.
+RUN . /etc/os-release \
+  && test "$ID" = "debian" \
+  && getconf GNU_LIBC_VERSION \
+  && node -e "import('onnxruntime-node').then(() => console.log('onnxruntime-node native runtime ready')).catch((error) => { console.error(error); process.exit(1) })"
 
 COPY src ./src
 COPY scripts ./scripts

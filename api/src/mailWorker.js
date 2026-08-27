@@ -72,7 +72,8 @@ async function main() {
   // contract check before this process can acquire an ingest lease.
   await pool.query(`
     SELECT 1
-    FROM email_accounts, email_folders, email_messages, email_folder_messages
+    FROM email_accounts, email_folders, email_messages, email_folder_messages,
+         email_sent_append_jobs
     LIMIT 0
   `)
 

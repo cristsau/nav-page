@@ -12,6 +12,32 @@ permissions:
   contents: read
 
 jobs:
+  api-production-image:
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v6
+
+      - name: Build production API image from a fresh base
+        run: >-
+          docker build
+          --pull
+          --build-arg NAV_RELEASE_SHA=ci
+          --tag nav-api:ci
+          api
+
+      - name: Verify Debian and the native semantic runtime
+        run: |
+          test "$(docker image inspect nav-api:ci --format '{{ index .Config.Labels "org.opencontainers.image.revision" }}')" = "ci"
+          docker run --rm nav-api:ci sh -eu -c '
+            . /etc/os-release
+            test "$ID" = "debian"
+            getconf GNU_LIBC_VERSION
+            node -e "import(\"onnxruntime-node\").then(() => console.log(\"semantic native runtime verified\")).catch((error) => { console.error(error); process.exit(1) })"
+          '
+
   test-and-build:
     runs-on: ubuntu-latest
     timeout-minutes: 10

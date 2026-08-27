@@ -1,6 +1,11 @@
 import { randomUUID } from 'node:crypto'
 import { pool, query } from '../db/index.js'
 import { decryptEmailPayload, encryptEmailPayload } from './emailCrypto.js'
+import {
+  claimDraftEmailAttachments,
+  getDraftEmailAttachmentManifest,
+  listDraftEmailAttachments
+} from './emailAttachmentStore.js'
 import { enqueueUserMail } from './mailOutbox.js'
 import { hashUserMailPayload, normalizeUserMailPayload } from './emailUserMail.js'
 
@@ -17,12 +22,16 @@ function draftContext(userId, draftId) {
   return `draft:${assertUuid(userId, 'User id')}:${assertUuid(draftId, 'Draft id')}`
 }
 
-async function decryptDraftRow(row) {
-  const payload = normalizeUserMailPayload(await decryptEmailPayload(
+async function decryptDraftPayload(row) {
+  return normalizeUserMailPayload(await decryptEmailPayload(
     row.payload_encrypted,
     { context: draftContext(row.user_id, row.id) }
   ))
-  if (hashUserMailPayload(payload) !== row.content_hash) {
+}
+
+async function decryptDraftRow(row, { attachmentManifest = [], attachments = [] } = {}) {
+  const payload = await decryptDraftPayload(row)
+  if (hashUserMailPayload(payload, attachmentManifest) !== row.content_hash) {
     throw new Error('Email draft content integrity check failed')
   }
   return {
@@ -30,6 +39,7 @@ async function decryptDraftRow(row) {
     accountId: row.account_id,
     sourceMessageId: row.source_message_id,
     payload,
+    attachments,
     contentHash: row.content_hash,
     status: row.status,
     outboxId: row.outbox_id,
@@ -37,6 +47,48 @@ async function decryptDraftRow(row) {
     confirmedAt: row.confirmed_at,
     createdAt: row.created_at,
     updatedAt: row.updated_at
+  }
+}
+
+export async function refreshEmailDraftContentHash({ userId, draftId }, {
+  poolInstance = pool
+} = {}) {
+  const ownerId = assertUuid(userId, 'User id')
+  const id = assertUuid(draftId, 'Draft id')
+  const client = await poolInstance.connect()
+  try {
+    await client.query('BEGIN')
+    const selected = await client.query(
+      `SELECT * FROM email_drafts
+       WHERE id = $1 AND user_id = $2 AND status = 'draft' AND expires_at > NOW()
+       FOR UPDATE`,
+      [id, ownerId]
+    )
+    const row = selected.rows[0]
+    if (!row) throw new Error('Email draft is unavailable for attachment changes')
+    const payload = await decryptDraftPayload(row)
+    const attachmentManifest = await getDraftEmailAttachmentManifest(
+      { userId: ownerId, draftId: id },
+      { queryFn: client.query.bind(client) }
+    )
+    const contentHash = hashUserMailPayload(payload, attachmentManifest)
+    const updated = await client.query(
+      `UPDATE email_drafts SET content_hash = $3, updated_at = NOW()
+       WHERE id = $1 AND user_id = $2
+       RETURNING *`,
+      [id, ownerId, contentHash]
+    )
+    const attachments = await listDraftEmailAttachments(
+      { userId: ownerId, draftId: id },
+      { queryFn: client.query.bind(client) }
+    )
+    await client.query('COMMIT')
+    return decryptDraftRow(updated.rows[0], { attachmentManifest, attachments })
+  } catch (error) {
+    try { await client.query('ROLLBACK') } catch {}
+    throw error
+  } finally {
+    client.release()
   }
 }
 
@@ -111,7 +163,34 @@ export async function getEmailDraftForUser(
      LIMIT 1`,
     [id, ownerId]
   )
-  return rows[0] ? decryptDraftRow(rows[0]) : null
+  if (!rows[0]) return null
+  const attachmentManifest = await getDraftEmailAttachmentManifest(
+    { userId: ownerId, draftId: id },
+    { queryFn }
+  )
+  const attachments = await listDraftEmailAttachments(
+    { userId: ownerId, draftId: id },
+    { queryFn }
+  )
+  try {
+    return await decryptDraftRow(rows[0], { attachmentManifest, attachments })
+  } catch (error) {
+    // Attachment rows and the draft hash are written in separate bounded
+    // transactions. If a process exits between them, a still-editable draft
+    // can safely repair only its derived hash from the authenticated payload
+    // and constrained attachment manifest. Queued/sent drafts never self-heal.
+    if (rows[0].status !== 'draft') throw error
+    const payload = await decryptDraftPayload(rows[0])
+    const repairedHash = hashUserMailPayload(payload, attachmentManifest)
+    const repaired = await queryFn(
+      `UPDATE email_drafts SET content_hash = $3, updated_at = NOW()
+       WHERE id = $1 AND user_id = $2 AND status = 'draft' AND content_hash = $4
+       RETURNING *`,
+      [id, ownerId, repairedHash, rows[0].content_hash]
+    )
+    if (!repaired.rows[0]) throw error
+    return decryptDraftRow(repaired.rows[0], { attachmentManifest, attachments })
+  }
 }
 
 export async function queueEmailDraft({
@@ -139,24 +218,40 @@ export async function queueEmailDraft({
     )
     const row = selected.rows[0]
     if (!row) throw new Error('Email draft was not found or has expired')
+    const attachmentManifest = await getDraftEmailAttachmentManifest(
+      { userId: ownerId, draftId: id },
+      { queryFn: client.query.bind(client) }
+    )
+    const attachments = await listDraftEmailAttachments(
+      { userId: ownerId, draftId: id },
+      { queryFn: client.query.bind(client) }
+    )
     if (row.content_hash !== expectedHash) {
       throw new Error('Email draft changed; preview it again before sending')
     }
     if (row.status === 'queued' || row.status === 'sent') {
       await client.query('COMMIT')
-      return { ...(await decryptDraftRow(row)), alreadyQueued: true }
+      return {
+        ...(await decryptDraftRow(row, { attachmentManifest, attachments })),
+        alreadyQueued: true
+      }
     }
     if (row.status !== 'draft') throw new Error('Email draft can no longer be sent')
-    const draft = await decryptDraftRow(row)
+    const draft = await decryptDraftRow(row, { attachmentManifest, attachments })
     const queued = await enqueueFn({
       userId: ownerId,
       accountId: row.account_id,
       sourceMessageId: row.source_message_id,
       draftId: id,
       payload: draft.payload,
+      attachmentManifest,
       expectedContentHash: expectedHash,
       queryFn: client.query.bind(client)
     })
+    await claimDraftEmailAttachments(
+      { userId: ownerId, draftId: id, outboxId: queued.id },
+      { queryFn: client.query.bind(client) }
+    )
     const updated = await client.query(
       `UPDATE email_drafts
        SET status = 'queued', outbox_id = $3, confirmed_at = NOW(), updated_at = NOW()
@@ -165,7 +260,7 @@ export async function queueEmailDraft({
       [id, ownerId, queued.id]
     )
     await client.query('COMMIT')
-    return decryptDraftRow(updated.rows[0])
+    return decryptDraftRow(updated.rows[0], { attachmentManifest, attachments })
   } catch (error) {
     try { await client.query('ROLLBACK') } catch {}
     throw error
@@ -173,4 +268,3 @@ export async function queueEmailDraft({
     client.release()
   }
 }
-

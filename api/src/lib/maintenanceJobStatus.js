@@ -8,6 +8,7 @@ export const MAINTENANCE_JOB_NAMES = Object.freeze({
   WEB_PUSH_DELIVERY: 'web_push_delivery',
   MAIL_DELIVERY: 'mail_delivery',
   EMAIL_INGEST: 'email_ingest',
+  EMAIL_SENT_APPEND: 'email_sent_append',
   EMAIL_DIGEST: 'email_digest',
   EMAIL_CACHE_RETENTION: 'email_cache_retention'
 })
@@ -169,6 +170,13 @@ const RESULT_FIELDS = Object.freeze({
     'tier1',
     'tier2',
     'tier3'
+  ],
+  [MAINTENANCE_JOB_NAMES.EMAIL_SENT_APPEND]: [
+    'processed',
+    'appended',
+    'reconciled',
+    'blocked',
+    'remaining'
   ],
   [MAINTENANCE_JOB_NAMES.EMAIL_DIGEST]: [
     'generated',
