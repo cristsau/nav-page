@@ -228,6 +228,25 @@ async function resolveEmailAiProviderForUser(userId) {
   return provider
 }
 
+function emailAiCalendarContext() {
+  const requestedTimeZone = String(config.emailDigestTimeZone || 'Asia/Shanghai').trim()
+  const readDate = (timeZone) => {
+    const parts = new Intl.DateTimeFormat('en-US', {
+      timeZone,
+      year: 'numeric',
+      month: '2-digit',
+      day: '2-digit'
+    }).formatToParts(new Date())
+    const value = Object.fromEntries(parts.map((part) => [part.type, part.value]))
+    return `${value.year}-${value.month}-${value.day}`
+  }
+  try {
+    return { currentDate: readDate(requestedTimeZone), timeZone: requestedTimeZone }
+  } catch {
+    return { currentDate: readDate('UTC'), timeZone: 'UTC' }
+  }
+}
+
 function emailAiSourceMetadata(messages) {
   return (Array.isArray(messages) ? messages : []).slice(0, 20).map((message, index) => ({
     sourceId: `M${index + 1}`,
@@ -990,6 +1009,7 @@ export default async function emailRoutes(fastify) {
     let provider = null
     try {
       provider = await resolveEmailAiProviderForUser(request.currentUser.id)
+      const calendarContext = emailAiCalendarContext()
       const cacheKey = buildEmailAiCacheKey({
         userId: request.currentUser.id,
         action,
@@ -998,7 +1018,8 @@ export default async function emailRoutes(fastify) {
         language: request.body?.language,
         replyTone: request.body?.tone,
         replyLength: request.body?.length,
-        model: provider.config?.model
+        model: provider.config?.model,
+        calendarDate: calendarContext.currentDate
       })
       const cached = emailAiResponseCache.get(cacheKey)
       if (cached) {
@@ -1024,7 +1045,8 @@ export default async function emailRoutes(fastify) {
         userInstruction: request.body?.instruction,
         targetLanguage: request.body?.language,
         replyTone: request.body?.tone,
-        replyLength: request.body?.length
+        replyLength: request.body?.length,
+        ...calendarContext
       }, request.currentUser.id)
       if (action === 'propose_notification_rule' && result.kind === 'structured') {
         result.data = boundedRuleProposal(result.data, { row, stored })
@@ -1102,6 +1124,7 @@ export default async function emailRoutes(fastify) {
         return { sources: publicEmailSearchSources(sources), result: null }
       }
       const provider = await resolveEmailAiProviderForUser(request.currentUser.id)
+      const calendarContext = emailAiCalendarContext()
       const result = await runEmailAi(provider, {
         action: 'search_answer',
         messages: sources.map((source) => ({
@@ -1111,7 +1134,8 @@ export default async function emailRoutes(fastify) {
           receivedAt: source.receivedAt,
           text: source.text
         })),
-        userInstruction: request.body?.question || search
+        userInstruction: request.body?.question || search,
+        ...calendarContext
       }, request.currentUser.id)
       await recordRuntimeAiUsageSafely({
         userId: request.currentUser.id,
@@ -1162,6 +1186,7 @@ export default async function emailRoutes(fastify) {
     try {
       const stored = await decryptCanonicalMailboxRow(row)
       const provider = await resolveEmailAiProviderForUser(request.currentUser.id)
+      const calendarContext = emailAiCalendarContext()
       const result = await runEmailAi(provider, {
         action: kind === 'create_draft'
           ? 'draft_reply'
@@ -1176,7 +1201,8 @@ export default async function emailRoutes(fastify) {
         text: stored.content.text,
         userInstruction: request.body?.instruction,
         replyTone: request.body?.tone,
-        replyLength: request.body?.length
+        replyLength: request.body?.length,
+        ...calendarContext
       }, request.currentUser.id)
       await recordRuntimeAiUsageSafely({
         userId: request.currentUser.id,

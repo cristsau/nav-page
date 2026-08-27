@@ -221,13 +221,17 @@ export function buildEmailAiPrompts({
   userInstruction = '',
   targetLanguage = '简体中文',
   replyTone = 'professional',
-  replyLength = 'medium'
+  replyLength = 'medium',
+  currentDate = '',
+  timeZone = ''
 } = {}) {
   const actionConfig = EMAIL_AI_ACTIONS[action]
   if (!actionConfig) throw new Error('不支持的邮件 AI 操作')
 
   const trustedRequest = {
     action,
+    ...(currentDate ? { currentDate: normalizeSingleLine(currentDate, 10) } : {}),
+    ...(timeZone ? { timeZone: normalizeSingleLine(timeZone, 80) } : {}),
     ...(action === 'draft_reply'
       ? {
           replyGuidance: normalizeSingleLine(

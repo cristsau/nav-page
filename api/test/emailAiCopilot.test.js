@@ -126,4 +126,13 @@ test('email AI versions and cache keys change with resources and trusted control
     model: 'gpt-5.6-sol'
   })
   assert.notEqual(base, changed)
+  const nextDay = buildEmailAiCacheKey({
+    userId: first.user_id,
+    action: 'ask',
+    resourceVersion: threadVersion,
+    instruction: '发生了什么？',
+    model: 'gpt-5.6-sol',
+    calendarDate: '2026-08-28'
+  })
+  assert.notEqual(base, nextDay)
 })

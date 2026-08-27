@@ -110,7 +110,8 @@ export function buildEmailAiCacheKey({
   language = '',
   replyTone = '',
   replyLength = '',
-  model = ''
+  model = '',
+  calendarDate = ''
 }) {
   return createHash('sha256').update(JSON.stringify({
     userId, action, resourceVersion,
@@ -118,7 +119,8 @@ export function buildEmailAiCacheKey({
     language: normalizedText(language, 80),
     replyTone: normalizedText(replyTone, 24),
     replyLength: normalizedText(replyLength, 24),
-    model: normalizedText(model, 120)
+    model: normalizedText(model, 120),
+    calendarDate: normalizedText(calendarDate, 10)
   })).digest('hex')
 }
 

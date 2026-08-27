@@ -28,7 +28,7 @@ const filters = [
 
 const categoryNames = {
   security: '账号安全', account: '账号安全', payment: '付款账单', billing: '付款账单',
-  ops: '服务运维', server: '服务运维', work: '工作待办', action: '工作待办',
+  operations: '服务运维', ops: '服务运维', server: '服务运维', work: '工作待办', action: '工作待办',
   receipt: '收据状态', status: '收据状态', personal: '个人邮件',
   newsletter: '订阅资讯', marketing: '营销推广', social: '社交通知', system: '系统通知'
 }
