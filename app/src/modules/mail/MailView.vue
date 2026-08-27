@@ -7,6 +7,7 @@ import MailFolderSheet from './components/MailFolderSheet.vue'
 import MailFolderSidebar from './components/MailFolderSidebar.vue'
 import MailMessageDetail from './components/MailMessageDetail.vue'
 import MailMessageList from './components/MailMessageList.vue'
+import MailNotificationRuleDialog from './components/MailNotificationRuleDialog.vue'
 import { fetchEmailStatus } from '@/shared/services/emailApi'
 import { useMailStore } from './useMailStore'
 
@@ -22,6 +23,9 @@ const folderSheetOpen = ref(false)
 const composeOpen = ref(false)
 const composeInitial = ref({})
 const composeSourceMessageId = ref('')
+const ruleDialogOpen = ref(false)
+const ruleMessage = ref(null)
+const ruleNotice = ref('')
 const lastMessageTrigger = ref(null)
 let updatingRoute = false
 
@@ -184,6 +188,16 @@ async function loadMore() {
   }
 }
 
+async function applyMailQuery(query) {
+  localError.value = ''
+  state.errorMessage = ''
+  try {
+    await mail.search(query)
+  } catch (error) {
+    localError.value = error?.message || '邮件搜索失败'
+  }
+}
+
 function openCompose(initial = {}) {
   composeInitial.value = { ...initial }
   composeSourceMessageId.value = String(initial?.sourceMessageId || '').trim()
@@ -197,6 +211,27 @@ function closeCompose() {
 }
 
 function onDraftQueued() {
+  void refreshWorkspace().catch(() => {})
+}
+
+function openNotificationRule(message) {
+  ruleMessage.value = message || state.selectedMessage || null
+  if (!ruleMessage.value) return
+  ruleDialogOpen.value = true
+}
+
+function closeNotificationRule() {
+  ruleDialogOpen.value = false
+  ruleMessage.value = null
+}
+
+function onNotificationRuleSaved(rule) {
+  ruleNotice.value = '邮件通知规则已启用；邮件仍会正常同步。'
+  const action = String(rule?.action || '').trim()
+  if (action && state.selectedMessage && ruleMessage.value) {
+    state.selectedMessage.notificationAction = action
+  }
+  window.setTimeout(() => { ruleNotice.value = '' }, 5_000)
   void refreshWorkspace().catch(() => {})
 }
 
@@ -236,7 +271,7 @@ onBeforeUnmount(mail.deactivate)
       <div>
         <span>智能邮箱</span>
         <h1>邮件</h1>
-        <p>已同步邮件保持只读；支持按需下载附件、AI 摘要、待办提取、翻译和安全回信。原邮箱不会被删除或移动，任何外发都必须先保存预览并由你再次确认。</p>
+        <p>已同步邮件保持只读；在一个工作区里完成检索、会话阅读、通知降噪、AI 分析和安全回信。原邮箱不会被删除或移动，任何外发都必须先保存预览并由你再次确认。</p>
       </div>
       <div class="mail-hero__actions">
         <button type="button" :disabled="!hasAccounts" @click="openCompose()">
@@ -252,6 +287,7 @@ onBeforeUnmount(mail.deactivate)
 
     <p v-if="errorMessage" class="mail-notice is-error" role="alert">{{ errorMessage }}</p>
     <p v-if="mailboxNotice" class="mail-notice is-warning" role="status">{{ mailboxNotice }}</p>
+    <p v-if="ruleNotice" class="mail-notice is-success" role="status">{{ ruleNotice }}</p>
 
     <section v-if="initialLoading" class="mail-loading" role="status" aria-label="正在加载邮箱工作区">
       <span></span><span></span><span></span>
@@ -293,6 +329,8 @@ onBeforeUnmount(mail.deactivate)
           @load-more="loadMore"
           @refresh="refreshWorkspace"
           @open-folders="folderSheetOpen = true"
+          @notification="openNotificationRule"
+          @query-change="applyMailQuery"
         />
       </div>
 
@@ -306,6 +344,7 @@ onBeforeUnmount(mail.deactivate)
           :loading="state.loadingDetail"
           @close="closeMessage"
           @reply="openCompose"
+          @notification="openNotificationRule"
         />
       </div>
     </section>
@@ -329,6 +368,13 @@ onBeforeUnmount(mail.deactivate)
       @close="closeCompose"
       @queued="onDraftQueued"
     />
+    <MailNotificationRuleDialog
+      :open="ruleDialogOpen"
+      :message="ruleMessage"
+      :account-id="state.activeAccountId"
+      @close="closeNotificationRule"
+      @saved="onNotificationRuleSaved"
+    />
   </main>
 </template>
 
@@ -345,6 +391,7 @@ onBeforeUnmount(mail.deactivate)
 .mail-notice { margin: 0 0 14px; padding: 11px 13px; border-radius: 12px; font-size: .71rem; line-height: 1.55; }
 .mail-notice.is-error { color: var(--error-color); background: color-mix(in srgb, var(--error-color) 9%, var(--bg-card)); border: 1px solid color-mix(in srgb, var(--error-color) 28%, transparent); }
 .mail-notice.is-warning { color: var(--warning-color); background: color-mix(in srgb, var(--warning-color) 9%, var(--bg-card)); border: 1px solid color-mix(in srgb, var(--warning-color) 28%, transparent); }
+.mail-notice.is-success { color: var(--success-color, #4c8a64); background: color-mix(in srgb, var(--success-color, #4c8a64) 9%, var(--bg-card)); border: 1px solid color-mix(in srgb, var(--success-color, #4c8a64) 28%, transparent); }
 .mail-loading { display: grid; min-height: min(690px, calc(100vh - 180px)); overflow: hidden; grid-template-columns: 220px 360px 1fr; gap: 1px; background: var(--border-light); border: 1px solid var(--border-light); border-radius: 21px; }
 .mail-loading span { background: linear-gradient(105deg, var(--bg-card) 25%, var(--bg-hover) 40%, var(--bg-card) 55%); background-size: 240% 100%; animation: mail-shimmer 1.4s ease infinite; }
 @keyframes mail-shimmer { to { background-position-x: -240%; } }
@@ -358,6 +405,9 @@ onBeforeUnmount(mail.deactivate)
 .mail-workspace__folders,
 .mail-workspace__list,
 .mail-workspace__detail { min-width: 0; min-height: 0; }
+@media (min-width: 1180px) {
+  .mail-workspace { height: min(780px, calc(100vh - 178px)); grid-template-columns: minmax(210px, 236px) minmax(350px, 400px) minmax(0, 1fr); }
+}
 @media (prefers-reduced-motion: reduce) {
   .mail-loading span { animation: none; }
 }

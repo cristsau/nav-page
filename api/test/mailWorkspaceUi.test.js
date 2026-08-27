@@ -104,3 +104,42 @@ test('mobile folder dialog traps focus, closes with Escape and restores focus', 
   assert.match(sheet, /restoreTarget\?\.focus/)
   assert.match(sheet, /width: 44px; height: 44px/)
 })
+
+test('mail workspace exposes server search, notification controls and one AI assistant entry', async () => {
+  const [api, store, view, list, detail, ruleDialog] = await Promise.all([
+    source('app/src/shared/services/emailApi.js'),
+    source('app/src/modules/mail/useMailStore.js'),
+    source('app/src/modules/mail/MailView.vue'),
+    source('app/src/modules/mail/components/MailMessageList.vue'),
+    source('app/src/modules/mail/components/MailMessageDetail.vue'),
+    source('app/src/modules/mail/components/MailNotificationRuleDialog.vue')
+  ])
+
+  assert.match(api, /query\.set\('q'/)
+  assert.match(api, /query\.set\('filter'/)
+  assert.match(store, /setMailSearch/)
+  assert.match(store, /slice\(0, 120\)/)
+  assert.match(store, /q: state\.searchQuery/)
+  assert.match(store, /filter: state\.searchFilter/)
+  assert.match(view, /@query-change="applyMailQuery"/)
+  assert.match(list, /全部/)
+  assert.match(list, /未读/)
+  assert.match(list, /重要/)
+  assert.match(list, /附件/)
+  assert.match(list, /notificationAction/)
+  assert.match(detail, /邮件 AI 助理/)
+  assert.match(detail, /thread_summary/)
+  assert.match(detail, /risk_review/)
+  assert.match(detail, /sandbox=""/)
+  assert.match(detail, /远程图片、脚本、表单和外部资源已阻止/)
+  assert.match(ruleDialog, /手动规则始终优先于 AI 分类/)
+  assert.match(ruleDialog, /当前会话/)
+  assert.match(ruleDialog, /这个发件人/)
+  assert.match(ruleDialog, /这个发件人域名/)
+  assert.match(ruleDialog, /完全静音/)
+  assert.match(ruleDialog, /\^\[a-f0-9\]\{64\}\$/)
+  assert.match(ruleDialog, /requiresCriticalConfirmation/)
+  assert.match(ruleDialog, /criticalMatchCount/)
+  assert.match(ruleDialog, /\['digest', 'in_app_only', 'silent'\]/)
+  assert.match(ruleDialog, /event\.key === 'Escape'/)
+})

@@ -19,6 +19,17 @@ function folderName(folder) {
 function accountName(account) {
   return account?.label || account?.displayName || account?.address || account?.email || '邮箱账号'
 }
+
+function folderIcon(folder) {
+  const specialUse = String(folder?.specialUse || folder?.special_use || '').toLowerCase()
+  if (specialUse === 'inbox') return 'mail'
+  if (specialUse === 'sent') return 'forward'
+  if (specialUse === 'drafts') return 'edit'
+  if (specialUse === 'archive' || specialUse === 'all') return 'archive'
+  if (specialUse === 'trash' || specialUse === 'junk') return 'trash'
+  if (specialUse === 'important' || specialUse === 'flagged') return 'star'
+  return 'folder'
+}
 </script>
 
 <template>
@@ -27,7 +38,7 @@ function accountName(account) {
       <span class="mail-folders__icon" aria-hidden="true"><Icon name="mail" :size="18" /></span>
       <div>
         <h2 :id="titleId">邮箱</h2>
-        <p>只读同步</p>
+        <p>实时收件 · 安全外发</p>
       </div>
     </header>
 
@@ -45,6 +56,7 @@ function accountName(account) {
     </label>
 
     <nav aria-label="邮件文件夹" :aria-busy="loading">
+      <h3 v-if="folders.length">邮件箱</h3>
       <p v-if="loading && !folders.length" role="status">正在读取文件夹…</p>
       <p v-else-if="!folders.length">当前邮箱还没有可显示的文件夹。</p>
       <ul v-else>
@@ -56,7 +68,7 @@ function accountName(account) {
             :aria-label="`${folderName(folder)}${Number(folder.unreadCount || 0) ? `，${Number(folder.unreadCount)} 封未读` : ''}`"
             @click="emit('select-folder', String(folder.id))"
           >
-            <Icon name="folder" :size="17" />
+            <Icon :name="folderIcon(folder)" :size="17" />
             <span>{{ folderName(folder) }}</span>
             <b v-if="Number(folder.unreadCount || 0)" aria-hidden="true">{{ Number(folder.unreadCount) > 999 ? '999+' : Number(folder.unreadCount) }}</b>
           </button>
@@ -75,6 +87,7 @@ function accountName(account) {
 .mail-account-select { display: grid; margin: 2px 4px 12px; gap: 5px; color: var(--text-muted); font-size: .65rem; }
 .mail-account-select select { width: 100%; min-height: 44px; padding: 0 10px; color: var(--text-primary); font: inherit; background: var(--bg-card); border: 1px solid var(--border-light); border-radius: 12px; }
 .mail-folders nav > p { padding: 18px 8px; color: var(--text-muted); font-size: .7rem; line-height: 1.6; }
+.mail-folders nav > h3 { margin: 18px 9px 7px; color: var(--text-muted); font-size: .58rem; font-weight: 760; letter-spacing: .08em; text-transform: uppercase; }
 .mail-folders ul { display: grid; margin: 0; padding: 0; gap: 3px; list-style: none; }
 .mail-folders button { display: grid; width: 100%; min-height: 44px; padding: 0 10px; align-items: center; grid-template-columns: 20px minmax(0, 1fr) auto; gap: 8px; text-align: left; color: var(--text-secondary); font: inherit; font-size: .73rem; background: transparent; border: 1px solid transparent; border-radius: 11px; cursor: pointer; }
 .mail-folders button span { overflow: hidden; white-space: nowrap; text-overflow: ellipsis; }
