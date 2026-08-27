@@ -37,6 +37,13 @@ import {
   EMAIL_MAILBOX_CHANGE_CHANNEL
 } from '../lib/emailMailboxStore.js'
 import {
+  EMAIL_MAILBOX_SEARCH_LIMITS,
+  mailboxFilterSql,
+  mailboxMessageMatchesQuery,
+  normalizeMailboxFilter,
+  normalizeMailboxSearchQuery
+} from '../lib/emailMailboxSearch.js'
+import {
   enqueueMail,
   normalizeEmailAddress,
   SMTP_DELIVERY_ERROR_CODES,
@@ -427,11 +434,22 @@ export default async function emailRoutes(fastify) {
       return { error: error.message }
     }
     const limit = boundedLimit(request.query?.limit)
-    const { rows } = await query(
-      `SELECT message.id AS message_id, message.user_id, account.source_key,
-              message.envelope_encrypted, message.content_encrypted,
-              message.received_at, message.has_attachments, message.attachment_count,
-              location.id AS location_id, location.folder_id, location.internal_date,
+    let searchQuery
+    let filter
+    try {
+      searchQuery = normalizeMailboxSearchQuery(request.query?.q)
+      filter = normalizeMailboxFilter(request.query?.filter)
+    } catch (error) {
+      reply.code(400)
+      return { error: error.message }
+    }
+    const filterSql = mailboxFilterSql(filter)
+    async function loadCandidateRows(batchCursor, batchLimit) {
+      const { rows } = await query(
+        `SELECT message.id AS message_id, message.user_id, account.source_key,
+               message.envelope_encrypted, message.content_encrypted,
+               message.received_at, message.has_attachments, message.attachment_count,
+               location.id AS location_id, location.folder_id, location.internal_date,
               location.size_bytes, location.seen, location.answered, location.flagged,
               location.draft, location.deleted, location.keywords, location.updated_at
        FROM email_folder_messages AS location
@@ -439,41 +457,98 @@ export default async function emailRoutes(fastify) {
          ON message.id = location.message_id
         AND message.account_id = location.account_id
         AND message.user_id = location.user_id
-       JOIN email_accounts AS account
-         ON account.id = location.account_id AND account.user_id = location.user_id
-       WHERE location.account_id = $1 AND location.folder_id = $2
-         AND location.user_id = $3 AND location.expunged_at IS NULL
-         AND ($4::timestamptz IS NULL OR (location.internal_date, location.id) < ($4::timestamptz, $5::uuid))
-       ORDER BY location.internal_date DESC, location.id DESC
-       LIMIT $6`,
-      [accountId, folderId, request.currentUser.id, cursor?.[0] || null, cursor?.[1] || null, limit + 1]
-    )
-    const page = rows.slice(0, limit)
-    const messages = []
-    for (const row of page) {
-      try { messages.push(await mapMailboxRow(row)) } catch {
-        messages.push({
-          id: row.location_id,
-          locationId: row.location_id,
-          canonicalMessageId: row.message_id,
-          folderId: row.folder_id,
-          subject: '邮件内容暂时无法解密',
-          preview: '请检查服务器邮件加密密钥。',
-          receivedAt: row.received_at,
-          internalDate: row.internal_date,
-          flags: { seen: Boolean(row.seen), flagged: Boolean(row.flagged) },
-          unavailable: true
-        })
-      }
+        JOIN email_accounts AS account
+          ON account.id = location.account_id AND account.user_id = location.user_id
+        WHERE location.account_id = $1 AND location.folder_id = $2
+          AND location.user_id = $3 AND location.expunged_at IS NULL
+          ${filterSql}
+          AND ($4::timestamptz IS NULL OR (location.internal_date, location.id) < ($4::timestamptz, $5::uuid))
+        ORDER BY location.internal_date DESC, location.id DESC
+        LIMIT $6`,
+        [
+          accountId,
+          folderId,
+          request.currentUser.id,
+          batchCursor?.[0] || null,
+          batchCursor?.[1] || null,
+          batchLimit + 1
+        ]
+      )
+      return rows
     }
+
+    const matched = []
+    let lastScannedRow = null
+    let scannedCount = 0
+    let hasScanOverflow = false
+    let batchCursor = cursor
+    do {
+      const remainingScanRows = searchQuery
+        ? EMAIL_MAILBOX_SEARCH_LIMITS.scanRows - scannedCount
+        : limit
+      const batchLimit = searchQuery
+        ? Math.min(EMAIL_MAILBOX_SEARCH_LIMITS.scanBatchRows, remainingScanRows)
+        : remainingScanRows
+      const rows = await loadCandidateRows(batchCursor, batchLimit)
+      const scanRows = rows.slice(0, batchLimit)
+      hasScanOverflow = rows.length > scanRows.length
+      for (const row of scanRows) {
+        lastScannedRow = row
+        scannedCount += 1
+        try {
+          const message = await mapMailboxRow(row)
+          if (!searchQuery || mailboxMessageMatchesQuery(message, searchQuery)) {
+            matched.push({ row, message })
+            if (searchQuery && matched.length > limit) break
+          }
+        } catch {
+          if (!searchQuery) {
+            matched.push({
+              row,
+              message: {
+                id: row.location_id,
+                locationId: row.location_id,
+                canonicalMessageId: row.message_id,
+                folderId: row.folder_id,
+                subject: '邮件内容暂时无法解密',
+                preview: '请检查服务器邮件加密密钥。',
+                receivedAt: row.received_at,
+                internalDate: row.internal_date,
+                flags: { seen: Boolean(row.seen), flagged: Boolean(row.flagged) },
+                unavailable: true
+              }
+            })
+          }
+        }
+      }
+      if (!searchQuery || matched.length > limit || !hasScanOverflow || !lastScannedRow) break
+      batchCursor = [new Date(lastScannedRow.internal_date).toISOString(), String(lastScannedRow.location_id)]
+    } while (scannedCount < EMAIL_MAILBOX_SEARCH_LIMITS.scanRows)
+
+    const page = matched.slice(0, limit)
+    const messages = []
+    for (const entry of page) messages.push(entry.message)
+    const hasMatchedOverflow = matched.length > limit
+    const hasMore = hasMatchedOverflow || hasScanOverflow
+    const cursorRow = hasMatchedOverflow
+      ? page[page.length - 1]?.row
+      : hasScanOverflow
+        ? lastScannedRow
+        : null
     return {
       messages,
-      hasMore: rows.length > limit,
-      nextCursor: rows.length > limit && page.length ? encodeCursor(page[page.length - 1]) : null,
-      revision: page.reduce((latest, row) => Math.max(
+      hasMore,
+      nextCursor: hasMore && cursorRow ? encodeCursor(cursorRow) : null,
+      revision: page.reduce((latest, entry) => Math.max(
         latest,
-        new Date(row.updated_at || 0).getTime() || 0
-      ), 0)
+        new Date(entry.row.updated_at || 0).getTime() || 0
+      ), 0),
+      search: {
+        query: searchQuery,
+        filter,
+        scanned: scannedCount,
+        capped: searchQuery && hasScanOverflow && !hasMatchedOverflow
+      }
     }
   })
 

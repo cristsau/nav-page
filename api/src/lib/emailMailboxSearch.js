@@ -7,7 +7,8 @@ export const EMAIL_MAILBOX_FILTERS = Object.freeze([
 
 export const EMAIL_MAILBOX_SEARCH_LIMITS = Object.freeze({
   queryCharacters: 120,
-  scanRows: 2_000
+  scanRows: 1_200,
+  scanBatchRows: 160
 })
 
 function normalizedText(value) {
