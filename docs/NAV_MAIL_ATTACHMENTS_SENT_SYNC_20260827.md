@@ -1,8 +1,20 @@
 # DOMO NAV — 邮件附件与 Sent 同步
 
-状态：`LOCAL_DONE / READY_FOR_LATER_DEPLOY / NOT_DEPLOYED`。
+状态：`LOCAL_DONE / RELEASE_AUTHORIZED / NOT_DEPLOYED`。
 
 本候选建立在邮件工作台、加密草稿与 SMTP 队列能力之上，新增收件附件按需下载、发件附件安全暂存，以及 SMTP 成功后的 Sent 文件夹幂等同步。生产环境尚未发布；Sent 同步开关默认关闭，也不会为历史已发送邮件补写 Sent 副本。
+
+## 生产语义索引兼容修复
+
+2026-08-27 的生产只读诊断确认，本地语义索引连续失败并非数据库或文档损坏，而是 OVH 本地缓存的 `node:24-bookworm-slim` 标签实际指向 Alpine/musl。`onnxruntime-node` 的 Linux x64 原生库依赖 glibc 加载器，因此在该错误镜像中触发 `ERR_DLOPEN_FAILED`；普通检索会降级为 BM25，但语义排序不可用。
+
+本候选同时加入以下不可绕过门禁：
+
+- API 基础镜像固定到经 Docker 官方 Registry 核验的 `node:24-bookworm-slim` OCI 索引摘要。
+- 镜像构建阶段要求 `/etc/os-release` 的 `ID=debian`，且 `getconf GNU_LIBC_VERSION` 成功。
+- 镜像构建阶段直接加载 `onnxruntime-node`；原生运行时不可用时构建立即失败。
+- GitHub CI 独立使用 `docker build --pull` 构建生产 API 镜像，并再次验证 release 标签、Debian/glibc 与原生运行时。
+- OVH 发布必须拉取固定摘要、构建候选镜像并通过相同门禁后才能切换；不得用 `gcompat` 或修改运行中容器掩盖问题。
 
 ## 本地实现范围
 
@@ -72,10 +84,11 @@
 1. 冻结精确 merge SHA，创建规范数据库与外部配置备份，并在一次性 PostgreSQL 16 中完成隔离恢复。
 2. 在隔离库依次执行迁移 `037`、`038`，再次执行全部迁移，运行结构验证器及附件/Sent PostgreSQL 集成测试。
 3. 保持 `NAV_EMAIL_SENT_APPEND_ENABLED=false` 发布同一 SHA 的 `nav-api`、`nav-web` 与 `nav-mail-worker`；不重建 PostgreSQL、CLIProxyAPI、Nginx Proxy Manager 或其他服务。
-4. 先验收无附件和带附件的草稿确认、上传、删除、发送、失败清理与收件附件下载。
-5. 使用专门测试邮箱确认唯一 Sent 目录；必要时填写 `NAV_IMAP_SENT_MAILBOX` 的精确路径。
-6. 只在 SMTP、IMAP、维护状态和日志脱敏均通过后，将 `NAV_EMAIL_SENT_APPEND_ENABLED` 改为 `true`，逐封测试 SMTP 接受、Sent APPEND、刷新后可见和断线对账。
-7. 最后完成 `nav.skrskr.net` 与 `nav.cristsau.cn` 的桌面和手机验收，再标记为 `VERIFIED_LIVE`。
+4. 切换前验证候选 API 镜像为 Debian/glibc 且能加载 `onnxruntime-node`；切换后等待语义索引成功清空待处理记录并关闭连续失败告警。
+5. 先验收无附件和带附件的草稿确认、上传、删除、发送、失败清理与收件附件下载。
+6. 使用专门测试邮箱确认唯一 Sent 目录；必要时填写 `NAV_IMAP_SENT_MAILBOX` 的精确路径。
+7. 只在 SMTP、IMAP、维护状态和日志脱敏均通过后，将 `NAV_EMAIL_SENT_APPEND_ENABLED` 改为 `true`，逐封测试 SMTP 接受、Sent APPEND、刷新后可见和断线对账。
+8. 最后完成 `nav.skrskr.net` 与 `nav.cristsau.cn` 的桌面和手机验收，再标记为 `VERIFIED_LIVE`。
 
 ## 回滚原则
 
@@ -95,6 +108,7 @@
 - Sent APPEND 前能够唯一发现目标目录；预搜索命中时不再 APPEND。
 - APPEND 成功记录 UIDVALIDITY/UID 并清除冻结 MIME；APPEND 模糊失败进入只对账路径，重跑不产生第二份副本。
 - 两个域名的桌面与手机端均能显示“已排队、已发送、Sent 同步中、已同步、需人工检查”等真实状态，不把 SMTP 成功误报为 Sent 已完成。
+- 语义索引待处理数归零，连续失败数归零，维护状态恢复成功且双域混合检索报告语义能力就绪。
 - 数据库、API 响应和日志中不存在可读附件、冻结 MIME、邮箱密码或加密密钥。
 
 ## 已知限制
