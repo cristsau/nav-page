@@ -47,7 +47,9 @@ let upsertEmailNotificationRule
 let listEmailNotificationRules
 let previewEmailNotificationRule
 let resolveEmailNotificationDecision
+let updateEmailNotificationRule
 let deleteEmailNotificationRule
+let processInboundEmail
 let temporaryDirectory
 
 before(async () => {
@@ -72,11 +74,13 @@ before(async () => {
   ;({ processEmailSentAppendJob } = await import('../src/lib/emailSentAppend.js'))
   ;({ decryptEmailSentMime } = await import('../src/lib/emailSentMimeCrypto.js'))
   ;({ UPDATE_MAILBOX_FAILURE_STATE_SQL: updateMailboxFailureStateSql } = await import('../src/lib/emailIngestScheduler.js'))
+  ;({ processInboundEmail } = await import('../src/lib/emailEvents.js'))
   ;({
     upsertEmailNotificationRule,
     listEmailNotificationRules,
     previewEmailNotificationRule,
     resolveEmailNotificationDecision,
+    updateEmailNotificationRule,
     deleteEmailNotificationRule
   } = await import('../src/lib/emailNotificationRules.js'))
 })
@@ -234,6 +238,28 @@ test('notification rules are owner-bound, encrypted at rest and protect critical
   assert.equal(savedRule.created, true)
   assert.equal(savedRule.rule.matchValue, 'sender@example.test')
   assert.equal(savedRule.rule.criticalOverrideConfirmed, true)
+  await assert.rejects(
+    updateEmailNotificationRule({
+      userId: OWNER_ID,
+      ruleId: savedRule.rule.id,
+      payload: { action: 'digest' }
+    }, { queryFn: (text, parameters) => pool.query(text, parameters) }),
+    (error) => error?.code === 'EMAIL_CRITICAL_NOTIFICATION_CONFIRMATION_REQUIRED'
+  )
+  const digestRule = await updateEmailNotificationRule({
+    userId: OWNER_ID,
+    ruleId: savedRule.rule.id,
+    payload: { action: 'digest', criticalOverrideConfirmed: true }
+  }, { queryFn: (text, parameters) => pool.query(text, parameters) })
+  assert.equal(digestRule.action, 'digest')
+  assert.equal(digestRule.criticalOverrideConfirmed, true)
+  const restoredSilentRule = await updateEmailNotificationRule({
+    userId: OWNER_ID,
+    ruleId: savedRule.rule.id,
+    payload: { action: 'silent', criticalOverrideConfirmed: true }
+  }, { queryFn: (text, parameters) => pool.query(text, parameters) })
+  assert.equal(restoredSilentRule.action, 'silent')
+  assert.equal(restoredSilentRule.criticalOverrideConfirmed, true)
 
   const storedRule = await pool.query(
     `SELECT match_value_digest, match_value_encrypted
@@ -269,6 +295,46 @@ test('notification rules are owner-bound, encrypted at rest and protect critical
   })
   assert.equal(decision.action, 'silent')
   assert.equal(decision.ruleId, savedRule.rule.id)
+  assert.equal(
+    Number((await pool.query(
+      'SELECT hit_count FROM email_notification_rules WHERE id = $1',
+      [savedRule.rule.id]
+    )).rows[0].hit_count),
+    0
+  )
+
+  const inbound = {
+    messageId: '<notification-rule-hit@example.test>',
+    mailboxUid: 11,
+    senderName: 'Security Sender',
+    senderAddress: 'sender@example.test',
+    recipient: 'owner@example.test',
+    subject: 'Security alert requires action',
+    text: 'A suspicious login requires action.',
+    receivedAt: new Date().toISOString()
+  }
+  const firstInbound = await processInboundEmail({
+    userId: OWNER_ID,
+    sourceKey: 'integration-mail',
+    email: inbound,
+    queryFn: (text, parameters) => pool.query(text, parameters)
+  })
+  assert.equal(firstInbound.inserted, true)
+  assert.equal(
+    Number((await pool.query(
+      'SELECT hit_count FROM email_notification_rules WHERE id = $1',
+      [savedRule.rule.id]
+    )).rows[0].hit_count),
+    1
+  )
+  const duplicateInbound = await processInboundEmail({
+    userId: OWNER_ID,
+    sourceKey: 'integration-mail',
+    email: inbound,
+    queryFn: (text, parameters) => pool.query(text, parameters)
+  })
+  assert.equal(duplicateInbound.inserted, false)
+  assert.equal(duplicateInbound.duplicate, true)
   assert.equal(
     Number((await pool.query(
       'SELECT hit_count FROM email_notification_rules WHERE id = $1',

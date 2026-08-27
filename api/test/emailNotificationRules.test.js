@@ -11,6 +11,7 @@ import {
   previewEmailNotificationRule,
   publicEmailNotificationDecision,
   resolveEmailNotificationDecision,
+  updateEmailNotificationRule,
   upsertEmailNotificationRule
 } from '../src/lib/emailNotificationRules.js'
 
@@ -58,8 +59,7 @@ test('notification rule match digests are keyed and domain separated', () => {
   assert.throws(() => digestEmailNotificationRuleValue('sender', 'sender@example.test', Buffer.alloc(16)))
 })
 
-test('deterministic matcher applies specificity order and records an explainable hit', async () => {
-  const updates = []
+test('deterministic matcher applies specificity order without mutating rule counters', async () => {
   const queryFn = async (sql, params) => {
     if (/SELECT id, scope, action/.test(sql)) {
       assert.equal(params[0], USER_ID)
@@ -88,10 +88,6 @@ test('deterministic matcher applies specificity order and records an explainable
         ]
       }
     }
-    if (/UPDATE email_notification_rules/.test(sql)) {
-      updates.push(params)
-      return { rowCount: 1, rows: [] }
-    }
     throw new Error(`unexpected SQL: ${sql}`)
   }
   const decision = await resolveEmailNotificationDecision({
@@ -107,7 +103,6 @@ test('deterministic matcher applies specificity order and records an explainable
   assert.equal(decision.action, 'in_app_only')
   assert.equal(decision.ruleId, 'bbbbbbbb-bbbb-4bbb-8bbb-bbbbbbbbbbbb')
   assert.match(decision.reason, /当前会话/)
-  assert.deepEqual(updates, [['bbbbbbbb-bbbb-4bbb-8bbb-bbbbbbbbbbbb', USER_ID]])
 })
 
 test('critical email cannot be suppressed by an unconfirmed rule', async () => {
@@ -162,7 +157,7 @@ test('a paused suppressive rule does not require confirmation until it is enable
   assert.equal(preview.requiresCriticalConfirmation, false)
 })
 
-test('a concurrent first upsert preserves ciphertext bound to the winning rule id', async () => {
+test('a concurrent first upsert preserves ciphertext and discards unused critical preauthorization', async () => {
   const winningId = 'eeeeeeee-eeee-4eee-8eee-eeeeeeeeeeee'
   const winningCiphertext = encryptEmailPayloadWithKey({ value: 'sender@example.test' }, KEY, {
     context: `email-notification-rule:${USER_ID}:${winningId}`
@@ -175,6 +170,7 @@ test('a concurrent first upsert preserves ciphertext bound to the winning rule i
     if (/INSERT INTO email_notification_rules/.test(sql)) {
       insertCandidateId = params[0]
       assert.notEqual(insertCandidateId, winningId)
+      assert.equal(params[9], false)
       assert.match(sql, /ELSE email_notification_rules\.match_value_encrypted/)
       return {
         rowCount: 1,
@@ -206,13 +202,126 @@ test('a concurrent first upsert preserves ciphertext bound to the winning rule i
       accountId: ACCOUNT_ID,
       scope: 'sender',
       matchValue: 'sender@example.test',
-      action: 'digest'
+      action: 'digest',
+      criticalOverrideConfirmed: true
     }
   }, { queryFn, encryptionKey: KEY })
   assert.ok(insertCandidateId)
   assert.equal(result.created, false)
   assert.equal(result.rule.id, winningId)
   assert.equal(result.rule.matchValue, 'sender@example.test')
+})
+
+function existingRuleRow({
+  action = 'immediate',
+  criticalOverrideConfirmed = true,
+  updatedAt = '2026-08-27 08:00:00.123456+00'
+} = {}) {
+  const id = 'dddddddd-dddd-4ddd-8ddd-dddddddddddd'
+  return {
+    id,
+    user_id: USER_ID,
+    account_id: ACCOUNT_ID,
+    scope: 'category',
+    action,
+    priority: 200,
+    match_value_digest: digestEmailNotificationRuleValue('category', 'security', KEY),
+    match_value_encrypted: encryptEmailPayloadWithKey({ value: 'security' }, KEY, {
+      context: `email-notification-rule:${USER_ID}:${id}`
+    }),
+    enabled: true,
+    critical_override_confirmed: criticalOverrideConfirmed,
+    expires_at: null,
+    explanation: '这类邮件手动规则。',
+    hit_count: 0,
+    last_hit_at: null,
+    created_at: new Date('2026-08-27T07:00:00Z'),
+    updated_at: new Date('2026-08-27T08:00:00.123Z'),
+    optimistic_updated_at: updatedAt
+  }
+}
+
+function updateRuleQuery({ current, updateResult = null, onUpdate = null }) {
+  return async (sql, params) => {
+    if (/SELECT \*, updated_at::text AS optimistic_updated_at/.test(sql)) {
+      return { rowCount: 1, rows: [current] }
+    }
+    if (/SELECT 1 FROM email_accounts/.test(sql)) return { rowCount: 1, rows: [{ '?column?': 1 }] }
+    if (/SELECT event\.id/.test(sql)) return { rowCount: 0, rows: [] }
+    if (/UPDATE email_notification_rules/.test(sql)) {
+      onUpdate?.(sql, params)
+      return updateResult || { rowCount: 0, rows: [] }
+    }
+    throw new Error(`unexpected SQL: ${sql}`)
+  }
+}
+
+test('changing into a suppressive action cannot reuse confirmation from another action', async () => {
+  for (const currentAction of ['immediate', 'silent']) {
+    const current = existingRuleRow({ action: currentAction, criticalOverrideConfirmed: true })
+    await assert.rejects(
+      updateEmailNotificationRule({
+        userId: USER_ID,
+        ruleId: current.id,
+        payload: { action: currentAction === 'immediate' ? 'silent' : 'digest' }
+      }, {
+        queryFn: updateRuleQuery({ current }),
+        encryptionKey: KEY
+      }),
+      (error) => error?.code === 'EMAIL_CRITICAL_NOTIFICATION_CONFIRMATION_REQUIRED'
+    )
+  }
+})
+
+test('explicit confirmation applies only to the current preview and PATCH is an atomic optimistic update', async () => {
+  const current = existingRuleRow({ action: 'immediate', criticalOverrideConfirmed: true })
+  let observedUpdate = null
+  const updatedRow = {
+    ...current,
+    action: 'silent',
+    critical_override_confirmed: true,
+    explanation: '这类邮件手动规则：静默收件。',
+    updated_at: new Date('2026-08-27T08:05:00Z')
+  }
+  const rule = await updateEmailNotificationRule({
+    userId: USER_ID,
+    ruleId: current.id,
+    payload: { action: 'silent', criticalOverrideConfirmed: true }
+  }, {
+    queryFn: updateRuleQuery({
+      current,
+      updateResult: { rowCount: 1, rows: [updatedRow] },
+      onUpdate: (sql, params) => { observedUpdate = { sql, params } }
+    }),
+    encryptionKey: KEY
+  })
+  assert.equal(rule.action, 'silent')
+  assert.equal(rule.criticalOverrideConfirmed, true)
+  assert.match(observedUpdate.sql, /WHERE id = \$1 AND user_id = \$2/)
+  assert.match(observedUpdate.sql, /updated_at = \$9::timestamptz/)
+  assert.doesNotMatch(observedUpdate.sql, /INSERT|ON CONFLICT/)
+  assert.equal(observedUpdate.params[5], true)
+  assert.equal(observedUpdate.params[8], current.optimistic_updated_at)
+})
+
+test('non-suppressive or paused updates clear confirmation and reject a concurrent lost update', async () => {
+  const current = existingRuleRow({ action: 'silent', criticalOverrideConfirmed: true })
+  let persistedConfirmation = null
+  await assert.rejects(
+    updateEmailNotificationRule({
+      userId: USER_ID,
+      ruleId: current.id,
+      payload: { action: 'immediate' }
+    }, {
+      queryFn: updateRuleQuery({
+        current,
+        onUpdate: (_sql, params) => { persistedConfirmation = params[5] }
+      }),
+      encryptionKey: KEY
+    }),
+    (error) => error?.statusCode === 409 && error?.code === 'EMAIL_NOTIFICATION_RULE_CONFLICT'
+  )
+  assert.equal(persistedConfirmation, false)
 })
 
 test('default decision fields remain stable for mailbox and assistant clients', () => {
@@ -252,7 +361,9 @@ test('API and delivery integration expose the agreed contract without plaintext 
   ]) assert.ok(routes.includes(field) || events.includes(field) || rules.includes(field), field)
   assert.match(scheduler, /notification_action[\s\S]*= 'digest'/)
   assert.match(events, /resolveEmailNotificationDecision/)
+  assert.match(events, /WITH inserted AS \([\s\S]*ON CONFLICT[\s\S]*DO NOTHING[\s\S]*rule_hit AS \([\s\S]*hit_count = rule\.hit_count \+ 1/)
   assert.match(events, /pushEnabled: action === 'immediate'/)
+  assert.doesNotMatch(rules, /recordHit/)
   assert.match(securityEvents, /email\.notification_rule\.create/)
   assert.match(securityEvents, /email\.notification_rule\.delete/)
   assert.doesNotMatch(migration, /\n\s*match_value\s+(?:TEXT|VARCHAR)/i)

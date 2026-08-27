@@ -226,20 +226,33 @@ export async function processInboundEmail({
   })
   const { rows } = await queryFn(
     `
-      INSERT INTO email_events (
-        user_id, source_key, mailbox_uid, message_id_hash, sender_hash,
-        received_at, tier, urgency, deterministic_signature,
-        event_signature, state_signature, duplicate_of,
-        classification_status, provider, model, content_encrypted,
-        email_message_id, category, importance_score, notification_action,
-        notification_reason, notification_rule_id, notification_evaluated_at
-      ) VALUES (
-        $1, $2, $3, $4, $5, $6, $7, $8, $9,
-        $10, $11, $12, $13, $14, $15, $16, $17,
-        $18, $19, $20, $21, $22, NOW()
+      WITH inserted AS (
+        INSERT INTO email_events (
+          user_id, source_key, mailbox_uid, message_id_hash, sender_hash,
+          received_at, tier, urgency, deterministic_signature,
+          event_signature, state_signature, duplicate_of,
+          classification_status, provider, model, content_encrypted,
+          email_message_id, category, importance_score, notification_action,
+          notification_reason, notification_rule_id, notification_evaluated_at
+        ) VALUES (
+          $1, $2, $3, $4, $5, $6, $7, $8, $9,
+          $10, $11, $12, $13, $14, $15, $16, $17,
+          $18, $19, $20, $21, $22, NOW()
+        )
+        ON CONFLICT (user_id, source_key, message_id_hash) DO NOTHING
+        RETURNING *
+      ), rule_hit AS (
+        UPDATE email_notification_rules AS rule
+        SET hit_count = rule.hit_count + 1,
+            last_hit_at = NOW()
+        FROM inserted
+        WHERE rule.id = inserted.notification_rule_id
+          AND rule.user_id = inserted.user_id
+        RETURNING rule.id
       )
-      ON CONFLICT (user_id, source_key, message_id_hash) DO NOTHING
-      RETURNING *
+      SELECT inserted.*
+      FROM inserted
+      LEFT JOIN rule_hit ON rule_hit.id = inserted.notification_rule_id
     `,
     [
       userId,

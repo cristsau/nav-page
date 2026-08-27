@@ -91,3 +91,37 @@ AI 不得自动发送、删除、移动或批量修改邮件。邮件正文始�
 - 失败回滚到发布前精确 release；
 - 双域完成匿名健康、一次性管理员登录态、邮件列表/搜索/规则/AI、退出与容器健康验收；
 - 生产验收不发送真实外部邮件，`NAV_EMAIL_SENT_APPEND_ENABLED=false` 保持不变。
+
+### 迁移 039 行数与时长门禁
+
+迁移 `039_email_notification_rules.sql` 会为历史 `email_events` 补齐通知决定，并在同一事务中校验约束。
+当前生产只读基线为 924 行、约 2.72 MB，因此本次无需拆分迁移；这个结论不能自动沿用到之后的发布。
+每次生产执行 039 前都必须先运行以下只读门禁：
+
+```bash
+export NAV_EMAIL_039_DATABASE_CONTAINER='<production-postgres-container>'
+export NAV_EMAIL_039_DATABASE_NAME='<production-database-name>'
+export NAV_EMAIL_039_DATABASE_USER='<production-database-user>'
+scripts/release/check-email-notification-migration.sh --preflight
+```
+
+脚本对 `COUNT(*)` 设置 15 秒 statement timeout 和 2 秒 lock timeout。默认硬门禁为：
+
+- `email_events <= 100000` 行；
+- `email_events` 总关系大小不超过 256 MiB；
+- 任一查询超时、锁等待或结果解析失败均为 `NO-GO`。
+
+随后必须在 canonical 备份恢复出的无网络 PostgreSQL 16 隔离实例中，使用精确 merge SHA 连续运行两次
+`npm --prefix api run migrate` 和一次 `npm --prefix api run verify:migrations`。对第一次迁移计时，并把实测秒数交给同一门禁脚本：
+
+```bash
+started_at="$(date +%s)"
+DATABASE_URL="$ISOLATED_DATABASE_URL" npm --prefix api run migrate
+elapsed_seconds="$(( $(date +%s) - started_at ))"
+scripts/release/check-email-notification-migration.sh \
+  --check-rehearsal-seconds "$elapsed_seconds"
+DATABASE_URL="$ISOLATED_DATABASE_URL" npm --prefix api run migrate
+DATABASE_URL="$ISOLATED_DATABASE_URL" npm --prefix api run verify:migrations
+```
+
+隔离实例必须可丢弃，`ISOLATED_DATABASE_URL` 不得指向生产。默认时长硬门禁为 120 秒；超过行数、大小或时长门禁时停止发布，先拆分回填/约束验证并重新走 CI 与恢复演练。发布证据必须保存脚本的两条 `GO` 输出、精确 merge SHA、隔离数据库标识和迁移日志摘要，不保存数据库口令或连接串。

@@ -10,7 +10,8 @@
 - `action`：`immediate`、`digest`、`in_app_only`、`silent`
 - 优先顺序：会话 > 发件人 > 域名 > 分类 > 邮箱账号；同一身份采用最近更新的规则
 - `enabled=false` 表示暂停；`expiresAt` 到期后自动失效；删除为硬删除
-- 命中后更新 `hitCount` 和 `lastHitAt`，`explanation` 可用于 UI 解释为什么提醒或静默
+- 只有新 `email_event` 实际插入成功才更新 `hitCount` 和 `lastHitAt`；重复去重不计数，
+  `explanation` 可用于 UI 解释为什么提醒或静默
 - 安全、支付或 Tier 1 邮件属于重要邮件。抑制这类通知必须显式传入
   `criticalOverrideConfirmed=true`；否则运行时保留默认立即提醒并返回安全保护原因
 
@@ -52,12 +53,16 @@
 
 请求体与预览相同。同一个用户、邮箱账号、范围和匹配值只保留一条规则；首次创建返回 `201`，覆盖返回 `200`。需要重要邮件确认但未确认时返回 `409` 和错误代码
 `EMAIL_CRITICAL_NOTIFICATION_CONFIRMATION_REQUIRED`。
+`criticalOverrideConfirmed=true` 只对当前预览确实要求确认的压制动作生效；不需要确认时服务端强制保存为
+`false`，不能预授权未来的重要邮件。非压制动作同样强制清零；从非压制动作或另一个压制动作切换时，
+必须针对新动作重新明确确认。
 
 ### 修改规则
 
 `PATCH /email/notification-rules/:id`
 
-允许修改 `action`、`enabled`、`expiresAt`、`criticalOverrideConfirmed`。规则身份（账号、范围、匹配值）不可修改；需要更换身份时先删除再创建。
+允许修改 `action`、`enabled`、`expiresAt`、`criticalOverrideConfirmed`。规则身份（账号、范围、匹配值）不可修改；需要更换身份时先删除再创建。服务端使用规则的 `updated_at` 做原子乐观更新；并发修改冲突返回 `409` 和
+`EMAIL_NOTIFICATION_RULE_CONFLICT`，客户端应刷新后让用户重新确认，而不是静默覆盖。
 
 ### 删除规则
 

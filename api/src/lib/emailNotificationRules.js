@@ -225,8 +225,7 @@ export async function resolveEmailNotificationDecision({
   conversationKey,
   tier,
   queryFn = query,
-  encryptionKey = null,
-  recordHit = true
+  encryptionKey = null
 }) {
   if (!UUID_PATTERN.test(String(userId || ''))) throw new TypeError('Email notification owner is invalid')
   const normalizedCategory = normalizeEmailNotificationCategory(category)
@@ -255,14 +254,6 @@ export async function resolveEmailNotificationDecision({
     if (critical && SUPPRESSIVE_ACTIONS.has(row.action) && row.critical_override_confirmed !== true) {
       protectedRule = true
       continue
-    }
-    if (recordHit) {
-      await queryFn(
-        `UPDATE email_notification_rules
-         SET hit_count = hit_count + 1, last_hit_at = NOW(), updated_at = updated_at
-         WHERE id = $1 AND user_id = $2`,
-        [row.id, userId]
-      )
     }
     return {
       action: row.action,
@@ -413,15 +404,22 @@ function criticalConfirmationError() {
   return error
 }
 
+function effectiveCriticalOverrideConfirmation(preview, requestedConfirmation) {
+  if (!preview.requiresCriticalConfirmation) return false
+  if (requestedConfirmation !== true) throw criticalConfirmationError()
+  return true
+}
+
 export async function upsertEmailNotificationRule({ userId, payload }, {
   queryFn = query,
   encryptionKey = null
 } = {}) {
   const preview = await previewEmailNotificationRule({ userId, payload }, { queryFn })
   const normalized = preview.normalized
-  if (preview.requiresCriticalConfirmation && !normalized.criticalOverrideConfirmed) {
-    throw criticalConfirmationError()
-  }
+  const criticalOverrideConfirmed = effectiveCriticalOverrideConfirmation(
+    preview,
+    normalized.criticalOverrideConfirmed
+  )
   const key = encryptionKey || await loadEmailEncryptionKey()
   const digest = digestEmailNotificationRuleValue(normalized.scope, normalized.matchValue, key)
   const existing = await queryFn(
@@ -464,7 +462,7 @@ export async function upsertEmailNotificationRule({ userId, payload }, {
       digest,
       encrypted,
       normalized.enabled,
-      normalized.criticalOverrideConfirmed,
+      criticalOverrideConfirmed,
       normalized.expiresAt,
       normalized.explanation
     ]
@@ -486,7 +484,10 @@ export async function updateEmailNotificationRule({ userId, ruleId, payload }, {
 } = {}) {
   if (!UUID_PATTERN.test(String(ruleId || ''))) throw new TypeError('Email notification rule id is invalid')
   const existing = await queryFn(
-    'SELECT * FROM email_notification_rules WHERE id = $1 AND user_id = $2 LIMIT 1',
+    `SELECT *, updated_at::text AS optimistic_updated_at
+     FROM email_notification_rules
+     WHERE id = $1 AND user_id = $2
+     LIMIT 1`,
     [ruleId, userId]
   )
   if (!existing.rowCount) {
@@ -504,31 +505,65 @@ export async function updateEmailNotificationRule({ userId, ruleId, payload }, {
   ) {
     throw new TypeError('Email notification rule identity cannot be changed; delete and recreate the rule')
   }
+  const nextAction = payload.action ?? current.action
+  const actionChanged = nextAction !== current.action
+  const requestedConfirmation = !SUPPRESSIVE_ACTIONS.has(nextAction)
+    ? false
+    : actionChanged
+      ? payload.criticalOverrideConfirmed === true
+      : Object.hasOwn(payload, 'criticalOverrideConfirmed')
+        ? payload.criticalOverrideConfirmed === true
+        : current.criticalOverrideConfirmed === true
   const merged = {
     accountId: current.accountId,
     scope: current.scope,
     matchValue: current.matchValue,
-    action: payload.action ?? current.action,
+    action: nextAction,
     enabled: payload.enabled ?? current.enabled,
     expiresAt: Object.hasOwn(payload, 'expiresAt')
       ? payload.expiresAt
       : current.expiresAt && new Date(current.expiresAt) > new Date()
         ? current.expiresAt
         : null,
-    criticalOverrideConfirmed: Object.hasOwn(payload, 'criticalOverrideConfirmed')
-      ? payload.criticalOverrideConfirmed
-      : current.criticalOverrideConfirmed
+    criticalOverrideConfirmed: requestedConfirmation
   }
-  const upserted = await upsertEmailNotificationRule({ userId, payload: merged }, {
-    queryFn,
-    encryptionKey: key
-  })
-  if (String(upserted.rule.id) !== String(ruleId)) {
-    const error = new Error('Email notification rule identity conflicts with an existing rule')
+  const preview = await previewEmailNotificationRule({ userId, payload: merged }, { queryFn })
+  const normalized = preview.normalized
+  const criticalOverrideConfirmed = effectiveCriticalOverrideConfirmation(
+    preview,
+    requestedConfirmation
+  )
+  const updated = await queryFn(
+    `UPDATE email_notification_rules
+     SET action = $3,
+         priority = $4,
+         enabled = $5,
+         critical_override_confirmed = $6,
+         expires_at = $7,
+         explanation = $8,
+         updated_at = NOW()
+     WHERE id = $1 AND user_id = $2
+       AND updated_at = $9::timestamptz
+     RETURNING *`,
+    [
+      ruleId,
+      userId,
+      normalized.action,
+      normalized.priority,
+      normalized.enabled,
+      criticalOverrideConfirmed,
+      normalized.expiresAt,
+      normalized.explanation,
+      existing.rows[0].optimistic_updated_at
+    ]
+  )
+  if (!updated.rowCount) {
+    const error = new Error('Email notification rule changed while it was being updated; refresh and retry')
     error.statusCode = 409
+    error.code = 'EMAIL_NOTIFICATION_RULE_CONFLICT'
     throw error
   }
-  return upserted.rule
+  return mapRule(updated.rows[0], userId, { encryptionKey: key })
 }
 
 export async function deleteEmailNotificationRule({ userId, ruleId }, { queryFn = query } = {}) {
