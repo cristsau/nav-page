@@ -109,7 +109,7 @@ function isImportant(message) {
   return message?.important === true
     || message?.flagged === true
     || message?.flags?.flagged === true
-    || Number(message?.importanceScore || 0) >= 0.72
+    || Number(message?.importanceScore || 0) >= 72
 }
 
 function hasAttachments(message) {

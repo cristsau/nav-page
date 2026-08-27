@@ -75,17 +75,68 @@ export function fetchEmailMessage({ accountId, locationId, folderId } = {}) {
 export function requestEmailAi(messageId, {
   action,
   instruction = '',
-  language = ''
+  language = '',
+  scope = '',
+  tone = '',
+  length = ''
 } = {}) {
   const payload = { action: String(action || '').trim() }
   const optionalFields = {
     instruction: String(instruction || '').trim(),
-    language: String(language || '').trim()
+    language: String(language || '').trim(),
+    scope: String(scope || '').trim(),
+    tone: String(tone || '').trim(),
+    length: String(length || '').trim()
   }
   for (const [key, value] of Object.entries(optionalFields)) {
     if (value) payload[key] = value
   }
   return request(`/email/messages/${requiredId(messageId, 'Email message id')}/ai`, {
+    method: 'POST',
+    body: JSON.stringify(payload)
+  })
+}
+
+export function searchEmailAi({ search = '', question = '', answer = true } = {}) {
+  return request('/email/ai/search', {
+    method: 'POST',
+    body: JSON.stringify({
+      search: String(search || '').trim(),
+      question: String(question || '').trim(),
+      answer: answer !== false
+    })
+  })
+}
+
+export function createEmailAiProposal(messageId, {
+  kind,
+  instruction = '',
+  tone = '',
+  length = ''
+} = {}) {
+  const payload = { kind: String(kind || '').trim() }
+  const optionalFields = {
+    instruction: String(instruction || '').trim(),
+    tone: String(tone || '').trim(),
+    length: String(length || '').trim()
+  }
+  for (const [key, value] of Object.entries(optionalFields)) {
+    if (value) payload[key] = value
+  }
+  return request(`/email/messages/${requiredId(messageId, 'Email message id')}/ai/proposals`, {
+    method: 'POST',
+    body: JSON.stringify(payload)
+  })
+}
+
+export function confirmEmailAiProposal(messageId, proposal = {}) {
+  const payload = {
+    kind: String(proposal.kind || '').trim(),
+    params: proposal.params,
+    operationId: String(proposal.operationId || '').trim(),
+    confirmationToken: String(proposal.confirmationToken || '').trim()
+  }
+  return request(`/email/messages/${requiredId(messageId, 'Email message id')}/ai/confirm`, {
     method: 'POST',
     body: JSON.stringify(payload)
   })

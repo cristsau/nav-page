@@ -129,7 +129,9 @@ test('mail workspace exposes server search, notification controls and one AI ass
   assert.match(list, /notificationAction/)
   assert.match(detail, /邮件 AI 助理/)
   assert.match(detail, /thread_summary/)
-  assert.match(detail, /risk_review/)
+  assert.match(detail, /thread_changes/)
+  assert.match(detail, /analyze/)
+  assert.doesNotMatch(detail, /explain_priority|risk_review/)
   assert.match(detail, /sandbox=""/)
   assert.match(detail, /远程图片、脚本、表单和外部资源已阻止/)
   assert.match(ruleDialog, /手动规则始终优先于 AI 分类/)
@@ -142,4 +144,51 @@ test('mail workspace exposes server search, notification controls and one AI ass
   assert.match(ruleDialog, /criticalMatchCount/)
   assert.match(ruleDialog, /\['digest', 'in_app_only', 'silent'\]/)
   assert.match(ruleDialog, /event\.key === 'Escape'/)
+})
+
+test('mail AI UI follows the bounded server actions, citations and confirm-before-write contract', async () => {
+  const [api, view, list, detail, searchDialog] = await Promise.all([
+    source('app/src/shared/services/emailApi.js'),
+    source('app/src/modules/mail/MailView.vue'),
+    source('app/src/modules/mail/components/MailMessageList.vue'),
+    source('app/src/modules/mail/components/MailMessageDetail.vue'),
+    source('app/src/modules/mail/components/MailAiSearchDialog.vue')
+  ])
+
+  for (const action of ['summarize', 'thread_summary', 'thread_changes', 'tasks', 'analyze', 'draft_reply', 'translate', 'ask', 'propose_notification_rule']) {
+    assert.match(detail, new RegExp(`['\"]${action}['\"]`))
+  }
+  assert.doesNotMatch(detail, /explain_priority|risk_review/)
+  assert.match(api, /scope: String\(scope/)
+  assert.match(api, /tone: String\(tone/)
+  assert.match(api, /length: String\(length/)
+  assert.match(detail, /value="message"/)
+  assert.match(detail, /value="thread"/)
+  assert.match(detail, /回信语气/)
+  assert.match(detail, /回信长度/)
+  assert.match(detail, /aiResult\.structured/)
+  assert.match(detail, /依据来源/)
+  assert.match(detail, /AI 建议，尚未保存/)
+  assert.match(detail, /打开提醒规则，由我确认/)
+  assert.match(detail, /Math\.max\(0, Math\.min\(100, Math\.round\(score\)\)\)/)
+  assert.match(list, /importanceScore \|\| 0\) >= 72/)
+
+  assert.match(api, /\/email\/messages\/\$\{requiredId\(messageId[\s\S]*?\/ai\/proposals/)
+  assert.match(api, /\/email\/messages\/\$\{requiredId\(messageId[\s\S]*?\/ai\/confirm/)
+  assert.match(detail, /previewRequired/)
+  assert.match(detail, /autoExecuted !== false/)
+  assert.match(detail, /尚未写入/)
+  assert.match(detail, /确认保存日记/)
+  assert.match(detail, /确认保存备忘录/)
+  assert.match(detail, /确认创建加密草稿/)
+
+  assert.match(api, /\/email\/ai\/search/)
+  assert.match(view, /问整个邮箱/)
+  assert.match(view, /MailAiSearchDialog/)
+  assert.match(searchDialog, /role="dialog"/)
+  assert.match(searchDialog, /aria-modal="true"/)
+  assert.match(searchDialog, /event\.key === 'Escape'/)
+  assert.match(searchDialog, /event\.key !== 'Tab'/)
+  assert.match(searchDialog, /restoreTarget\?\.focus/)
+  assert.match(searchDialog, /依据来源/)
 })

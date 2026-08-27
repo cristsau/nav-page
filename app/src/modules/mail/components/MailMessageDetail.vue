@@ -1,7 +1,12 @@
 <script setup>
 import { computed, onBeforeUnmount, onMounted, reactive, ref, watch } from 'vue'
 import Icon from '@/shared/components/Icon.vue'
-import { downloadEmailAttachment, requestEmailAi } from '@/shared/services/emailApi'
+import {
+  confirmEmailAiProposal,
+  createEmailAiProposal,
+  downloadEmailAttachment,
+  requestEmailAi
+} from '@/shared/services/emailApi'
 
 const props = defineProps({
   message: { type: Object, default: null },
@@ -19,18 +24,60 @@ const aiResult = ref(null)
 const aiError = ref('')
 const aiPanelOpen = ref(false)
 const aiInstruction = ref('')
+const aiAskScope = ref('message')
+const aiReplyTone = ref('professional')
+const aiReplyLength = ref('medium')
+const aiOperationInstruction = ref('')
+const aiProposal = ref(null)
+const aiProposalBusyKind = ref('')
+const aiProposalConfirming = ref(false)
+const aiOperationResult = ref(null)
 const bodyMode = ref('plain')
 const attachmentDownloads = reactive({})
 let aiRequestSequence = 0
 
-const aiActions = [
-  { action: 'summarize', label: '快速摘要', detail: '提炼关键结论和上下文', icon: 'note' },
-  { action: 'thread_summary', label: '会话进展', detail: '梳理变化、未决问题与等待对象', icon: 'users' },
-  { action: 'tasks', label: '提取待办', detail: '找出截止时间、责任人与下一步', icon: 'list' },
-  { action: 'draft_reply', label: '起草回信', detail: '生成可编辑草稿，发送前仍需确认', icon: 'reply' },
-  { action: 'translate', label: '翻译成中文', detail: '保留语气和专业术语', icon: 'book' },
-  { action: 'explain_priority', label: '解释重要性', detail: '说明分类、提醒和判断依据', icon: 'bell' },
-  { action: 'risk_review', label: '风险检查', detail: '辅助识别钓鱼、付款和账号风险', icon: 'shield' }
+const aiActionGroups = [
+  {
+    id: 'understand',
+    label: '理解邮件',
+    actions: [
+      { action: 'summarize', label: '快速摘要', detail: '提炼当前邮件的关键结论', icon: 'note' },
+      { action: 'thread_summary', label: '会话摘要', detail: '梳理整段会话的共识和未决项', icon: 'users' },
+      { action: 'thread_changes', label: '会话变化', detail: '只看这次新增与改变的内容', icon: 'refresh' },
+      { action: 'analyze', label: '深度分析', detail: '结构化判断重要性、风险与依据', icon: 'shield' },
+      { action: 'tasks', label: '提取待办', detail: '找出截止时间、责任人与下一步', icon: 'list' },
+      { action: 'translate', label: '翻译成中文', detail: '保留原意、语气和专业术语', icon: 'book' },
+      { action: 'propose_notification_rule', label: '建议提醒规则', detail: '分析降噪方式，但不会自动保存', icon: 'bell' }
+    ]
+  },
+  {
+    id: 'write',
+    label: '协助写作',
+    actions: [
+      { action: 'draft_reply', label: '起草回信', detail: '按所选语气与长度生成可编辑内容', icon: 'reply' }
+    ]
+  }
+]
+
+const aiProposalActions = [
+  { kind: 'create_diary', label: '保存为日记', detail: '先预览标题、日期、正文和标签', icon: 'calendar' },
+  { kind: 'create_memo', label: '保存为备忘录', detail: '先预览内容与可选截止时间', icon: 'note' },
+  { kind: 'create_draft', label: '创建加密回复草稿', detail: '只创建草稿，不会自动发送', icon: 'edit' }
+]
+
+const aiActions = aiActionGroups.flatMap((group) => group.actions)
+
+const aiToneOptions = [
+  { value: 'professional', label: '专业' },
+  { value: 'friendly', label: '友好' },
+  { value: 'concise', label: '直接' },
+  { value: 'formal', label: '正式' }
+]
+
+const aiLengthOptions = [
+  { value: 'short', label: '简短' },
+  { value: 'medium', label: '适中' },
+  { value: 'detailed', label: '详细' }
 ]
 
 const categoryNames = {
@@ -42,6 +89,11 @@ const categoryNames = {
 
 const notificationNames = {
   immediate: '立即提醒', digest: '仅放入摘要', in_app_only: '仅站内显示', silent: '完全静音'
+}
+
+const notificationScopeNames = {
+  conversation: '当前会话', sender: '这个发件人', domain: '发件人域名',
+  category: '邮件分类', account: '当前邮箱'
 }
 
 const safeMessageId = computed(() => String(
@@ -66,6 +118,53 @@ const categoryLabel = computed(() => {
   return categoryNames[value] || (value ? '智能分类' : '')
 })
 const notificationLabel = computed(() => notificationNames[String(props.message?.notificationAction || '').trim()] || '')
+const importancePercentage = computed(() => {
+  const score = Number(props.message?.importanceScore || 0)
+  return Number.isFinite(score) ? Math.max(0, Math.min(100, Math.round(score))) : 0
+})
+const aiProposalPreview = computed(() => {
+  const proposal = aiProposal.value
+  const params = proposal?.params
+  if (!proposal || !params || typeof params !== 'object') return null
+  if (proposal.kind === 'create_diary') {
+    return {
+      title: '日记预览',
+      fields: [
+        { label: '标题', value: params.title },
+        { label: '日期', value: params.entryDate },
+        { label: '心情', value: params.mood || '未设置' },
+        { label: '标签', value: Array.isArray(params.tags) ? params.tags.join('、') : '' }
+      ],
+      content: params.content,
+      confirmLabel: '确认保存日记'
+    }
+  }
+  if (proposal.kind === 'create_memo') {
+    return {
+      title: '备忘录预览',
+      fields: [
+        { label: '标题', value: params.title },
+        { label: '截止时间', value: params.dueAt || '未设置' },
+        { label: '标签', value: Array.isArray(params.tags) ? params.tags.join('、') : '' }
+      ],
+      content: params.content,
+      confirmLabel: '确认保存备忘录'
+    }
+  }
+  return {
+    title: '加密回复草稿预览',
+    fields: [
+      { label: '收件人', value: Array.isArray(params.to) ? params.to.join('、') : '' },
+      { label: '主题', value: params.subject }
+    ],
+    content: params.text,
+    confirmLabel: '确认创建加密草稿'
+  }
+})
+const aiOperationHref = computed(() => {
+  const href = String(aiOperationResult.value?.receipt?.href || '').trim()
+  return /^\/(?!\/)/.test(href) ? href : ''
+})
 
 const safeHtmlDocument = computed(() => {
   const body = sanitizedHtmlBody(htmlBody.value)
@@ -196,14 +295,64 @@ function formatSize(value) {
 function textFromAiPayload(payload) {
   const result = payload?.result || payload?.output || payload?.data || payload
   if (typeof result === 'string') return result.trim()
-  return String(result?.text || result?.content || result?.summary || result?.body || result?.draft?.text || result?.draft?.body || '').trim()
+  return String(
+    result?.text
+    || result?.content
+    || result?.summary
+    || result?.body
+    || result?.data?.summary
+    || result?.draft?.text
+    || result?.draft?.body
+    || ''
+  ).trim()
+}
+
+function normalizeAiSources(value) {
+  return (Array.isArray(value) ? value : []).slice(0, 20).map((source, index) => ({
+    sourceId: String(source?.sourceId || `M${index + 1}`).slice(0, 12),
+    messageId: String(source?.messageId || ''),
+    subject: String(source?.subject || '（无主题）').slice(0, 500),
+    sender: String(source?.sender || '').slice(0, 320),
+    receivedAt: source?.receivedAt || ''
+  }))
+}
+
+function normalizeStructuredAiResult(result, action = '') {
+  if (result?.kind !== 'structured' || !result.data || typeof result.data !== 'object') return null
+  const data = result.data
+  if (action === 'propose_notification_rule') {
+    const rawScope = String(data.scope || '').trim()
+    const rawAction = String(data.action || '').trim()
+    return {
+      type: 'notification-rule',
+      scope: rawScope === 'thread' ? 'conversation' : rawScope,
+      action: rawAction === 'mute' ? 'silent' : rawAction,
+      matchValue: String(data.matchValue || '').trim(),
+      reason: String(data.reason || '').trim(),
+      persisted: data.persisted === true
+    }
+  }
+  const boundedList = (value) => (Array.isArray(value) ? value : [])
+    .map((item) => String(item || '').trim())
+    .filter(Boolean)
+    .slice(0, 12)
+  return {
+    type: 'analysis',
+    summary: String(data.summary || '').trim(),
+    category: String(data.category || '').trim(),
+    importance: String(data.importance || '').trim(),
+    evidence: boundedList(data.evidence),
+    actions: boundedList(data.actions),
+    deadlines: boundedList(data.deadlines),
+    risks: boundedList(data.risks)
+  }
 }
 
 function titleForAiAction(action) {
   return aiActions.find((item) => item.action === action)?.label || 'AI 结果'
 }
 
-async function runAi(action, instruction = '') {
+async function runAi(action, instruction = '', overrides = {}) {
   if (!aiAvailable.value || aiBusyAction.value) return
   const requestMessageId = safeMessageId.value
   const requestSequence = ++aiRequestSequence
@@ -213,12 +362,23 @@ async function runAi(action, instruction = '') {
     const payload = await requestEmailAi(requestMessageId, {
       action,
       instruction: String(instruction || '').trim(),
-      language: action === 'translate' ? 'zh-CN' : ''
+      language: action === 'translate' ? 'zh-CN' : '',
+      scope: action === 'ask' ? String(overrides.scope || aiAskScope.value) : '',
+      tone: action === 'draft_reply' ? String(overrides.tone || aiReplyTone.value) : '',
+      length: action === 'draft_reply' ? String(overrides.length || aiReplyLength.value) : ''
     })
     if (requestSequence !== aiRequestSequence || requestMessageId !== safeMessageId.value) return
     const text = textFromAiPayload(payload)
-    if (!text) throw new Error('AI 没有返回可显示的内容')
-    aiResult.value = { action, title: titleForAiAction(action), text }
+    const structured = normalizeStructuredAiResult(payload?.result, action)
+    if (!text && !structured) throw new Error('AI 没有返回可显示的内容')
+    aiResult.value = {
+      action,
+      title: titleForAiAction(action),
+      text,
+      structured,
+      sources: normalizeAiSources(payload?.sources),
+      model: String(payload?.result?.model || '').trim()
+    }
     aiPanelOpen.value = false
     aiInstruction.value = ''
   } catch (error) {
@@ -227,6 +387,58 @@ async function runAi(action, instruction = '') {
   } finally {
     if (requestSequence === aiRequestSequence) aiBusyAction.value = ''
   }
+}
+
+async function buildAiProposal(kind) {
+  if (!aiAvailable.value || aiProposalBusyKind.value || aiProposalConfirming.value) return
+  const requestMessageId = safeMessageId.value
+  const requestSequence = ++aiRequestSequence
+  aiProposalBusyKind.value = kind
+  aiError.value = ''
+  aiOperationResult.value = null
+  try {
+    const payload = await createEmailAiProposal(requestMessageId, {
+      kind,
+      instruction: aiOperationInstruction.value,
+      tone: kind === 'create_draft' ? aiReplyTone.value : '',
+      length: kind === 'create_draft' ? aiReplyLength.value : ''
+    })
+    if (requestSequence !== aiRequestSequence || requestMessageId !== safeMessageId.value) return
+    if (!payload?.proposal?.previewRequired || payload.proposal.autoExecuted !== false) {
+      throw new Error('服务器未返回可确认的安全预览')
+    }
+    aiProposal.value = payload.proposal
+  } catch (error) {
+    if (requestSequence !== aiRequestSequence || requestMessageId !== safeMessageId.value) return
+    aiError.value = error?.message || 'AI 操作预览生成失败'
+  } finally {
+    if (requestSequence === aiRequestSequence) aiProposalBusyKind.value = ''
+  }
+}
+
+async function confirmAiProposal() {
+  if (!aiProposal.value || aiProposalConfirming.value) return
+  const requestMessageId = safeMessageId.value
+  const requestSequence = ++aiRequestSequence
+  aiProposalConfirming.value = true
+  aiError.value = ''
+  try {
+    const payload = await confirmEmailAiProposal(requestMessageId, aiProposal.value)
+    if (requestSequence !== aiRequestSequence || requestMessageId !== safeMessageId.value) return
+    aiOperationResult.value = payload
+    aiProposal.value = null
+    aiOperationInstruction.value = ''
+  } catch (error) {
+    if (requestSequence !== aiRequestSequence || requestMessageId !== safeMessageId.value) return
+    aiError.value = error?.message || 'AI 操作确认失败'
+  } finally {
+    if (requestSequence === aiRequestSequence) aiProposalConfirming.value = false
+  }
+}
+
+function cancelAiProposal() {
+  if (aiProposalConfirming.value) return
+  aiProposal.value = null
 }
 
 function replyPayload(text = '', mode = 'reply') {
@@ -270,6 +482,14 @@ watch(() => safeMessageId.value, () => {
   aiError.value = ''
   aiPanelOpen.value = false
   aiInstruction.value = ''
+  aiAskScope.value = 'message'
+  aiReplyTone.value = 'professional'
+  aiReplyLength.value = 'medium'
+  aiOperationInstruction.value = ''
+  aiProposal.value = null
+  aiProposalBusyKind.value = ''
+  aiProposalConfirming.value = false
+  aiOperationResult.value = null
   bodyMode.value = 'plain'
   for (const key of Object.keys(attachmentDownloads)) delete attachmentDownloads[key]
 })
@@ -317,17 +537,74 @@ watch(() => safeMessageId.value, () => {
           <div><span><Icon name="sparkles" :size="18" /></span><div><strong>邮件 AI 助理</strong><small>回答带依据，所有外发仍需你确认</small></div></div>
           <button type="button" aria-label="关闭 AI 助理" @click="aiPanelOpen = false"><Icon name="close" :size="17" /></button>
         </header>
-        <div class="mail-message-detail__ai-grid">
-          <button v-for="item in aiActions" :key="item.action" type="button" :disabled="Boolean(aiBusyAction)" @click="runAi(item.action)">
-            <span><Icon :name="item.icon" :size="17" /></span>
-            <span><strong>{{ aiBusyAction === item.action ? '处理中…' : item.label }}</strong><small>{{ item.detail }}</small></span>
-          </button>
+        <div class="mail-message-detail__ai-preferences" aria-label="回复偏好">
+          <label>
+            <span>回信语气</span>
+            <select v-model="aiReplyTone">
+              <option v-for="option in aiToneOptions" :key="option.value" :value="option.value">{{ option.label }}</option>
+            </select>
+          </label>
+          <label>
+            <span>回信长度</span>
+            <select v-model="aiReplyLength">
+              <option v-for="option in aiLengthOptions" :key="option.value" :value="option.value">{{ option.label }}</option>
+            </select>
+          </label>
         </div>
-        <form @submit.prevent="runAi('ask', aiInstruction)">
-          <label for="mail-ai-instruction">就这封邮件提问</label>
+
+        <section v-for="group in aiActionGroups" :key="group.id" class="mail-message-detail__ai-group" :aria-labelledby="`mail-ai-group-${group.id}`">
+          <h4 :id="`mail-ai-group-${group.id}`">{{ group.label }}</h4>
+          <div class="mail-message-detail__ai-grid">
+            <button v-for="item in group.actions" :key="item.action" type="button" :disabled="Boolean(aiBusyAction || aiProposalBusyKind || aiProposalConfirming)" @click="runAi(item.action)">
+              <span><Icon :name="item.icon" :size="17" /></span>
+              <span><strong>{{ aiBusyAction === item.action ? '处理中…' : item.label }}</strong><small>{{ item.detail }}</small></span>
+            </button>
+          </div>
+        </section>
+
+        <form class="mail-message-detail__ai-question" @submit.prevent="runAi('ask', aiInstruction, { scope: aiAskScope })">
+          <div class="mail-message-detail__ai-scope" role="group" aria-label="提问范围">
+            <label><input v-model="aiAskScope" type="radio" value="message">当前邮件</label>
+            <label><input v-model="aiAskScope" type="radio" value="thread">整个会话</label>
+          </div>
+          <label for="mail-ai-instruction">向邮件 AI 提问</label>
           <textarea id="mail-ai-instruction" v-model="aiInstruction" rows="3" placeholder="例如：这封邮件需要我在什么时候回复？"></textarea>
           <button type="submit" :disabled="!aiInstruction.trim() || Boolean(aiBusyAction)"><Icon name="sparkles" :size="17" />{{ aiBusyAction === 'ask' ? '思考中…' : '询问 AI' }}</button>
         </form>
+
+        <section class="mail-message-detail__ai-operations" aria-labelledby="mail-ai-operations-title">
+          <div>
+            <h4 id="mail-ai-operations-title">安全操作</h4>
+            <p>AI 只生成预览；你确认后才写入 NAV，回复草稿不会自动发送。</p>
+          </div>
+          <label for="mail-ai-operation-instruction">补充要求（可选）</label>
+          <textarea id="mail-ai-operation-instruction" v-model="aiOperationInstruction" rows="2" placeholder="例如：只记录交付节点，并加上项目标签。"></textarea>
+          <div class="mail-message-detail__ai-operation-grid">
+            <button v-for="item in aiProposalActions" :key="item.kind" type="button" :disabled="Boolean(aiBusyAction || aiProposalBusyKind || aiProposalConfirming)" @click="buildAiProposal(item.kind)">
+              <Icon :name="item.icon" :size="17" />
+              <span><strong>{{ aiProposalBusyKind === item.kind ? '生成预览中…' : item.label }}</strong><small>{{ item.detail }}</small></span>
+            </button>
+          </div>
+          <section v-if="aiProposalPreview" class="mail-message-detail__ai-proposal" aria-labelledby="mail-ai-proposal-title">
+            <div>
+              <h5 id="mail-ai-proposal-title">{{ aiProposalPreview.title }}</h5>
+              <span>尚未写入</span>
+            </div>
+            <dl>
+              <div v-for="field in aiProposalPreview.fields" :key="field.label"><dt>{{ field.label }}</dt><dd>{{ field.value || '未设置' }}</dd></div>
+            </dl>
+            <pre>{{ aiProposalPreview.content || '没有正文内容' }}</pre>
+            <div class="mail-message-detail__ai-proposal-actions">
+              <button type="button" :disabled="aiProposalConfirming" @click="cancelAiProposal">取消</button>
+              <button type="button" :disabled="aiProposalConfirming" @click="confirmAiProposal"><Icon name="check" :size="17" />{{ aiProposalConfirming ? '正在写入…' : aiProposalPreview.confirmLabel }}</button>
+            </div>
+          </section>
+          <div v-if="aiOperationResult" class="mail-message-detail__ai-operation-success" role="status">
+            <Icon name="circle-check" :size="18" />
+            <span>操作已完成；系统保留了可审计回执。</span>
+            <a v-if="aiOperationHref" :href="aiOperationHref">查看结果</a>
+          </div>
+        </section>
         <p>邮件正文被视为不可信内容；敏感值先脱敏，AI 不能自行发送、删除或移动邮件。</p>
       </section>
 
@@ -343,7 +620,7 @@ watch(() => safeMessageId.value, () => {
       <div class="mail-message-detail__signals" aria-label="邮件分类和提醒">
         <span v-if="categoryLabel"><Icon name="tag" :size="14" />{{ categoryLabel }}</span>
         <span v-if="notificationLabel"><Icon :name="message.notificationAction === 'silent' ? 'bell-off' : 'bell'" :size="14" />{{ notificationLabel }}</span>
-        <span v-if="Number(message.importanceScore || 0) > 0"><Icon name="star" :size="14" />重要度 {{ Math.round(Number(message.importanceScore) * 100) }}%</span>
+        <span v-if="importancePercentage > 0"><Icon name="star" :size="14" />重要度 {{ importancePercentage }}%</span>
         <small v-if="message.notificationReason">{{ message.notificationReason }}</small>
       </div>
 
@@ -373,10 +650,42 @@ watch(() => safeMessageId.value, () => {
       <section v-if="aiResult" class="mail-message-detail__ai" aria-labelledby="mail-ai-result-title">
         <div>
           <span><Icon name="sparkles" :size="18" /></span>
-          <h3 id="mail-ai-result-title">{{ aiResult.title }}</h3>
+          <h3 id="mail-ai-result-title">{{ aiResult.title }}<small v-if="aiResult.model"> · {{ aiResult.model }}</small></h3>
           <button type="button" aria-label="关闭 AI 结果" title="关闭" @click="aiResult = null"><Icon name="close" :size="16" /></button>
         </div>
-        <pre>{{ aiResult.text }}</pre>
+        <section v-if="aiResult.structured" class="mail-message-detail__ai-structured" aria-label="结构化分析结果">
+          <template v-if="aiResult.structured.type === 'notification-rule'">
+            <div class="mail-message-detail__ai-rule-status"><Icon name="bell" :size="17" /><strong>AI 建议，尚未保存</strong></div>
+            <dl class="mail-message-detail__ai-rule">
+              <div><dt>范围</dt><dd>{{ notificationScopeNames[aiResult.structured.scope] || aiResult.structured.scope || '未指定' }}</dd></div>
+              <div><dt>方式</dt><dd>{{ notificationNames[aiResult.structured.action] || aiResult.structured.action || '未指定' }}</dd></div>
+              <div v-if="aiResult.structured.matchValue"><dt>匹配对象</dt><dd>{{ aiResult.structured.matchValue }}</dd></div>
+              <div><dt>理由</dt><dd>{{ aiResult.structured.reason || 'AI 未提供理由。' }}</dd></div>
+            </dl>
+            <button type="button" class="mail-message-detail__open-rule" @click="emit('notification', message, $event.currentTarget)"><Icon name="settings" :size="17" />打开提醒规则，由我确认</button>
+          </template>
+          <template v-else>
+            <p>{{ aiResult.structured.summary || 'AI 未提供摘要。' }}</p>
+            <div class="mail-message-detail__ai-structured-tags">
+              <span v-if="aiResult.structured.category">分类：{{ categoryNames[aiResult.structured.category] || aiResult.structured.category }}</span>
+              <span v-if="aiResult.structured.importance">重要性：{{ aiResult.structured.importance }}</span>
+            </div>
+            <div v-if="aiResult.structured.actions.length"><h4>建议行动</h4><ul><li v-for="item in aiResult.structured.actions" :key="item">{{ item }}</li></ul></div>
+            <div v-if="aiResult.structured.deadlines.length"><h4>时间节点</h4><ul><li v-for="item in aiResult.structured.deadlines" :key="item">{{ item }}</li></ul></div>
+            <div v-if="aiResult.structured.risks.length"><h4>风险</h4><ul><li v-for="item in aiResult.structured.risks" :key="item">{{ item }}</li></ul></div>
+            <div v-if="aiResult.structured.evidence.length"><h4>判断依据</h4><ul><li v-for="item in aiResult.structured.evidence" :key="item">{{ item }}</li></ul></div>
+          </template>
+        </section>
+        <pre v-else>{{ aiResult.text }}</pre>
+        <section v-if="aiResult.sources.length" class="mail-message-detail__ai-sources" aria-labelledby="mail-ai-sources-title">
+          <h4 id="mail-ai-sources-title">依据来源</h4>
+          <ol>
+            <li v-for="source in aiResult.sources" :key="`${source.sourceId}-${source.messageId}`">
+              <span>{{ source.sourceId }}</span>
+              <div><strong>{{ source.subject }}</strong><small>{{ source.sender || '未知发件人' }}<template v-if="source.receivedAt"> · {{ formatLongDate(source.receivedAt) }}</template></small></div>
+            </li>
+          </ol>
+        </section>
         <button v-if="aiResult.action === 'draft_reply'" type="button" class="mail-message-detail__use-draft" @click="openReply(aiResult.text)"><Icon name="edit" :size="17" />检查并回复</button>
         <p>AI 结果可能有误。发送前仍需由你预览并明确确认。</p>
       </section>
@@ -442,6 +751,11 @@ watch(() => safeMessageId.value, () => {
 .mail-message-detail__ai-panel header strong { font-size: .72rem; }
 .mail-message-detail__ai-panel header small { color: var(--text-muted); font-size: .59rem; }
 .mail-message-detail__ai-panel > header > button { display: grid; width: 44px; height: 44px; place-items: center; color: var(--text-secondary); background: var(--bg-card); border: 1px solid var(--border-light); border-radius: 11px; cursor: pointer; }
+.mail-message-detail__ai-preferences { display: grid; margin-top: 10px; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 7px; }
+.mail-message-detail__ai-preferences label { display: grid; gap: 5px; color: var(--text-muted); font-size: .59rem; font-weight: 700; }
+.mail-message-detail__ai-preferences select { width: 100%; min-height: 44px; padding: 0 34px 0 10px; color: var(--text-primary); font: inherit; font-size: .64rem; background: var(--bg-card); border: 1px solid var(--border-light); border-radius: 11px; }
+.mail-message-detail__ai-group { margin-top: 13px; }
+.mail-message-detail__ai-group > h4, .mail-message-detail__ai-operations h4 { margin: 0; color: var(--text-secondary); font-size: .61rem; letter-spacing: .035em; }
 .mail-message-detail__ai-grid { display: grid; margin-top: 11px; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 7px; }
 .mail-message-detail__ai-grid button { display: grid; min-height: 66px; padding: 9px 10px; align-items: center; grid-template-columns: 32px minmax(0, 1fr); gap: 8px; text-align: left; color: var(--text-primary); font: inherit; background: var(--bg-card); border: 1px solid var(--border-light); border-radius: 12px; cursor: pointer; }
 .mail-message-detail__ai-grid button:disabled { opacity: .5; cursor: wait; }
@@ -449,11 +763,39 @@ watch(() => safeMessageId.value, () => {
 .mail-message-detail__ai-grid button > span:last-child { display: grid; gap: 2px; }
 .mail-message-detail__ai-grid strong { font-size: .65rem; }
 .mail-message-detail__ai-grid small { color: var(--text-muted); font-size: .56rem; line-height: 1.35; }
-.mail-message-detail__ai-panel form { display: grid; margin-top: 10px; grid-template-columns: minmax(0, 1fr) auto; gap: 7px; }
-.mail-message-detail__ai-panel form label { grid-column: 1 / -1; color: var(--text-muted); font-size: .61rem; font-weight: 700; }
+.mail-message-detail__ai-panel form { display: grid; margin-top: 13px; grid-template-columns: minmax(0, 1fr) auto; gap: 7px; }
+.mail-message-detail__ai-panel form > label { grid-column: 1 / -1; color: var(--text-muted); font-size: .61rem; font-weight: 700; }
 .mail-message-detail__ai-panel textarea { min-width: 0; padding: 10px 11px; resize: vertical; color: var(--text-primary); font: inherit; font-size: .66rem; line-height: 1.55; background: var(--bg-card); border: 1px solid var(--border-light); border-radius: 12px; }
 .mail-message-detail__ai-panel form button { display: inline-flex; min-width: 104px; min-height: 44px; padding: 0 12px; align-items: center; justify-content: center; gap: 6px; color: var(--accent-contrast, #fff); font: inherit; font-size: .64rem; font-weight: 720; background: var(--accent-color); border: 0; border-radius: 12px; cursor: pointer; }
 .mail-message-detail__ai-panel form button:disabled { opacity: .5; cursor: not-allowed; }
+.mail-message-detail__ai-scope { display: flex; grid-column: 1 / -1; gap: 6px; }
+.mail-message-detail__ai-scope label { display: inline-flex; min-height: 38px; padding: 0 10px; align-items: center; gap: 6px; color: var(--text-secondary); font-size: .61rem; background: var(--bg-card); border: 1px solid var(--border-light); border-radius: 10px; cursor: pointer; }
+.mail-message-detail__ai-scope input { width: 16px; height: 16px; accent-color: var(--accent-color); }
+.mail-message-detail__ai-operations { display: grid; margin-top: 15px; padding-top: 14px; gap: 8px; border-top: 1px solid color-mix(in srgb, var(--accent-color) 16%, var(--border-light)); }
+.mail-message-detail__ai-operations > div:first-child { display: grid; gap: 4px; }
+.mail-message-detail__ai-operations > div:first-child p, .mail-message-detail__ai-operations > label { margin: 0; color: var(--text-muted); font-size: .58rem; line-height: 1.5; }
+.mail-message-detail__ai-operation-grid { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 7px; }
+.mail-message-detail__ai-operation-grid > button { display: grid; min-height: 70px; padding: 10px; align-items: center; grid-template-columns: auto minmax(0, 1fr); gap: 8px; text-align: left; color: var(--text-primary); font: inherit; background: var(--bg-card); border: 1px solid var(--border-light); border-radius: 12px; cursor: pointer; }
+.mail-message-detail__ai-operation-grid > button > svg { color: var(--accent-color); }
+.mail-message-detail__ai-operation-grid > button span { display: grid; gap: 3px; }
+.mail-message-detail__ai-operation-grid strong { font-size: .62rem; }
+.mail-message-detail__ai-operation-grid small { color: var(--text-muted); font-size: .54rem; line-height: 1.35; }
+.mail-message-detail__ai-operation-grid button:disabled { opacity: .5; cursor: wait; }
+.mail-message-detail__ai-proposal { display: grid; padding: 12px; gap: 10px; background: var(--bg-card); border: 1px solid color-mix(in srgb, var(--accent-color) 25%, var(--border-light)); border-radius: 13px; }
+.mail-message-detail__ai-proposal > div:first-child { display: flex; align-items: center; justify-content: space-between; gap: 8px; }
+.mail-message-detail__ai-proposal h5 { margin: 0; font-size: .68rem; }
+.mail-message-detail__ai-proposal > div:first-child span { padding: 3px 7px; color: var(--warning-color); font-size: .54rem; background: color-mix(in srgb, var(--warning-color) 9%, var(--bg-card)); border-radius: 999px; }
+.mail-message-detail__ai-proposal dl { display: grid; margin: 0; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 8px 12px; }
+.mail-message-detail__ai-proposal dl div { display: grid; gap: 2px; }
+.mail-message-detail__ai-proposal dt { color: var(--text-muted); font-size: .54rem; }
+.mail-message-detail__ai-proposal dd { margin: 0; overflow-wrap: anywhere; color: var(--text-secondary); font-size: .61rem; }
+.mail-message-detail__ai-proposal pre { max-height: 220px; margin: 0; padding: 10px; overflow: auto; white-space: pre-wrap; overflow-wrap: anywhere; color: var(--text-secondary); font: inherit; font-size: .62rem; line-height: 1.6; background: var(--bg-secondary); border-radius: 9px; }
+.mail-message-detail__ai-proposal-actions { display: flex; justify-content: flex-end; gap: 7px; }
+.mail-message-detail__ai-proposal-actions button { min-height: 44px; padding: 0 12px; color: var(--text-secondary); font: inherit; font-size: .61rem; font-weight: 700; background: var(--bg-secondary); border: 1px solid var(--border-light); border-radius: 10px; cursor: pointer; }
+.mail-message-detail__ai-proposal-actions button:last-child { display: inline-flex; align-items: center; gap: 5px; color: var(--accent-contrast, #fff); background: var(--accent-color); border-color: transparent; }
+.mail-message-detail__ai-proposal-actions button:disabled { opacity: .5; cursor: wait; }
+.mail-message-detail__ai-operation-success { display: flex; min-height: 44px; padding: 8px 10px; align-items: center; gap: 7px; color: var(--success-color, #4c8a64); font-size: .6rem; background: color-mix(in srgb, var(--success-color, #4c8a64) 8%, var(--bg-card)); border: 1px solid color-mix(in srgb, var(--success-color, #4c8a64) 23%, var(--border-light)); border-radius: 11px; }
+.mail-message-detail__ai-operation-success a { margin-left: auto; color: var(--accent-color); font-weight: 700; }
 .mail-message-detail__ai-panel > p { margin: 10px 0 0; color: var(--text-muted); font-size: .57rem; line-height: 1.5; }
 .mail-message-detail__sender { display: grid; padding: 20px clamp(16px, 2.4vw, 28px) 12px; align-items: center; grid-template-columns: auto minmax(0, 1fr) auto; gap: 11px; }
 .mail-message-detail__avatar { display: grid; width: 42px; height: 42px; place-items: center; color: var(--accent-color); font-size: .75rem; font-weight: 780; background: var(--accent-bg); border: 1px solid color-mix(in srgb, var(--accent-color) 20%, var(--border-light)); border-radius: 13px; }
@@ -495,9 +837,32 @@ watch(() => safeMessageId.value, () => {
 .mail-message-detail__ai > div { display: grid; align-items: center; grid-template-columns: auto minmax(0, 1fr) auto; gap: 8px; }
 .mail-message-detail__ai > div > span { color: var(--accent-color); }
 .mail-message-detail__ai > div h3 { margin: 0; }
+.mail-message-detail__ai > div h3 small { color: var(--text-muted); font-size: .56rem; font-weight: 500; }
 .mail-message-detail__ai button { display: inline-flex; min-height: 44px; padding: 0 12px; align-items: center; justify-content: center; gap: 6px; color: var(--text-secondary); font: inherit; font-size: .64rem; font-weight: 700; background: var(--bg-card); border: 1px solid var(--border-light); border-radius: 11px; cursor: pointer; }
 .mail-message-detail__ai > div button { width: 44px; padding: 0; }
 .mail-message-detail__ai pre { margin: 13px 0 0; white-space: pre-wrap; overflow-wrap: anywhere; color: var(--text-secondary); font: inherit; font-size: .68rem; line-height: 1.7; }
+.mail-message-detail__ai-structured { display: grid; margin-top: 12px; gap: 10px; }
+.mail-message-detail__ai-structured > p { margin: 0; color: var(--text-secondary); font-size: .68rem; line-height: 1.7; }
+.mail-message-detail__ai-structured-tags { display: flex; flex-wrap: wrap; gap: 5px; }
+.mail-message-detail__ai-structured-tags span { padding: 4px 8px; color: var(--accent-color); font-size: .57rem; background: var(--bg-card); border: 1px solid var(--border-light); border-radius: 999px; }
+.mail-message-detail__ai-structured > div:not(.mail-message-detail__ai-structured-tags) { display: grid; gap: 5px; }
+.mail-message-detail__ai-structured h4, .mail-message-detail__ai-sources h4 { margin: 0; color: var(--text-secondary); font-size: .61rem; }
+.mail-message-detail__ai-structured ul { display: grid; margin: 0; padding-left: 18px; gap: 4px; color: var(--text-secondary); font-size: .62rem; line-height: 1.55; }
+.mail-message-detail__ai-rule-status { display: flex !important; min-height: 36px; padding: 7px 9px; align-items: center; gap: 7px; color: var(--warning-color); background: color-mix(in srgb, var(--warning-color) 8%, var(--bg-card)); border: 1px solid color-mix(in srgb, var(--warning-color) 22%, var(--border-light)); border-radius: 10px; }
+.mail-message-detail__ai-rule-status strong { font-size: .61rem; }
+.mail-message-detail__ai-rule { display: grid; margin: 0; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 9px 14px; }
+.mail-message-detail__ai-rule div { display: grid; gap: 3px; }
+.mail-message-detail__ai-rule dt { color: var(--text-muted); font-size: .55rem; }
+.mail-message-detail__ai-rule dd { margin: 0; overflow-wrap: anywhere; color: var(--text-secondary); font-size: .62rem; line-height: 1.5; }
+.mail-message-detail__ai .mail-message-detail__open-rule { width: fit-content; color: var(--accent-color); }
+.mail-message-detail__ai-sources { display: grid; margin-top: 13px; gap: 7px; }
+.mail-message-detail__ai-sources ol { display: grid; margin: 0; padding: 0; gap: 5px; list-style: none; }
+.mail-message-detail__ai-sources li { display: grid; min-height: 46px; padding: 7px 9px; align-items: center; grid-template-columns: auto minmax(0, 1fr); gap: 8px; background: var(--bg-card); border: 1px solid var(--border-light); border-radius: 10px; }
+.mail-message-detail__ai-sources li > span { display: grid; min-width: 31px; height: 26px; padding-inline: 5px; place-items: center; color: var(--accent-color); font-size: .56rem; font-weight: 760; background: var(--accent-bg); border-radius: 7px; }
+.mail-message-detail__ai-sources li > div { display: grid; min-width: 0; gap: 2px; }
+.mail-message-detail__ai-sources strong, .mail-message-detail__ai-sources small { overflow: hidden; white-space: nowrap; text-overflow: ellipsis; }
+.mail-message-detail__ai-sources strong { font-size: .61rem; }
+.mail-message-detail__ai-sources small { color: var(--text-muted); font-size: .54rem; }
 .mail-message-detail__ai .mail-message-detail__use-draft { margin-top: 13px; color: var(--accent-contrast, #fff); background: var(--accent-color); border-color: transparent; }
 .mail-message-detail__ai > p { margin: 11px 0 0; color: var(--text-muted); font-size: .58rem; line-height: 1.55; }
 .mail-message-detail__ai-error { color: var(--error-color); font-size: .65rem; line-height: 1.55; background: color-mix(in srgb, var(--error-color) 8%, var(--bg-card)); border: 1px solid color-mix(in srgb, var(--error-color) 24%, transparent); }
@@ -518,8 +883,13 @@ watch(() => safeMessageId.value, () => {
   .mail-message-detail__close { display: none !important; }
   .mail-message-detail__actions { display: none; }
   .mail-message-detail__ai-panel { margin-inline: 12px; }
+  .mail-message-detail__ai-preferences { grid-template-columns: 1fr; }
   .mail-message-detail__ai-grid { grid-template-columns: 1fr; }
   .mail-message-detail__ai-panel form { grid-template-columns: 1fr; }
+  .mail-message-detail__ai-operation-grid { grid-template-columns: 1fr; }
+  .mail-message-detail__ai-proposal dl { grid-template-columns: 1fr; }
+  .mail-message-detail__ai-rule { grid-template-columns: 1fr; }
+  .mail-message-detail__ai-proposal-actions { display: grid; grid-template-columns: 1fr; }
   .mail-message-detail__sender { grid-template-columns: auto minmax(0, 1fr); }
   .mail-message-detail__sender time { grid-column: 2; }
   .mail-message-detail__recipients dl { grid-template-columns: 1fr; }

@@ -2,6 +2,7 @@
 import { computed, nextTick, onBeforeUnmount, onMounted, ref, watch } from 'vue'
 import { RouterLink, useRoute, useRouter } from 'vue-router'
 import Icon from '@/shared/components/Icon.vue'
+import MailAiSearchDialog from './components/MailAiSearchDialog.vue'
 import MailComposeDialog from './components/MailComposeDialog.vue'
 import MailFolderSheet from './components/MailFolderSheet.vue'
 import MailFolderSidebar from './components/MailFolderSidebar.vue'
@@ -21,6 +22,7 @@ const initialLoading = ref(true)
 const localError = ref('')
 const folderSheetOpen = ref(false)
 const composeOpen = ref(false)
+const aiSearchOpen = ref(false)
 const composeInitial = ref({})
 const composeSourceMessageId = ref('')
 const ruleDialogOpen = ref(false)
@@ -278,6 +280,10 @@ onBeforeUnmount(mail.deactivate)
           <Icon name="plus" :size="17" />
           <span>写邮件</span>
         </button>
+        <button type="button" :disabled="!hasAccounts" aria-haspopup="dialog" @click="aiSearchOpen = true">
+          <Icon name="sparkles" :size="17" />
+          <span>问整个邮箱</span>
+        </button>
         <button type="button" :disabled="initialLoading || state.loadingMessages" @click="refreshWorkspace">
           <Icon name="refresh" :size="17" />
           <span>{{ initialLoading || state.loadingMessages ? '读取中…' : '刷新' }}</span>
@@ -367,6 +373,10 @@ onBeforeUnmount(mail.deactivate)
       :initial="composeInitial"
       @close="closeCompose"
       @queued="onDraftQueued"
+    />
+    <MailAiSearchDialog
+      :open="aiSearchOpen"
+      @close="aiSearchOpen = false"
     />
     <MailNotificationRuleDialog
       :open="ruleDialogOpen"
