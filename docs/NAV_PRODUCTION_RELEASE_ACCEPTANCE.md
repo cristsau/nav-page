@@ -19,6 +19,9 @@
 - `scripts/release/nav-with-ephemeral-admin.sh`
 - `api/src/ops/releaseAcceptanceAccount.js`
 - `api/src/ops/releaseAcceptanceAccountCli.js`
+- 邮件工作区的有状态双域验收见
+  [`NAV_MAIL_WORKSPACE_ACCEPTANCE.md`](NAV_MAIL_WORKSPACE_ACCEPTANCE.md)。该脚本仍必须由本页的一次性
+  管理员生命周期包装；合成邮件未准备时返回非零 SKIP，不得写成 PASS。
 
 ## 为什么不再使用固定验收密码
 

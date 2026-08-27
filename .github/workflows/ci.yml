@@ -96,6 +96,8 @@ jobs:
         run: |
           bash -n scripts/release/nav-with-ephemeral-admin.sh
           bash -n scripts/release/test-nav-with-ephemeral-admin.sh
+          bash -n scripts/release/accept-mail-workspace.sh
+          shellcheck --severity=warning scripts/release/accept-mail-workspace.sh
 
       - name: Validate backup and recovery shell
         run: |
