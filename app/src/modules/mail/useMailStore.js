@@ -31,6 +31,9 @@ function initialMailState() {
     pages: {},
     activeAccountId: '',
     activeFolderId: '',
+    searchQuery: '',
+    searchFilter: 'all',
+    searchMeta: null,
     selectedMessageId: '',
     selectedMessage: null,
     loadingAccounts: false,
@@ -226,8 +229,9 @@ export async function loadMailMessages({ replace = true } = {}) {
   const folderId = state.activeFolderId
   if (!ownerUserId || !accountId || !folderId) return emptyMessagePage()
   const key = pageKey(accountId, folderId)
+  const searchKey = `${state.searchQuery}\u0000${state.searchFilter}`
   const existing = pageRefreshRequests.get(key)
-  if (existing && requestGate.isCurrent(existing.ticket) && (!replace || existing.replace)) {
+  if (existing && existing.searchKey === searchKey && requestGate.isCurrent(existing.ticket) && (!replace || existing.replace)) {
     return existing.promise
   }
 
@@ -235,10 +239,17 @@ export async function loadMailMessages({ replace = true } = {}) {
   let requestPromise
   requestPromise = (async () => {
     try {
-      const payload = await fetchEmailMessages({ accountId, folderId, limit: PAGE_SIZE })
+      const payload = await fetchEmailMessages({
+        accountId,
+        folderId,
+        limit: PAGE_SIZE,
+        q: state.searchQuery,
+        filter: state.searchFilter
+      })
       if (!requestStillCurrent(ticket, ownerUserId)) return ensurePage(accountId, folderId)
       const current = ensurePage(accountId, folderId)
       state.pages[key] = mergeMessagePage(current, payload, { replace })
+      state.searchMeta = payload?.search || null
       return state.pages[key]
     } catch (error) {
       if (!requestStillCurrent(ticket, ownerUserId)) return ensurePage(accountId, folderId)
@@ -251,7 +262,7 @@ export async function loadMailMessages({ replace = true } = {}) {
       }
     }
   })()
-  pageRefreshRequests.set(key, { promise: requestPromise, replace, ticket })
+  pageRefreshRequests.set(key, { promise: requestPromise, replace, ticket, searchKey })
   updateLoadingFlags()
   return requestPromise
 }
@@ -285,7 +296,9 @@ export async function loadMoreMailMessages() {
         accountId,
         folderId,
         cursor,
-        limit: PAGE_SIZE
+        limit: PAGE_SIZE,
+        q: state.searchQuery,
+        filter: state.searchFilter
       })
       if (!requestStillCurrent(ticket, ownerUserId)) return ensurePage(accountId, folderId)
       const latest = ensurePage(accountId, folderId)
@@ -326,7 +339,8 @@ export async function selectMailAccount(accountId, { preferredFolderId = '' } = 
     ? requestedFolderId
     : defaultFolderId(folders)
   updateLoadingFlags()
-  await loadMailMessages({ replace: !ensurePage(targetAccountId, state.activeFolderId).loaded })
+  const searchActive = Boolean(state.searchQuery) || state.searchFilter !== 'all'
+  await loadMailMessages({ replace: searchActive || !ensurePage(targetAccountId, state.activeFolderId).loaded })
 }
 
 export async function selectMailFolder(folderId) {
@@ -339,7 +353,25 @@ export async function selectMailFolder(folderId) {
   }
   updateLoadingFlags()
   const page = ensurePage(state.activeAccountId, targetFolderId)
-  if (!page.loaded || page.invalidated) await loadMailMessages({ replace: true })
+  if (!page.loaded || page.invalidated || state.searchQuery || state.searchFilter !== 'all') {
+    await loadMailMessages({ replace: true })
+  }
+}
+
+export async function setMailSearch({ query = '', filter = 'all' } = {}) {
+  if (!bindMailStoreToCurrentUser()) return emptyMessagePage()
+  const normalizedQuery = String(query || '').trim().slice(0, 120)
+  const allowedFilters = new Set(['all', 'unread', 'flagged', 'attachments'])
+  const requestedFilter = String(filter || 'all').trim().toLowerCase()
+  const normalizedFilter = allowedFilters.has(requestedFilter) ? requestedFilter : 'all'
+  if (normalizedQuery === state.searchQuery && normalizedFilter === state.searchFilter) {
+    return currentPage.value
+  }
+  state.searchQuery = normalizedQuery
+  state.searchFilter = normalizedFilter
+  state.searchMeta = null
+  clearSelectedMailMessage()
+  return loadMailMessages({ replace: true })
 }
 
 export async function loadMailMessage(locationId) {
@@ -565,6 +597,7 @@ export function useMailStore() {
     loadMessage: loadMailMessage,
     loadLegacyEvent: loadLegacyMailEvent,
     loadMore: loadMoreMailMessages,
+    search: setMailSearch,
     refresh: refreshVisibleMailbox,
     clearSelection: clearSelectedMailMessage,
     startRealtime: startMailRealtime,

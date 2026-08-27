@@ -2,11 +2,14 @@
 import { computed, nextTick, onBeforeUnmount, onMounted, ref, watch } from 'vue'
 import { RouterLink, useRoute, useRouter } from 'vue-router'
 import Icon from '@/shared/components/Icon.vue'
+import MailAiSearchDialog from './components/MailAiSearchDialog.vue'
 import MailComposeDialog from './components/MailComposeDialog.vue'
 import MailFolderSheet from './components/MailFolderSheet.vue'
 import MailFolderSidebar from './components/MailFolderSidebar.vue'
 import MailMessageDetail from './components/MailMessageDetail.vue'
 import MailMessageList from './components/MailMessageList.vue'
+import MailNotificationRuleDialog from './components/MailNotificationRuleDialog.vue'
+import MailNotificationRulesManagerDialog from './components/MailNotificationRulesManagerDialog.vue'
 import { fetchEmailStatus } from '@/shared/services/emailApi'
 import { useMailStore } from './useMailStore'
 
@@ -20,9 +23,15 @@ const initialLoading = ref(true)
 const localError = ref('')
 const folderSheetOpen = ref(false)
 const composeOpen = ref(false)
+const aiSearchOpen = ref(false)
 const composeInitial = ref({})
 const composeSourceMessageId = ref('')
+const ruleDialogOpen = ref(false)
+const rulesManagerOpen = ref(false)
+const ruleMessage = ref(null)
+const ruleNotice = ref('')
 const lastMessageTrigger = ref(null)
+const detailRef = ref(null)
 let updatingRoute = false
 
 const errorMessage = computed(() => localError.value || state.errorMessage)
@@ -44,6 +53,10 @@ const mailboxNotice = computed(() => {
   if (!ingestConfigured.value) return '当前邮箱连接不可用；已同步内容仍可只读查看。'
   if (!ingestEnabled.value) return '邮箱已配置，但后台自动同步当前处于关闭状态。'
   return ''
+})
+const activeAccountLabel = computed(() => {
+  const account = state.accounts.find((item) => String(item.id) === state.activeAccountId)
+  return account?.label || account?.displayName || account?.address || account?.email || '当前邮箱'
 })
 
 function queryText(value) {
@@ -160,10 +173,43 @@ async function openMessage(messageId, trigger) {
   localError.value = ''
   state.errorMessage = ''
   try {
-    await mail.loadMessage(messageId)
+    const request = mail.loadMessage(messageId)
+    await nextTick()
+    focusMailDetail()
+    await request
     await replaceMailQuery({ messageId })
+    await nextTick()
+    focusMailDetail()
   } catch (error) {
     localError.value = error?.message || '邮件详情加载失败'
+  }
+}
+
+function focusMailDetail() {
+  detailRef.value?.focusInitial?.()
+}
+
+async function openAiSearchSource(source) {
+  const accountId = String(source?.accountId || '').trim()
+  const folderId = String(source?.folderId || '').trim()
+  const locationId = String(source?.locationId || '').trim()
+  if (!accountId || !folderId || !locationId) {
+    localError.value = '这个来源暂时没有可打开的邮箱位置。'
+    return
+  }
+  aiSearchOpen.value = false
+  localError.value = ''
+  state.errorMessage = ''
+  try {
+    if (accountId !== state.activeAccountId) {
+      await mail.selectAccount(accountId, { preferredFolderId: folderId })
+      mail.startRealtime()
+    } else if (folderId !== state.activeFolderId) {
+      await mail.selectFolder(folderId)
+    }
+    await openMessage(locationId)
+  } catch (error) {
+    localError.value = error?.message || '邮件来源打开失败'
   }
 }
 
@@ -184,6 +230,16 @@ async function loadMore() {
   }
 }
 
+async function applyMailQuery(query) {
+  localError.value = ''
+  state.errorMessage = ''
+  try {
+    await mail.search(query)
+  } catch (error) {
+    localError.value = error?.message || '邮件搜索失败'
+  }
+}
+
 function openCompose(initial = {}) {
   composeInitial.value = { ...initial }
   composeSourceMessageId.value = String(initial?.sourceMessageId || '').trim()
@@ -197,6 +253,39 @@ function closeCompose() {
 }
 
 function onDraftQueued() {
+  void refreshWorkspace().catch(() => {})
+}
+
+function openNotificationRule(message) {
+  ruleMessage.value = message || state.selectedMessage || null
+  if (!ruleMessage.value) return
+  ruleDialogOpen.value = true
+}
+
+function closeNotificationRule() {
+  ruleDialogOpen.value = false
+  ruleMessage.value = null
+}
+
+function onNotificationRuleSaved(rule) {
+  ruleNotice.value = '邮件通知规则已启用；邮件仍会正常同步。'
+  const action = String(rule?.action || '').trim()
+  if (action && state.selectedMessage && ruleMessage.value) {
+    state.selectedMessage.notificationAction = action
+  }
+  window.setTimeout(() => { ruleNotice.value = '' }, 5_000)
+  void refreshWorkspace().catch(() => {})
+}
+
+async function openRulesManager() {
+  folderSheetOpen.value = false
+  await nextTick()
+  rulesManagerOpen.value = true
+}
+
+function onRulesManagerChanged() {
+  ruleNotice.value = '邮件提醒规则已更新；邮件仍会正常同步。'
+  window.setTimeout(() => { ruleNotice.value = '' }, 5_000)
   void refreshWorkspace().catch(() => {})
 }
 
@@ -236,12 +325,16 @@ onBeforeUnmount(mail.deactivate)
       <div>
         <span>智能邮箱</span>
         <h1>邮件</h1>
-        <p>已同步邮件保持只读；支持按需下载附件、AI 摘要、待办提取、翻译和安全回信。原邮箱不会被删除或移动，任何外发都必须先保存预览并由你再次确认。</p>
+        <p>已同步邮件保持只读；在一个工作区里完成检索、会话阅读、通知降噪、AI 分析和安全回信。原邮箱不会被删除或移动，任何外发都必须先保存预览并由你再次确认。</p>
       </div>
       <div class="mail-hero__actions">
         <button type="button" :disabled="!hasAccounts" @click="openCompose()">
           <Icon name="plus" :size="17" />
           <span>写邮件</span>
+        </button>
+        <button type="button" :disabled="!hasAccounts" aria-haspopup="dialog" @click="aiSearchOpen = true">
+          <Icon name="sparkles" :size="17" />
+          <span>问整个邮箱</span>
         </button>
         <button type="button" :disabled="initialLoading || state.loadingMessages" @click="refreshWorkspace">
           <Icon name="refresh" :size="17" />
@@ -252,6 +345,7 @@ onBeforeUnmount(mail.deactivate)
 
     <p v-if="errorMessage" class="mail-notice is-error" role="alert">{{ errorMessage }}</p>
     <p v-if="mailboxNotice" class="mail-notice is-warning" role="status">{{ mailboxNotice }}</p>
+    <p v-if="ruleNotice" class="mail-notice is-success" role="status">{{ ruleNotice }}</p>
 
     <section v-if="initialLoading" class="mail-loading" role="status" aria-label="正在加载邮箱工作区">
       <span></span><span></span><span></span>
@@ -277,6 +371,7 @@ onBeforeUnmount(mail.deactivate)
           :loading="state.loadingFolders"
           @select-account="chooseAccount"
           @select-folder="chooseFolder"
+          @manage-rules="openRulesManager"
         />
       </aside>
 
@@ -293,11 +388,14 @@ onBeforeUnmount(mail.deactivate)
           @load-more="loadMore"
           @refresh="refreshWorkspace"
           @open-folders="folderSheetOpen = true"
+          @notification="openNotificationRule"
+          @query-change="applyMailQuery"
         />
       </div>
 
       <div class="mail-workspace__detail">
         <MailMessageDetail
+          ref="detailRef"
           :message="state.selectedMessage"
           :message-id="state.selectedMessageId"
           :account-id="state.activeAccountId"
@@ -306,6 +404,8 @@ onBeforeUnmount(mail.deactivate)
           :loading="state.loadingDetail"
           @close="closeMessage"
           @reply="openCompose"
+          @notification="openNotificationRule"
+          @open-source="openAiSearchSource"
         />
       </div>
     </section>
@@ -320,6 +420,7 @@ onBeforeUnmount(mail.deactivate)
       @close="folderSheetOpen = false"
       @select-account="chooseAccount"
       @select-folder="chooseFolder"
+      @manage-rules="openRulesManager"
     />
     <MailComposeDialog
       :show="composeOpen"
@@ -328,6 +429,25 @@ onBeforeUnmount(mail.deactivate)
       :initial="composeInitial"
       @close="closeCompose"
       @queued="onDraftQueued"
+    />
+    <MailAiSearchDialog
+      :open="aiSearchOpen"
+      @close="aiSearchOpen = false"
+      @open-source="openAiSearchSource"
+    />
+    <MailNotificationRuleDialog
+      :open="ruleDialogOpen"
+      :message="ruleMessage"
+      :account-id="state.activeAccountId"
+      @close="closeNotificationRule"
+      @saved="onNotificationRuleSaved"
+    />
+    <MailNotificationRulesManagerDialog
+      :open="rulesManagerOpen"
+      :account-id="state.activeAccountId"
+      :account-label="activeAccountLabel"
+      @close="rulesManagerOpen = false"
+      @changed="onRulesManagerChanged"
     />
   </main>
 </template>
@@ -345,6 +465,7 @@ onBeforeUnmount(mail.deactivate)
 .mail-notice { margin: 0 0 14px; padding: 11px 13px; border-radius: 12px; font-size: .71rem; line-height: 1.55; }
 .mail-notice.is-error { color: var(--error-color); background: color-mix(in srgb, var(--error-color) 9%, var(--bg-card)); border: 1px solid color-mix(in srgb, var(--error-color) 28%, transparent); }
 .mail-notice.is-warning { color: var(--warning-color); background: color-mix(in srgb, var(--warning-color) 9%, var(--bg-card)); border: 1px solid color-mix(in srgb, var(--warning-color) 28%, transparent); }
+.mail-notice.is-success { color: var(--success-color, #4c8a64); background: color-mix(in srgb, var(--success-color, #4c8a64) 9%, var(--bg-card)); border: 1px solid color-mix(in srgb, var(--success-color, #4c8a64) 28%, transparent); }
 .mail-loading { display: grid; min-height: min(690px, calc(100vh - 180px)); overflow: hidden; grid-template-columns: 220px 360px 1fr; gap: 1px; background: var(--border-light); border: 1px solid var(--border-light); border-radius: 21px; }
 .mail-loading span { background: linear-gradient(105deg, var(--bg-card) 25%, var(--bg-hover) 40%, var(--bg-card) 55%); background-size: 240% 100%; animation: mail-shimmer 1.4s ease infinite; }
 @keyframes mail-shimmer { to { background-position-x: -240%; } }
@@ -358,6 +479,9 @@ onBeforeUnmount(mail.deactivate)
 .mail-workspace__folders,
 .mail-workspace__list,
 .mail-workspace__detail { min-width: 0; min-height: 0; }
+@media (min-width: 1180px) {
+  .mail-workspace { height: min(780px, calc(100vh - 178px)); grid-template-columns: minmax(210px, 236px) minmax(350px, 400px) minmax(0, 1fr); }
+}
 @media (prefers-reduced-motion: reduce) {
   .mail-loading span { animation: none; }
 }

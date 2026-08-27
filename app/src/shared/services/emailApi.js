@@ -45,13 +45,19 @@ export function fetchEmailMessages({
   accountId,
   folderId,
   cursor = '',
-  limit = 40
+  limit = 40,
+  q = '',
+  filter = 'all'
 } = {}) {
   const query = new URLSearchParams({
     folderId: String(folderId || ''),
     limit: String(limit)
   })
   if (String(cursor || '').trim()) query.set('cursor', String(cursor).trim())
+  if (String(q || '').trim()) query.set('q', String(q).trim())
+  if (String(filter || '').trim() && String(filter).trim() !== 'all') {
+    query.set('filter', String(filter).trim())
+  }
   return request(
     `/email/accounts/${requiredId(accountId, 'Email account id')}/messages?${query.toString()}`,
     { method: 'GET', cache: 'no-store' }
@@ -69,12 +75,18 @@ export function fetchEmailMessage({ accountId, locationId, folderId } = {}) {
 export function requestEmailAi(messageId, {
   action,
   instruction = '',
-  language = ''
+  language = '',
+  scope = '',
+  tone = '',
+  length = ''
 } = {}) {
   const payload = { action: String(action || '').trim() }
   const optionalFields = {
     instruction: String(instruction || '').trim(),
-    language: String(language || '').trim()
+    language: String(language || '').trim(),
+    scope: String(scope || '').trim(),
+    tone: String(tone || '').trim(),
+    length: String(length || '').trim()
   }
   for (const [key, value] of Object.entries(optionalFields)) {
     if (value) payload[key] = value
@@ -82,6 +94,97 @@ export function requestEmailAi(messageId, {
   return request(`/email/messages/${requiredId(messageId, 'Email message id')}/ai`, {
     method: 'POST',
     body: JSON.stringify(payload)
+  })
+}
+
+export function searchEmailAi({ search = '', question = '', answer = true } = {}) {
+  return request('/email/ai/search', {
+    method: 'POST',
+    body: JSON.stringify({
+      search: String(search || '').trim(),
+      question: String(question || '').trim(),
+      answer: answer !== false
+    })
+  })
+}
+
+export function createEmailAiProposal(messageId, {
+  kind,
+  instruction = '',
+  tone = '',
+  length = ''
+} = {}) {
+  const payload = { kind: String(kind || '').trim() }
+  const optionalFields = {
+    instruction: String(instruction || '').trim(),
+    tone: String(tone || '').trim(),
+    length: String(length || '').trim()
+  }
+  for (const [key, value] of Object.entries(optionalFields)) {
+    if (value) payload[key] = value
+  }
+  return request(`/email/messages/${requiredId(messageId, 'Email message id')}/ai/proposals`, {
+    method: 'POST',
+    body: JSON.stringify(payload)
+  })
+}
+
+export function confirmEmailAiProposal(messageId, proposal = {}) {
+  const payload = {
+    kind: String(proposal.kind || '').trim(),
+    params: proposal.params,
+    operationId: String(proposal.operationId || '').trim(),
+    confirmationToken: String(proposal.confirmationToken || '').trim()
+  }
+  return request(`/email/messages/${requiredId(messageId, 'Email message id')}/ai/confirm`, {
+    method: 'POST',
+    body: JSON.stringify(payload)
+  })
+}
+
+// Notification rule contract (implemented by the server-side mail rules module):
+// GET    /email/notification-rules
+// POST   /email/notification-rules
+// PATCH  /email/notification-rules/:id
+// DELETE /email/notification-rules/:id
+// POST   /email/notification-rules/preview
+// The UI never persists a raw match value locally; it derives the current
+// conversation/sender/domain/category only when the user previews or saves.
+export function fetchEmailNotificationRules({ accountId = '' } = {}) {
+  const query = new URLSearchParams()
+  if (String(accountId || '').trim()) query.set('accountId', String(accountId).trim())
+  const encodedQuery = query.toString()
+  const suffix = encodedQuery ? `?${encodedQuery}` : ''
+  return request(`/email/notification-rules${suffix}`, {
+    method: 'GET',
+    cache: 'no-store'
+  })
+}
+
+export function previewEmailNotificationRule(payload = {}) {
+  return request('/email/notification-rules/preview', {
+    method: 'POST',
+    body: JSON.stringify(payload)
+  })
+}
+
+export function createEmailNotificationRule(payload = {}) {
+  return request('/email/notification-rules', {
+    method: 'POST',
+    body: JSON.stringify(payload)
+  })
+}
+
+export function updateEmailNotificationRule(ruleId, payload = {}) {
+  return request(`/email/notification-rules/${requiredId(ruleId, 'Email notification rule id')}`, {
+    method: 'PATCH',
+    body: JSON.stringify(payload)
+  })
+}
+
+export function deleteEmailNotificationRule(ruleId) {
+  return request(`/email/notification-rules/${requiredId(ruleId, 'Email notification rule id')}`, {
+    method: 'DELETE'
   })
 }
 

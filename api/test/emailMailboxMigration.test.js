@@ -18,6 +18,18 @@ const sentAppendMigrationUrl = new URL(
   '../src/db/migrations/038_email_sent_append_jobs.sql',
   import.meta.url
 )
+const notificationRuleMigrationUrl = new URL(
+  '../src/db/migrations/039_email_notification_rules.sql',
+  import.meta.url
+)
+const notificationRuleReleaseDocUrl = new URL(
+  '../../docs/NAV_MAIL_WORKSPACE_RULES_AI_20260827.md',
+  import.meta.url
+)
+const notificationRuleGateUrl = new URL(
+  '../../scripts/release/check-email-notification-migration.sh',
+  import.meta.url
+)
 const verifierUrl = new URL('../src/db/verifyMigrations.js', import.meta.url)
 
 test('mailbox foundation models accounts, folders, messages and remote identities', async () => {
@@ -198,4 +210,57 @@ test('migration verifier validates Sent append types, defaults and remote identi
   assert.match(verifier, /\(next_attempt_at, created_at, id\)/)
   assert.match(verifier, /\(user_id, created_at desc, id\)/)
   assert.match(verifier, /await verifyEmailSentAppendSchema\(\)/)
+})
+
+test('email notification rule migration encrypts rule values and persists explainable decisions', async () => {
+  const migration = await readFile(notificationRuleMigrationUrl, 'utf8')
+
+  assert.match(migration, /CREATE TABLE IF NOT EXISTS email_notification_rules \(/)
+  assert.match(migration, /match_value_digest CHAR\(64\) NOT NULL/)
+  assert.match(migration, /match_value_encrypted BYTEA NOT NULL/)
+  assert.doesNotMatch(migration, /match_value\s+(?:TEXT|VARCHAR)/i)
+  assert.match(migration, /scope IN \('conversation', 'sender', 'domain', 'category', 'account'\)/)
+  assert.match(migration, /action IN \('immediate', 'digest', 'in_app_only', 'silent'\)/)
+  assert.match(migration, /UNIQUE \(user_id, account_id, scope, match_value_digest\)/)
+  assert.match(migration, /FOREIGN KEY \(account_id, user_id\)[\s\S]*REFERENCES email_accounts\(id, user_id\) ON DELETE CASCADE/)
+  assert.match(migration, /FOREIGN KEY \(notification_rule_id, user_id\)[\s\S]*ON DELETE SET NULL \(notification_rule_id\)/)
+  assert.match(migration, /ADD COLUMN IF NOT EXISTS category VARCHAR\(24\)/)
+  assert.match(migration, /ADD COLUMN IF NOT EXISTS importance_score SMALLINT/)
+  assert.match(migration, /ADD COLUMN IF NOT EXISTS notification_action VARCHAR\(16\)/)
+  assert.match(migration, /ADD COLUMN IF NOT EXISTS notification_reason TEXT/)
+  assert.match(migration, /idx_email_events_pending_notification_digest/)
+})
+
+test('migration verifier validates notification rule ownership, encryption and delivery indexes', async () => {
+  const verifier = await readFile(verifierUrl, 'utf8')
+
+  assert.match(verifier, /async function verifyEmailNotificationRuleSchema\(\)/)
+  assert.match(verifier, /email_notification_rules_account_user_fkey/)
+  assert.match(verifier, /email_notification_rules_match_ciphertext_size_check/)
+  assert.match(verifier, /email_events_notification_rule_fkey/)
+  assert.match(verifier, /idx_email_notification_rules_active/)
+  assert.match(verifier, /idx_email_events_pending_notification_digest/)
+  assert.match(verifier, /'notification_action', "'digest'::text"/)
+  assert.match(verifier, /\['notification_reason', 'text', 'NO', "''::text"\]/)
+  assert.match(verifier, /\['notification_rule_id', 'uuid', 'YES', null\]/)
+  assert.match(verifier, /\['notification_evaluated_at', 'timestamptz', 'NO', 'now\(\)'\]/)
+  assert.match(verifier, /await verifyEmailNotificationRuleSchema\(\)/)
+})
+
+test('email notification migration has executable row, size and isolated-duration release gates', async () => {
+  const [releaseDoc, gate] = await Promise.all([
+    readFile(notificationRuleReleaseDocUrl, 'utf8'),
+    readFile(notificationRuleGateUrl, 'utf8')
+  ])
+
+  assert.match(gate, /SET statement_timeout = '15s'/)
+  assert.match(gate, /SET lock_timeout = '2s'/)
+  assert.match(gate, /DEFAULT_MAX_ROWS=100000/)
+  assert.match(gate, /DEFAULT_MAX_RELATION_BYTES=268435456/)
+  assert.match(gate, /DEFAULT_MAX_REHEARSAL_SECONDS=120/)
+  assert.match(gate, /COUNT\(\*\)::bigint/)
+  assert.match(gate, /pg_total_relation_size/)
+  assert.match(releaseDoc, /canonical 备份恢复出的无网络 PostgreSQL 16 隔离实例/)
+  assert.match(releaseDoc, /--check-rehearsal-seconds/)
+  assert.match(releaseDoc, /不得指向生产/)
 })

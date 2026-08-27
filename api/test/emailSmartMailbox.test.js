@@ -18,6 +18,35 @@ test('mail API exposes authenticated AI, draft preview and explicit send routes'
   assert.match(route, /eventType: 'email\.send\.queued'/)
   assert.match(route, /reply\.code\(202\)/)
   assert.match(route, /Object\.hasOwn\(EMAIL_AI_ACTIONS, action\)/)
+  assert.match(route, /EMAIL_AI_MESSAGE_ACTIONS\.has\(action\)/)
+  assert.match(route, /fastify\.post\('\/email\/ai\/search'/)
+  assert.match(route, /fastify\.post\('\/email\/messages\/:messageId\/ai\/proposals'/)
+  assert.match(route, /fastify\.post\('\/email\/messages\/:messageId\/ai\/confirm'/)
+  assert.match(route, /verifyEmailAiConfirmationToken/)
+  assert.match(route, /toolName: kind/)
+  assert.match(route, /`\/mail\?draft=\$\{encodeURIComponent\(resourceId\)\}`/)
+  assert.doesNotMatch(route, /create_note/)
+  const aiRoutes = route.slice(
+    route.indexOf("fastify.post('/email/messages/:messageId/ai'"),
+    route.indexOf("fastify.post('/email/drafts'")
+  )
+  assert.doesNotMatch(aiRoutes, /queueEmailDraft\(/)
+  assert.doesNotMatch(aiRoutes, /enqueueUserMail\(/)
+  assert.doesNotMatch(aiRoutes, /DELETE FROM email_messages|UPDATE email_folder_messages SET.*deleted/is)
+  assert.match(route, /scope === 'conversation'/)
+  assert.match(route, /row\?\.thread_key_hash/)
+  assert.doesNotMatch(route, /matchValue = 'current-thread'/)
+})
+
+test('AI draft confirmation reuses the operation transaction without a nested transaction', async () => {
+  const drafts = await source('../src/lib/emailDrafts.js')
+  const helper = drafts.slice(
+    drafts.indexOf('export async function createEmailDraftInTransaction'),
+    drafts.indexOf('export async function createEmailDraft({')
+  )
+  assert.match(helper, /client\.query/)
+  assert.match(helper, /INSERT INTO email_drafts/)
+  assert.doesNotMatch(helper, /client\.query\('BEGIN'\)|client\.query\('COMMIT'\)/)
 })
 
 test('mailbox ingestion failure state is scoped by source and owner', async () => {

@@ -11,19 +11,45 @@ import {
   runEmailAi,
   selectEmailAiProvider
 } from '../lib/emailAi.js'
+import {
+  buildEmailAiCacheKey,
+  deriveEmailResourceVersion,
+  deriveEmailThreadResourceVersion,
+  EmailAiResponseCache,
+  loadOwnedEmailThread,
+  searchOwnedEmails
+} from '../lib/emailAiCopilot.js'
+import {
+  createEmailAiConfirmationToken,
+  deriveEmailAiConfirmationSecret,
+  EmailAiConfirmationError,
+  verifyEmailAiConfirmationToken
+} from '../lib/emailAiConfirmation.js'
 import { loadEmailEncryptionKey } from '../lib/emailCrypto.js'
 import {
   createEmailDraft,
+  createEmailDraftInTransaction,
   getEmailDraftForUser,
   queueEmailDraft,
   refreshEmailDraftContentHash
 } from '../lib/emailDrafts.js'
+import { executeAssistantToolOperation } from '../lib/assistantToolOperations.js'
+import { executeAssistantTool } from '../lib/assistantTools.js'
 import {
   createDraftEmailAttachment,
   deleteDraftEmailAttachment,
   EMAIL_ATTACHMENT_LIMITS
 } from '../lib/emailAttachmentStore.js'
 import { getEmailEventForUser, getEmailNotificationDetails } from '../lib/emailEvents.js'
+import {
+  deleteEmailNotificationRule,
+  listEmailNotificationRules,
+  previewEmailNotificationRule,
+  publicEmailNotificationDecision,
+  normalizeEmailNotificationCategory,
+  updateEmailNotificationRule,
+  upsertEmailNotificationRule
+} from '../lib/emailNotificationRules.js'
 import { validateImapConfig } from '../lib/emailIngestScheduler.js'
 import {
   decorateIncomingAttachmentMetadata,
@@ -37,6 +63,13 @@ import {
   EMAIL_MAILBOX_CHANGE_CHANNEL
 } from '../lib/emailMailboxStore.js'
 import {
+  EMAIL_MAILBOX_SEARCH_LIMITS,
+  mailboxFilterSql,
+  mailboxMessageMatchesQuery,
+  normalizeMailboxFilter,
+  normalizeMailboxSearchQuery
+} from '../lib/emailMailboxSearch.js'
+import {
   enqueueMail,
   normalizeEmailAddress,
   SMTP_DELIVERY_ERROR_CODES,
@@ -49,6 +82,20 @@ const UUID_PATTERN = /^[0-9a-f]{8}-(?:[0-9a-f]{4}-){3}[0-9a-f]{12}$/i
 const EMAIL_STREAM_MAX_LIFETIME_MS = 5 * 60 * 1000
 const EMAIL_STREAM_RETRY_AFTER_SECONDS = 5
 const emailStreamConnectionLimiter = createEmailSseConnectionLimiter({ maxConnections: 3 })
+const emailAiResponseCache = new EmailAiResponseCache()
+const EMAIL_AI_THREAD_ACTIONS = new Set(['thread_summary', 'thread_changes'])
+const EMAIL_AI_MESSAGE_ACTIONS = new Set([
+  'summarize',
+  'tasks',
+  'ask',
+  'thread_summary',
+  'thread_changes',
+  'analyze',
+  'draft_reply',
+  'translate',
+  'propose_notification_rule'
+])
+const EMAIL_AI_PROPOSAL_KINDS = new Set(['create_diary', 'create_memo', 'create_draft'])
 
 function boundedLimit(value) {
   const parsed = Number(value)
@@ -150,17 +197,138 @@ async function getCanonicalMailboxRowForUser(messageId, userId) {
   if (!UUID_PATTERN.test(String(messageId || ''))) return null
   const { rows } = await query(
     `SELECT message.id AS message_id, message.account_id, message.user_id,
-            account.source_key, message.envelope_encrypted,
-            message.content_encrypted, message.received_at,
-            message.has_attachments, message.attachment_count
-     FROM email_messages AS message
-     JOIN email_accounts AS account
-       ON account.id = message.account_id AND account.user_id = message.user_id
-     WHERE message.id = $1 AND message.user_id = $2
+             account.source_key, message.canonical_hash, message.thread_key_hash,
+             message.updated_at, message.envelope_encrypted,
+             message.content_encrypted, message.received_at,
+             message.has_attachments, message.attachment_count,
+             location.location_id, location.folder_id
+      FROM email_messages AS message
+      JOIN email_accounts AS account
+        ON account.id = message.account_id AND account.user_id = message.user_id
+      LEFT JOIN LATERAL (
+        SELECT candidate.id AS location_id, candidate.folder_id
+        FROM email_folder_messages AS candidate
+        JOIN email_folders AS folder
+          ON folder.id = candidate.folder_id
+         AND folder.account_id = candidate.account_id
+         AND folder.user_id = candidate.user_id
+        WHERE candidate.message_id = message.id
+          AND candidate.account_id = message.account_id
+          AND candidate.user_id = message.user_id
+          AND candidate.expunged_at IS NULL
+        ORDER BY
+          CASE folder.special_use
+            WHEN 'inbox' THEN 0 WHEN 'flagged' THEN 1 WHEN 'sent' THEN 2
+            WHEN 'drafts' THEN 3 WHEN 'archive' THEN 4 WHEN 'trash' THEN 8
+            WHEN 'junk' THEN 9 ELSE 6
+          END,
+          candidate.internal_date DESC,
+          candidate.id DESC
+        LIMIT 1
+      ) AS location ON TRUE
+      WHERE message.id = $1 AND message.user_id = $2
      LIMIT 1`,
     [messageId, userId]
   )
   return rows[0] || null
+}
+
+async function decryptCanonicalMailboxRow(row) {
+  return decryptStoredMailboxMessage(row, {
+    userId: row.user_id,
+    sourceKey: row.source_key
+  })
+}
+
+async function resolveEmailAiProviderForUser(userId) {
+  const appConfig = await getUserSettingValue(userId, 'appConfig', {})
+  const resolution = await resolveChatProviderModel(
+    appConfig?.search?.providers?.chatgpt || {}
+  )
+  const provider = selectEmailAiProvider({ chatgpt: resolution.provider })
+  if (!provider) throw new Error('请先在设置中启用 ChatGPT / OpenAI')
+  return provider
+}
+
+function emailAiCalendarContext() {
+  const requestedTimeZone = String(config.emailDigestTimeZone || 'Asia/Shanghai').trim()
+  const readDate = (timeZone) => {
+    const parts = new Intl.DateTimeFormat('en-US', {
+      timeZone,
+      year: 'numeric',
+      month: '2-digit',
+      day: '2-digit'
+    }).formatToParts(new Date())
+    const value = Object.fromEntries(parts.map((part) => [part.type, part.value]))
+    return `${value.year}-${value.month}-${value.day}`
+  }
+  try {
+    return { currentDate: readDate(requestedTimeZone), timeZone: requestedTimeZone }
+  } catch {
+    return { currentDate: readDate('UTC'), timeZone: 'UTC' }
+  }
+}
+
+function emailAiSourceMetadata(messages) {
+  return (Array.isArray(messages) ? messages : []).slice(0, 20).map((message, index) => ({
+    sourceId: `M${index + 1}`,
+    messageId: message.messageId || null,
+    accountId: message.accountId || null,
+    folderId: message.folderId || null,
+    locationId: message.locationId || null,
+    subject: String(message.subject || '（无主题）').slice(0, 500),
+    sender: String(message.sender || '').slice(0, 320),
+    receivedAt: message.receivedAt || null
+  }))
+}
+
+function publicEmailSearchSources(sources) {
+  return (Array.isArray(sources) ? sources : []).map(({ text, score: _score, ...source }) => ({
+    ...source,
+    preview: String(text || '').replace(/\s+/g, ' ').trim().slice(0, 280)
+  }))
+}
+
+function publicEmailAiResult(result, { cached = false } = {}) {
+  const {
+    usage: _usage,
+    apiMode: _apiMode,
+    latencyMs: _latencyMs,
+    ...publicResult
+  } = result
+  return { ...publicResult, cached }
+}
+
+function boundedRuleProposal(data, { row, stored }) {
+  const requestedScope = String(data?.scope || 'sender').trim().toLowerCase()
+  const scope = requestedScope === 'thread' ? 'conversation' : requestedScope
+  const sender = String(stored?.envelope?.sender?.address || '').trim().toLowerCase()
+  const domain = sender.includes('@') ? sender.split('@').pop() : ''
+  let matchValue = String(data?.matchValue || '').trim().slice(0, 320)
+  if (scope === 'sender') matchValue = sender
+  else if (scope === 'domain') matchValue = domain
+  else if (scope === 'conversation') matchValue = String(row?.thread_key_hash || '').trim().toLowerCase()
+  else if (scope === 'category') {
+    const categoryAliases = {
+      billing: 'payment',
+      receipt: 'payment',
+      ops: 'operations',
+      server: 'operations',
+      system: 'status'
+    }
+    matchValue = normalizeEmailNotificationCategory(
+      categoryAliases[matchValue.toLowerCase()] || matchValue.toLowerCase()
+    )
+  }
+  return {
+    scope,
+    action: String(data?.action || 'in_app_only').trim().toLowerCase() === 'mute'
+      ? 'silent'
+      : String(data?.action || 'in_app_only').trim().toLowerCase(),
+    matchValue,
+    reason: String(data?.reason || '').trim().slice(0, 1_000),
+    persisted: false
+  }
 }
 
 async function mapMailboxRow(row, { includeBody = false } = {}) {
@@ -187,6 +355,9 @@ async function mapMailboxRow(row, { includeBody = false } = {}) {
       : undefined,
     receivedAt: row.received_at,
     internalDate: row.internal_date,
+    threadKey: row.thread_key_hash || null,
+    threadMessageCount: Number(row.thread_message_count || 1),
+    ...publicEmailNotificationDecision(row),
     sizeBytes: Number(row.size_bytes || 0),
     hasAttachments: Boolean(row.has_attachments),
     attachmentCount: Number(row.attachment_count || 0),
@@ -321,6 +492,138 @@ export default async function emailRoutes(fastify) {
     return { email }
   })
 
+  fastify.get('/email/notification-rules', async (request, reply) => {
+    await fastify.requireAuth(request, reply)
+    reply.header('Cache-Control', 'private, no-store')
+    const accountId = request.query?.accountId ? String(request.query.accountId) : null
+    try {
+      return {
+        rules: await listEmailNotificationRules({
+          userId: request.currentUser.id,
+          accountId
+        })
+      }
+    } catch (error) {
+      reply.code(Number(error?.statusCode) || (error instanceof TypeError ? 400 : 503))
+      return { error: error.message || 'Email notification rules could not be loaded' }
+    }
+  })
+
+  fastify.post('/email/notification-rules/preview', async (request, reply) => {
+    await fastify.requireAuth(request, reply)
+    reply.header('Cache-Control', 'private, no-store')
+    try {
+      const preview = await previewEmailNotificationRule({
+        userId: request.currentUser.id,
+        payload: request.body || {}
+      })
+      await recordSecurityEventBestEffort({
+        request,
+        eventType: 'email.notification_rule.preview',
+        outcome: 'success',
+        actorUserId: request.currentUser.id,
+        subjectUserId: request.currentUser.id,
+        resourceType: 'email_notification_rule',
+        affectedCount: preview.matchCount
+      }, request.log)
+      return preview
+    } catch (error) {
+      reply.code(Number(error?.statusCode) || (error instanceof TypeError ? 400 : 503))
+      return { error: error.message || 'Email notification rule could not be previewed' }
+    }
+  })
+
+  fastify.post('/email/notification-rules', async (request, reply) => {
+    await fastify.requireAuth(request, reply)
+    reply.header('Cache-Control', 'private, no-store')
+    try {
+      const result = await upsertEmailNotificationRule({
+        userId: request.currentUser.id,
+        payload: request.body || {}
+      })
+      await recordSecurityEventBestEffort({
+        request,
+        eventType: result.created
+          ? 'email.notification_rule.create'
+          : 'email.notification_rule.update',
+        outcome: 'success',
+        actorUserId: request.currentUser.id,
+        subjectUserId: request.currentUser.id,
+        resourceType: 'email_notification_rule',
+        resourceId: result.rule.id,
+        affectedCount: 1,
+        metadata: {
+          scope: result.rule.scope,
+          action: result.rule.action,
+          enabled: result.rule.enabled
+        }
+      }, request.log)
+      reply.code(result.created ? 201 : 200)
+      return result
+    } catch (error) {
+      reply.code(Number(error?.statusCode) || (error instanceof TypeError ? 400 : 503))
+      return {
+        error: error.message || 'Email notification rule could not be saved',
+        code: error?.code || undefined
+      }
+    }
+  })
+
+  fastify.patch('/email/notification-rules/:ruleId', async (request, reply) => {
+    await fastify.requireAuth(request, reply)
+    reply.header('Cache-Control', 'private, no-store')
+    try {
+      const rule = await updateEmailNotificationRule({
+        userId: request.currentUser.id,
+        ruleId: String(request.params.ruleId || ''),
+        payload: request.body || {}
+      })
+      await recordSecurityEventBestEffort({
+        request,
+        eventType: 'email.notification_rule.update',
+        outcome: 'success',
+        actorUserId: request.currentUser.id,
+        subjectUserId: request.currentUser.id,
+        resourceType: 'email_notification_rule',
+        resourceId: rule.id,
+        affectedCount: 1,
+        metadata: { action: rule.action, enabled: rule.enabled }
+      }, request.log)
+      return { rule }
+    } catch (error) {
+      reply.code(Number(error?.statusCode) || (error instanceof TypeError ? 400 : 503))
+      return {
+        error: error.message || 'Email notification rule could not be updated',
+        code: error?.code || undefined
+      }
+    }
+  })
+
+  fastify.delete('/email/notification-rules/:ruleId', async (request, reply) => {
+    await fastify.requireAuth(request, reply)
+    reply.header('Cache-Control', 'private, no-store')
+    try {
+      const result = await deleteEmailNotificationRule({
+        userId: request.currentUser.id,
+        ruleId: String(request.params.ruleId || '')
+      })
+      await recordSecurityEventBestEffort({
+        request,
+        eventType: 'email.notification_rule.delete',
+        outcome: 'success',
+        actorUserId: request.currentUser.id,
+        subjectUserId: request.currentUser.id,
+        resourceType: 'email_notification_rule',
+        resourceId: result.id,
+        affectedCount: 1
+      }, request.log)
+      return result
+    } catch (error) {
+      reply.code(Number(error?.statusCode) || (error instanceof TypeError ? 400 : 503))
+      return { error: error.message || 'Email notification rule could not be deleted' }
+    }
+  })
+
   fastify.get('/email/accounts', async (request, reply) => {
     await fastify.requireAuth(request, reply)
     reply.header('Cache-Control', 'private, no-store')
@@ -427,11 +730,30 @@ export default async function emailRoutes(fastify) {
       return { error: error.message }
     }
     const limit = boundedLimit(request.query?.limit)
-    const { rows } = await query(
-      `SELECT message.id AS message_id, message.user_id, account.source_key,
-              message.envelope_encrypted, message.content_encrypted,
-              message.received_at, message.has_attachments, message.attachment_count,
-              location.id AS location_id, location.folder_id, location.internal_date,
+    let searchQuery
+    let filter
+    try {
+      searchQuery = normalizeMailboxSearchQuery(request.query?.q)
+      filter = normalizeMailboxFilter(request.query?.filter)
+    } catch (error) {
+      reply.code(400)
+      return { error: error.message }
+    }
+    const filterSql = mailboxFilterSql(filter)
+    async function loadCandidateRows(batchCursor, batchLimit) {
+      const { rows } = await query(
+        `SELECT message.id AS message_id, message.user_id, account.source_key,
+               message.envelope_encrypted, message.content_encrypted,
+               message.received_at, message.has_attachments, message.attachment_count,
+               message.thread_key_hash,
+               (SELECT COUNT(*)::integer
+                FROM email_messages AS thread_message
+                WHERE thread_message.account_id = message.account_id
+                  AND thread_message.user_id = message.user_id
+                  AND thread_message.thread_key_hash = message.thread_key_hash) AS thread_message_count,
+               event.tier, event.urgency, event.category, event.importance_score,
+               event.notification_action, event.notification_reason, event.notification_rule_id,
+               location.id AS location_id, location.folder_id, location.internal_date,
               location.size_bytes, location.seen, location.answered, location.flagged,
               location.draft, location.deleted, location.keywords, location.updated_at
        FROM email_folder_messages AS location
@@ -440,40 +762,110 @@ export default async function emailRoutes(fastify) {
         AND message.account_id = location.account_id
         AND message.user_id = location.user_id
        JOIN email_accounts AS account
-         ON account.id = location.account_id AND account.user_id = location.user_id
+          ON account.id = location.account_id AND account.user_id = location.user_id
+       LEFT JOIN LATERAL (
+         SELECT email_event.tier, email_event.urgency, email_event.category,
+                email_event.importance_score, email_event.notification_action,
+                email_event.notification_reason, email_event.notification_rule_id
+         FROM email_events AS email_event
+         WHERE email_event.email_message_id = message.id
+           AND email_event.user_id = message.user_id
+         ORDER BY email_event.received_at DESC, email_event.id DESC
+         LIMIT 1
+       ) AS event ON TRUE
        WHERE location.account_id = $1 AND location.folder_id = $2
          AND location.user_id = $3 AND location.expunged_at IS NULL
+         ${filterSql}
          AND ($4::timestamptz IS NULL OR (location.internal_date, location.id) < ($4::timestamptz, $5::uuid))
        ORDER BY location.internal_date DESC, location.id DESC
        LIMIT $6`,
-      [accountId, folderId, request.currentUser.id, cursor?.[0] || null, cursor?.[1] || null, limit + 1]
-    )
-    const page = rows.slice(0, limit)
-    const messages = []
-    for (const row of page) {
-      try { messages.push(await mapMailboxRow(row)) } catch {
-        messages.push({
-          id: row.location_id,
-          locationId: row.location_id,
-          canonicalMessageId: row.message_id,
-          folderId: row.folder_id,
-          subject: '邮件内容暂时无法解密',
-          preview: '请检查服务器邮件加密密钥。',
-          receivedAt: row.received_at,
-          internalDate: row.internal_date,
-          flags: { seen: Boolean(row.seen), flagged: Boolean(row.flagged) },
-          unavailable: true
-        })
-      }
+        [
+          accountId,
+          folderId,
+          request.currentUser.id,
+          batchCursor?.[0] || null,
+          batchCursor?.[1] || null,
+          batchLimit + 1
+        ]
+      )
+      return rows
     }
+
+    const matched = []
+    let lastScannedRow = null
+    let scannedCount = 0
+    let hasScanOverflow = false
+    let batchCursor = cursor
+    do {
+      const remainingScanRows = searchQuery
+        ? EMAIL_MAILBOX_SEARCH_LIMITS.scanRows - scannedCount
+        : limit
+      const batchLimit = searchQuery
+        ? Math.min(EMAIL_MAILBOX_SEARCH_LIMITS.scanBatchRows, remainingScanRows)
+        : remainingScanRows
+      const rows = await loadCandidateRows(batchCursor, batchLimit)
+      const scanRows = rows.slice(0, batchLimit)
+      hasScanOverflow = rows.length > scanRows.length
+      for (const row of scanRows) {
+        lastScannedRow = row
+        scannedCount += 1
+        try {
+          const message = await mapMailboxRow(row)
+          if (!searchQuery || mailboxMessageMatchesQuery(message, searchQuery)) {
+            matched.push({ row, message })
+            if (searchQuery && matched.length > limit) break
+          }
+        } catch {
+          if (!searchQuery) {
+            matched.push({
+              row,
+              message: {
+                id: row.location_id,
+                locationId: row.location_id,
+                canonicalMessageId: row.message_id,
+                folderId: row.folder_id,
+                subject: '邮件内容暂时无法解密',
+                preview: '请检查服务器邮件加密密钥。',
+                receivedAt: row.received_at,
+                internalDate: row.internal_date,
+                threadKey: row.thread_key_hash || null,
+                threadMessageCount: Number(row.thread_message_count || 1),
+                ...publicEmailNotificationDecision(row),
+                flags: { seen: Boolean(row.seen), flagged: Boolean(row.flagged) },
+                unavailable: true
+              }
+            })
+          }
+        }
+      }
+      if (!searchQuery || matched.length > limit || !hasScanOverflow || !lastScannedRow) break
+      batchCursor = [new Date(lastScannedRow.internal_date).toISOString(), String(lastScannedRow.location_id)]
+    } while (scannedCount < EMAIL_MAILBOX_SEARCH_LIMITS.scanRows)
+
+    const page = matched.slice(0, limit)
+    const messages = []
+    for (const entry of page) messages.push(entry.message)
+    const hasMatchedOverflow = matched.length > limit
+    const hasMore = hasMatchedOverflow || hasScanOverflow
+    const cursorRow = hasMatchedOverflow
+      ? page[page.length - 1]?.row
+      : hasScanOverflow
+        ? lastScannedRow
+        : null
     return {
       messages,
-      hasMore: rows.length > limit,
-      nextCursor: rows.length > limit && page.length ? encodeCursor(page[page.length - 1]) : null,
-      revision: page.reduce((latest, row) => Math.max(
+      hasMore,
+      nextCursor: hasMore && cursorRow ? encodeCursor(cursorRow) : null,
+      revision: page.reduce((latest, entry) => Math.max(
         latest,
-        new Date(row.updated_at || 0).getTime() || 0
-      ), 0)
+        new Date(entry.row.updated_at || 0).getTime() || 0
+      ), 0),
+      search: {
+        query: searchQuery,
+        filter,
+        scanned: scannedCount,
+        capped: searchQuery && hasScanOverflow && !hasMatchedOverflow
+      }
     }
   })
 
@@ -491,6 +883,14 @@ export default async function emailRoutes(fastify) {
       `SELECT message.id AS message_id, message.user_id, account.source_key,
               message.envelope_encrypted, message.content_encrypted,
               message.received_at, message.has_attachments, message.attachment_count,
+              message.thread_key_hash,
+              (SELECT COUNT(*)::integer
+               FROM email_messages AS thread_message
+               WHERE thread_message.account_id = message.account_id
+                 AND thread_message.user_id = message.user_id
+                 AND thread_message.thread_key_hash = message.thread_key_hash) AS thread_message_count,
+              event.tier, event.urgency, event.category, event.importance_score,
+              event.notification_action, event.notification_reason, event.notification_rule_id,
               location.id AS location_id, location.folder_id, location.internal_date,
               location.size_bytes, location.seen, location.answered, location.flagged,
               location.draft, location.deleted, location.keywords
@@ -500,7 +900,17 @@ export default async function emailRoutes(fastify) {
        JOIN email_folder_messages AS location
          ON location.message_id = message.id
         AND location.account_id = message.account_id
-        AND location.user_id = message.user_id
+         AND location.user_id = message.user_id
+       LEFT JOIN LATERAL (
+         SELECT email_event.tier, email_event.urgency, email_event.category,
+                email_event.importance_score, email_event.notification_action,
+                email_event.notification_reason, email_event.notification_rule_id
+         FROM email_events AS email_event
+         WHERE email_event.email_message_id = message.id
+           AND email_event.user_id = message.user_id
+         ORDER BY email_event.received_at DESC, email_event.id DESC
+         LIMIT 1
+       ) AS event ON TRUE
        WHERE location.id = $1 AND location.account_id = $2 AND location.user_id = $3
          AND location.folder_id = $4 AND location.expunged_at IS NULL
        LIMIT 1`,
@@ -574,7 +984,9 @@ export default async function emailRoutes(fastify) {
     reply.header('Cache-Control', 'private, no-store')
     const messageId = String(request.params.messageId || '')
     const action = String(request.body?.action || '').trim().toLowerCase()
-    if (!UUID_PATTERN.test(messageId) || !Object.hasOwn(EMAIL_AI_ACTIONS, action)) {
+    if (!UUID_PATTERN.test(messageId)
+      || !Object.hasOwn(EMAIL_AI_ACTIONS, action)
+      || !EMAIL_AI_MESSAGE_ACTIONS.has(action)) {
       reply.code(400)
       return { error: 'Invalid email AI request' }
     }
@@ -589,39 +1001,85 @@ export default async function emailRoutes(fastify) {
       return { error: 'Email message not found' }
     }
     let stored
+    let messages
     try {
-      stored = await decryptStoredMailboxMessage(row, {
-        userId: row.user_id,
-        sourceKey: row.source_key
-      })
+      stored = await decryptCanonicalMailboxRow(row)
+      messages = (EMAIL_AI_THREAD_ACTIONS.has(action)
+          || (action === 'ask' && String(request.body?.scope || '').toLowerCase() === 'thread'))
+        ? await loadOwnedEmailThread({
+            userId: request.currentUser.id,
+            messageRow: row,
+            queryFn: query,
+            decryptMessage: decryptCanonicalMailboxRow
+          })
+        : [{
+            messageId: row.message_id,
+            accountId: row.account_id,
+            folderId: row.folder_id || null,
+            locationId: row.location_id || null,
+            subject: stored.envelope.subject,
+            sender: stored.envelope.sender?.address || stored.envelope.sender?.name,
+            to: stored.envelope.to,
+            cc: stored.envelope.cc,
+            receivedAt: row.received_at,
+            text: stored.content.text
+          }]
     } catch {
       reply.code(503)
       return { error: 'Email content could not be decrypted' }
     }
 
-    const appConfig = await getUserSettingValue(request.currentUser.id, 'appConfig', {})
+    const resourceVersion = deriveEmailThreadResourceVersion(
+      messages,
+      deriveEmailResourceVersion(row)
+    )
     const startedAt = Date.now()
     let provider = null
     try {
-      const resolution = await resolveChatProviderModel(
-        appConfig?.search?.providers?.chatgpt || {}
-      )
-      provider = selectEmailAiProvider({ chatgpt: resolution.provider })
-      if (!provider) {
-        reply.code(503)
-        return { error: '请先在设置中启用 ChatGPT / OpenAI' }
+      provider = await resolveEmailAiProviderForUser(request.currentUser.id)
+      const calendarContext = emailAiCalendarContext()
+      const cacheKey = buildEmailAiCacheKey({
+        userId: request.currentUser.id,
+        action,
+        resourceVersion,
+        instruction: request.body?.instruction,
+        language: request.body?.language,
+        replyTone: request.body?.tone,
+        replyLength: request.body?.length,
+        model: provider.config?.model,
+        calendarDate: calendarContext.currentDate
+      })
+      const cached = emailAiResponseCache.get(cacheKey)
+      if (cached) {
+        await recordSecurityEventBestEffort({
+          request,
+          eventType: 'email.ai.request',
+          outcome: 'success',
+          actorUserId: request.currentUser.id,
+          subjectUserId: request.currentUser.id,
+          resourceType: 'email_message',
+          resourceId: row.message_id,
+          affectedCount: 1
+        }, request.log)
+        return {
+          result: publicEmailAiResult(cached, { cached: true }),
+          sources: emailAiSourceMetadata(messages),
+          resourceVersion
+        }
       }
       const result = await runEmailAi(provider, {
         action,
-        subject: stored.envelope.subject,
-        sender: stored.envelope.sender?.address || stored.envelope.sender?.name,
-        to: stored.envelope.to,
-        cc: stored.envelope.cc,
-        receivedAt: row.received_at,
-        text: stored.content.text,
+        messages,
         userInstruction: request.body?.instruction,
-        targetLanguage: request.body?.language
+        targetLanguage: request.body?.language,
+        replyTone: request.body?.tone,
+        replyLength: request.body?.length,
+        ...calendarContext
       }, request.currentUser.id)
+      if (action === 'propose_notification_rule' && result.kind === 'structured') {
+        result.data = boundedRuleProposal(result.data, { row, stored })
+      }
+      emailAiResponseCache.set(cacheKey, result)
       await recordRuntimeAiUsageSafely({
         userId: request.currentUser.id,
         feature: AI_USAGE_FEATURES.EMAIL_ASSIST,
@@ -632,13 +1090,21 @@ export default async function emailRoutes(fastify) {
         usage: result.usage,
         latencyMs: result.latencyMs
       }, request.log)
-      const {
-        usage: _usage,
-        apiMode: _apiMode,
-        latencyMs: _latencyMs,
-        ...publicResult
-      } = result
-      return { result: publicResult }
+      await recordSecurityEventBestEffort({
+        request,
+        eventType: 'email.ai.request',
+        outcome: 'success',
+        actorUserId: request.currentUser.id,
+        subjectUserId: request.currentUser.id,
+        resourceType: 'email_message',
+        resourceId: row.message_id,
+        affectedCount: 1
+      }, request.log)
+      return {
+        result: publicEmailAiResult(result),
+        sources: emailAiSourceMetadata(messages),
+        resourceVersion
+      }
     } catch (error) {
       await recordRuntimeAiUsageSafely({
         userId: request.currentUser.id,
@@ -652,6 +1118,301 @@ export default async function emailRoutes(fastify) {
       }, request.log)
       reply.code(502)
       return { error: error.message || '邮件 AI 执行失败' }
+    }
+  })
+
+  fastify.post('/email/ai/search', async (request, reply) => {
+    await fastify.requireAuth(request, reply)
+    reply.header('Cache-Control', 'private, no-store')
+    const search = String(request.body?.search || request.body?.question || '').trim()
+    if (search.length < 2 || search.length > 240) {
+      reply.code(400)
+      return { error: '邮件搜索词需要 2 到 240 个字符' }
+    }
+    const rateLimited = await enforceAiRateLimit(request, reply, {
+      deniedError: '邮件检索请求过于频繁，请稍后再试'
+    })
+    if (rateLimited) return rateLimited
+    try {
+      const sources = await searchOwnedEmails({
+        userId: request.currentUser.id,
+        search,
+        queryFn: query,
+        decryptMessage: decryptCanonicalMailboxRow
+      })
+      if (request.body?.answer === false || !sources.length) {
+        await recordSecurityEventBestEffort({
+          request,
+          eventType: 'email.ai.request',
+          outcome: 'success',
+          actorUserId: request.currentUser.id,
+          subjectUserId: request.currentUser.id,
+          affectedCount: sources.length
+        }, request.log)
+        return { sources: publicEmailSearchSources(sources), result: null }
+      }
+      const provider = await resolveEmailAiProviderForUser(request.currentUser.id)
+      const calendarContext = emailAiCalendarContext()
+      const result = await runEmailAi(provider, {
+        action: 'search_answer',
+        messages: sources.map((source) => ({
+          messageId: source.messageId,
+          subject: source.subject,
+          sender: source.sender,
+          receivedAt: source.receivedAt,
+          text: source.text
+        })),
+        userInstruction: request.body?.question || search,
+        ...calendarContext
+      }, request.currentUser.id)
+      await recordRuntimeAiUsageSafely({
+        userId: request.currentUser.id,
+        feature: AI_USAGE_FEATURES.EMAIL_ASSIST,
+        provider: result.provider,
+        model: result.model,
+        apiMode: result.apiMode,
+        success: true,
+        usage: result.usage,
+        latencyMs: result.latencyMs
+      }, request.log)
+      await recordSecurityEventBestEffort({
+        request,
+        eventType: 'email.ai.request',
+        outcome: 'success',
+        actorUserId: request.currentUser.id,
+        subjectUserId: request.currentUser.id,
+        affectedCount: sources.length
+      }, request.log)
+      return {
+        sources: publicEmailSearchSources(sources),
+        result: publicEmailAiResult(result)
+      }
+    } catch (error) {
+      reply.code(error instanceof TypeError ? 400 : 502)
+      return { error: error.message || '邮件检索失败' }
+    }
+  })
+
+  fastify.post('/email/messages/:messageId/ai/proposals', async (request, reply) => {
+    await fastify.requireAuth(request, reply)
+    reply.header('Cache-Control', 'private, no-store')
+    const messageId = String(request.params.messageId || '')
+    const kind = String(request.body?.kind || '').trim().toLowerCase()
+    if (!UUID_PATTERN.test(messageId) || !EMAIL_AI_PROPOSAL_KINDS.has(kind)) {
+      reply.code(400)
+      return { error: 'Invalid email AI proposal request' }
+    }
+    const rateLimited = await enforceAiRateLimit(request, reply, {
+      deniedError: '邮件 AI 提议请求过于频繁，请稍后再试'
+    })
+    if (rateLimited) return rateLimited
+    const row = await getCanonicalMailboxRowForUser(messageId, request.currentUser.id)
+    if (!row) {
+      reply.code(404)
+      return { error: 'Email message not found' }
+    }
+    try {
+      const stored = await decryptCanonicalMailboxRow(row)
+      const provider = await resolveEmailAiProviderForUser(request.currentUser.id)
+      const calendarContext = emailAiCalendarContext()
+      const result = await runEmailAi(provider, {
+        action: kind === 'create_draft'
+          ? 'draft_reply'
+          : kind === 'create_diary'
+            ? 'propose_diary'
+            : 'propose_memo',
+        subject: stored.envelope.subject,
+        sender: stored.envelope.sender?.address || stored.envelope.sender?.name,
+        to: stored.envelope.to,
+        cc: stored.envelope.cc,
+        receivedAt: row.received_at,
+        text: stored.content.text,
+        userInstruction: request.body?.instruction,
+        replyTone: request.body?.tone,
+        replyLength: request.body?.length,
+        ...calendarContext
+      }, request.currentUser.id)
+      await recordRuntimeAiUsageSafely({
+        userId: request.currentUser.id,
+        feature: AI_USAGE_FEATURES.EMAIL_ASSIST,
+        provider: result.provider,
+        model: result.model,
+        apiMode: result.apiMode,
+        success: true,
+        usage: result.usage,
+        latencyMs: result.latencyMs
+      }, request.log)
+      const senderAddress = String(stored.envelope.sender?.address || '').trim()
+      if (kind === 'create_draft' && !senderAddress) {
+        throw new TypeError('这封邮件没有可用于回复的发件地址')
+      }
+      const params = kind === 'create_draft'
+        ? {
+            accountId: row.account_id,
+            sourceMessageId: row.message_id,
+            to: senderAddress ? [senderAddress] : [],
+            subject: /^\s*re:/i.test(String(stored.envelope.subject || ''))
+              ? String(stored.envelope.subject || '').slice(0, 998)
+              : `Re: ${String(stored.envelope.subject || '（无主题）')}`.slice(0, 998),
+            text: result.text
+          }
+        : kind === 'create_diary'
+          ? {
+              title: result.data.title,
+              content: result.data.content,
+              entryDate: result.data.entryDate,
+              mood: result.data.mood,
+              tags: [...new Set(['邮件', ...result.data.tags])].slice(0, 12)
+            }
+          : {
+            title: result.data.title,
+            content: result.data.content,
+            dueAt: result.data.dueAt,
+            remindBeforeMinutes: 0,
+            tags: [...new Set(['邮件', ...result.data.tags])].slice(0, 12)
+          }
+      const operationId = randomUUID()
+      const resourceVersion = deriveEmailResourceVersion(row)
+      const secret = deriveEmailAiConfirmationSecret(await loadEmailEncryptionKey())
+      const confirmationToken = createEmailAiConfirmationToken({
+        userId: request.currentUser.id,
+        messageId: row.message_id,
+        resourceVersion,
+        kind,
+        params,
+        operationId
+      }, secret)
+      await recordSecurityEventBestEffort({
+        request,
+        eventType: 'email.ai.request',
+        outcome: 'success',
+        actorUserId: request.currentUser.id,
+        subjectUserId: request.currentUser.id,
+        resourceType: 'email_message',
+        resourceId: row.message_id,
+        affectedCount: 1
+      }, request.log)
+      return {
+        proposal: {
+          kind,
+          params,
+          operationId,
+          resourceVersion,
+          confirmationToken,
+          expiresInSeconds: 300,
+          previewRequired: true,
+          autoExecuted: false
+        }
+      }
+    } catch (error) {
+      reply.code(error instanceof TypeError ? 400 : 502)
+      return { error: error.message || '邮件 AI 提议生成失败' }
+    }
+  })
+
+  fastify.post('/email/messages/:messageId/ai/confirm', async (request, reply) => {
+    await fastify.requireAuth(request, reply)
+    reply.header('Cache-Control', 'private, no-store')
+    const messageId = String(request.params.messageId || '')
+    const kind = String(request.body?.kind || '').trim().toLowerCase()
+    const operationId = String(request.body?.operationId || '')
+    const params = request.body?.params
+    if (!UUID_PATTERN.test(messageId) || !UUID_PATTERN.test(operationId)
+      || !EMAIL_AI_PROPOSAL_KINDS.has(kind) || !params
+      || typeof params !== 'object' || Array.isArray(params)) {
+      reply.code(400)
+      return { error: 'Invalid email AI confirmation request' }
+    }
+    const row = await getCanonicalMailboxRowForUser(messageId, request.currentUser.id)
+    if (!row) {
+      reply.code(404)
+      return { error: 'Email message not found' }
+    }
+    try {
+      const resourceVersion = deriveEmailResourceVersion(row)
+      const secret = deriveEmailAiConfirmationSecret(await loadEmailEncryptionKey())
+      verifyEmailAiConfirmationToken(request.body?.confirmationToken, {
+        userId: request.currentUser.id,
+        messageId: row.message_id,
+        resourceVersion,
+        kind,
+        params,
+        operationId
+      }, secret)
+
+      let operation
+      if (kind === 'create_memo' || kind === 'create_diary') {
+        operation = await executeAssistantTool({
+          user: request.currentUser,
+          toolName: kind,
+          args: params,
+          operationId,
+          confirmed: true,
+          logger: request.log
+        })
+      } else {
+        const stored = await decryptCanonicalMailboxRow(row)
+        const replyHeaders = {
+          inReplyTo: stored.envelope.messageId || '',
+          references: [
+            ...(Array.isArray(stored.envelope.references) ? stored.envelope.references : []),
+            ...(stored.envelope.messageId ? [stored.envelope.messageId] : [])
+          ]
+        }
+        operation = await executeAssistantToolOperation({
+          userId: request.currentUser.id,
+          operationId,
+          toolName: 'create_email_draft',
+          toolVersion: 1,
+          risk: 'write',
+          authorizationMode: 'confirmation',
+          args: params,
+          execute: async (client) => {
+            const draft = await createEmailDraftInTransaction({
+              userId: request.currentUser.id,
+              accountId: params.accountId,
+              sourceMessageId: params.sourceMessageId,
+              payload: {
+                to: params.to,
+                subject: params.subject,
+                text: params.text
+              },
+              replyHeaders
+            }, { client })
+            return {
+              result: { draft },
+              resourceType: 'email_draft',
+              resourceId: draft.id,
+              created: true,
+              deduplicated: false,
+              undoable: false,
+              responseStatus: 201
+            }
+          },
+          rehydrate: async ({ resourceId }) => ({
+            draft: await getEmailDraftForUser(request.currentUser.id, resourceId)
+          }),
+          buildHref: (_resourceType, resourceId) => `/mail?draft=${encodeURIComponent(resourceId)}`
+        })
+      }
+      await recordSecurityEventBestEffort({
+        request,
+        eventType: 'email.ai.proposal.confirm',
+        outcome: 'success',
+        actorUserId: request.currentUser.id,
+        subjectUserId: request.currentUser.id,
+        resourceType: operation.receipt?.resourceType || 'email_message',
+        resourceId: operation.receipt?.resourceId || row.message_id,
+        affectedCount: 1
+      }, request.log)
+      reply.code(operation.receipt?.replayed ? 200 : 201)
+      return operation
+    } catch (error) {
+      const statusCode = error instanceof EmailAiConfirmationError
+        ? error.statusCode
+        : Number(error?.statusCode || 409)
+      reply.code(Number.isSafeInteger(statusCode) ? statusCode : 409)
+      return { error: error.code || error.message || '邮件 AI 确认失败' }
     }
   })
 

@@ -12,7 +12,7 @@ const props = defineProps({
   loading: { type: Boolean, default: false }
 })
 
-const emit = defineEmits(['close', 'select-account', 'select-folder'])
+const emit = defineEmits(['close', 'select-account', 'select-folder', 'manage-rules'])
 const dialog = ref(null)
 let restoreTarget = null
 
@@ -87,6 +87,7 @@ onBeforeUnmount(() => restoreTarget?.focus?.())
           :loading="loading"
           @select-account="emit('select-account', $event)"
           @select-folder="emit('select-folder', $event)"
+          @manage-rules="emit('manage-rules')"
         />
       </section>
     </div>

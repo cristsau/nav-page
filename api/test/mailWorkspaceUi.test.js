@@ -104,3 +104,123 @@ test('mobile folder dialog traps focus, closes with Escape and restores focus', 
   assert.match(sheet, /restoreTarget\?\.focus/)
   assert.match(sheet, /width: 44px; height: 44px/)
 })
+
+test('mail workspace exposes server search, notification controls and one AI assistant entry', async () => {
+  const [api, store, view, list, detail, ruleDialog] = await Promise.all([
+    source('app/src/shared/services/emailApi.js'),
+    source('app/src/modules/mail/useMailStore.js'),
+    source('app/src/modules/mail/MailView.vue'),
+    source('app/src/modules/mail/components/MailMessageList.vue'),
+    source('app/src/modules/mail/components/MailMessageDetail.vue'),
+    source('app/src/modules/mail/components/MailNotificationRuleDialog.vue')
+  ])
+
+  assert.match(api, /query\.set\('q'/)
+  assert.match(api, /query\.set\('filter'/)
+  assert.match(store, /setMailSearch/)
+  assert.match(store, /slice\(0, 120\)/)
+  assert.match(store, /q: state\.searchQuery/)
+  assert.match(store, /filter: state\.searchFilter/)
+  assert.match(view, /@query-change="applyMailQuery"/)
+  assert.match(list, /全部/)
+  assert.match(list, /未读/)
+  assert.match(list, /重要/)
+  assert.match(list, /附件/)
+  assert.match(list, /notificationAction/)
+  assert.match(detail, /邮件 AI 助理/)
+  assert.match(detail, /thread_summary/)
+  assert.match(detail, /thread_changes/)
+  assert.match(detail, /analyze/)
+  assert.doesNotMatch(detail, /explain_priority|risk_review/)
+  assert.match(detail, /sandbox=""/)
+  assert.match(detail, /远程图片、脚本、表单和外部资源已阻止/)
+  assert.match(ruleDialog, /手动规则始终优先于 AI 分类/)
+  assert.match(ruleDialog, /当前会话/)
+  assert.match(ruleDialog, /这个发件人/)
+  assert.match(ruleDialog, /这个发件人域名/)
+  assert.match(ruleDialog, /完全静音/)
+  assert.match(ruleDialog, /\^\[a-f0-9\]\{64\}\$/)
+  assert.match(ruleDialog, /requiresCriticalConfirmation/)
+  assert.match(ruleDialog, /criticalMatchCount/)
+  assert.match(ruleDialog, /\['digest', 'in_app_only', 'silent'\]/)
+  assert.match(ruleDialog, /event\.key === 'Escape'/)
+})
+
+test('mail AI UI follows the bounded server actions, citations and confirm-before-write contract', async () => {
+  const [api, view, list, detail, searchDialog, server] = await Promise.all([
+    source('app/src/shared/services/emailApi.js'),
+    source('app/src/modules/mail/MailView.vue'),
+    source('app/src/modules/mail/components/MailMessageList.vue'),
+    source('app/src/modules/mail/components/MailMessageDetail.vue'),
+    source('app/src/modules/mail/components/MailAiSearchDialog.vue'),
+    source('api/src/routes/email.js')
+  ])
+
+  for (const action of ['summarize', 'thread_summary', 'thread_changes', 'tasks', 'analyze', 'draft_reply', 'translate', 'ask', 'propose_notification_rule']) {
+    assert.match(detail, new RegExp(`['\"]${action}['\"]`))
+  }
+  assert.doesNotMatch(detail, /explain_priority|risk_review/)
+  assert.match(api, /scope: String\(scope/)
+  assert.match(api, /tone: String\(tone/)
+  assert.match(api, /length: String\(length/)
+  assert.match(detail, /value="message"/)
+  assert.match(detail, /value="thread"/)
+  assert.match(detail, /回信语气/)
+  assert.match(detail, /回信长度/)
+  assert.match(detail, /aiResult\.structured/)
+  assert.match(detail, /依据来源/)
+  assert.match(detail, /AI 建议，尚未保存/)
+  assert.match(detail, /打开提醒规则，由我确认/)
+  assert.match(detail, /Math\.max\(0, Math\.min\(100, Math\.round\(score\)\)\)/)
+  assert.match(list, /importanceScore \|\| 0\) >= 72/)
+
+  assert.match(api, /\/email\/messages\/\$\{requiredId\(messageId[\s\S]*?\/ai\/proposals/)
+  assert.match(api, /\/email\/messages\/\$\{requiredId\(messageId[\s\S]*?\/ai\/confirm/)
+  assert.match(detail, /previewRequired/)
+  assert.match(detail, /autoExecuted !== false/)
+  assert.match(detail, /尚未写入/)
+  assert.match(detail, /确认保存日记/)
+  assert.match(detail, /确认保存备忘录/)
+  assert.match(detail, /确认创建加密草稿/)
+  assert.match(detail, /aiProposal\.value = null[\s\S]*?createEmailAiProposal/)
+  assert.match(detail, /if \(!aiProposal\.value \|\| aiBusyAction\.value \|\| aiProposalBusyKind\.value \|\| aiProposalConfirming\.value\) return/)
+  assert.match(detail, /if \(aiProposalBusyKind\.value === kind\) aiProposalBusyKind\.value = ''/)
+  assert.match(detail, /if \(!aiAvailable\.value \|\| aiBusyAction\.value \|\| aiProposalBusyKind\.value \|\| aiProposalConfirming\.value\) return/)
+  assert.match(detail, /if \(aiBusyAction\.value === action\) aiBusyAction\.value = ''/)
+  assert.match(detail, /aiProposalConfirming\.value = false/)
+  assert.match(detail, /Boolean\(aiBusyAction \|\| aiProposalBusyKind \|\| aiProposalConfirming\)/)
+
+  assert.match(api, /\/email\/ai\/search/)
+  assert.match(view, /问整个邮箱/)
+  assert.match(view, /MailAiSearchDialog/)
+  assert.match(searchDialog, /role="dialog"/)
+  assert.match(searchDialog, /aria-modal="true"/)
+  assert.match(searchDialog, /event\.key === 'Escape'/)
+  assert.match(searchDialog, /event\.key !== 'Tab'/)
+  assert.match(searchDialog, /restoreTarget\?\.focus/)
+  assert.match(searchDialog, /依据来源/)
+  assert.match(searchDialog, /emit\('open-source', source\)/)
+  assert.match(view, /async function openAiSearchSource/)
+  assert.match(view, /@open-source="openAiSearchSource"/)
+  assert.match(detail, /emit\('open-source', source\)/)
+  assert.match(detail, /accountId: String\(source\?\.accountId/)
+  assert.match(server, /accountId: message\.accountId \|\| null/)
+  assert.match(server, /candidate\.user_id = message\.user_id/)
+})
+
+test('mail detail focus, modal layering and mobile action bar stay accessible', async () => {
+  const [view, detail, shell] = await Promise.all([
+    source('app/src/modules/mail/MailView.vue'),
+    source('app/src/modules/mail/components/MailMessageDetail.vue'),
+    source('app/src/shared/components/MobileTabBar.vue')
+  ])
+
+  assert.match(view, /ref="detailRef"/)
+  assert.match(view, /detailRef\.value\?\.focusInitial\?\.\(\)/)
+  assert.match(detail, /defineExpose\(\{ focusInitial \}\)/)
+  assert.match(detail, /tabindex="-1"/)
+  assert.match(detail, /document\.querySelector\('\[role="dialog"\]\[aria-modal="true"\]'\)/)
+  assert.match(detail, /bottom: calc\(86px \+ env\(safe-area-inset-bottom\)\)/)
+  assert.match(detail, /z-index: 620/)
+  assert.match(shell, /z-index: 640/)
+})

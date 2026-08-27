@@ -92,7 +92,7 @@ export async function refreshEmailDraftContentHash({ userId, draftId }, {
   }
 }
 
-export async function createEmailDraft({
+export async function createEmailDraftInTransaction({
   userId,
   accountId,
   sourceMessageId = null,
@@ -100,10 +100,11 @@ export async function createEmailDraft({
   replyHeaders = null,
   expiresInDays = 30
 }, {
-  poolInstance = pool,
+  client,
   encryptPayloadFn = encryptEmailPayload,
   draftId = randomUUID()
 } = {}) {
+  if (!client?.query) throw new TypeError('Email draft transaction client is required')
   const ownerId = assertUuid(userId, 'User id')
   const ownedAccountId = assertUuid(accountId, 'Email account id')
   const sourceId = sourceMessageId ? assertUuid(sourceMessageId, 'Source message id') : null
@@ -117,31 +118,58 @@ export async function createEmailDraft({
   const encrypted = await encryptPayloadFn(normalized, {
     context: draftContext(ownerId, id)
   })
+  const account = await client.query(
+    'SELECT 1 FROM email_accounts WHERE id = $1 AND user_id = $2 AND enabled = TRUE',
+    [ownedAccountId, ownerId]
+  )
+  if (!account.rowCount) throw new Error('Email account is unavailable')
+  if (sourceId) {
+    const source = await client.query(
+      'SELECT 1 FROM email_messages WHERE id = $1 AND account_id = $2 AND user_id = $3',
+      [sourceId, ownedAccountId, ownerId]
+    )
+    if (!source.rowCount) throw new Error('Source email message is unavailable')
+  }
+  const { rows } = await client.query(
+    `INSERT INTO email_drafts (
+       id, user_id, account_id, source_message_id,
+       payload_encrypted, content_hash, expires_at
+     ) VALUES ($1,$2,$3,$4,$5,$6,NOW() + ($7::integer * INTERVAL '1 day'))
+     RETURNING *`,
+    [id, ownerId, ownedAccountId, sourceId, encrypted, contentHash, days]
+  )
+  return decryptDraftRow(rows[0])
+}
+
+export async function createEmailDraft({
+  userId,
+  accountId,
+  sourceMessageId = null,
+  payload,
+  replyHeaders = null,
+  expiresInDays = 30
+}, {
+  poolInstance = pool,
+  encryptPayloadFn = encryptEmailPayload,
+  draftId = randomUUID()
+} = {}) {
   const client = await poolInstance.connect()
   try {
     await client.query('BEGIN')
-    const account = await client.query(
-      'SELECT 1 FROM email_accounts WHERE id = $1 AND user_id = $2 AND enabled = TRUE',
-      [ownedAccountId, ownerId]
-    )
-    if (!account.rowCount) throw new Error('Email account is unavailable')
-    if (sourceId) {
-      const source = await client.query(
-        'SELECT 1 FROM email_messages WHERE id = $1 AND account_id = $2 AND user_id = $3',
-        [sourceId, ownedAccountId, ownerId]
-      )
-      if (!source.rowCount) throw new Error('Source email message is unavailable')
-    }
-    const { rows } = await client.query(
-      `INSERT INTO email_drafts (
-         id, user_id, account_id, source_message_id,
-         payload_encrypted, content_hash, expires_at
-       ) VALUES ($1,$2,$3,$4,$5,$6,NOW() + ($7::integer * INTERVAL '1 day'))
-       RETURNING *`,
-      [id, ownerId, ownedAccountId, sourceId, encrypted, contentHash, days]
-    )
+    const draft = await createEmailDraftInTransaction({
+      userId,
+      accountId,
+      sourceMessageId,
+      payload,
+      replyHeaders,
+      expiresInDays
+    }, {
+      client,
+      encryptPayloadFn,
+      draftId
+    })
     await client.query('COMMIT')
-    return decryptDraftRow(rows[0])
+    return draft
   } catch (error) {
     try { await client.query('ROLLBACK') } catch {}
     throw error
