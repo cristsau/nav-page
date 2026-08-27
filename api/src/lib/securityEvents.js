@@ -21,6 +21,8 @@ export const SECURITY_EVENT_TYPES = Object.freeze([
   'admin.integrations.mail.imap_tested',
   'admin.integrations.cloud_backup.updated',
   'admin.integrations.cloud_backup.tested',
+  'email.ai.request',
+  'email.ai.proposal.confirm',
   'admin.telegram_config.update',
   'admin.security_events.export',
   'admin.security_events.delete'

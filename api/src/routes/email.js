@@ -11,13 +11,30 @@ import {
   runEmailAi,
   selectEmailAiProvider
 } from '../lib/emailAi.js'
+import {
+  buildEmailAiCacheKey,
+  deriveEmailResourceVersion,
+  deriveEmailThreadResourceVersion,
+  EmailAiResponseCache,
+  loadOwnedEmailThread,
+  searchOwnedEmails
+} from '../lib/emailAiCopilot.js'
+import {
+  createEmailAiConfirmationToken,
+  deriveEmailAiConfirmationSecret,
+  EmailAiConfirmationError,
+  verifyEmailAiConfirmationToken
+} from '../lib/emailAiConfirmation.js'
 import { loadEmailEncryptionKey } from '../lib/emailCrypto.js'
 import {
   createEmailDraft,
+  createEmailDraftInTransaction,
   getEmailDraftForUser,
   queueEmailDraft,
   refreshEmailDraftContentHash
 } from '../lib/emailDrafts.js'
+import { executeAssistantToolOperation } from '../lib/assistantToolOperations.js'
+import { executeAssistantTool } from '../lib/assistantTools.js'
 import {
   createDraftEmailAttachment,
   deleteDraftEmailAttachment,
@@ -56,6 +73,20 @@ const UUID_PATTERN = /^[0-9a-f]{8}-(?:[0-9a-f]{4}-){3}[0-9a-f]{12}$/i
 const EMAIL_STREAM_MAX_LIFETIME_MS = 5 * 60 * 1000
 const EMAIL_STREAM_RETRY_AFTER_SECONDS = 5
 const emailStreamConnectionLimiter = createEmailSseConnectionLimiter({ maxConnections: 3 })
+const emailAiResponseCache = new EmailAiResponseCache()
+const EMAIL_AI_THREAD_ACTIONS = new Set(['thread_summary', 'thread_changes'])
+const EMAIL_AI_MESSAGE_ACTIONS = new Set([
+  'summarize',
+  'tasks',
+  'ask',
+  'thread_summary',
+  'thread_changes',
+  'analyze',
+  'draft_reply',
+  'translate',
+  'propose_notification_rule'
+])
+const EMAIL_AI_PROPOSAL_KINDS = new Set(['create_diary', 'create_memo', 'create_draft'])
 
 function boundedLimit(value) {
   const parsed = Number(value)
@@ -157,7 +188,8 @@ async function getCanonicalMailboxRowForUser(messageId, userId) {
   if (!UUID_PATTERN.test(String(messageId || ''))) return null
   const { rows } = await query(
     `SELECT message.id AS message_id, message.account_id, message.user_id,
-            account.source_key, message.envelope_encrypted,
+            account.source_key, message.canonical_hash, message.thread_key_hash,
+            message.updated_at, message.envelope_encrypted,
             message.content_encrypted, message.received_at,
             message.has_attachments, message.attachment_count
      FROM email_messages AS message
@@ -168,6 +200,67 @@ async function getCanonicalMailboxRowForUser(messageId, userId) {
     [messageId, userId]
   )
   return rows[0] || null
+}
+
+async function decryptCanonicalMailboxRow(row) {
+  return decryptStoredMailboxMessage(row, {
+    userId: row.user_id,
+    sourceKey: row.source_key
+  })
+}
+
+async function resolveEmailAiProviderForUser(userId) {
+  const appConfig = await getUserSettingValue(userId, 'appConfig', {})
+  const resolution = await resolveChatProviderModel(
+    appConfig?.search?.providers?.chatgpt || {}
+  )
+  const provider = selectEmailAiProvider({ chatgpt: resolution.provider })
+  if (!provider) throw new Error('请先在设置中启用 ChatGPT / OpenAI')
+  return provider
+}
+
+function emailAiSourceMetadata(messages) {
+  return (Array.isArray(messages) ? messages : []).slice(0, 20).map((message, index) => ({
+    sourceId: `M${index + 1}`,
+    messageId: message.messageId || null,
+    subject: String(message.subject || '（无主题）').slice(0, 500),
+    sender: String(message.sender || '').slice(0, 320),
+    receivedAt: message.receivedAt || null
+  }))
+}
+
+function publicEmailSearchSources(sources) {
+  return (Array.isArray(sources) ? sources : []).map(({ text, score: _score, ...source }) => ({
+    ...source,
+    preview: String(text || '').replace(/\s+/g, ' ').trim().slice(0, 280)
+  }))
+}
+
+function publicEmailAiResult(result, { cached = false } = {}) {
+  const {
+    usage: _usage,
+    apiMode: _apiMode,
+    latencyMs: _latencyMs,
+    ...publicResult
+  } = result
+  return { ...publicResult, cached }
+}
+
+function boundedRuleProposal(data, { row, stored }) {
+  const scope = String(data?.scope || 'sender')
+  const sender = String(stored?.envelope?.sender?.address || '').trim().toLowerCase()
+  const domain = sender.includes('@') ? sender.split('@').pop() : ''
+  let matchValue = String(data?.matchValue || '').trim().slice(0, 320)
+  if (scope === 'sender') matchValue = sender
+  else if (scope === 'domain') matchValue = domain
+  else if (scope === 'thread') matchValue = 'current-thread'
+  return {
+    scope,
+    action: String(data?.action || 'in_app_only'),
+    matchValue,
+    reason: String(data?.reason || '').trim().slice(0, 1_000),
+    persisted: false
+  }
 }
 
 async function mapMailboxRow(row, { includeBody = false } = {}) {
@@ -649,7 +742,9 @@ export default async function emailRoutes(fastify) {
     reply.header('Cache-Control', 'private, no-store')
     const messageId = String(request.params.messageId || '')
     const action = String(request.body?.action || '').trim().toLowerCase()
-    if (!UUID_PATTERN.test(messageId) || !Object.hasOwn(EMAIL_AI_ACTIONS, action)) {
+    if (!UUID_PATTERN.test(messageId)
+      || !Object.hasOwn(EMAIL_AI_ACTIONS, action)
+      || !EMAIL_AI_MESSAGE_ACTIONS.has(action)) {
       reply.code(400)
       return { error: 'Invalid email AI request' }
     }
@@ -664,39 +759,79 @@ export default async function emailRoutes(fastify) {
       return { error: 'Email message not found' }
     }
     let stored
+    let messages
     try {
-      stored = await decryptStoredMailboxMessage(row, {
-        userId: row.user_id,
-        sourceKey: row.source_key
-      })
+      stored = await decryptCanonicalMailboxRow(row)
+      messages = (EMAIL_AI_THREAD_ACTIONS.has(action)
+          || (action === 'ask' && String(request.body?.scope || '').toLowerCase() === 'thread'))
+        ? await loadOwnedEmailThread({
+            userId: request.currentUser.id,
+            messageRow: row,
+            queryFn: query,
+            decryptMessage: decryptCanonicalMailboxRow
+          })
+        : [{
+            messageId: row.message_id,
+            subject: stored.envelope.subject,
+            sender: stored.envelope.sender?.address || stored.envelope.sender?.name,
+            to: stored.envelope.to,
+            cc: stored.envelope.cc,
+            receivedAt: row.received_at,
+            text: stored.content.text
+          }]
     } catch {
       reply.code(503)
       return { error: 'Email content could not be decrypted' }
     }
 
-    const appConfig = await getUserSettingValue(request.currentUser.id, 'appConfig', {})
+    const resourceVersion = deriveEmailThreadResourceVersion(
+      messages,
+      deriveEmailResourceVersion(row)
+    )
     const startedAt = Date.now()
     let provider = null
     try {
-      const resolution = await resolveChatProviderModel(
-        appConfig?.search?.providers?.chatgpt || {}
-      )
-      provider = selectEmailAiProvider({ chatgpt: resolution.provider })
-      if (!provider) {
-        reply.code(503)
-        return { error: '请先在设置中启用 ChatGPT / OpenAI' }
+      provider = await resolveEmailAiProviderForUser(request.currentUser.id)
+      const cacheKey = buildEmailAiCacheKey({
+        userId: request.currentUser.id,
+        action,
+        resourceVersion,
+        instruction: request.body?.instruction,
+        language: request.body?.language,
+        replyTone: request.body?.tone,
+        replyLength: request.body?.length,
+        model: provider.config?.model
+      })
+      const cached = emailAiResponseCache.get(cacheKey)
+      if (cached) {
+        await recordSecurityEventBestEffort({
+          request,
+          eventType: 'email.ai.request',
+          outcome: 'success',
+          actorUserId: request.currentUser.id,
+          subjectUserId: request.currentUser.id,
+          resourceType: 'email_message',
+          resourceId: row.message_id,
+          affectedCount: 1
+        }, request.log)
+        return {
+          result: publicEmailAiResult(cached, { cached: true }),
+          sources: emailAiSourceMetadata(messages),
+          resourceVersion
+        }
       }
       const result = await runEmailAi(provider, {
         action,
-        subject: stored.envelope.subject,
-        sender: stored.envelope.sender?.address || stored.envelope.sender?.name,
-        to: stored.envelope.to,
-        cc: stored.envelope.cc,
-        receivedAt: row.received_at,
-        text: stored.content.text,
+        messages,
         userInstruction: request.body?.instruction,
-        targetLanguage: request.body?.language
+        targetLanguage: request.body?.language,
+        replyTone: request.body?.tone,
+        replyLength: request.body?.length
       }, request.currentUser.id)
+      if (action === 'propose_notification_rule' && result.kind === 'structured') {
+        result.data = boundedRuleProposal(result.data, { row, stored })
+      }
+      emailAiResponseCache.set(cacheKey, result)
       await recordRuntimeAiUsageSafely({
         userId: request.currentUser.id,
         feature: AI_USAGE_FEATURES.EMAIL_ASSIST,
@@ -707,13 +842,21 @@ export default async function emailRoutes(fastify) {
         usage: result.usage,
         latencyMs: result.latencyMs
       }, request.log)
-      const {
-        usage: _usage,
-        apiMode: _apiMode,
-        latencyMs: _latencyMs,
-        ...publicResult
-      } = result
-      return { result: publicResult }
+      await recordSecurityEventBestEffort({
+        request,
+        eventType: 'email.ai.request',
+        outcome: 'success',
+        actorUserId: request.currentUser.id,
+        subjectUserId: request.currentUser.id,
+        resourceType: 'email_message',
+        resourceId: row.message_id,
+        affectedCount: 1
+      }, request.log)
+      return {
+        result: publicEmailAiResult(result),
+        sources: emailAiSourceMetadata(messages),
+        resourceVersion
+      }
     } catch (error) {
       await recordRuntimeAiUsageSafely({
         userId: request.currentUser.id,
@@ -727,6 +870,297 @@ export default async function emailRoutes(fastify) {
       }, request.log)
       reply.code(502)
       return { error: error.message || '邮件 AI 执行失败' }
+    }
+  })
+
+  fastify.post('/email/ai/search', async (request, reply) => {
+    await fastify.requireAuth(request, reply)
+    reply.header('Cache-Control', 'private, no-store')
+    const search = String(request.body?.search || request.body?.question || '').trim()
+    if (search.length < 2 || search.length > 240) {
+      reply.code(400)
+      return { error: '邮件搜索词需要 2 到 240 个字符' }
+    }
+    const rateLimited = await enforceAiRateLimit(request, reply, {
+      deniedError: '邮件检索请求过于频繁，请稍后再试'
+    })
+    if (rateLimited) return rateLimited
+    try {
+      const sources = await searchOwnedEmails({
+        userId: request.currentUser.id,
+        search,
+        queryFn: query,
+        decryptMessage: decryptCanonicalMailboxRow
+      })
+      if (request.body?.answer === false || !sources.length) {
+        await recordSecurityEventBestEffort({
+          request,
+          eventType: 'email.ai.request',
+          outcome: 'success',
+          actorUserId: request.currentUser.id,
+          subjectUserId: request.currentUser.id,
+          affectedCount: sources.length
+        }, request.log)
+        return { sources: publicEmailSearchSources(sources), result: null }
+      }
+      const provider = await resolveEmailAiProviderForUser(request.currentUser.id)
+      const result = await runEmailAi(provider, {
+        action: 'search_answer',
+        messages: sources.map((source) => ({
+          messageId: source.messageId,
+          subject: source.subject,
+          sender: source.sender,
+          receivedAt: source.receivedAt,
+          text: source.text
+        })),
+        userInstruction: request.body?.question || search
+      }, request.currentUser.id)
+      await recordRuntimeAiUsageSafely({
+        userId: request.currentUser.id,
+        feature: AI_USAGE_FEATURES.EMAIL_ASSIST,
+        provider: result.provider,
+        model: result.model,
+        apiMode: result.apiMode,
+        success: true,
+        usage: result.usage,
+        latencyMs: result.latencyMs
+      }, request.log)
+      await recordSecurityEventBestEffort({
+        request,
+        eventType: 'email.ai.request',
+        outcome: 'success',
+        actorUserId: request.currentUser.id,
+        subjectUserId: request.currentUser.id,
+        affectedCount: sources.length
+      }, request.log)
+      return {
+        sources: publicEmailSearchSources(sources),
+        result: publicEmailAiResult(result)
+      }
+    } catch (error) {
+      reply.code(error instanceof TypeError ? 400 : 502)
+      return { error: error.message || '邮件检索失败' }
+    }
+  })
+
+  fastify.post('/email/messages/:messageId/ai/proposals', async (request, reply) => {
+    await fastify.requireAuth(request, reply)
+    reply.header('Cache-Control', 'private, no-store')
+    const messageId = String(request.params.messageId || '')
+    const kind = String(request.body?.kind || '').trim().toLowerCase()
+    if (!UUID_PATTERN.test(messageId) || !EMAIL_AI_PROPOSAL_KINDS.has(kind)) {
+      reply.code(400)
+      return { error: 'Invalid email AI proposal request' }
+    }
+    const rateLimited = await enforceAiRateLimit(request, reply, {
+      deniedError: '邮件 AI 提议请求过于频繁，请稍后再试'
+    })
+    if (rateLimited) return rateLimited
+    const row = await getCanonicalMailboxRowForUser(messageId, request.currentUser.id)
+    if (!row) {
+      reply.code(404)
+      return { error: 'Email message not found' }
+    }
+    try {
+      const stored = await decryptCanonicalMailboxRow(row)
+      const provider = await resolveEmailAiProviderForUser(request.currentUser.id)
+      const result = await runEmailAi(provider, {
+        action: kind === 'create_draft'
+          ? 'draft_reply'
+          : kind === 'create_diary'
+            ? 'propose_diary'
+            : 'propose_memo',
+        subject: stored.envelope.subject,
+        sender: stored.envelope.sender?.address || stored.envelope.sender?.name,
+        to: stored.envelope.to,
+        cc: stored.envelope.cc,
+        receivedAt: row.received_at,
+        text: stored.content.text,
+        userInstruction: request.body?.instruction,
+        replyTone: request.body?.tone,
+        replyLength: request.body?.length
+      }, request.currentUser.id)
+      await recordRuntimeAiUsageSafely({
+        userId: request.currentUser.id,
+        feature: AI_USAGE_FEATURES.EMAIL_ASSIST,
+        provider: result.provider,
+        model: result.model,
+        apiMode: result.apiMode,
+        success: true,
+        usage: result.usage,
+        latencyMs: result.latencyMs
+      }, request.log)
+      const senderAddress = String(stored.envelope.sender?.address || '').trim()
+      if (kind === 'create_draft' && !senderAddress) {
+        throw new TypeError('这封邮件没有可用于回复的发件地址')
+      }
+      const params = kind === 'create_draft'
+        ? {
+            accountId: row.account_id,
+            sourceMessageId: row.message_id,
+            to: senderAddress ? [senderAddress] : [],
+            subject: /^\s*re:/i.test(String(stored.envelope.subject || ''))
+              ? String(stored.envelope.subject || '').slice(0, 998)
+              : `Re: ${String(stored.envelope.subject || '（无主题）')}`.slice(0, 998),
+            text: result.text
+          }
+        : kind === 'create_diary'
+          ? {
+              title: result.data.title,
+              content: result.data.content,
+              entryDate: result.data.entryDate,
+              mood: result.data.mood,
+              tags: [...new Set(['邮件', ...result.data.tags])].slice(0, 12)
+            }
+          : {
+            title: result.data.title,
+            content: result.data.content,
+            dueAt: result.data.dueAt,
+            remindBeforeMinutes: 0,
+            tags: [...new Set(['邮件', ...result.data.tags])].slice(0, 12)
+          }
+      const operationId = randomUUID()
+      const resourceVersion = deriveEmailResourceVersion(row)
+      const secret = deriveEmailAiConfirmationSecret(await loadEmailEncryptionKey())
+      const confirmationToken = createEmailAiConfirmationToken({
+        userId: request.currentUser.id,
+        messageId: row.message_id,
+        resourceVersion,
+        kind,
+        params,
+        operationId
+      }, secret)
+      await recordSecurityEventBestEffort({
+        request,
+        eventType: 'email.ai.request',
+        outcome: 'success',
+        actorUserId: request.currentUser.id,
+        subjectUserId: request.currentUser.id,
+        resourceType: 'email_message',
+        resourceId: row.message_id,
+        affectedCount: 1
+      }, request.log)
+      return {
+        proposal: {
+          kind,
+          params,
+          operationId,
+          resourceVersion,
+          confirmationToken,
+          expiresInSeconds: 300,
+          previewRequired: true,
+          autoExecuted: false
+        }
+      }
+    } catch (error) {
+      reply.code(error instanceof TypeError ? 400 : 502)
+      return { error: error.message || '邮件 AI 提议生成失败' }
+    }
+  })
+
+  fastify.post('/email/messages/:messageId/ai/confirm', async (request, reply) => {
+    await fastify.requireAuth(request, reply)
+    reply.header('Cache-Control', 'private, no-store')
+    const messageId = String(request.params.messageId || '')
+    const kind = String(request.body?.kind || '').trim().toLowerCase()
+    const operationId = String(request.body?.operationId || '')
+    const params = request.body?.params
+    if (!UUID_PATTERN.test(messageId) || !UUID_PATTERN.test(operationId)
+      || !EMAIL_AI_PROPOSAL_KINDS.has(kind) || !params
+      || typeof params !== 'object' || Array.isArray(params)) {
+      reply.code(400)
+      return { error: 'Invalid email AI confirmation request' }
+    }
+    const row = await getCanonicalMailboxRowForUser(messageId, request.currentUser.id)
+    if (!row) {
+      reply.code(404)
+      return { error: 'Email message not found' }
+    }
+    try {
+      const resourceVersion = deriveEmailResourceVersion(row)
+      const secret = deriveEmailAiConfirmationSecret(await loadEmailEncryptionKey())
+      verifyEmailAiConfirmationToken(request.body?.confirmationToken, {
+        userId: request.currentUser.id,
+        messageId: row.message_id,
+        resourceVersion,
+        kind,
+        params,
+        operationId
+      }, secret)
+
+      let operation
+      if (kind === 'create_memo' || kind === 'create_diary') {
+        operation = await executeAssistantTool({
+          user: request.currentUser,
+          toolName: kind,
+          args: params,
+          operationId,
+          confirmed: true,
+          logger: request.log
+        })
+      } else {
+        const stored = await decryptCanonicalMailboxRow(row)
+        const replyHeaders = {
+          inReplyTo: stored.envelope.messageId || '',
+          references: [
+            ...(Array.isArray(stored.envelope.references) ? stored.envelope.references : []),
+            ...(stored.envelope.messageId ? [stored.envelope.messageId] : [])
+          ]
+        }
+        operation = await executeAssistantToolOperation({
+          userId: request.currentUser.id,
+          operationId,
+          toolName: 'create_email_draft',
+          toolVersion: 1,
+          risk: 'write',
+          authorizationMode: 'confirmation',
+          args: params,
+          execute: async (client) => {
+            const draft = await createEmailDraftInTransaction({
+              userId: request.currentUser.id,
+              accountId: params.accountId,
+              sourceMessageId: params.sourceMessageId,
+              payload: {
+                to: params.to,
+                subject: params.subject,
+                text: params.text
+              },
+              replyHeaders
+            }, { client })
+            return {
+              result: { draft },
+              resourceType: 'email_draft',
+              resourceId: draft.id,
+              created: true,
+              deduplicated: false,
+              undoable: false,
+              responseStatus: 201
+            }
+          },
+          rehydrate: async ({ resourceId }) => ({
+            draft: await getEmailDraftForUser(request.currentUser.id, resourceId)
+          }),
+          buildHref: (_resourceType, resourceId) => `/mail?draft=${encodeURIComponent(resourceId)}`
+        })
+      }
+      await recordSecurityEventBestEffort({
+        request,
+        eventType: 'email.ai.proposal.confirm',
+        outcome: 'success',
+        actorUserId: request.currentUser.id,
+        subjectUserId: request.currentUser.id,
+        resourceType: operation.receipt?.resourceType || 'email_message',
+        resourceId: operation.receipt?.resourceId || row.message_id,
+        affectedCount: 1
+      }, request.log)
+      reply.code(operation.receipt?.replayed ? 200 : 201)
+      return operation
+    } catch (error) {
+      const statusCode = error instanceof EmailAiConfirmationError
+        ? error.statusCode
+        : Number(error?.statusCode || 409)
+      reply.code(Number.isSafeInteger(statusCode) ? statusCode : 409)
+      return { error: error.code || error.message || '邮件 AI 确认失败' }
     }
   })
 
