@@ -113,6 +113,25 @@ NAV_RATE_LIMIT_KEY_SECRET=<至少 32 字符的独立随机值>
 
 ## 备份与恢复
 
+### PostgreSQL 数据目录
+
+`docker-compose.backend.yml` 不再使用会受 Compose project name 作用域影响的命名卷，
+而是要求显式提供 release 树之外的持久目录：
+
+```dotenv
+NAV_POSTGRES_DATA_DIR=/var/lib/domo-nav/postgres
+```
+
+Compose 缺少该变量时直接拒绝解析，并且不会自动创建宿主机来源目录。受支持的
+`scripts/deploy-backend.sh` 为全新安装提供上面的兼容默认值，同时拒绝相对路径、符号链接、
+源码/release 内路径，以及与现有 `nav-postgres` 容器真实挂载来源不一致的路径。
+
+从旧 `nav-postgres-data` 命名卷迁移时，不得直接启动新 Compose。先完成 canonical 备份和
+隔离恢复，停止数据库写入，读取旧容器 `/var/lib/postgresql/data` 的真实 `Mounts[].Source`，
+再把数据库恢复到新的空目录，或在一次受控切换中明确使用已经验证的旧来源路径。切换后必须
+核对容器挂载、迁移表、逐表行数、双域登录和新的备份/隔离恢复；不要在 PostgreSQL 运行时
+用普通文件复制搬运 `PGDATA`，也不要删除旧卷，直到新目录和回退路径都完成验收。
+
 仓库已提供运行手册与脚本：
 
 - `docs/NAV_BACKUP_RUNBOOK.md`

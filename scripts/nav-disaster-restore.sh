@@ -126,8 +126,9 @@ compose_up() {
     || fatal "$EX_CONFIG" "Compose file is unavailable: $compose_file"
   split_list "$services_value" services
   ((${#services[@]} > 0)) || fatal "$EX_CONFIG" "Compose service list is empty"
-  docker compose --project-directory "$project_dir" -f "$compose_file" \
-    up -d --build "${services[@]}"
+  NAV_POSTGRES_DATA_DIR="$NAV_POSTGRES_DATA_DIR" \
+    docker compose --project-directory "$project_dir" -f "$compose_file" \
+      up -d --build "${services[@]}"
 }
 
 stop_container_list() {
@@ -316,6 +317,7 @@ source "$CONFIG_FILE"
 : "${NAV_DB_CONTAINER:=nav-postgres}"
 : "${NAV_DB_NAME:=nav}"
 : "${NAV_DB_USER:=nav}"
+: "${NAV_POSTGRES_DATA_DIR:=}"
 : "${NAV_PROJECT_DIR:=/opt/nav}"
 : "${NAV_FRONTEND_DIR:=/home/web/html/nav}"
 : "${NAV_COMPOSE_PATHS:=}"
@@ -351,6 +353,10 @@ source "$CONFIG_FILE"
   || fatal "$EX_CONFIG" "NAV_DR_READY_INTERVAL_SECONDS is invalid"
 [[ "$NAV_DR_DATABASE_SERVICE" =~ ^[A-Za-z0-9][A-Za-z0-9_.-]*$ ]] \
   || fatal "$EX_CONFIG" "NAV_DR_DATABASE_SERVICE is invalid"
+[[ "$NAV_POSTGRES_DATA_DIR" == /* && "$NAV_POSTGRES_DATA_DIR" != / ]] \
+  || fatal "$EX_CONFIG" "NAV_POSTGRES_DATA_DIR must be a bounded absolute path"
+[[ ! -L "$NAV_POSTGRES_DATA_DIR" ]] \
+  || fatal "$EX_CONFIG" "NAV_POSTGRES_DATA_DIR must not be a symbolic link"
 
 if ((EUID != 0)); then
   if [[ "${CI:-}" != "true" || "${NODE_ENV:-}" != "test" || "${NAV_DISASTER_RESTORE_TEST:-}" != "true" ]]; then
@@ -362,6 +368,15 @@ for command_name in stat realpath flock find sort sha256sum cp mv mktemp awk ins
   command -v "$command_name" >/dev/null 2>&1 \
     || fatal "$EX_UNAVAILABLE" "required command is unavailable: $command_name"
 done
+postgres_data_real="$(realpath -m -- "$NAV_POSTGRES_DATA_DIR")"
+project_dir_real="$(realpath -m -- "${NAV_DR_COMPOSE_PROJECT_DIR:-$NAV_PROJECT_DIR}")"
+case "$postgres_data_real" in
+  "$project_dir_real"|"$project_dir_real"/*|/opt/nav-stack/current|/opt/nav-stack/current/*|/opt/nav-stack/releases|/opt/nav-stack/releases/*)
+    fatal "$EX_CONFIG" "NAV_POSTGRES_DATA_DIR must remain outside the release tree"
+    ;;
+esac
+NAV_POSTGRES_DATA_DIR="$postgres_data_real"
+export NAV_POSTGRES_DATA_DIR
 assert_safe_file "$NAV_RESTORE_SCRIPT" "restore verification script"
 
 [[ "$NAV_BACKUP_ROOT" == /* && -d "$NAV_BACKUP_ROOT" && ! -L "$NAV_BACKUP_ROOT" ]] \
@@ -424,6 +439,21 @@ flock -n "$BACKUP_LOCK_FD" || fatal "$EX_TEMPFAIL" "a NAV backup or rehearsal is
 exec 9>>"$NAV_DR_RESTORE_LOCK_FILE"
 chmod 0600 "$NAV_DR_RESTORE_LOCK_FILE"
 flock -n "$RESTORE_LOCK_FD" || fatal "$EX_TEMPFAIL" "another disaster restore is running"
+
+if container_exists "$NAV_DB_CONTAINER"; then
+  current_source="$(docker inspect --format '{{range .Mounts}}{{if eq .Destination "/var/lib/postgresql/data"}}{{.Source}}{{end}}{{end}}' "$NAV_DB_CONTAINER")"
+  [[ -n "$current_source" ]] \
+    || fatal "$EX_CONFIG" "existing $NAV_DB_CONTAINER has no PostgreSQL data mount"
+  current_source_real="$(realpath -m -- "$current_source")"
+  [[ "$current_source_real" == "$postgres_data_real" ]] \
+    || fatal "$EX_CONFIG" "existing $NAV_DB_CONTAINER uses a different PostgreSQL data directory"
+fi
+install -d -m 0700 -- "$NAV_POSTGRES_DATA_DIR"
+[[ -d "$NAV_POSTGRES_DATA_DIR" && ! -L "$NAV_POSTGRES_DATA_DIR" ]] \
+  || fatal "$EX_CONFIG" "NAV_POSTGRES_DATA_DIR must be a non-symlink directory"
+postgres_data_real="$(realpath -e -- "$NAV_POSTGRES_DATA_DIR")"
+NAV_POSTGRES_DATA_DIR="$postgres_data_real"
+export NAV_POSTGRES_DATA_DIR
 
 install -d -m 0700 -- "$NAV_DR_ROLLBACK_ROOT"
 rollback_root_real="$(realpath -e -- "$NAV_DR_ROLLBACK_ROOT")"

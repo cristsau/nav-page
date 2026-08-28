@@ -152,6 +152,63 @@ jobs:
           env NAV_STACK_ROOT="$test_root" \
             bash scripts/nav-controlled-cleanup.sh --dry-run --release-min-age-days 0
 
+      - name: Preserve releases backing running and stopped container bind mounts
+        run: |
+          set -euo pipefail
+          test_root="$(mktemp -d)"
+          trap 'rm -rf -- "$test_root"' EXIT
+          fake_bin="$test_root/fake-bin"
+          mkdir -p "$fake_bin" \
+            "$test_root/releases/20260827-230000-1111111" \
+            "$test_root/releases/20260828-010000-2222222" \
+            "$test_root/releases/20260825-010000-3333333" \
+            "$test_root/releases/20260825-020000-4444444" \
+            "$test_root/releases/20260825-030000-5555555"
+          ln -s "$test_root/releases/20260828-010000-2222222" "$test_root/current"
+          ln -s "$test_root/releases/20260827-230000-1111111" "$test_root/rollback"
+          touch -d '3 days ago' "$test_root/releases"/*
+          cat > "$fake_bin/docker" <<'EOF'
+          #!/usr/bin/env bash
+          set -euo pipefail
+          if [[ "$1" == ps && "$2" == -aq ]]; then
+            printf '%s\n' running-container stopped-container
+          elif [[ "$1" == inspect && "$2" == --format && "$3" == *'.Mounts'* ]]; then
+            printf '%s\n%s\n' "$RUNNING_BIND_SOURCE" "$STOPPED_BIND_SOURCE"
+          elif [[ "$1" == inspect && "$2" == --format ]]; then
+            printf '%s\n%s\n' sha256:running sha256:stopped
+          elif [[ "$1" == image && "$2" == ls ]]; then
+            exit 0
+          else
+            printf 'unexpected fake docker invocation: %q ' "$@" >&2
+            exit 97
+          fi
+          EOF
+          chmod 0755 "$fake_bin/docker"
+          running_release="$test_root/releases/20260825-010000-3333333"
+          stopped_release="$test_root/releases/20260825-020000-4444444"
+          removable_release="$test_root/releases/20260825-030000-5555555"
+          cleanup_output="$(
+            env \
+              PATH="$fake_bin:$PATH" \
+              NAV_STACK_ROOT="$test_root" \
+              RUNNING_BIND_SOURCE="$running_release/frontend-dist" \
+              STOPPED_BIND_SOURCE="$stopped_release/secrets" \
+              bash scripts/nav-controlled-cleanup.sh \
+                --dry-run --release-min-age-days 0 2>&1
+          )"
+          grep -Fq "preserve container-bound release: $running_release" <<< "$cleanup_output"
+          grep -Fq "preserve container-bound release: $stopped_release" <<< "$cleanup_output"
+          grep -Fq "release candidate: $removable_release" <<< "$cleanup_output"
+          ! grep -Fq "release candidate: $running_release" <<< "$cleanup_output"
+          ! grep -Fq "release candidate: $stopped_release" <<< "$cleanup_output"
+          ! grep -Fq "release candidate: $(readlink -f "$test_root/current")" <<< "$cleanup_output"
+          ! grep -Fq "release candidate: $(readlink -f "$test_root/rollback")" <<< "$cleanup_output"
+          test -d "$running_release"
+          test -d "$stopped_release"
+          test -d "$removable_release"
+          test -d "$(readlink -f "$test_root/current")"
+          test -d "$(readlink -f "$test_root/rollback")"
+
       - name: Validate backup systemd units
         run: |
           sudo install -d -m 0755 /usr/local/sbin /usr/share/doc/domo-nav
