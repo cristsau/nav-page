@@ -176,6 +176,10 @@ test('complete disaster restore validates a full backup without mutating the hos
   const configPath = path.join(tempRoot, 'nav-backup.env')
   const verifierPath = path.join(tempRoot, 'restore-verifier')
   const calledPath = path.join(tempRoot, 'verifier-called.txt')
+  const postgresDataPath = path.join(tempRoot, 'postgres-data')
+
+  assert.equal(path.relative(tempRoot, postgresDataPath), 'postgres-data')
+  await mkdir(postgresDataPath, { recursive: true })
 
   for (const directory of [
     'database',
@@ -225,6 +229,7 @@ test('complete disaster restore validates a full backup without mutating the hos
       CI: 'true',
       NODE_ENV: 'test',
       NAV_DISASTER_RESTORE_TEST: 'true',
+      NAV_POSTGRES_DATA_DIR: postgresDataPath,
       NAV_TEST_VERIFIER_CALLED: calledPath
     }
   })

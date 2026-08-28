@@ -18,7 +18,11 @@ services:
     ports:
       - "127.0.0.1:5432:5432"
     volumes:
-      - nav-postgres-data:/var/lib/postgresql/data
+      - type: bind
+        source: "${NAV_POSTGRES_DATA_DIR:?set NAV_POSTGRES_DATA_DIR to an absolute persistent directory outside the release tree}"
+        target: /var/lib/postgresql/data
+        bind:
+          create_host_path: false
     healthcheck:
       test: ["CMD-SHELL", "pg_isready -U nav -d nav"]
       interval: 10s
@@ -87,5 +91,4 @@ services:
       - "${NAV_INTEGRATIONS_DIR:-/etc/nav/integrations}:${NAV_INTEGRATIONS_DIR:-/etc/nav/integrations}:ro"
 
 volumes:
-  nav-postgres-data:
   nav-model-cache:

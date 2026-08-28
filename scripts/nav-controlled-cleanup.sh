@@ -32,9 +32,10 @@ usage() {
 Usage: nav-controlled-cleanup.sh [--dry-run|--apply] [--release-min-age-days N]
 
 Dry-run is the default. Apply keeps the verified current and rollback releases,
+keeps every release used as a bind source by any running or stopped container,
 removes only older verified NAV release directories, retains 30 days of logs,
-prunes Docker dangling layers, and removes only unreferenced NAV API images.
-It never prunes containers, networks, volumes, build cache or non-NAV images.
+prunes Docker dangling layers, and removes only unreferenced NAV API images. It
+never prunes containers, networks, volumes, build cache or non-NAV images.
 EOF
 }
 
@@ -90,6 +91,37 @@ resolve_release_link() {
   printf '%s\n' "$target"
 }
 
+protected_bind_source=''
+release_has_container_bind_source() {
+  local release="$1"
+  local container_output mount_output bind_source bind_real
+  local -a inspected_container_ids=()
+  protected_bind_source=''
+
+  container_output="$(docker ps -aq)" \
+    || fatal "$EX_UNAVAILABLE" "could not enumerate Docker containers for release bind protection"
+  [[ -n "$container_output" ]] || return 1
+  mapfile -t inspected_container_ids <<< "$container_output"
+  mount_output="$(
+    docker inspect --format \
+      '{{range .Mounts}}{{if eq .Type "bind"}}{{println .Source}}{{end}}{{end}}' \
+      "${inspected_container_ids[@]}"
+  )" || fatal "$EX_UNAVAILABLE" "could not inspect Docker bind sources"
+
+  while IFS= read -r bind_source; do
+    [[ -n "$bind_source" ]] || continue
+    [[ "$bind_source" == /* ]] \
+      || fatal "$EX_CONFIG" "Docker reported a non-absolute bind source"
+    bind_real="$(realpath -m -- "$bind_source")" \
+      || fatal "$EX_CONFIG" "could not normalize Docker bind source"
+    if [[ "$bind_real" == "$release" || "$bind_real" == "$release/"* ]]; then
+      protected_bind_source="$bind_real"
+      return 0
+    fi
+  done <<< "$mount_output"
+  return 1
+}
+
 current_target="$(resolve_release_link "$stack_real/current")" \
   || fatal "$EX_CONFIG" "current release link is missing or invalid"
 rollback_target="$(resolve_release_link "$stack_real/rollback")" \
@@ -106,6 +138,10 @@ while IFS= read -r -d '' candidate; do
   [[ "$base" =~ ^[0-9]{8}-[0-9]{6}-[0-9a-f]{7,40}$ ]] || continue
   [[ ! -L "$candidate" && "$(dirname "$(realpath -e -- "$candidate")")" == "$releases_real" ]] \
     || fatal "$EX_CONFIG" "release candidate escaped the verified release root"
+  if release_has_container_bind_source "$candidate"; then
+    log "preserve container-bound release: $candidate (bind source: $protected_bind_source)"
+    continue
+  fi
   release_candidates+=("$candidate")
 done < <(
   find -P "$releases_real" -mindepth 1 -maxdepth 1 -type d \
@@ -152,6 +188,8 @@ fi
 "$LOG_RETENTION_SCRIPT" \
   || fatal "$EX_SOFTWARE" "30-day log retention failed"
 
+# Revalidate every planned release before the first removal. A container may
+# have been created or stopped after the dry-run plan was assembled.
 for candidate in "${release_candidates[@]}"; do
   candidate_real="$(realpath -e -- "$candidate")"
   [[ "$(dirname "$candidate_real")" == "$releases_real" \
@@ -159,6 +197,21 @@ for candidate in "${release_candidates[@]}"; do
       && "$candidate_real" != "$rollback_target" \
       && ! -L "$candidate" ]] \
     || fatal "$EX_CONFIG" "release changed after planning; refusing cleanup"
+  release_has_container_bind_source "$candidate_real" \
+    && fatal "$EX_CONFIG" \
+      "release became a Docker bind source after planning: $candidate_real ($protected_bind_source)"
+done
+
+for candidate in "${release_candidates[@]}"; do
+  candidate_real="$(realpath -e -- "$candidate")"
+  [[ "$(dirname "$candidate_real")" == "$releases_real" \
+      && "$candidate_real" != "$current_target" \
+      && "$candidate_real" != "$rollback_target" \
+      && ! -L "$candidate" ]] \
+    || fatal "$EX_CONFIG" "release changed before removal; refusing cleanup"
+  release_has_container_bind_source "$candidate_real" \
+    && fatal "$EX_CONFIG" \
+      "release became a Docker bind source before removal: $candidate_real ($protected_bind_source)"
   rm -rf --one-file-system -- "$candidate_real"
   log "removed old NAV release: $candidate_real"
 done
