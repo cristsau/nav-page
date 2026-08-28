@@ -2635,10 +2635,10 @@ async function verifyEmailRemoteCommandSchema() {
       'result_uid is null', 'result_uid', '4294967295'
     ]],
     ['email_remote_commands_move_target_check', [
-      "action = 'move'", 'target_folder_id is not null'
+      '(action)::text', "'move'::text", 'target_folder_id is not null'
     ]],
     ['email_remote_commands_delete_confirmation_check', [
-      "action = 'delete'", 'permanent_confirmed_at is not null'
+      '(action)::text', "'delete'::text", 'permanent_confirmed_at is not null'
     ]],
     ['email_remote_commands_undo_window_check', [
       'undo_until >= created_at', 'next_attempt_at >= created_at'
