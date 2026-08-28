@@ -51,7 +51,7 @@ test('assistant is a first-class responsive destination with sources, history an
   assert.match(view, /历史/)
 })
 
-test('mail is a first-class read-only destination with setup, cache, and legacy deep-link states', async () => {
+test('mail is a first-class destination with safe remote commands, setup, cache, and legacy deep-link states', async () => {
   const [route, navigation, mobileNav, view, store, emailApi] = await Promise.all([
     source('../../app/src/router/index.js'),
     source('../../app/src/shared/navigation/appNavigation.js'),
@@ -63,13 +63,15 @@ test('mail is a first-class read-only destination with setup, cache, and legacy 
   assert.match(route, /path: '\/mail'/)
   assert.match(navigation, /id: 'mail'/)
   assert.match(mobileNav, /flex: 1 1 0/)
-  assert.match(view, /已同步邮件保持只读/)
+  assert.match(view, /远端已读、重要、归档、移动与删除操作进入安全队列/)
   assert.match(view, /还没有启用智能收件/)
   assert.match(view, /邮箱已连接，但 DOMO NAV 还没有收录邮件/)
   assert.match(view, /已同步内容仍可只读查看/)
   assert.match(store, /loadLegacyEvent/)
   assert.match(emailApi, /fetchEmailEvents/)
   assert.match(emailApi, /fetchEmailEvent/)
+  assert.match(emailApi, /createEmailMessageCommand/)
+  assert.match(emailApi, /undoEmailMessageCommand/)
 })
 
 test('mail settings describe provider-neutral SMTP and IMAP constraints', async () => {
