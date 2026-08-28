@@ -3,6 +3,7 @@ import { startEmailCacheRetention } from './emailRetention.js'
 import { startEmailDigestScheduler } from './emailDigestScheduler.js'
 import { startEmailIngestWorker } from './emailIngestWorker.js'
 import { startEmailSentAppendScheduler } from './emailSentAppend.js'
+import { startEmailRemoteCommandScheduler } from './emailRemoteCommandWorker.js'
 import { MAINTENANCE_JOB_NAMES } from './maintenanceJobStatus.js'
 import { startMailDeliveryScheduler } from './mailOutbox.js'
 import {
@@ -63,6 +64,20 @@ async function startCurrent() {
     observer: observerFactory(
       MAINTENANCE_JOB_NAMES.EMAIL_SENT_APPEND,
       '已发送邮件同步'
+    )
+  }))
+  if (workerRuntimeEnabled) starters.push(() => startEmailRemoteCommandScheduler({
+    enabled: config.emailIngestEnabled,
+    policy: {
+      intervalSeconds: 3,
+      batchSize: 10,
+      staleRunningSeconds: 300
+    },
+    poolInstance,
+    logger,
+    observer: observerFactory(
+      MAINTENANCE_JOB_NAMES.EMAIL_REMOTE_COMMANDS,
+      '邮箱远端操作队列'
     )
   }))
   if (workerRuntimeEnabled) starters.push(() => startEmailCacheRetention({

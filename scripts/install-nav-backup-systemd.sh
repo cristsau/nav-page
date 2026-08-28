@@ -39,6 +39,9 @@ declare -a scripts=(
   nav-disaster-restore.sh
   nav-heartbeat.sh
   nav-job-failure-notify.sh
+  nav-release-link.sh
+  enable-nav-local-backup-timers.sh
+  nav-controlled-cleanup.sh
 )
 declare -a units=(
   nav-backup.service
@@ -111,4 +114,5 @@ target.chmod(0o600)
 PY
 
 log "backup scripts and units installed without enabling or starting any timer"
-log "create and validate the mode-600 config/credential files, run manual backup and restore gates, then enable timers in a separately authorized production step"
+log "copy and validate the mode-600 local backup config, then run enable-nav-local-backup-timers --check"
+log "only enable-nav-local-backup-timers --enable may enable the local timers after backup and isolated-restore proof; no offsite timer is installed"

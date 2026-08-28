@@ -63,6 +63,12 @@ import {
   EMAIL_MAILBOX_CHANGE_CHANNEL
 } from '../lib/emailMailboxStore.js'
 import {
+  enqueueEmailRemoteCommand,
+  getEmailRemoteCommand,
+  undoEmailRemoteCommand
+} from '../lib/emailRemoteCommands.js'
+import { EmailRemoteCommandError } from '../lib/emailRemoteCommandPolicy.js'
+import {
   EMAIL_MAILBOX_SEARCH_LIMITS,
   mailboxFilterSql,
   mailboxMessageMatchesQuery,
@@ -361,6 +367,11 @@ async function mapMailboxRow(row, { includeBody = false } = {}) {
     sizeBytes: Number(row.size_bytes || 0),
     hasAttachments: Boolean(row.has_attachments),
     attachmentCount: Number(row.attachment_count || 0),
+    remote: {
+      uidValidity: String(row.uid_validity),
+      uid: String(row.uid),
+      modseq: row.modseq == null ? null : String(row.modseq)
+    },
     flags: {
       seen: Boolean(row.seen),
       answered: Boolean(row.answered),
@@ -754,7 +765,8 @@ export default async function emailRoutes(fastify) {
                event.tier, event.urgency, event.category, event.importance_score,
                event.notification_action, event.notification_reason, event.notification_rule_id,
                location.id AS location_id, location.folder_id, location.internal_date,
-              location.size_bytes, location.seen, location.answered, location.flagged,
+              location.size_bytes, location.uid_validity, location.uid, location.modseq,
+              location.seen, location.answered, location.flagged,
               location.draft, location.deleted, location.keywords, location.updated_at
        FROM email_folder_messages AS location
        JOIN email_messages AS message
@@ -831,7 +843,16 @@ export default async function emailRoutes(fastify) {
                 threadKey: row.thread_key_hash || null,
                 threadMessageCount: Number(row.thread_message_count || 1),
                 ...publicEmailNotificationDecision(row),
-                flags: { seen: Boolean(row.seen), flagged: Boolean(row.flagged) },
+                remote: {
+                  uidValidity: String(row.uid_validity),
+                  uid: String(row.uid),
+                  modseq: row.modseq == null ? null : String(row.modseq)
+                },
+                flags: {
+                  seen: Boolean(row.seen),
+                  flagged: Boolean(row.flagged),
+                  deleted: Boolean(row.deleted)
+                },
                 unavailable: true
               }
             })
@@ -892,7 +913,8 @@ export default async function emailRoutes(fastify) {
               event.tier, event.urgency, event.category, event.importance_score,
               event.notification_action, event.notification_reason, event.notification_rule_id,
               location.id AS location_id, location.folder_id, location.internal_date,
-              location.size_bytes, location.seen, location.answered, location.flagged,
+              location.size_bytes, location.uid_validity, location.uid, location.modseq,
+              location.seen, location.answered, location.flagged,
               location.draft, location.deleted, location.keywords
        FROM email_messages AS message
        JOIN email_accounts AS account
@@ -923,6 +945,96 @@ export default async function emailRoutes(fastify) {
     try { return { message: await mapMailboxRow(rows[0], { includeBody: true }) } } catch {
       reply.code(503)
       return { error: 'Email content could not be decrypted' }
+    }
+  })
+
+  fastify.post('/email/accounts/:accountId/messages/:locationId/commands', async (request, reply) => {
+    await fastify.requireAuth(request, reply)
+    reply.header('Cache-Control', 'private, no-store')
+    const accountId = String(request.params.accountId || '')
+    const locationId = String(request.params.locationId || '')
+    if (![accountId, locationId].every((value) => UUID_PATTERN.test(value))) {
+      reply.code(400)
+      return { error: 'Invalid email message identity' }
+    }
+    try {
+      const result = await enqueueEmailRemoteCommand({
+        poolInstance: pool,
+        userId: request.currentUser.id,
+        accountId,
+        locationId,
+        input: request.body
+      })
+      if (result.inserted) {
+        await recordSecurityEventBestEffort({
+          request,
+          eventType: 'email.remote_command.queued',
+          outcome: 'success',
+          actorUserId: request.currentUser.id,
+          subjectUserId: request.currentUser.id,
+          resourceType: 'email_remote_command',
+          resourceId: result.command.id,
+          affectedCount: 1
+        }, request.log)
+      }
+      reply.code(202)
+      return { command: result.command, idempotentReplay: !result.inserted }
+    } catch (error) {
+      if (!(error instanceof EmailRemoteCommandError)) throw error
+      reply.code(error.statusCode)
+      return { error: error.message, code: error.code }
+    }
+  })
+
+  fastify.get('/email/commands/:commandId', async (request, reply) => {
+    await fastify.requireAuth(request, reply)
+    reply.header('Cache-Control', 'private, no-store')
+    const commandId = String(request.params.commandId || '')
+    if (!UUID_PATTERN.test(commandId)) {
+      reply.code(400)
+      return { error: 'Invalid email command id' }
+    }
+    const command = await getEmailRemoteCommand({
+      poolInstance: pool,
+      userId: request.currentUser.id,
+      commandId
+    })
+    if (!command) {
+      reply.code(404)
+      return { error: 'Email command not found' }
+    }
+    return { command }
+  })
+
+  fastify.post('/email/commands/:commandId/undo', async (request, reply) => {
+    await fastify.requireAuth(request, reply)
+    reply.header('Cache-Control', 'private, no-store')
+    const commandId = String(request.params.commandId || '')
+    if (!UUID_PATTERN.test(commandId)) {
+      reply.code(400)
+      return { error: 'Invalid email command id' }
+    }
+    try {
+      const command = await undoEmailRemoteCommand({
+        poolInstance: pool,
+        userId: request.currentUser.id,
+        commandId
+      })
+      await recordSecurityEventBestEffort({
+        request,
+        eventType: 'email.remote_command.cancelled',
+        outcome: 'success',
+        actorUserId: request.currentUser.id,
+        subjectUserId: request.currentUser.id,
+        resourceType: 'email_remote_command',
+        resourceId: command.id,
+        affectedCount: 1
+      }, request.log)
+      return { command }
+    } catch (error) {
+      if (!(error instanceof EmailRemoteCommandError)) throw error
+      reply.code(error.statusCode)
+      return { error: error.message, code: error.code }
     }
   })
 

@@ -1,6 +1,7 @@
 <script setup>
 import { computed, nextTick, onMounted, reactive, ref, watch } from 'vue'
 import Icon from '@/shared/components/Icon.vue'
+import OauthIntegrationSettings from './OauthIntegrationSettings.vue'
 import { useAuth } from '@/shared/composables/useAuth'
 import {
   fetchManagedIntegrations,
@@ -395,12 +396,14 @@ onMounted(refresh)
     <p v-if="message" class="notice notice--success" role="status">{{ message }}</p>
     <p v-if="error" ref="errorNotice" class="notice notice--error" role="alert" tabindex="-1">{{ error }}</p>
 
+    <OauthIntegrationSettings />
+
     <form class="integration-card" novalidate @submit.prevent.stop="saveMail">
       <header class="card-header">
         <div class="card-icon"><Icon name="mail" :size="20" /></div>
         <div>
           <h4>邮件服务（SMTP / IMAP）</h4>
-          <p>兼容使用密码或应用专用密码、支持 SMTP 465 与 IMAP 993 隐式 TLS 的邮箱。仅支持 OAuth 登录的邮箱暂未接入。</p>
+          <p>兼容密码或应用专用密码；OAuth-only 邮箱可在上方配置 Google / Microsoft Refresh Token Provider。</p>
         </div>
       </header>
 

@@ -19,6 +19,7 @@ import { startSearchEmbeddingScheduler } from './lib/searchEmbeddingScheduler.js
 import { startWebPushScheduler } from './lib/webPushScheduler.js'
 import { configureEmailRuntime, stopEmailRuntime } from './lib/emailRuntimeController.js'
 import { applyManagedIntegrationsToRuntime } from './lib/managedIntegrations.js'
+import { applyManagedOauthToRuntime } from './lib/managedOauthIntegrations.js'
 import { sendMaintenanceNotification } from './lib/notificationDelivery.js'
 import { attachCollaborationWebSocket } from './lib/collaborationWebSocket.js'
 import {
@@ -32,6 +33,7 @@ async function main() {
   validatePersistentRateLimitConfiguration()
   await runMigrations()
   await applyManagedIntegrationsToRuntime()
+  await applyManagedOauthToRuntime()
   const initialAcceptanceRecovery = await recoverExpiredReleaseAcceptanceAccounts({
     poolInstance: pool
   })

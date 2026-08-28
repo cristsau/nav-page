@@ -36,6 +36,7 @@ CREATED_DRAFT_ID=''
 EPHEMERAL_USER_ID=''
 OUTBOX_BEFORE=''
 OUTBOX_AFTER=''
+REMOTE_COMMAND_QUEUE='NOT_RECORDED'
 FINALIZING=false
 SUMMARY_WRITTEN=false
 
@@ -53,6 +54,7 @@ safe_summary() {
     "cleanup=$cleanup" \
     "mail_outbox_before=${OUTBOX_BEFORE:-NOT_RECORDED}" \
     "mail_outbox_after=${OUTBOX_AFTER:-NOT_RECORDED}" \
+    "remote_command_queue=${REMOTE_COMMAND_QUEUE:-NOT_RECORDED}" \
     'real_mail_send=NOT_INVOKED' \
     'remote_mailbox_mutation=NOT_INVOKED' \
     'credential_values=NOT_RECORDED' \
@@ -429,6 +431,78 @@ THREAD_KEY="$(jq -r '.message.threadKey // empty' "$detail_response")"
 THREAD_KEY="${THREAD_KEY,,}"
 [[ "$THREAD_KEY" =~ $SHA256_PATTERN ]] \
   || fatal "$EX_SOFTWARE" 'prepared synthetic message has no stable conversation key'
+
+command_payload="$TMP_DIR/remote-command.json"
+jq -e '
+  (.message.remote.uidValidity | tostring | test("^[1-9][0-9]*$"))
+  and ((.message.remote.modseq == null) or (.message.remote.modseq | tostring | test("^[1-9][0-9]*$")))
+  and (.message.flags.seen | type == "boolean")
+  and (.message.flags.flagged | type == "boolean")
+  and (.message.flags.deleted | type == "boolean")
+' "$detail_response" >/dev/null \
+  || fatal "$EX_SOFTWARE" 'prepared synthetic message has no remote conflict snapshot'
+jq -n \
+  --arg key "accept:$NAV_ACCEPTANCE_RUN_ID" \
+  --arg uid_validity "$(jq -r '.message.remote.uidValidity' "$detail_response")" \
+  --arg modseq "$(jq -r '.message.remote.modseq // empty' "$detail_response")" \
+  --argjson seen "$(jq '.message.flags.seen' "$detail_response")" \
+  --argjson flagged "$(jq '.message.flags.flagged' "$detail_response")" \
+  --argjson deleted "$(jq '.message.flags.deleted' "$detail_response")" '
+  {
+    action: (if $seen then "mark_unread" else "mark_read" end),
+    idempotencyKey: $key,
+    expected: {
+      uidValidity: $uid_validity,
+      modseq: (if $modseq == "" then null else $modseq end),
+      seen: $seen,
+      flagged: $flagged,
+      deleted: $deleted
+    }
+  }
+' > "$command_payload"
+
+command_create_response="$TMP_DIR/remote-command-create.json"
+request_json 'remote command enqueue' POST "$PRIMARY_BASE_URL" \
+  "/api/email/accounts/$ACCOUNT_ID/messages/$LOCATION_ID/commands" \
+  "$PRIMARY_COOKIE_JAR" "$command_payload" "$command_create_response" '202'
+REMOTE_COMMAND_ID="$(jq -r '.command.id // empty' "$command_create_response")"
+REMOTE_COMMAND_ID="${REMOTE_COMMAND_ID,,}"
+validate_uuid "$REMOTE_COMMAND_ID" 'remote command id'
+jq -e --arg id "$REMOTE_COMMAND_ID" '
+  .idempotentReplay == false
+  and .command.id == $id
+  and .command.status == "scheduled"
+  and (.command.undoUntil | type == "string" and test("^[0-9]{4}-[0-9]{2}-[0-9]{2}T"))
+' "$command_create_response" >/dev/null \
+  || fatal "$EX_SOFTWARE" 'remote command enqueue contract is invalid'
+
+command_replay_response="$TMP_DIR/remote-command-replay.json"
+request_json 'remote command idempotent replay' POST "$SECONDARY_BASE_URL" \
+  "/api/email/accounts/$ACCOUNT_ID/messages/$LOCATION_ID/commands" \
+  "$SECONDARY_COOKIE_JAR" "$command_payload" "$command_replay_response" '202'
+jq -e --arg id "$REMOTE_COMMAND_ID" '
+  .idempotentReplay == true and .command.id == $id and .command.status == "scheduled"
+' "$command_replay_response" >/dev/null \
+  || fatal "$EX_SOFTWARE" 'remote command idempotent replay contract is invalid'
+
+empty_payload="$TMP_DIR/empty.json"
+printf '%s\n' '{}' > "$empty_payload"
+command_undo_response="$TMP_DIR/remote-command-undo.json"
+request_json 'remote command undo' POST "$SECONDARY_BASE_URL" \
+  "/api/email/commands/$REMOTE_COMMAND_ID/undo" "$SECONDARY_COOKIE_JAR" \
+  "$empty_payload" "$command_undo_response" '200'
+jq -e --arg id "$REMOTE_COMMAND_ID" '.command.id == $id and .command.status == "cancelled"' \
+  "$command_undo_response" >/dev/null \
+  || fatal "$EX_SOFTWARE" 'remote command undo contract is invalid'
+
+command_status_response="$TMP_DIR/remote-command-status.json"
+request_json 'remote command final status' GET "$PRIMARY_BASE_URL" \
+  "/api/email/commands/$REMOTE_COMMAND_ID" "$PRIMARY_COOKIE_JAR" '' \
+  "$command_status_response" '200'
+jq -e --arg id "$REMOTE_COMMAND_ID" '.command.id == $id and .command.status == "cancelled"' \
+  "$command_status_response" >/dev/null \
+  || fatal "$EX_SOFTWARE" 'cancelled remote command was not visible through the primary domain'
+REMOTE_COMMAND_QUEUE='PASS'
 
 existing_rules_response="$TMP_DIR/rules-before.json"
 request_json 'notification rules preflight' GET "$PRIMARY_BASE_URL" \

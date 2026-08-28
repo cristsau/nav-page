@@ -1,5 +1,5 @@
 [Unit]
-Description=Schedule DOMO NAV bounded backup retention
+Description=Schedule DOMO NAV bounded local backup retention
 
 [Timer]
 OnCalendar=Sun *-*-* 05:17:00 UTC

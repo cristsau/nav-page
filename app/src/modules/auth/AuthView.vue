@@ -8,6 +8,7 @@ import {
   resendBackendRegistrationEmail,
   verifyBackendRegistrationEmail
 } from '@/shared/services/authApi'
+import { fetchOauthLoginConfig, startOauthLogin } from '@/shared/services/oauthApi'
 
 const route = useRoute()
 const {
@@ -37,6 +38,8 @@ const registrationConfig = ref({ emailVerificationEnabled: false, emailRequired:
 const showVerificationResend = ref(false)
 const resendEmail = ref('')
 const resendLoading = ref(false)
+const oauthConfig = ref({ providers: { google: { enabled: false }, wechat: { enabled: false } } })
+const oauthLoading = ref('')
 
 const loginForm = ref({
   username: '',
@@ -110,6 +113,15 @@ async function loadRegistrationConfig() {
   }
 }
 
+async function loadOauthConfig() {
+  if (!backendAuthEnabled.value) return
+  try {
+    oauthConfig.value = await fetchOauthLoginConfig()
+  } catch {
+    oauthConfig.value = { providers: { google: { enabled: false }, wechat: { enabled: false } } }
+  }
+}
+
 async function verifyRegistrationFromLink() {
   const fragment = String(window.location.hash || '')
   if (!fragment.startsWith('#register-verify?')) return
@@ -139,8 +151,15 @@ onMounted(async () => {
   await Promise.all([
     initAuth(),
     loadPasskeyAvailability(),
-    loadRegistrationConfig()
+    loadRegistrationConfig(),
+    loadOauthConfig()
   ])
+  const oauthError = String(route.query.oauth_error || '')
+  if (oauthError) {
+    errorMessage.value = oauthError === 'not_linked'
+      ? '该外部账号尚未绑定。请先使用密码登录，再到账号安全中绑定。'
+      : '外部登录未完成或已过期，请重新尝试。'
+  }
   await verifyRegistrationFromLink()
 })
 
@@ -180,6 +199,20 @@ async function handlePasskeyLogin() {
       : '无法使用这个 Passkey 登录，请确认用户名和 Passkey 后重试。'
   } finally {
     loading.value = false
+  }
+}
+
+async function handleOauthLogin(provider) {
+  if (oauthLoading.value) return
+  oauthLoading.value = provider
+  errorMessage.value = ''
+  successMessage.value = ''
+  try {
+    const result = await startOauthLogin(provider, redirectTarget.value)
+    window.location.assign(result.authorizationUrl)
+  } catch (error) {
+    errorMessage.value = error.message || '无法发起外部登录，请稍后重试。'
+    oauthLoading.value = ''
   }
 }
 
@@ -426,6 +459,33 @@ async function handleResendVerification() {
         >
           当前浏览器不支持 Passkey，请使用密码登录或更换浏览器。
         </p>
+        <div
+          v-if="oauthConfig.providers.google.enabled || oauthConfig.providers.wechat.enabled"
+          class="auth-divider"
+          aria-hidden="true"
+        >
+          <span>外部账号</span>
+        </div>
+        <button
+          v-if="oauthConfig.providers.google.enabled"
+          class="auth-passkey"
+          type="button"
+          :disabled="Boolean(oauthLoading) || loading"
+          @click="handleOauthLogin('google')"
+        >
+          <Icon name="link" :size="18" />
+          {{ oauthLoading === 'google' ? '正在前往 Google…' : '使用 Google 登录' }}
+        </button>
+        <button
+          v-if="oauthConfig.providers.wechat.enabled"
+          class="auth-passkey"
+          type="button"
+          :disabled="Boolean(oauthLoading) || loading"
+          @click="handleOauthLogin('wechat')"
+        >
+          <Icon name="link" :size="18" />
+          {{ oauthLoading === 'wechat' ? '正在前往微信…' : '使用微信登录' }}
+        </button>
         <button
           v-if="backendAuthEnabled"
           class="auth-link"

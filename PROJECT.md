@@ -48,6 +48,13 @@ DOMO NAV 是面向个人与小团队的私有化导航工作台。产品主线�
 - 图片附件经 NAV 后端上传到个人图床；加密笔记禁止上传公开图床图片
 - `/media` 图片库：瀑布流、搜索、分页、引用关系、保留策略、分享、删除和对账
 
+### 邮件工作台
+
+- 桌面三栏与手机渐进式列表/详情布局，支持服务端搜索、筛选和只读查看
+- 账户、分类、域名、发件人和会话级通知规则；支持立即、摘要、仅站内和静默
+- 带来源邮件摘要、跨邮件检索，以及只在预览确认后保存的加密 AI 草稿
+- 关键通知保护、托管 SMTP/IMAP 配置和 Secret 不回显
+
 ### 设置与 AI
 
 - 主题模式、配色方案、自定义主题、站点名称、Logo 与 favicon
@@ -76,19 +83,23 @@ DOMO NAV 是面向个人与小团队的私有化导航工作台。产品主线�
 
 | 状态 | 能力 |
 | --- | --- |
-| 已验证生产 | 分享 UI、Responses API、动态模型、导航拖拽/批量、到期提醒中心、手动链接检查、图片库与图片生命周期、双域 CORS、图床删除结果闭环、共享限流、安全审计与有界后台维护 |
-| 部分完成 | 生产仍为打开页面时提醒、手动链接检查、安装型 PWA、JSON 数据迁移 |
-| 本地源码完成、待 CI/发布 | Passkey；统一搜索/带来源助理/AI 用量；提前提醒；定时链接检查；书签 HTML 与 Markdown 导入导出；命令面板主题/模型；PWA 离线外壳；自动保存与 50 版本历史 |
-| 外部配置或独立评估 | 异地存储凭据与外部 dead-man；Web Push/VAPID；中文 tokenizer/BM25 与向量 embedding；完整块编辑器 |
+| 已验证生产 | 分享 UI、Responses API/动态模型/AI 助理、本地 BM25/向量语义、Web Push、导航拖拽/批量/链接检查、到期提醒、块编辑器/版本、协作与离线同步、图片库、流式恢复、邮件工作台/通知规则/邮件 AI、双域 CORS、共享限流、安全审计与有界后台维护 |
+| 本地源码完成、待 CI/发布 | 2026-08-28 有界维护 profile、原子 release 指针、本地 backup/retention/isolated-restore timer 门禁、受控磁盘清理 |
+| 外部配置或人工流程 | 异地存储凭据/首次 exact-ID 恢复/外部 dead-man；OAuth provider 凭据和同意屏幕；扩展商店开发者账号、签名、提交与审核 |
 
 精确生产 SHA、验收证据和剩余门槛以 [STATUS_REPORT.md](./STATUS_REPORT.md) 为准。
+
+2026-08-28 的运维候选补齐了有界书签/AI 保留 profile、原子 release 指针、本地备份
+timer 启用前门禁与受控磁盘清理，但状态仍为 `LOCAL_DONE / READY_FOR_CI / NOT_DEPLOYED`。
+异地对象存储没有用户选定的 provider/Secret/恢复证据时，必须继续显示为未配置。
 
 ## 当前生产
 
 - 主域名：[https://nav.skrskr.net](https://nav.skrskr.net)
 - 反代域名：[https://nav.cristsau.cn](https://nav.cristsau.cn)
-- 当前已验证提交：`25c9c133ad6c34b857cf13c293aa5a89c8ef04d7`
-- 当前 release：`/opt/nav-stack/releases/20260823-233024-25c9c13`
+- 最新留档的已验证提交（2026-08-27）：`15fd83e3f197afb7a03fe119ce118feae26ab10f`
+- 对应 release：`/opt/nav-stack/releases/20260827-231729-15fd83e`
+- 2026-08-28 运维收口批次尚未发布；实时状态必须在下一次发布前重新读取。
 
 生产发布、回滚和外部配置边界见 [DEPLOYMENT.md](./DEPLOYMENT.md)。
 
@@ -104,10 +115,12 @@ DOMO NAV 是面向个人与小团队的私有化导航工作台。产品主线�
 
 ## 后续优先级
 
-1. 先让 2026-08-24 本地候选通过 GitHub Linux CI、PostgreSQL 16 隔离迁移/恢复和真机验收。
-2. 发布后保持新增开关关闭，按 Passkey、提醒、链接检查、AI 用量清理的顺序渐进启用。
-3. 用户选定免费存储后填写通用异地备份 Secret，再做首次快照、恢复演练与外部 dead-man。
-4. 用真实数据决定是否引入中文 tokenizer/BM25、向量 embedding、Web Push 和完整块编辑器。
+1. 让 2026-08-28 运维候选通过 GitHub Linux shellcheck、systemd 和全量应用/PostgreSQL 门禁。
+2. 现场创建/核验 `current` 与 `rollback` 指针，先只运行本地 timer 的只读 preflight。
+3. 发布后按最小批次启用书签健康检查和 AI 用量保留，并在管理员维护面板验收。
+4. 经单独授权后完成一次本地 canonical backup 与隔离恢复，才允许启用本地 timer。
+5. 用户选定免费存储后填写通用异地备份 Secret，再做首次快照、恢复演练与外部 dead-man。
+6. 扩展商店开发者账号、签名、提交和审核继续作为外部人工流程。
 
 ## 接力阅读顺序
 

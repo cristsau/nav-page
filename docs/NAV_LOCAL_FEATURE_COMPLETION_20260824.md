@@ -29,7 +29,7 @@
 
 ### 2. Passkey / WebAuthn
 
-- 固定 RP ID `nav.skrskr.net` 与 Origin `https://nav.skrskr.net`，反代域保持密码登录。
+- 固定两组精确 RP/Origin：`nav.skrskr.net` 与 `nav.cristsau.cn`；两个域名分别登记凭据。
 - 包含登记、登录、删除、挑战一次性消费、持久化限流、恢复码重置联动、审计和设置 UI。
 - 默认 `NAV_WEBAUTHN_ENABLED=false`；生产迁移与真实 iPhone/电脑验收前不得开启。
 

@@ -6,6 +6,7 @@ import { decryptEmailSentMime } from './emailSentMimeCrypto.js'
 import { persistEmailMailboxMessage } from './emailMailboxStore.js'
 import { sanitizeMaintenanceErrorCode } from './maintenanceJobStatus.js'
 import { readOwnerSecretFile } from './ownerSecretFile.js'
+import { resolveImapAuth } from './emailOauth2.js'
 import { assertSafeOutboundHost } from './outboundEndpoints.js'
 
 const LOCK_SQL = `SELECT pg_try_advisory_lock(hashtext(current_database()), hashtext('nav_email_sent_append')) AS acquired`
@@ -70,7 +71,11 @@ export function selectUniqueSentMailbox(folders, explicitPath = '') {
 }
 
 function validateRuntimeConfig(runtimeConfig) {
-  if (!runtimeConfig.imapHost || !runtimeConfig.imapUsername || !runtimeConfig.imapPasswordFile) {
+  if (
+    !runtimeConfig.imapHost
+    || !runtimeConfig.imapUsername
+    || (!runtimeConfig.imapPasswordFile && !runtimeConfig.imapOauthProvider)
+  ) {
     throw new Error('IMAP configuration is incomplete')
   }
   if (runtimeConfig.imapSecure !== true || Number(runtimeConfig.imapPort) !== 993) {
@@ -86,15 +91,12 @@ async function createImapClient(runtimeConfig, {
 }) {
   validateRuntimeConfig(runtimeConfig)
   await assertHostImpl(runtimeConfig.imapHost, { label: 'IMAP ' })
-  const password = await readSecretImpl(runtimeConfig.imapPasswordFile, {
-    label: 'IMAP password',
-    maxBytes: 4096
-  })
+  const auth = await resolveImapAuth(runtimeConfig, { readSecretImpl })
   return new ImapClient({
     host: runtimeConfig.imapHost,
     port: Number(runtimeConfig.imapPort),
     secure: true,
-    auth: { user: runtimeConfig.imapUsername, pass: password },
+    auth,
     disableAutoIdle: true,
     tls: { minVersion: 'TLSv1.2', rejectUnauthorized: true },
     logger: false

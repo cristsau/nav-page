@@ -1,6 +1,7 @@
 <script setup>
 import { computed, onBeforeUnmount, onMounted, reactive, ref, watch } from 'vue'
 import Icon from '@/shared/components/Icon.vue'
+import MailMessageActionDialog from './MailMessageActionDialog.vue'
 import {
   confirmEmailAiProposal,
   createEmailAiProposal,
@@ -14,10 +15,15 @@ const props = defineProps({
   accountId: { type: String, default: '' },
   folderId: { type: String, default: '' },
   locationId: { type: String, default: '' },
+  folders: { type: Array, default: () => [] },
+  activeFolder: { type: Object, default: null },
+  command: { type: Object, default: null },
+  commandBusy: { type: Boolean, default: false },
+  commandError: { type: String, default: '' },
   loading: { type: Boolean, default: false }
 })
 
-const emit = defineEmits(['close', 'reply', 'notification', 'open-source'])
+const emit = defineEmits(['close', 'reply', 'notification', 'open-source', 'command', 'undo-command'])
 
 const detailRoot = ref(null)
 const mobileBackButton = ref(null)
@@ -36,6 +42,8 @@ const aiProposalConfirming = ref(false)
 const aiOperationResult = ref(null)
 const bodyMode = ref('plain')
 const attachmentDownloads = reactive({})
+const actionDialogMode = ref('')
+const actionRestoreTarget = ref(null)
 let aiRequestSequence = 0
 
 const aiActionGroups = [
@@ -96,6 +104,19 @@ const notificationNames = {
 const notificationScopeNames = {
   conversation: '当前会话', sender: '这个发件人', domain: '发件人域名',
   category: '邮件分类', account: '当前邮箱'
+}
+
+const commandStatusNames = {
+  queued: '操作已进入安全队列，可在短时间内撤销。',
+  pending: '操作已进入安全队列，可在短时间内撤销。',
+  processing: '正在连接远端邮箱执行操作…',
+  succeeded: '远端邮箱操作已完成。',
+  undone: '操作已撤销，没有修改远端邮箱。',
+  cancelled: '操作已取消，没有修改远端邮箱。',
+  canceled: '操作已取消，没有修改远端邮箱。',
+  conflict: '远端邮件状态已经变化，本次操作未执行。请刷新后重试。',
+  expired: '操作等待时间已过期，没有修改远端邮箱。',
+  failed: '远端邮箱操作失败，没有伪装为成功。'
 }
 
 const safeMessageId = computed(() => String(
@@ -167,6 +188,45 @@ const aiOperationHref = computed(() => {
   const href = String(aiOperationResult.value?.receipt?.href || '').trim()
   return /^\/(?!\/)/.test(href) ? href : ''
 })
+const messageSeen = computed(() => props.message?.flags?.seen === true)
+const messageFlagged = computed(() => props.message?.flags?.flagged === true)
+const activeSpecialUse = computed(() => String(props.activeFolder?.specialUse || '').trim().toLowerCase())
+const canPermanentlyDelete = computed(() => (
+  props.message?.flags?.deleted === true || ['trash', 'junk', 'spam'].includes(activeSpecialUse.value)
+))
+const commandStatus = computed(() => String(props.command?.status || '').trim().toLowerCase())
+const commandNotice = computed(() => {
+  if (!props.command) return ''
+  const base = commandStatusNames[commandStatus.value] || '邮件操作状态正在更新。'
+  const detail = props.command?.errorMessage || props.command?.errorCode || ''
+  return detail && ['failed', 'conflict'].includes(commandStatus.value) ? `${base} ${detail}` : base
+})
+const commandCanUndo = computed(() => {
+  if (!['scheduled', 'queued', 'pending'].includes(commandStatus.value)) return false
+  const deadline = new Date(props.command?.undoUntil || 0).getTime()
+  return Number.isFinite(deadline) && deadline > Date.now()
+})
+
+function requestCommand(action, options = {}) {
+  if (props.commandBusy || !props.message || props.message.legacyEvent) return
+  emit('command', { action, ...options })
+}
+
+function openActionDialog(mode, event) {
+  actionRestoreTarget.value = event?.currentTarget || document.activeElement
+  actionDialogMode.value = mode
+}
+
+function closeActionDialog() {
+  actionDialogMode.value = ''
+}
+
+function confirmActionDialog(payload) {
+  const mode = actionDialogMode.value
+  closeActionDialog()
+  if (mode === 'move') requestCommand('move', payload)
+  if (mode === 'delete') requestCommand('delete', payload)
+}
 
 const safeHtmlDocument = computed(() => {
   const body = sanitizedHtmlBody(htmlBody.value)
@@ -516,6 +576,8 @@ watch(() => safeMessageId.value, () => {
   aiProposalBusyKind.value = ''
   aiProposalConfirming.value = false
   aiOperationResult.value = null
+  actionDialogMode.value = ''
+  actionRestoreTarget.value = null
   bodyMode.value = 'plain'
   for (const key of Object.keys(attachmentDownloads)) delete attachmentDownloads[key]
 })
@@ -550,12 +612,40 @@ watch(() => safeMessageId.value, () => {
         <button type="button" @click="openReply()"><Icon name="reply" :size="17" />回复</button>
         <button type="button" @click="openReply('', 'reply-all')"><Icon name="reply-all" :size="17" />全部回复</button>
         <button type="button" @click="openReply('', 'forward')"><Icon name="forward" :size="17" />转发</button>
+        <button type="button" :disabled="commandBusy" @click="requestCommand(messageSeen ? 'mark_unread' : 'mark_read')">
+          <Icon name="mail" :size="17" />{{ messageSeen ? '标为未读' : '标为已读' }}
+        </button>
+        <button type="button" :disabled="commandBusy" @click="requestCommand(messageFlagged ? 'unstar' : 'star')">
+          <Icon name="star" :size="17" />{{ messageFlagged ? '取消重要' : '设为重要' }}
+        </button>
+        <button v-if="activeSpecialUse !== 'archive'" type="button" :disabled="commandBusy" @click="requestCommand('archive')">
+          <Icon name="archive" :size="17" />归档
+        </button>
+        <button type="button" :disabled="commandBusy" @click="openActionDialog('move', $event)">
+          <Icon name="folder" :size="17" />移动
+        </button>
+        <button v-if="!['trash', 'junk', 'spam'].includes(activeSpecialUse)" type="button" :disabled="commandBusy" @click="requestCommand('trash')">
+          <Icon name="trash" :size="17" />移到垃圾箱
+        </button>
+        <button v-if="canPermanentlyDelete" type="button" class="is-danger" :disabled="commandBusy" @click="openActionDialog('delete', $event)">
+          <Icon name="trash" :size="17" />永久删除
+        </button>
         <button type="button" @click="emit('notification', message, $event.currentTarget)">
           <Icon :name="message.notificationAction === 'silent' ? 'bell-off' : 'bell'" :size="17" />提醒
         </button>
         <button type="button" class="is-ai" :aria-expanded="aiPanelOpen" aria-controls="mail-ai-panel" @click="aiPanelOpen = !aiPanelOpen">
           <Icon name="sparkles" :size="17" />AI 助理
         </button>
+      </section>
+
+      <section
+        v-if="commandNotice || commandError"
+        :class="['mail-message-detail__command-status', { 'is-error': ['failed', 'conflict'].includes(commandStatus) || commandError }]"
+        :role="['failed', 'conflict'].includes(commandStatus) || commandError ? 'alert' : 'status'"
+      >
+        <Icon :name="['failed', 'conflict'].includes(commandStatus) || commandError ? 'alert' : commandStatus === 'succeeded' ? 'circle-check' : 'clock'" :size="18" />
+        <span>{{ commandError || commandNotice }}</span>
+        <button v-if="commandCanUndo" type="button" :disabled="commandBusy" @click="emit('undo-command')"><Icon name="undo" :size="16" />撤销</button>
       </section>
 
       <section v-if="aiPanelOpen" id="mail-ai-panel" class="mail-message-detail__ai-panel" role="region" aria-label="邮件 AI 助理">
@@ -748,10 +838,33 @@ watch(() => safeMessageId.value, () => {
 
       <nav v-if="!message.legacyEvent" class="mail-message-detail__mobile-actions" aria-label="移动端邮件操作">
         <button type="button" @click="openReply()"><Icon name="reply" :size="19" /><span>回复</span></button>
-        <button type="button" @click="emit('notification', message, $event.currentTarget)"><Icon name="bell" :size="19" /><span>提醒</span></button>
+        <button type="button" :disabled="commandBusy" @click="requestCommand(messageSeen ? 'mark_unread' : 'mark_read')"><Icon name="mail" :size="19" /><span>{{ messageSeen ? '未读' : '已读' }}</span></button>
+        <button type="button" :disabled="commandBusy" @click="requestCommand(messageFlagged ? 'unstar' : 'star')"><Icon name="star" :size="19" /><span>{{ messageFlagged ? '取消重要' : '重要' }}</span></button>
         <button type="button" :aria-expanded="aiPanelOpen" @click="aiPanelOpen = !aiPanelOpen"><Icon name="sparkles" :size="19" /><span>AI 助理</span></button>
-        <button type="button" @click="openReply('', 'forward')"><Icon name="forward" :size="19" /><span>转发</span></button>
+        <details class="mail-message-detail__mobile-more">
+          <summary><Icon name="more-horizontal" :size="19" /><span>更多</span></summary>
+          <div>
+            <button type="button" @click="openReply('', 'forward')"><Icon name="forward" :size="18" />转发</button>
+            <button v-if="activeSpecialUse !== 'archive'" type="button" :disabled="commandBusy" @click="requestCommand('archive')"><Icon name="archive" :size="18" />归档</button>
+            <button type="button" :disabled="commandBusy" @click="openActionDialog('move', $event)"><Icon name="folder" :size="18" />移动</button>
+            <button v-if="!['trash', 'junk', 'spam'].includes(activeSpecialUse)" type="button" :disabled="commandBusy" @click="requestCommand('trash')"><Icon name="trash" :size="18" />移到垃圾箱</button>
+            <button type="button" @click="emit('notification', message, $event.currentTarget)"><Icon name="bell" :size="18" />提醒规则</button>
+            <button v-if="canPermanentlyDelete" type="button" class="is-danger" :disabled="commandBusy" @click="openActionDialog('delete', $event)"><Icon name="trash" :size="18" />永久删除</button>
+          </div>
+        </details>
       </nav>
+
+      <MailMessageActionDialog
+        :open="Boolean(actionDialogMode)"
+        :mode="actionDialogMode"
+        :folders="folders"
+        :current-folder-id="folderId"
+        :subject="message.subject || '(无主题)'"
+        :busy="commandBusy"
+        :restore-target="actionRestoreTarget"
+        @close="closeActionDialog"
+        @confirm="confirmActionDialog"
+      />
     </template>
   </article>
 </template>
@@ -771,6 +884,12 @@ watch(() => safeMessageId.value, () => {
 .mail-message-detail__actions button { display: inline-flex; min-height: 44px; padding: 0 11px; flex: 0 0 auto; align-items: center; justify-content: center; gap: 6px; color: var(--text-secondary); font: inherit; font-size: .65rem; font-weight: 700; background: transparent; border: 1px solid transparent; border-radius: 11px; cursor: pointer; }
 .mail-message-detail__actions button:hover, .mail-message-detail__actions button:focus-visible { color: var(--text-primary); background: var(--bg-secondary); border-color: var(--border-light); }
 .mail-message-detail__actions button.is-ai { color: var(--accent-color); background: var(--accent-bg); border-color: color-mix(in srgb, var(--accent-color) 20%, var(--border-light)); }
+.mail-message-detail__actions button.is-danger { color: var(--error-color); }
+.mail-message-detail__actions button:disabled { opacity: .48; cursor: wait; }
+.mail-message-detail__command-status { display: flex; min-height: 48px; margin: 12px clamp(16px, 2.4vw, 28px) 0; padding: 9px 11px; align-items: center; gap: 8px; color: var(--success-color, #4c8a64); font-size: .63rem; line-height: 1.5; background: color-mix(in srgb, var(--success-color, #4c8a64) 8%, var(--bg-card)); border: 1px solid color-mix(in srgb, var(--success-color, #4c8a64) 23%, var(--border-light)); border-radius: 12px; }
+.mail-message-detail__command-status.is-error { color: var(--error-color); background: color-mix(in srgb, var(--error-color) 8%, var(--bg-card)); border-color: color-mix(in srgb, var(--error-color) 24%, var(--border-light)); }
+.mail-message-detail__command-status span { min-width: 0; flex: 1; }
+.mail-message-detail__command-status button { display: inline-flex; min-height: 40px; padding: 0 11px; align-items: center; gap: 5px; color: var(--accent-color); font: inherit; font-size: .61rem; font-weight: 720; background: var(--bg-card); border: 1px solid var(--border-light); border-radius: 10px; cursor: pointer; }
 .mail-message-detail__ai-panel { margin: 14px clamp(16px, 2.4vw, 28px) 0; padding: 14px; background: color-mix(in srgb, var(--accent-bg) 66%, var(--bg-card)); border: 1px solid color-mix(in srgb, var(--accent-color) 24%, var(--border-light)); border-radius: 17px; box-shadow: var(--shadow-card); }
 .mail-message-detail__ai-panel > header { display: flex; min-height: 44px; align-items: center; justify-content: space-between; gap: 10px; }
 .mail-message-detail__ai-panel > header > div { display: flex; align-items: center; gap: 9px; }
@@ -924,9 +1043,17 @@ watch(() => safeMessageId.value, () => {
   .mail-message-detail__sender { grid-template-columns: auto minmax(0, 1fr); }
   .mail-message-detail__sender time { grid-column: 2; }
   .mail-message-detail__recipients dl { grid-template-columns: 1fr; }
-  .mail-message-detail__mobile-actions { position: fixed; z-index: 620; right: 14px; bottom: calc(86px + env(safe-area-inset-bottom)); left: 14px; display: grid; min-height: 64px; padding: 6px; grid-template-columns: repeat(4, minmax(0, 1fr)); gap: 3px; background: color-mix(in srgb, var(--bg-card) 94%, transparent); border: 1px solid var(--border-light); border-radius: 18px; box-shadow: var(--shadow-card); backdrop-filter: blur(18px); }
-  .mail-message-detail__mobile-actions button { display: grid; min-width: 44px; min-height: 50px; place-content: center; justify-items: center; gap: 3px; color: var(--text-secondary); font: inherit; font-size: .55rem; background: transparent; border: 0; border-radius: 12px; }
-  .mail-message-detail__mobile-actions button:active { color: var(--accent-color); background: var(--accent-bg); }
+  .mail-message-detail__mobile-actions { position: fixed; z-index: 620; right: 14px; bottom: calc(86px + env(safe-area-inset-bottom)); left: 14px; display: grid; min-height: 64px; padding: 6px; grid-template-columns: repeat(5, minmax(0, 1fr)); gap: 3px; background: color-mix(in srgb, var(--bg-card) 94%, transparent); border: 1px solid var(--border-light); border-radius: 18px; box-shadow: var(--shadow-card); backdrop-filter: blur(18px); }
+  .mail-message-detail__mobile-actions > button,
+  .mail-message-detail__mobile-more > summary { display: grid; min-width: 44px; min-height: 50px; place-content: center; justify-items: center; gap: 3px; color: var(--text-secondary); font: inherit; font-size: .55rem; background: transparent; border: 0; border-radius: 12px; cursor: pointer; list-style: none; }
+  .mail-message-detail__mobile-more > summary::-webkit-details-marker { display: none; }
+  .mail-message-detail__mobile-actions > button:active,
+  .mail-message-detail__mobile-more > summary:active { color: var(--accent-color); background: var(--accent-bg); }
+  .mail-message-detail__mobile-more { position: relative; min-width: 0; }
+  .mail-message-detail__mobile-more > div { position: absolute; right: 0; bottom: calc(100% + 10px); display: grid; width: min(250px, calc(100vw - 40px)); padding: 7px; gap: 3px; background: var(--bg-card); border: 1px solid var(--border-light); border-radius: 15px; box-shadow: 0 18px 48px rgb(0 0 0 / .22); }
+  .mail-message-detail__mobile-more > div button { display: flex; min-height: 44px; padding: 0 12px; align-items: center; justify-content: flex-start; gap: 9px; text-align: left; color: var(--text-secondary); font: inherit; font-size: .64rem; background: transparent; border: 0; border-radius: 10px; }
+  .mail-message-detail__mobile-more > div button:active { color: var(--accent-color); background: var(--accent-bg); }
+  .mail-message-detail__mobile-more > div button.is-danger { color: var(--error-color); }
 }
 @media (prefers-reduced-motion: reduce) {
   .mail-message-detail__header, .mail-message-detail__actions, .mail-message-detail__mobile-actions { backdrop-filter: none; }

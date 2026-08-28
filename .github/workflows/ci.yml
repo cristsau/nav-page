@@ -114,7 +114,10 @@ jobs:
             scripts/nav-disaster-restore.sh \
             scripts/nav-heartbeat.sh \
             scripts/nav-job-failure-notify.sh \
-            scripts/install-nav-backup-systemd.sh
+            scripts/install-nav-backup-systemd.sh \
+            scripts/nav-release-link.sh \
+            scripts/enable-nav-local-backup-timers.sh \
+            scripts/nav-controlled-cleanup.sh
           shellcheck --severity=warning \
             scripts/nav-backup.sh \
             scripts/nav-restore-rehearsal.sh \
@@ -123,7 +126,31 @@ jobs:
             scripts/nav-disaster-restore.sh \
             scripts/nav-heartbeat.sh \
             scripts/nav-job-failure-notify.sh \
-            scripts/install-nav-backup-systemd.sh
+            scripts/install-nav-backup-systemd.sh \
+            scripts/nav-release-link.sh \
+            scripts/enable-nav-local-backup-timers.sh \
+            scripts/nav-controlled-cleanup.sh
+
+      - name: Exercise atomic release links and cleanup dry-run
+        run: |
+          set -euo pipefail
+          test_root="$(mktemp -d)"
+          trap 'rm -rf -- "$test_root"' EXIT
+          mkdir -p \
+            "$test_root/releases/20260827-230000-1111111" \
+            "$test_root/releases/20260828-010000-2222222"
+          env NAV_STACK_ROOT="$test_root" NAV_RELEASE_LOCK_FILE="$test_root/release.lock" \
+            bash scripts/nav-release-link.sh switch "$test_root/releases/20260827-230000-1111111"
+          env NAV_STACK_ROOT="$test_root" NAV_RELEASE_LOCK_FILE="$test_root/release.lock" \
+            bash scripts/nav-release-link.sh switch "$test_root/releases/20260828-010000-2222222"
+          test "$(readlink -f "$test_root/current")" = "$test_root/releases/20260828-010000-2222222"
+          test "$(readlink -f "$test_root/rollback")" = "$test_root/releases/20260827-230000-1111111"
+          env NAV_STACK_ROOT="$test_root" NAV_RELEASE_LOCK_FILE="$test_root/release.lock" \
+            bash scripts/nav-release-link.sh rollback
+          test "$(readlink -f "$test_root/current")" = "$test_root/releases/20260827-230000-1111111"
+          test "$(readlink -f "$test_root/rollback")" = "$test_root/releases/20260828-010000-2222222"
+          env NAV_STACK_ROOT="$test_root" \
+            bash scripts/nav-controlled-cleanup.sh --dry-run --release-min-age-days 0
 
       - name: Validate backup systemd units
         run: |
@@ -135,6 +162,9 @@ jobs:
           sudo install -m 0750 scripts/nav-disaster-restore.sh /usr/local/sbin/nav-disaster-restore
           sudo install -m 0750 scripts/nav-heartbeat.sh /usr/local/sbin/nav-heartbeat
           sudo install -m 0750 scripts/nav-job-failure-notify.sh /usr/local/sbin/nav-job-failure-notify
+          sudo install -m 0750 scripts/nav-release-link.sh /usr/local/sbin/nav-release-link
+          sudo install -m 0750 scripts/enable-nav-local-backup-timers.sh /usr/local/sbin/enable-nav-local-backup-timers
+          sudo install -m 0750 scripts/nav-controlled-cleanup.sh /usr/local/sbin/nav-controlled-cleanup
           sudo install -m 0644 docs/NAV_BACKUP_RUNBOOK.md /usr/share/doc/domo-nav/NAV_BACKUP_RUNBOOK.md
           sudo systemd-analyze verify ops/systemd/*.service ops/systemd/*.timer
 

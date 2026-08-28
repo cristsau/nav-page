@@ -1,5 +1,5 @@
 [Unit]
-Description=Schedule the DOMO NAV isolated restore rehearsal
+Description=Schedule the DOMO NAV newest local backup isolated restore rehearsal
 
 [Timer]
 OnCalendar=Wed *-*-* 04:47:00 UTC

@@ -1,10 +1,51 @@
 # DOMO NAV Status Report
 
-最后更新：2026-08-24
+最后更新：2026-08-28
 
 本页区分 `VERIFIED_LIVE`、`LOCAL_DONE`、`READY_FOR_CI`、`PARTIAL`、`USER_CONFIG_LATER`
 和 `UNFINISHED`。仓库中存在脚本或代码，不等于生产
 已经安装、启用或形成灾难恢复闭环；每次发布前仍须重新读取 GitHub、OVH 与双域状态。
+
+## 2026-08-28 当前留档基线与运维收口候选
+
+- 最新留档的已验证生产版本（2026-08-27）为
+  `15fd83e3f197afb7a03fe119ce118feae26ab10f`，OVH release 为
+  `/opt/nav-stack/releases/20260827-231729-15fd83e`。这不是 2026-08-28 的实时
+  主机读取结果，后续发布仍须现场复核。
+- 本批状态：`LOCAL_DONE / READY_FOR_CI / NOT_DEPLOYED`。没有发布、启用 timer、
+  运行备份/恢复、执行磁盘清理、删除 release/镜像或写入生产配置。
+- 应用开关继续默认关闭；`ops/env/nav-production-maintenance.env` 只为书签健康检查和
+  AI 用量保留提供有界 opt-in：每小时最多 20 条/并发 2，AI 聚合保留 400 天且每次
+  最多删除 2,000 行。两项均进入现有管理员维护状态与告警框架。
+- `scripts/nav-release-link.sh` 新增经命名/路径校验的 `current`、`rollback` 原子指针；
+  canonical backup 与切换共享发布锁，防止一次备份混入两个 release。
+- 三个 systemd 候选已改为本地备份、本地保留、最新本地备份的隔离 PostgreSQL 恢复。
+  `enable-nav-local-backup-timers` 必须先验证 mode-600 配置、current 指针、固定镜像、
+  本地删除下限，以及全部云端开关为 false；启用前还必须实际通过一次备份和隔离恢复。
+- 异地 restic 仍为 `USER_CONFIG_LATER / NOT_CONFIGURED / NOT_ENABLED`；没有对象存储
+  Secret 时不会安装或启用一个伪装成异地恢复的 timer。
+- `nav-controlled-cleanup` 默认只预览，保留 current+rollback 和未知/无 revision 标签的
+  镜像；apply 仅允许 30 天日志、Docker dangling layer 与可信的未引用 NAV API 镜像，
+  不触碰容器、网络、卷、build cache 或非 NAV 镜像。
+- 完整边界与后续启用顺序见
+  [`docs/NAV_OPERATIONS_COMPLETION_20260828.md`](./docs/NAV_OPERATIONS_COMPLETION_20260828.md)。
+
+## 2026-08-28 身份 OAuth 与邮箱远端命令候选
+
+- 状态：`LOCAL_DONE / READY_FOR_CI / DEFAULT_OFF / NOT_DEPLOYED`。
+- 迁移 `040` 增加 Google/微信外部身份与一次性授权事务；双域回调固定，Google 使用
+  state/nonce/PKCE/JWKS，微信只使用稳定 unionid/openid。默认必须先密码登录再绑定；
+  verified-email 自动关联默认关闭，开启后也只接受唯一的已审批、已验证邮箱候选。
+- Provider Secret、邮箱 OAuth Refresh Token 与内部 HMAC key 只保存为服务器 owner-only
+  文件，管理 API 只返回 configured 布尔值。无真实凭据时 Google/微信登录和 Google/Microsoft
+  邮箱 OAuth 均保持关闭，不能把结构检查称为外部授权成功。
+- 迁移 `041` 增加邮箱远端命令 outbox：用户级幂等、10 秒撤销、UIDVALIDITY/MODSEQ/flags
+  冲突保护、写后复核与有界重试。支持已读、星标、归档、移动、Trash 和受二次确认保护的
+  永久删除；移动/删除结果不明时不会盲目重试。
+- 合成发布验收只验证命令排队、幂等重放和撤销，不触碰真实邮箱；真实 Provider 登录、
+  OAuth consent 与专用测试邮箱远端写入仍需外部凭据和人工验收。
+- 详细边界见 [`docs/NAV_IDENTITY_AND_MAIL_ROADMAP.md`](./docs/NAV_IDENTITY_AND_MAIL_ROADMAP.md)
+  与 [`docs/NAV_MAIL_REMOTE_COMMANDS.md`](./docs/NAV_MAIL_REMOTE_COMMANDS.md)。
 
 ## 2026-08-24 实时评论事件流候选
 
@@ -76,9 +117,9 @@
 ## 当前源码与生产基线
 
 - GitHub：`cristsau/nav-page`（Private），默认分支 `master`。
-- 2026-08-24 本工作树创建时的 `origin/master` 为 PR #42 merge：
-  `d918f449c0ee90ee363ae5ea7eef4d2025721a84`；后续状态仍须现场读取。
-- 最近一次已验证生产 API 应用 SHA：`d918f449c0ee90ee363ae5ea7eef4d2025721a84`。
+- 2026-08-27 最后一次独立留档的 GitHub/生产 merge SHA 为 PR #57：
+  `15fd83e3f197afb7a03fe119ce118feae26ab10f`；后续状态仍须现场读取。
+- 最近一次留档的已验证生产 API 应用 SHA：`15fd83e3f197afb7a03fe119ce118feae26ab10f`。
 - 当前生产源码包含的连续 PR：
   - [#28 发布文档校准](https://github.com/cristsau/nav-page/pull/28)
   - [#29 异地备份调度候选](https://github.com/cristsau/nav-page/pull/29)（源码已包含，运行环境仍为
@@ -96,14 +137,16 @@
   - [#38 恢复就绪与 PWA 缓存加固](https://github.com/cristsau/nav-page/pull/38)
   - [#41 当前设备 Web Push 登记修复](https://github.com/cristsau/nav-page/pull/41)
   - [#42 协作、离线、完整灾备编排与流式恢复](https://github.com/cristsau/nav-page/pull/42)
-- 最近一次已验证 OVH release：`/opt/nav-stack/releases/20260824-180310-d918f44`。
-- PR #42 发布前回滚目标：`/opt/nav-stack/releases/20260824-055950-accf664`；迁移 019–027 均为
-  加法迁移，应用回滚时保留。
+  - PR #56 邮件工作台、通知规则、邮件 AI 与语义修复
+  - PR #57 生产验收托管配置热修
+- 最近一次留档的已验证 OVH release：`/opt/nav-stack/releases/20260827-231729-15fd83e`。
+- 对应回滚 release：`/opt/nav-stack/releases/20260827-145131-5f6c8ef`。
 - 生产域名：
   - `https://nav.skrskr.net`
   - `https://nav.cristsau.cn`
-- 2026-08-24 发布后复核：双域首页与 `/api/health` 均为 200，API/Web/PostgreSQL 健康；
-  CLIProxyAPI、Nginx Proxy Manager、Vaultwarden 和 Komari 保持运行。
+- 2026-08-27 发布后复核：双域首页、邮件页、`/api/health`、会话、退出和 CORS 均通过；
+  API/mail-worker/Web 健康且重启计数为 0，PostgreSQL、CLIProxyAPI、Nginx Proxy Manager、
+  Vaultwarden 和 Komari 未重建。
 
 PR #30 的图片删除重试告警正确性、PR #31 的云端安全恢复、PR #32 的 Telegram 精确目标
 投递与独立 PostgreSQL 16 维护演练，以及 PR #33/#34 的一次性管理员发布验收生命周期与
@@ -163,6 +206,17 @@ PR #30 的图片删除重试告警正确性、PR #31 的云端安全恢复、PR 
   21600 秒，恢复后通知一次。
 - 运行内告警无法报告 OVH 主机、容器、网络或调度器整体离线，仍需主机外 dead-man。
 
+### 邮件工作台、邮件 AI 与语义索引
+
+- 桌面三栏、手机渐进式邮件工作台支持服务端列表、详情、搜索和筛选。
+- 账户、分类、域名、发件人和会话级通知规则支持立即、摘要、仅站内与静默；关键通知保留
+  确认保护。
+- 邮件 AI 支持带来源摘要、跨邮件检索和“预览后确认”的加密草稿操作，默认不直接发送
+  真实邮件。
+- 语义索引已固定 Debian/glibc 推理镜像；2026-08-27 验收为 384 维、任务成功、连续失败 0、
+  待处理 0，旧 `ERR_DLOPEN_FAILED` 已清零。
+- 合成邮件与一次性管理员完成双域验收后已清理；真实发信和远端邮箱修改未在验收中执行。
+
 ## PR #37/#38 高级功能发布与恢复证据（历史）
 
 - PR #37 与 #38 已合并；`a9eff0d` master CI `32685311488` 和最终 `788be84` master CI
@@ -199,28 +253,26 @@ PR #30 的图片删除重试告警正确性、PR #31 的云端安全恢复、PR 
 
 ## 生产仍为部分完成
 
-- 页面关闭后的标准 Web Push、VAPID、提醒调度和 PWA Service Worker 已启用；浏览器通知权限
-  必须由用户逐设备授权，尚未观察到真实 Chrome/Edge/iPhone 的最终通知到达证据。
-- 有界定时链接检查、提前提醒、Passkey 与 AI 用量清理源码/迁移已上线，但是否启用取决于各自
-  生产开关；Passkey 尚未完成真实设备注册与登录验收。
-- 生产安全 JSON、Chrome/Edge 书签 HTML 和 Markdown 导入导出已进入发布版本，但完整生态
-  恢复仍不含图床对象与外层代理。
-- PWA 离线说明壳、显式更新、Web Push、已访问工作区的完整离线编辑和跨设备增量同步已随
-  PR #42 上线；iPhone/iPad 仍必须从主屏幕安装入口授权通知，真实双设备离线并发体验建议继续
-  人工验收。
-- 云端 JSON 恢复的密码二次确认、只读差异预览和替换边界已随 PR #32 发布；超过 5,000 条的
-  NDJSON 流式恢复已随 PR #42 上线并通过 6,500 条 PostgreSQL 16 隔离演练；图床对象和外层
-  代理整套恢复仍等待运行配置与可丢弃环境演练。
+- 应用内高级功能已经进入 2026-08-27 生产基线；逐设备浏览器通知、Passkey 与跨域 RP 行为仍
+  需要保留真实设备回归，不用历史“源码存在”替代现场体验证据。
+- 邮件工作台、通知规则和 AI 草稿已验收；真实发信、远端邮箱修改以及外部 OAuth provider
+  同意流程不在合成验收中自动执行。
+- JSON/NDJSON 恢复、图床/代理灾备编排已有源码与隔离数据库证据；图床对象读取凭据、外层
+  NPM 精确路径和完整可丢弃主机演练仍未形成闭环。
+- 2026-08-28 的本地自动备份/timer/release-link/清理批次尚未发布或启用；生产当前不能宣称
+  已有自动本地恢复演练或自动异地加密备份。
 
 ## 仍未完成
 
-1. 在用户选定免费存储后，为 OVH 填写通用异地备份 Secret，并验收首次快照、远端保留、
-   定期隔离恢复、失败报警与外部 dead-man。
-2. 由用户在真实 Chrome/Edge/iPhone 主屏应用中逐设备授权并验证“页面关闭仍送达”。
-3. 按需逐项启用并真机验收 Passkey、定时链接检查与 AI 用量清理；保持最小批次和独立回滚。
-4. 在单独授权的主机维护中，将已合并的恢复就绪修复更新到主机全局恢复工具；当前 release
-   已使用稳定就绪门禁完成隔离恢复，本项不影响在线应用功能。
-5. 扩展商店开发者账号、签名、提交与审核继续暂缓。
+1. 让 2026-08-28 运维收口批次通过 GitHub Linux CI；之后按发布前备份/隔离恢复/回滚/双域
+   验收门禁发布，不能直接用本地测试替代。
+2. 现场建立并核验 `/opt/nav-stack/current` 与 `rollback`；先运行 local timer `--check`，
+   经单独授权、一次真实本地备份和隔离恢复后再启用三个 timer。
+3. 仅在 dry-run 审阅确认后，另行授权受控清理；本批没有删除任何 release、镜像或日志。
+4. 用户选定免费存储后填写通用异地备份 Secret，再验收首次加密快照、远端保留、exact-ID
+   恢复与外部 dead-man；未提供 Secret 时保持未配置。
+5. 外部 OAuth provider 的开发者应用、回调域名、凭据与同意屏幕仍需用户/平台流程；扩展商店
+   开发者账号、签名、提交与审核继续暂缓。
 
 ## 仍建议用户手工验收
 

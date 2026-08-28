@@ -9,13 +9,19 @@ Those operations require a fresh production-change authorization, a
 last-minute backup, a maintenance window, rollback preparation, and acceptance
 checks.
 
-Repository automation status on 2026-08-24: the systemd units, success
-heartbeat, independent `OnFailure` notifier, exact cloud-snapshot selector,
-manual local-backup selector and installer are release candidates. This is
-**SOURCE-READY only: NOT DEPLOYED and NOT ENABLED**. The installer does not
-enable or start timers. Until the production host is separately configured and
-accepted, the presence of these files must not be described as automatic
-offsite backup or scheduled restore verification.
+Repository automation status on 2026-08-28: the three systemd candidates are
+strictly local-only (canonical local backup, bounded local retention, and
+isolated restore of the newest local backup). Installation and enablement are
+separate; the installer starts nothing, while the enable gate must first prove
+one new backup and one isolated PostgreSQL restore. This is
+**LOCAL_DONE / READY_FOR_CI / NOT DEPLOYED / NOT ENABLED**.
+
+Restic upload, exact-ID cloud restore and remote retention remain manual,
+separately gated capabilities. They have no scheduled unit in this candidate.
+Without a selected provider, scoped credentials, restic password custody and a
+successful cloud recovery rehearsal, the system must report
+`USER_CONFIG_LATER / NOT_CONFIGURED / NOT_ENABLED`, never “automatic offsite
+backup”.
 
 ## Safety properties
 
@@ -38,6 +44,11 @@ offsite backup or scheduled restore verification.
   allowing a backup mutation while a selected recovery copy is being verified.
   Release-specific scripts must call the canonical backup entry instead of
   duplicating a direct `pg_dump` path.
+- `/opt/nav-stack/current` and `/opt/nav-stack/rollback` are maintained only by
+  `nav-release-link`. The current pointer is replaced atomically and accepts
+  only a verified direct release child. The canonical backup additionally holds
+  `/run/lock/nav-release-link.lock` for its full run, so release switching cannot
+  make one backup capture files from two releases.
 - PostgreSQL is exported with
   `pg_dump -Fc --no-owner --no-acl --snapshot=<exported-id>`.
 - GitHub CI's isolated PostgreSQL 16 gate executes this canonical script against
@@ -57,10 +68,10 @@ offsite backup or scheduled restore verification.
 - Cloud export is implemented only through restic. Restic encrypts and
   authenticates repository objects before upload; the scripts contain no
   plaintext `aws s3 cp`, `rclone copy`, or archive-upload path.
-- The scheduled restore path queries the newest snapshot with the configured
-  restic tag, validates one immutable 64-character snapshot ID, path and UTC
-  timestamp, and restores that exact ID. It never substitutes the newest local
-  backup and never re-resolves `latest` after selection.
+- The installed scheduled restore path selects only the newest eligible local
+  backup and verifies it in an isolated network-less PostgreSQL container.
+  `nav-restore-cloud-latest` remains available for an explicitly authorized
+  manual exact-ID restic rehearsal; it is not a timer target.
 - Restic uses the dedicated root-owned mode-`700` cache
   `/var/cache/nav-restic`. The cache is operational metadata, not a backup or a
   substitute for independent restic-password custody.
@@ -126,9 +137,10 @@ an ignorable warning.
 
 ## Initial installation
 
-Copy the example on the current OVH host and adjust every path to the active
-`/opt/nav-stack/releases/<timestamp>-<short-sha>` layout. Oracle-JP is not the
-current production target, and historical Oracle paths must not be reused:
+Copy the example on the current OVH host. Release-local paths must use the
+verified atomic `/opt/nav-stack/current` pointer; do not hard-code one release
+directory into scheduled backup configuration. Oracle-JP is not the current
+production target, and historical Oracle paths must not be reused:
 
 ```bash
 sudo install -d -m 700 /etc/nav
@@ -166,6 +178,9 @@ scripts/nav-restore-cloud-latest.sh
 scripts/nav-restore-latest.sh
 scripts/nav-heartbeat.sh
 scripts/nav-job-failure-notify.sh
+scripts/nav-release-link.sh
+scripts/enable-nav-local-backup-timers.sh
+scripts/nav-controlled-cleanup.sh
 scripts/install-nav-backup-systemd.sh
 ops/systemd/nav-backup.service
 ops/systemd/nav-backup.timer
@@ -184,44 +199,49 @@ merge SHA:
 sudo bash scripts/install-nav-backup-systemd.sh
 ```
 
-This copies scripts, units, and the bounded daily log-retention job, creates only the bounded backup/report
-directories, runs `systemd-analyze verify` when available, and reloads systemd.
+This copies scripts, units, and the bounded daily log-retention job, creates only
+the bounded backup/report directories, runs `systemd-analyze verify` when
+available, and reloads systemd.
 It deliberately does **not** create credentials, initialize restic, enable a
 timer, start a job, alter containers, or delete a backup.
 
-The example release paths contain `REPLACE_WITH_RELEASE` and the runtime
-container names contain `REPLACE_*`. Replace them with the currently accepted
-OVH release and exact `docker ps` names. Every later NAV release must update and
-dry-run these paths before the previous release is eligible for removal.
+Create or inspect the two verified pointers before enabling local automation:
+
+```bash
+sudo /usr/local/sbin/nav-release-link status
+sudo /usr/local/sbin/nav-release-link switch \
+  /opt/nav-stack/releases/YYYYmmdd-HHMMSS-abcdef0
+```
+
+`switch` is a production mutation and needs a separately authorized release
+window. It atomically sets `current` and records the previous verified target as
+`rollback`; `nav-release-link rollback` swaps the two verified pointers without
+changing PostgreSQL or starting containers. Runtime container names still use
+`REPLACE_*` until they are replaced with exact `docker ps` names.
 
 ### Scheduler layout
 
-| Unit | Default schedule | Mutation gate | Success signal |
+| Unit | Default schedule | Exact action | Enable gate |
 | --- | --- | --- | --- |
-| `nav-backup.service` | daily at 03:17 UTC plus 0–15 min jitter | encrypted upload only | backup heartbeat |
-| `nav-backup-retention.service` | Sunday 05:17 UTC plus 0–20 min jitter | cloud upload plus separately enabled local/remote retention | backup heartbeat |
-| `nav-restore-rehearsal.service` | Wednesday 04:47 UTC plus 0–20 min jitter | exact newest tagged restic snapshot restored to a private temporary directory, then isolated network-less PostgreSQL verification | restore heartbeat |
+| `nav-backup.service` | daily at 03:17 UTC plus 0–15 min jitter | one local canonical backup | manual backup and isolated restore must pass first |
+| `nav-backup-retention.service` | Sunday 05:17 UTC plus 0–20 min jitter | local backup plus bounded local pruning | local keep days >= 7 and keep count >= 2 |
+| `nav-restore-rehearsal.service` | Wednesday 04:47 UTC plus 0–20 min jitter | newest eligible local backup in isolated network-less PostgreSQL | pinned image already present; no implicit pull |
 
 All timers use `Persistent=true`. Backup, retention and restore verification
 share the nonblocking canonical `/run/lock/nav-backup.lock`; an accidental
-overlap fails rather than running against a moving recovery set. The scheduled
-rehearsal does **not** select from `NAV_BACKUP_ROOT`. It asks restic for exactly
-one latest snapshot carrying `NAV_RESTIC_TAG`, freezes and validates that
-snapshot's exact ID/path/time, enforces
-`NAV_CLOUD_REHEARSAL_MAX_SNAPSHOT_AGE_HOURS`, restores the exact ID, and then
-delegates to the isolated PostgreSQL verifier.
-
-`nav-restore-latest` remains available only as a manually invoked local
-fallback/rehearsal helper. It selects a regular `nav-*` directory immediately
-below `NAV_BACKUP_ROOT`, applies `NAV_REHEARSAL_MAX_BACKUP_AGE_HOURS`, and calls
-the same isolated verifier. It is not the `ExecStart` target of the scheduled
-restore service and it is not a production database restore tool.
+overlap fails rather than running against a moving recovery set.
+`nav-restore-latest` is the scheduled restore target. It selects one regular,
+fresh `nav-*` directory immediately below `NAV_BACKUP_ROOT`, applies
+`NAV_REHEARSAL_MAX_BACKUP_AGE_HOURS`, and calls the isolated verifier. It is not
+a production database restore tool.
 
 The units use a read-only system view plus narrow write paths under
 `/var/backups` and `/run/lock`, resource deprioritization, `UMask=0077`,
 `NoNewPrivileges`, private devices/tmp, and kernel/control-group protections.
-They still need the Docker socket and outbound HTTPS for PostgreSQL tools,
-restic, Telegram and the external heartbeat.
+The local-only units need the Docker socket through `AF_UNIX`; they do not
+request outbound cloud access. The optional independent failure notifier may
+use a separately configured external channel, but missing external credentials
+must not be reported as an offsite backup failure or success.
 
 ## Local backup
 
@@ -250,6 +270,14 @@ run is removed only when its resolved path is a verified
 `NAV_BACKUP_ROOT/.nav-backup.*` staging directory.
 
 ## Failure alert
+
+Failure delivery is optional and independent from the local backup gate. The
+current host-level notifier supports a dedicated Telegram credential only; if
+that file is absent, the original service still records a non-zero result in
+systemd/journald but no external alert channel is configured. Do not represent
+an installed `OnFailure` unit as a working alert. A future Web Push/email host
+notifier needs its own reviewed implementation because the application itself
+may be the failed component.
 
 Create a dedicated Telegram credential file:
 
@@ -513,22 +541,21 @@ Acceptance criteria:
 Reports are mode `600` files under `NAV_REHEARSAL_REPORT_DIR`. A rehearsal
 failure returns non-zero and sends the same opt-in Telegram alert.
 
-### Manual local fallback/rehearsal selector
+### Local scheduled/manual selector
 
-The local selector remains useful when R2 is unavailable or when an operator
-needs to validate the newest completed local backup manually:
+The same selector used by the weekly local timer can be run manually:
 
 ```bash
 sudo /usr/local/sbin/nav-restore-latest --config /etc/nav/nav-backup.env
 ```
 
 It chooses only the newest eligible local backup and then delegates to the same
-isolated rehearsal script. It is not wired to the scheduled timer, and it does
-not restore production or switch traffic.
+isolated rehearsal script. It does not restore production or switch traffic.
 
-### Scheduled encrypted cloud selector
+### Manual encrypted cloud selector (not scheduled)
 
-Before enabling the timer, invoke the scheduled command manually:
+After a provider and Secret are configured in a separate change, invoke the
+cloud command manually:
 
 ```bash
 sudo /usr/local/sbin/nav-restore-cloud-latest \
@@ -544,7 +571,8 @@ and restores that exact ID into a private temporary plaintext workspace. It
 then passes the exact restored `nav-*` directory to
 `nav-restore-rehearsal.sh --run-isolated`. The scheduled path must produce a
 restore heartbeat only after isolated PostgreSQL verification and verified
-workspace cleanup have both succeeded.
+workspace cleanup have both succeeded. This repository candidate deliberately
+does not install a cloud restore timer.
 
 Restic's repository lock protects exact-ID download from a concurrent restic
 write or prune. Before reading the restored copy, the isolated verifier also
@@ -558,54 +586,52 @@ Do not enable timers immediately after file installation. The repository state
 described by this runbook remains **NOT DEPLOYED / NOT ENABLED**. Complete this
 order in one separately authorized maintenance window:
 
-1. verify current release/container paths and file ownership/modes without
-   printing contents;
-2. create/verify root-owned mode-`700` `/var/cache/nav-restic` and the configured
-   cloud-restore root, and verify all config/password files are regular,
-   non-symlink, root-owned mode-`600` files;
-3. initialize the dedicated restic repository once and record its repository
-   ID without recording credentials;
-4. run the backup script manually with `--cloud-upload`, then verify the exact
-   restic snapshot and manifest evidence;
-5. with the timer still disabled, set the cloud-rehearsal config gate and run
-   `nav-restore-cloud-latest --cloud-restore`; record the selected exact
-   snapshot ID, table/row/migration matches, and proof that no
-   `.nav-cloud-restore.*` workspace remains;
-6. prove canonical lock contention fails closed, and separately test
-   `nav-restore-latest` against a local backup as a manual fallback. A local-only
-   pass does not satisfy the encrypted cloud-restore gate;
-7. send clearly labelled manual backup/restore heartbeat tests and confirm the
-   provider deadlines;
-8. run each systemd service manually, confirm that
-   `nav-restore-rehearsal.service` executes `nav-restore-cloud-latest`, and
-   review its exit status/journal;
-9. inject a harmless preflight failure to prove
-   `nav-scheduled-failure@%n.service`, then restore the
-   valid config;
-10. enable only the three timers and inspect their next-run times:
+1. verify `/opt/nav-stack/current` and `/opt/nav-stack/rollback` with
+   `nav-release-link status`, exact container names and file ownership/modes
+   without printing Secret contents;
+2. copy the example to root-owned mode-`600` `/etc/nav/nav-backup.env`, set
+   `NAV_ENABLE_LOCAL_PRUNE=true`, keep days >= 7, keep count >= 2, and set
+   `NAV_ENABLE_RESTORE_CONTAINER=true`;
+3. keep `NAV_ENABLE_CLOUD_UPLOAD`,
+   `NAV_ENABLE_CLOUD_RESTORE_REHEARSAL` and `NAV_ENABLE_RESTIC_FORGET` false;
+   a local timer must never imply a configured offsite destination;
+4. verify the pinned PostgreSQL image is already present locally; do not pull an
+   image during the enablement window;
+5. run the read-only gate:
 
    ```bash
-   sudo systemctl enable --now \
-     nav-backup.timer \
-     nav-backup-retention.timer \
-     nav-restore-rehearsal.timer
-   systemctl list-timers --all 'nav-*'
+   sudo /usr/local/sbin/enable-nav-local-backup-timers --check
    ```
 
-11. recheck NAV/CLIProxyAPI/PostgreSQL/NPM/Vaultwarden/Komari health and restart
+6. inspect the exact plan and then, only with separate timer authorization, run:
+
+   ```bash
+   sudo /usr/local/sbin/enable-nav-local-backup-timers --enable
+   ```
+
+   This command first creates a local canonical backup and proves its isolated
+   PostgreSQL restore. It enables the three timers only after both succeed.
+7. inspect `systemctl list-timers --all 'nav-*'`, each service result, the newest
+   manifest and isolated report; prove `nav-restore-rehearsal.service` executes
+   `nav-restore-latest` rather than a cloud selector;
+8. prove the canonical backup/release locks fail closed under contention and,
+   where an external failure channel is actually configured, inject one harmless
+   preflight failure to test `nav-scheduled-failure@%n.service`;
+9. recheck NAV/CLIProxyAPI/PostgreSQL/NPM/Vaultwarden/Komari health and restart
    counts; scheduler enablement must not rebuild or restart them.
 
 Rollback disables the three timers and stops only a currently running backup
-or rehearsal after confirming its stage. Keep completed local/cloud snapshots,
-restic password, evidence and config files intact; rollback must not delete the
-only recovery copy.
+or rehearsal after confirming its stage. Keep completed local snapshots,
+reports and config files intact; rollback must not delete the only recovery
+copy. Cloud snapshots and credentials, if configured later under a separate
+change, are also left untouched.
 
 ## Cloud recovery rehearsal
 
-The scheduled cloud rehearsal automates the exact-ID download and isolated
-database verification on the NAV host, but it remains disabled until the gate
-above passes. A broader off-host recovery drill should still be tested
-separately:
+The manual cloud selector automates an exact-ID download and isolated database
+verification on the NAV host once external credentials are configured. No
+cloud timer is installed by this candidate. A broader off-host recovery drill
+should still be tested separately:
 
 1. Create a mode-`700` temporary directory on a non-production host.
 2. Load the mode-`600` restic environment and password files.

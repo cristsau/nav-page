@@ -4,6 +4,7 @@ import { simpleParser } from 'mailparser'
 import { config } from '../config.js'
 import { sanitizeMaintenanceErrorCode } from './maintenanceJobStatus.js'
 import { readOwnerSecretFile } from './ownerSecretFile.js'
+import { resolveImapAuth } from './emailOauth2.js'
 import { processInboundEmail } from './emailEvents.js'
 import { EMAIL_ENCRYPTION_MAX_PLAINTEXT_BYTES } from './emailCrypto.js'
 import {
@@ -56,7 +57,11 @@ export function validateImapConfig(runtimeConfig = config) {
   const sourceKey = String(runtimeConfig.emailSourceKey || '').trim().toLowerCase()
   if (!/^[a-z0-9_.-]{1,80}$/.test(sourceKey)) throw new Error('Email source key is invalid')
   if (!runtimeConfig.emailOwnerUsername) throw new Error('Email owner username is not configured')
-  if (!runtimeConfig.imapHost || !runtimeConfig.imapUsername || !runtimeConfig.imapPasswordFile) {
+  if (
+    !runtimeConfig.imapHost
+    || !runtimeConfig.imapUsername
+    || (!runtimeConfig.imapPasswordFile && !runtimeConfig.imapOauthProvider)
+  ) {
     throw new Error('IMAP configuration is incomplete')
   }
   if (!runtimeConfig.imapSecure) throw new Error('IMAP must use implicit TLS')
@@ -77,15 +82,12 @@ export async function verifyImapConnection(
 ) {
   validateImapConfig(runtimeConfig)
   await assertHostImpl(runtimeConfig.imapHost, { label: 'IMAP ' })
-  const password = await readSecretImpl(runtimeConfig.imapPasswordFile, {
-    label: 'IMAP password',
-    maxBytes: 4096
-  })
+  const auth = await resolveImapAuth(runtimeConfig, { readSecretImpl })
   const client = new ImapClient({
     host: runtimeConfig.imapHost,
     port: Number(runtimeConfig.imapPort),
     secure: true,
-    auth: { user: runtimeConfig.imapUsername, pass: password },
+    auth,
     disableAutoIdle: true,
     tls: { minVersion: 'TLSv1.2', rejectUnauthorized: true },
     logger: false
@@ -249,15 +251,12 @@ export function startEmailIngestScheduler({
     if (imap?.usable) return imap
     try { imap?.close?.() } catch {}
     await assertHostImpl(runtimeConfig.imapHost, { label: 'IMAP ' })
-    const password = await readSecretImpl(runtimeConfig.imapPasswordFile, {
-      label: 'IMAP password',
-      maxBytes: 4096
-    })
+    const auth = await resolveImapAuth(runtimeConfig, { readSecretImpl })
     const client = new ImapClient({
       host: runtimeConfig.imapHost,
       port: Number(runtimeConfig.imapPort),
       secure: true,
-      auth: { user: runtimeConfig.imapUsername, pass: password },
+      auth,
       disableAutoIdle: false,
       maxIdleTime: Math.max(60_000, validated.pollIntervalSeconds * 1000),
       tls: { minVersion: 'TLSv1.2', rejectUnauthorized: true },

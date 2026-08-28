@@ -75,6 +75,70 @@ test('server, config and Compose keep maintenance and logs bounded', async () =>
   assert.equal((compose.match(/logging: \*nav-logging/g) || []).length, 3)
 })
 
+test('production maintenance profile opts in only the two reviewed bounded jobs', async () => {
+  const [profile, config, route] = await Promise.all([
+    source('../../ops/env/nav-production-maintenance.env'),
+    source('../src/config.js'),
+    source('../src/routes/maintenance.js')
+  ])
+
+  assert.match(profile, /NAV_BOOKMARK_HEALTH_SCHEDULER_ENABLED=true/)
+  assert.match(profile, /NAV_BOOKMARK_HEALTH_SCHEDULER_BATCH_SIZE=20/)
+  assert.match(profile, /NAV_BOOKMARK_HEALTH_SCHEDULER_CONCURRENCY=2/)
+  assert.match(profile, /NAV_AI_USAGE_RETENTION_ENABLED=true/)
+  assert.match(profile, /NAV_AI_USAGE_RETENTION_DAYS=400/)
+  assert.match(profile, /NAV_AI_USAGE_RETENTION_MAX_BATCHES_PER_RUN=4/)
+  assert.doesNotMatch(profile, /SECRET|PASSWORD|TOKEN|API_KEY/)
+  assert.match(config, /bookmarkHealthSchedulerEnabled/)
+  assert.match(config, /aiUsageRetentionEnabled/)
+  assert.match(route, /BOOKMARK_HEALTH_CHECK/)
+  assert.match(route, /AI_USAGE_RETENTION/)
+})
+
+test('local timers cannot claim offsite backup and the release cleanup is bounded', async () => {
+  const [
+    backupUnit,
+    retentionUnit,
+    restoreUnit,
+    enableGate,
+    releaseLink,
+    cleanup,
+    backupConfig
+  ] = await Promise.all([
+    source('../../ops/systemd/nav-backup.service'),
+    source('../../ops/systemd/nav-backup-retention.service'),
+    source('../../ops/systemd/nav-restore-rehearsal.service'),
+    source('../../scripts/enable-nav-local-backup-timers.sh'),
+    source('../../scripts/nav-release-link.sh'),
+    source('../../scripts/nav-controlled-cleanup.sh'),
+    source('../../scripts/nav-backup.env.example')
+  ])
+
+  assert.match(backupUnit, /nav-backup --config \/etc\/nav\/nav-backup\.env\s*$/m)
+  assert.doesNotMatch(backupUnit, /cloud-upload|restic|heartbeat/)
+  assert.match(retentionUnit, /nav-backup --config \/etc\/nav\/nav-backup\.env --prune-local/)
+  assert.doesNotMatch(retentionUnit, /cloud-upload|forget-cloud|restic|heartbeat/)
+  assert.match(restoreUnit, /nav-restore-latest --config \/etc\/nav\/nav-backup\.env/)
+  assert.doesNotMatch(restoreUnit, /nav-restore-cloud-latest|restic|heartbeat/)
+  assert.match(enableGate, /NAV_ENABLE_CLOUD_UPLOAD/)
+  assert.match(enableGate, /must remain false for the local-only timer profile/)
+  assert.match(enableGate, /systemctl start nav-backup\.service/)
+  assert.match(enableGate, /systemctl start nav-restore-rehearsal\.service/)
+  assert.match(enableGate, /systemctl enable --now/)
+  assert.match(releaseLink, /mv -Tf -- "\$TEMP_LINK" "\$destination"/)
+  assert.match(releaseLink, /rollback requires verified current and rollback links/)
+  assert.match(backupConfig, /NAV_RELEASE_LOCK_FILE=\/run\/lock\/nav-release-link\.lock/)
+  assert.match(cleanup, /APPLY=false/)
+  assert.match(cleanup, /current_target/)
+  assert.match(cleanup, /rollback_target/)
+  assert.match(cleanup, /--vacuum-time=30d|nav-log-retention/)
+  assert.match(cleanup, /docker image prune --force --filter dangling=true/)
+  assert.match(cleanup, /revision.*\^\[0-9a-f\].*40/)
+  assert.doesNotMatch(cleanup, /docker (?:system|container|volume|network) prune/)
+  assert.match(backupConfig, /NAV_PROJECT_DIR=\/opt\/nav-stack\/current/)
+  assert.match(backupConfig, /NAV_DR_COMPOSE_PROJECT_DIR=\/opt\/nav-stack\/current/)
+})
+
 test('migration verification keeps all twelve maintenance jobs after feature integration', async () => {
   const [verifier, statusService, maintenanceRoute] = await Promise.all([
     source('../src/db/verifyMigrations.js'),

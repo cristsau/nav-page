@@ -1,6 +1,7 @@
 <script setup>
 import { computed, onBeforeUnmount, onMounted, ref, watch } from 'vue'
 import Icon from '@/shared/components/Icon.vue'
+import OauthIdentitySettings from './OauthIdentitySettings.vue'
 import { useAuth } from '@/shared/composables/useAuth'
 
 const {
@@ -295,7 +296,7 @@ async function handleRegisterPasskey() {
       ...passkeys.value.filter((item) => item.id !== passkey.id)
     ]
     passkeyCurrentPassword.value = ''
-    setFeedback({ message: 'Passkey 已登记，可在主域名登录页使用。' })
+    setFeedback({ message: 'Passkey 已登记，可在当前域名的登录页使用；另一个域名需要单独登记。' })
   } catch (error) {
     passkeyCurrentPassword.value = ''
     setFeedback({
@@ -572,6 +573,8 @@ onBeforeUnmount(() => {
       {{ errorMessage }}
     </p>
 
+    <OauthIdentitySettings />
+
     <div class="security-block">
       <div class="block-heading">
         <div>
@@ -699,7 +702,7 @@ onBeforeUnmount(() => {
         {{ passkeyConfig.unsupportedOriginMessage || '当前域名不支持 Passkey。' }}
       </div>
       <div v-else-if="!passkeyConfig.enabled" class="passkey-notice">
-        服务器默认关闭 Passkey。管理员完成迁移与主域名验收后，可设置
+        服务器默认关闭 Passkey。管理员完成迁移与双域验收后，可设置
         <code>NAV_WEBAUTHN_ENABLED=true</code> 启用。
       </div>
       <div

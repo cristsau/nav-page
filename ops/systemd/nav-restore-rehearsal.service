@@ -1,8 +1,7 @@
 [Unit]
-Description=DOMO NAV exact encrypted offsite snapshot restore rehearsal
+Description=DOMO NAV newest local backup isolated restore rehearsal
 Documentation=file:/usr/share/doc/domo-nav/NAV_BACKUP_RUNBOOK.md
-Wants=network-online.target
-After=network-online.target docker.service
+After=docker.service
 Requires=docker.service
 OnFailure=nav-scheduled-failure@%n.service
 
@@ -11,11 +10,7 @@ Type=oneshot
 User=root
 Group=root
 UMask=0077
-Environment=RESTIC_CACHE_DIR=/var/cache/nav-restic
-CacheDirectory=nav-restic
-CacheDirectoryMode=0700
-ExecStart=/usr/local/sbin/nav-restore-cloud-latest --config /etc/nav/nav-backup.env --cloud-restore
-ExecStartPost=/usr/local/sbin/nav-heartbeat --config /etc/nav/nav-heartbeat.env restore
+ExecStart=/usr/local/sbin/nav-restore-latest --config /etc/nav/nav-backup.env
 TimeoutStartSec=4h
 Nice=10
 IOSchedulingClass=best-effort
@@ -34,5 +29,5 @@ ProtectControlGroups=true
 RestrictSUIDSGID=true
 LockPersonality=true
 RestrictRealtime=true
-RestrictAddressFamilies=AF_UNIX AF_INET AF_INET6
-ReadWritePaths=/var/backups/nav /var/backups/nav-cloud-restore /var/backups/nav-restic-evidence /var/backups/nav-rehearsal-reports /var/cache/nav-restic /run/lock
+RestrictAddressFamilies=AF_UNIX
+ReadWritePaths=/var/backups/nav /var/backups/nav-rehearsal-reports /run/lock

@@ -12,6 +12,7 @@ readonly EX_CANTCREAT=73
 readonly EX_TEMPFAIL=75
 readonly EX_CONFIG=78
 readonly CANONICAL_BACKUP_LOCK_FILE='/run/lock/nav-backup.lock'
+readonly CANONICAL_RELEASE_LOCK_FILE='/run/lock/nav-release-link.lock'
 
 PROGRAM_NAME="$(basename "$0")"
 CONFIG_FILE="${NAV_BACKUP_CONFIG:-/etc/nav/nav-backup.env}"
@@ -300,6 +301,7 @@ source "$CONFIG_FILE"
 
 : "${NAV_BACKUP_ROOT:=/var/backups/nav}"
 : "${NAV_BACKUP_LOCK_FILE:=$CANONICAL_BACKUP_LOCK_FILE}"
+: "${NAV_RELEASE_LOCK_FILE:=$CANONICAL_RELEASE_LOCK_FILE}"
 : "${NAV_DB_CONTAINER:=nav-postgres}"
 : "${NAV_DB_NAME:=nav}"
 : "${NAV_DB_USER:=nav}"
@@ -344,6 +346,8 @@ fi
 [[ "$NAV_BACKUP_ROOT" == /* ]] || fatal "$EX_CONFIG" "NAV_BACKUP_ROOT must be absolute"
 [[ "$NAV_BACKUP_LOCK_FILE" == "$CANONICAL_BACKUP_LOCK_FILE" ]] \
   || fatal "$EX_CONFIG" "NAV_BACKUP_LOCK_FILE must remain $CANONICAL_BACKUP_LOCK_FILE"
+[[ "$NAV_RELEASE_LOCK_FILE" == "$CANONICAL_RELEASE_LOCK_FILE" ]] \
+  || fatal "$EX_CONFIG" "NAV_RELEASE_LOCK_FILE must remain $CANONICAL_RELEASE_LOCK_FILE"
 [[ "$NAV_FRONTEND_DIR" == /* ]] || fatal "$EX_CONFIG" "NAV_FRONTEND_DIR must be absolute"
 [[ "$NAV_PROJECT_DIR" == /* ]] || fatal "$EX_CONFIG" "NAV_PROJECT_DIR must be absolute"
 [[ "$NAV_RESTIC_EVIDENCE_DIR" == /* ]] || fatal "$EX_CONFIG" "NAV_RESTIC_EVIDENCE_DIR must be absolute"
@@ -504,6 +508,35 @@ PY
 exec 9>>"$NAV_BACKUP_LOCK_FILE"
 chmod 0600 "$NAV_BACKUP_LOCK_FILE"
 flock -n "$LOCK_FD" || fatal "$EX_TEMPFAIL" "another NAV backup is already running"
+
+# The release switcher holds this second canonical lock while replacing
+# /opt/nav-stack/current. Keeping it for the whole backup prevents source,
+# frontend and configuration paths from resolving to different releases.
+python3 - "$NAV_RELEASE_LOCK_FILE" <<'PY' \
+  || fatal "$EX_CONFIG" "canonical NAV release lock is unsafe"
+import os
+import stat
+import sys
+
+path = sys.argv[1]
+flags = os.O_RDWR | os.O_CREAT | os.O_CLOEXEC | os.O_NOFOLLOW
+fd = os.open(path, flags, 0o600)
+try:
+    descriptor = os.fstat(fd)
+    path_stat = os.lstat(path)
+    if not stat.S_ISREG(descriptor.st_mode) or stat.S_ISLNK(path_stat.st_mode):
+        raise SystemExit(1)
+    if descriptor.st_uid != 0 or descriptor.st_ino != path_stat.st_ino or descriptor.st_dev != path_stat.st_dev:
+        raise SystemExit(1)
+    if stat.S_IMODE(descriptor.st_mode) & 0o022:
+        raise SystemExit(1)
+    os.fchmod(fd, 0o600)
+finally:
+    os.close(fd)
+PY
+exec 8>>"$NAV_RELEASE_LOCK_FILE"
+chmod 0600 "$NAV_RELEASE_LOCK_FILE"
+flock -n 8 || fatal "$EX_TEMPFAIL" "a NAV release switch is already running"
 
 CURRENT_STAGE="backup workspace creation"
 [[ ! -L "$NAV_BACKUP_ROOT" ]] || fatal "$EX_CONFIG" "backup root must not be a symlink"
