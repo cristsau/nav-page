@@ -83,6 +83,7 @@ jobs:
           NAV_RELEASE_SHA: ci
           NAV_SECRETS_DIR: /tmp/nav-ci-secrets
           NAV_INTEGRATIONS_DIR: /tmp/nav-ci-integrations
+          NAV_POSTGRES_DATA_DIR: /tmp/nav-ci-postgres-data
         run: |
           touch api/.env
           docker compose -f docker-compose.backend.yml config --quiet
