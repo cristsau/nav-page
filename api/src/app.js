@@ -28,6 +28,7 @@ import noteReminderRoutes from './routes/noteReminders.js'
 import notesRoutes from './routes/notes.js'
 import offlineSyncRoutes from './routes/offlineSync.js'
 import passkeyRoutes from './routes/passkeys.js'
+import oauthRoutes from './routes/oauth.js'
 import publicSharePageRoutes from './routes/publicSharePage.js'
 import productivityImportRoutes from './routes/productivityImports.js'
 import securityEventRoutes from './routes/securityEvents.js'
@@ -68,6 +69,7 @@ export function createApp() {
           'req.headers.authorization',
           'req.headers.cookie',
           'req.headers["x-api-key"]',
+          'req.url',
           'req.body.password',
           'req.body.currentPassword',
           'req.body.newPassword',
@@ -78,6 +80,12 @@ export function createApp() {
           'req.body.accessKeyId',
           'req.body.secretAccessKey',
           'req.body.sessionToken',
+          'req.body.clientSecret',
+          'req.body.refreshToken',
+          'req.body.*.clientSecret',
+          'req.body.*.refreshToken',
+          'req.query.code',
+          'req.query.state',
           'req.body.token',
           'req.body.email',
           'req.body.planToken',
@@ -165,6 +173,7 @@ export function createApp() {
   app.register(notesRoutes, { prefix: '/api' })
   app.register(offlineSyncRoutes, { prefix: '/api' })
   app.register(passkeyRoutes, { prefix: '/api' })
+  app.register(oauthRoutes, { prefix: '/api' })
   app.register(productivityImportRoutes, { prefix: '/api' })
   app.register(settingsRoutes, { prefix: '/api' })
   app.register(workspaceRoutes, { prefix: '/api' })

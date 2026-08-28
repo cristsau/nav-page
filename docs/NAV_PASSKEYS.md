@@ -2,12 +2,13 @@
 
 ## 状态边界
 
-Passkey 源码切片已经实现，但 `NAV_WEBAUTHN_ENABLED` 默认是 `false`。在迁移、CI、主域名和
+Passkey 源码切片已经实现，但 `NAV_WEBAUTHN_ENABLED` 默认是 `false`。在迁移、CI、双域和
 真实设备验收完成前，不应把它描述为生产已启用。
 
-- 唯一 RP ID：`nav.skrskr.net`
-- 唯一允许的 WebAuthn Origin：`https://nav.skrskr.net`
-- `https://nav.cristsau.cn`：继续支持密码、恢复码登录，但不参与 Passkey 仪式
+- 允许的 RP/Origin 组合固定为：
+  - `nav.skrskr.net` / `https://nav.skrskr.net`
+  - `nav.cristsau.cn` / `https://nav.cristsau.cn`
+- WebAuthn 凭据绑定 RP ID，因此两个域名必须分别登记；同一设备可以各保存一枚凭据。
 - 服务端：`@simplewebauthn/server` 13.3.x
 - 浏览器端：`@simplewebauthn/browser` 13.3.x
 
@@ -16,7 +17,7 @@ Passkey 源码切片已经实现，但 `NAV_WEBAUTHN_ENABLED` 默认是 `false`�
 [浏览器端文档](https://simplewebauthn.dev/docs/packages/browser/)为准；没有自行实现
 WebAuthn 签名、挑战或凭据验证算法。
 
-RP ID 和 Origin 在服务端代码中固定，不允许用环境变量临时改成另一个域名。这样可以防止一次
+两组 RP ID 和 Origin 在服务端代码中固定，不允许用环境变量临时增加另一个域名。这样可以防止一次
 错误配置让已登记的 Passkey 全部不可用，或让别名域意外扩大认证边界。
 
 ## 安全设计
@@ -57,18 +58,20 @@ RP ID 和 Origin 在服务端代码中固定，不允许用环境变量临时改
 - `POST /api/auth/passkeys/register/verify`
 - `DELETE /api/auth/passkeys/:passkeyId`
 
-除配置读取和凭据列表外，Passkey 操作都要求浏览器 `Origin` 与规范主域完全相等。删除在功能开关
-关闭时仍然允许，以便用户清理已有凭据，但仍只允许从规范主域发起且必须验证当前密码。
+除配置读取和凭据列表外，Passkey 操作都要求浏览器 `Origin` 精确命中两组批准来源之一，并按
+来源选择对应 RP ID。删除在功能开关关闭时仍然允许，以便用户清理已有凭据，但仍必须来自批准
+来源且验证当前密码。
 
 ## 启用步骤
 
 1. 在 GitHub Linux CI 完成 `npm ci`、API 全量测试、迁移校验和 Vite 构建。
 2. 对 PostgreSQL 做当前备份，并在隔离 PostgreSQL 16 中执行和验证迁移 019。
 3. 先以 `NAV_WEBAUTHN_ENABLED=false` 发布，确认密码、恢复码、会话撤销和两个域名均未回归。
-4. 确认反向代理保留真实 HTTPS Origin，主域证书和 `https://nav.skrskr.net` 均稳定。
+4. 确认反向代理保留真实 HTTPS Origin，两个域名的证书和 HTTPS 均稳定。
 5. 仅将 API 环境的 `NAV_WEBAUTHN_ENABLED` 改为 `true`，重建 API 后检查配置接口。
-6. 在真实 Windows/Edge、iPhone/Safari 至少各完成一次登记、退出、Passkey 登录和删除。
-7. 在 `nav.cristsau.cn` 确认页面明确提示密码登录，Passkey options/verify 返回 403。
+6. 在真实 Windows/Edge、iPhone/Safari 对两个域名分别完成登记、退出、Passkey 登录和删除。
+7. 确认 `/api/auth/passkeys/config` 在两个域名分别返回对应的 Origin、RP ID 和
+   `enrollmentMode=per-origin`；第三方 Origin 必须返回不支持。
 8. 核对 `auth.passkey.register`、`auth.passkey.login`、`auth.passkey.delete` 审计记录不含敏感载荷。
 
 ## 回退

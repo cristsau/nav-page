@@ -37,6 +37,9 @@ test('mail workspace acceptance covers mailbox, rules and cited AI operations', 
     'filter=all&q=$encoded_marker',
     'filter=unread',
     '/api/email/accounts/$ACCOUNT_ID/messages/$LOCATION_ID?folderId=',
+    '/api/email/accounts/$ACCOUNT_ID/messages/$LOCATION_ID/commands',
+    '/api/email/commands/$REMOTE_COMMAND_ID/undo',
+    '/api/email/commands/$REMOTE_COMMAND_ID',
     '/api/email/notification-rules/preview',
     '/api/email/notification-rules',
     '/api/email/messages/$MESSAGE_ID/ai',
@@ -51,6 +54,10 @@ test('mail workspace acceptance covers mailbox, rules and cited AI operations', 
   assert.match(shell, /any\(\.sources\[\]; \.messageId == \$id/)
   assert.match(shell, /previewRequired == true/)
   assert.match(shell, /autoExecuted == false/)
+  assert.match(shell, /idempotentReplay == false/)
+  assert.match(shell, /idempotentReplay == true/)
+  assert.match(shell, /\.command\.status == "cancelled"/)
+  assert.match(shell, /remote_command_queue=\$\{REMOTE_COMMAND_QUEUE/)
 })
 
 test('mail workspace acceptance proves encrypted draft cleanup and a stable outbox', async () => {

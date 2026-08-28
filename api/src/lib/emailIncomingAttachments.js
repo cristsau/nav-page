@@ -4,6 +4,7 @@ import { config } from '../config.js'
 import { validateImapConfig } from './emailIngestScheduler.js'
 import { assertSafeOutboundHost } from './outboundEndpoints.js'
 import { readOwnerSecretFile } from './ownerSecretFile.js'
+import { resolveImapAuth } from './emailOauth2.js'
 export {
   decorateIncomingAttachmentMetadata,
   normalizeIncomingAttachmentMetadata,
@@ -71,15 +72,12 @@ export async function fetchIncomingAttachment(
 
   validateImapConfig(runtimeConfig)
   await assertHost(runtimeConfig.imapHost, { label: 'IMAP ' })
-  const password = await readSecret(runtimeConfig.imapPasswordFile, {
-    label: 'IMAP password',
-    maxBytes: 4096
-  })
+  const auth = await resolveImapAuth(runtimeConfig, { readSecretImpl: readSecret })
   const client = new ImapClient({
     host: runtimeConfig.imapHost,
     port: Number(runtimeConfig.imapPort),
     secure: true,
-    auth: { user: runtimeConfig.imapUsername, pass: password },
+    auth,
     disableAutoIdle: true,
     tls: { minVersion: 'TLSv1.2', rejectUnauthorized: true },
     logger: false

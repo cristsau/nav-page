@@ -1,5 +1,5 @@
 [Unit]
-Description=Schedule the DOMO NAV daily encrypted offsite backup
+Description=Schedule the DOMO NAV daily local canonical backup
 
 [Timer]
 OnCalendar=*-*-* 03:17:00 UTC

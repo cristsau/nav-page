@@ -19,6 +19,9 @@ const scriptFiles = [
   'scripts/nav-disaster-restore.sh',
   'scripts/nav-heartbeat.sh',
   'scripts/nav-job-failure-notify.sh',
+  'scripts/nav-release-link.sh',
+  'scripts/enable-nav-local-backup-timers.sh',
+  'scripts/nav-controlled-cleanup.sh',
   'scripts/install-nav-backup-systemd.sh'
 ]
 
@@ -59,7 +62,7 @@ test('backup snapshot fails closed around release acceptance residue', async () 
   assert.match(backup, /exec 9>>"\$NAV_BACKUP_LOCK_FILE"/)
   assert.doesNotMatch(backup, /exec 9>"\$NAV_BACKUP_LOCK_FILE"/)
 })
-test('systemd schedules separate daily backup, weekly retention, and exact cloud restore', async () => {
+test('systemd schedules separate local backup, local retention, and isolated local restore', async () => {
   const daily = await read('ops/systemd/nav-backup.service')
   const retention = await read('ops/systemd/nav-backup-retention.service')
   const restore = await read('ops/systemd/nav-restore-rehearsal.service')
@@ -67,22 +70,16 @@ test('systemd schedules separate daily backup, weekly retention, and exact cloud
   const retentionTimer = await read('ops/systemd/nav-backup-retention.timer')
   const restoreTimer = await read('ops/systemd/nav-restore-rehearsal.timer')
 
-  assert.match(daily, /ExecStart=.*nav-backup .*--cloud-upload$/m)
-  assert.doesNotMatch(daily, /--prune-local|--forget-cloud/)
-  assert.match(retention, /--cloud-upload --prune-local --forget-cloud/)
-  assert.match(restore, /ExecStart=.*nav-restore-cloud-latest .*nav-backup\.env --cloud-restore$/m)
-  assert.match(restore, /Wants=network-online\.target/)
-  assert.match(restore, /^ReadWritePaths=.*\/var\/backups\/nav-cloud-restore/m)
-  assert.match(daily, /ExecStartPost=.*nav-heartbeat .* backup$/m)
-  assert.match(retention, /ExecStartPost=.*nav-heartbeat .* backup$/m)
-  assert.match(restore, /ExecStartPost=.*nav-heartbeat .* restore$/m)
+  assert.match(daily, /ExecStart=.*nav-backup .*nav-backup\.env$/m)
+  assert.doesNotMatch(daily, /--cloud-upload|--prune-local|--forget-cloud|heartbeat|restic/)
+  assert.match(retention, /ExecStart=.*nav-backup .*nav-backup\.env --prune-local$/m)
+  assert.doesNotMatch(retention, /--cloud-upload|--forget-cloud|heartbeat|restic/)
+  assert.match(restore, /ExecStart=.*nav-restore-latest .*nav-backup\.env$/m)
+  assert.doesNotMatch(restore, /nav-restore-cloud-latest|cloud-restore|heartbeat|restic/)
 
   for (const content of [daily, retention, restore]) {
     assert.match(content, /OnFailure=nav-scheduled-failure@%n\.service/)
-    assert.match(content, /^Environment=RESTIC_CACHE_DIR=\/var\/cache\/nav-restic$/m)
-    assert.match(content, /^CacheDirectory=nav-restic$/m)
-    assert.match(content, /^CacheDirectoryMode=0700$/m)
-    assert.match(content, /^ReadWritePaths=.*\/var\/cache\/nav-restic/m)
+    assert.match(content, /RestrictAddressFamilies=AF_UNIX/)
     assert.match(content, /ProtectSystem=strict/)
     assert.match(content, /NoNewPrivileges=true/)
     assert.match(content, /UMask=0077/)
@@ -257,6 +254,9 @@ test('installer deploys units but cannot enable or start them', async () => {
   const installer = await read('scripts/install-nav-backup-systemd.sh')
   assert.match(installer, /nav-restore-cloud-latest\.sh/)
   assert.match(installer, /nav-disaster-restore\.sh/)
+  assert.match(installer, /nav-release-link\.sh/)
+  assert.match(installer, /enable-nav-local-backup-timers\.sh/)
+  assert.match(installer, /nav-controlled-cleanup\.sh/)
   assert.match(installer, /\/var\/backups\/nav-cloud-restore/)
   assert.match(installer, /systemctl daemon-reload/)
   assert.doesNotMatch(installer, /systemctl\s+(?:enable|start|restart|reload)\b/)

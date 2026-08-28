@@ -9,6 +9,7 @@ export const MAINTENANCE_JOB_NAMES = Object.freeze({
   MAIL_DELIVERY: 'mail_delivery',
   EMAIL_INGEST: 'email_ingest',
   EMAIL_SENT_APPEND: 'email_sent_append',
+  EMAIL_REMOTE_COMMANDS: 'email_remote_commands',
   EMAIL_DIGEST: 'email_digest',
   EMAIL_CACHE_RETENTION: 'email_cache_retention'
 })
@@ -177,6 +178,13 @@ const RESULT_FIELDS = Object.freeze({
     'reconciled',
     'blocked',
     'remaining'
+  ],
+  [MAINTENANCE_JOB_NAMES.EMAIL_REMOTE_COMMANDS]: [
+    'processed',
+    'succeeded',
+    'retried',
+    'conflicted',
+    'failed'
   ],
   [MAINTENANCE_JOB_NAMES.EMAIL_DIGEST]: [
     'generated',

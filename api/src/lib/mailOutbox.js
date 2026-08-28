@@ -4,6 +4,7 @@ import { config } from '../config.js'
 import { query } from '../db/index.js'
 import { sanitizeMaintenanceErrorCode } from './maintenanceJobStatus.js'
 import { readOwnerSecretFile } from './ownerSecretFile.js'
+import { resolveSmtpAuth } from './emailOauth2.js'
 import { assertSafeOutboundHost } from './outboundEndpoints.js'
 import { decryptEmailPayload, encryptEmailPayload } from './emailCrypto.js'
 import {
@@ -313,7 +314,10 @@ export function validateSmtpConfig(runtimeConfig = config) {
   }
   normalizeEmailAddress(runtimeConfig.smtpUsername)
   normalizeEmailAddress(runtimeConfig.smtpFromAddress)
-  if (!String(runtimeConfig.smtpPasswordFile || '').trim()) {
+  if (
+    !String(runtimeConfig.smtpPasswordFile || '').trim()
+    && !String(runtimeConfig.smtpOauthProvider || '').trim()
+  ) {
     throw new Error('SMTP password file is not configured')
   }
   return host
@@ -326,7 +330,7 @@ export async function verifiedMailConfigurationStatus(
   const baseConfigured = Boolean(
     runtimeConfig.smtpHost
     && runtimeConfig.smtpUsername
-    && runtimeConfig.smtpPasswordFile
+    && (runtimeConfig.smtpPasswordFile || runtimeConfig.smtpOauthProvider)
     && runtimeConfig.smtpFromAddress
   )
   if (!baseConfigured) {
@@ -334,7 +338,11 @@ export async function verifiedMailConfigurationStatus(
   }
   try {
     validateSmtpConfig(runtimeConfig)
-    await readSecretImpl(runtimeConfig.smtpPasswordFile, { label: 'SMTP password', maxBytes: 4096 })
+    if (runtimeConfig.smtpOauthProvider) {
+      await resolveSmtpAuth(runtimeConfig, { readSecretImpl })
+    } else {
+      await readSecretImpl(runtimeConfig.smtpPasswordFile, { label: 'SMTP password', maxBytes: 4096 })
+    }
     return {
       configured: true,
       enabled: runtimeConfig.mailDeliveryEnabled,
@@ -432,18 +440,12 @@ export async function enqueueUserMail({
 
 async function createSmtpTransport(runtimeConfig = config, readSecretImpl = readOwnerSecretFile) {
   validateSmtpConfig(runtimeConfig)
-  const password = await readSecretImpl(runtimeConfig.smtpPasswordFile, {
-    label: 'SMTP password',
-    maxBytes: 4096
-  })
+  const auth = await resolveSmtpAuth(runtimeConfig, { readSecretImpl })
   return nodemailer.createTransport({
     host: runtimeConfig.smtpHost,
     port: Number(runtimeConfig.smtpPort),
     secure: true,
-    auth: {
-      user: normalizeEmailAddress(runtimeConfig.smtpUsername),
-      pass: password
-    },
+    auth,
     connectionTimeout: 10_000,
     greetingTimeout: 10_000,
     socketTimeout: 30_000,

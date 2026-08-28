@@ -8,13 +8,15 @@
 
 ## 验收边界
 
-脚本只验证 NAV 自己的登录态、邮件只读工作区、通知规则、邮件 AI 与本地加密草稿。
-它不会发送真实邮件，也不会在 IMAP 服务端执行已读、星标、移动、删除或其他远端邮箱修改。
+脚本验证 NAV 自己的登录态、邮件工作区、通知规则、邮件 AI、本地加密草稿，以及远端操作
+队列的冲突快照、幂等重放和撤销契约。远端操作在 10 秒等待窗内立即撤销，因此不会发送真实邮件，
+也不会在 IMAP 服务端执行已读、星标、移动、删除或其他远端邮箱修改。
 成功证据固定包含：
 
 ```text
 real_mail_send=NOT_INVOKED
 remote_mailbox_mutation=NOT_INVOKED
+remote_command_queue=PASS
 ```
 
 脚本使用 `curl`、独立 Cookie jar 和 `jq` 完成两个 HTTPS 域名的登录、Session 与 API
@@ -134,17 +136,20 @@ env \
 3. 分别登录两个域名并验证 `/api/auth/session` 返回同一个一次性用户。
 4. 记录该一次性用户的 `mail_outbox` 数量。
 5. 读取邮件列表和详情；用唯一标记验证服务端 `q` 搜索；通过第二域验证 `unread` 过滤。
-6. 对合成会话执行通知规则 preview、create、跨域 list、patch 和 delete；若已有同身份规则则
+6. 从详情取得 UIDVALIDITY、MODSEQ 和 flags 快照，创建一个幂等远端 flags 指令，通过第二域
+   重放同一幂等键，再在等待窗关闭前撤销；最后回到第一域确认状态为 `cancelled`。该流程验证
+   真实 API 与数据库队列，但明确不调用 IMAP worker。
+7. 对合成会话执行通知规则 preview、create、跨域 list、patch 和 delete；若已有同身份规则则
    失败，绝不覆盖后再删除未知数据。
-7. 执行邮件 AI summarize，并要求来源中包含合成邮件。
-8. 调用 `/api/email/ai/search` 的 `answer=false` 来源模式，要求返回合成邮件来源；该步骤不制造
+8. 执行邮件 AI summarize，并要求来源中包含合成邮件。
+9. 调用 `/api/email/ai/search` 的 `answer=false` 来源模式，要求返回合成邮件来源；该步骤不制造
    第二次模型回答。
-9. 生成 `create_draft` AI 提议，使用原样 token/参数显式 confirm；读取 PostgreSQL 只验证
+10. 生成 `create_draft` AI 提议，使用原样 token/参数显式 confirm；读取 PostgreSQL 只验证
    `payload_encrypted`、`content_hash`、`status=draft` 与 `outbox_id IS NULL`。
-10. 以 `draft id + ephemeral user id + status=draft + outbox_id IS NULL` 精确删除该临时草稿。
+11. 以 `draft id + ephemeral user id + status=draft + outbox_id IS NULL` 精确删除该临时草稿。
    任一条件不匹配都失败关闭。包装器最终删除一次性用户时仍会通过外键清理其操作记录。
-11. 再次记录该用户的 `mail_outbox` 数量，要求与开始时完全一致，然后双域退出。
-12. 编排器核对精确 fixture 身份、outbox 仍为零并删除临时 account；包装器再清理一次性用户。
+12. 再次记录该用户的 `mail_outbox` 数量，要求与开始时完全一致，然后双域退出。
+13. 编排器核对精确 fixture 身份、outbox 仍为零并删除临时 account；包装器再清理一次性用户。
 
 任何 HTTP、JSON、所有权、密文、清理、outbox 不变式或退出检查失败都返回非零。`EXIT`
 清理会尽力删除本轮精确创建的规则和草稿并退出两个域；清理失败会把最终状态提升为失败。

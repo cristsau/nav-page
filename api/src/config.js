@@ -207,7 +207,7 @@ export const config = {
   ),
   bookmarkHealthSchedulerConcurrency: normalizePositiveInteger(
     process.env.NAV_BOOKMARK_HEALTH_SCHEDULER_CONCURRENCY,
-    4
+    2
   ),
   maintenanceAlertsEnabled:
     process.env.NAV_MAINTENANCE_ALERTS_ENABLED === 'true',
@@ -235,7 +235,7 @@ export const config = {
   ),
   aiUsageRetentionMaxBatchesPerRun: normalizePositiveInteger(
     process.env.NAV_AI_USAGE_RETENTION_MAX_BATCHES_PER_RUN,
-    20
+    4
   ),
   hybridSearchEnabled: process.env.NAV_HYBRID_SEARCH_ENABLED !== 'false',
   semanticSearchEnabled: process.env.NAV_SEMANTIC_SEARCH_ENABLED === 'true',
@@ -307,6 +307,7 @@ export const config = {
   smtpSecure: process.env.NAV_SMTP_SECURE !== 'false',
   smtpUsername: String(process.env.NAV_SMTP_USERNAME || '').trim(),
   smtpPasswordFile: String(process.env.NAV_SMTP_PASSWORD_FILE || '').trim(),
+  smtpOauthProvider: '',
   smtpFromAddress: String(process.env.NAV_SMTP_FROM_ADDRESS || '').trim(),
   smtpFromName: String(process.env.NAV_SMTP_FROM_NAME || 'DOMO NAV').trim(),
   adminEmailRecipients: normalizeCsv(process.env.NAV_ADMIN_EMAIL_RECIPIENTS),
@@ -324,6 +325,7 @@ export const config = {
   imapSecure: process.env.NAV_IMAP_SECURE !== 'false',
   imapUsername: String(process.env.NAV_IMAP_USERNAME || '').trim(),
   imapPasswordFile: String(process.env.NAV_IMAP_PASSWORD_FILE || '').trim(),
+  imapOauthProvider: '',
   imapMailbox: String(process.env.NAV_IMAP_MAILBOX || 'INBOX').trim(),
   emailSentAppendEnabled: process.env.NAV_EMAIL_SENT_APPEND_ENABLED === 'true',
   imapSentMailbox: String(process.env.NAV_IMAP_SENT_MAILBOX || '').trim(),

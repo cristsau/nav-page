@@ -72,6 +72,51 @@ export function fetchEmailMessage({ accountId, locationId, folderId } = {}) {
   )
 }
 
+export function createEmailMessageCommand({
+  accountId,
+  locationId,
+  action,
+  targetFolderId = '',
+  idempotencyKey,
+  expected = {},
+  confirm = ''
+} = {}) {
+  const payload = {
+    action: String(action || '').trim(),
+    idempotencyKey: String(idempotencyKey || '').trim(),
+    expected: {
+      uidValidity: expected?.uidValidity == null ? null : String(expected.uidValidity),
+      modseq: expected?.modseq == null ? null : String(expected.modseq),
+      seen: expected?.seen === true,
+      flagged: expected?.flagged === true,
+      deleted: expected?.deleted === true
+    }
+  }
+  if (String(targetFolderId || '').trim()) payload.targetFolderId = String(targetFolderId).trim()
+  if (String(confirm || '').trim()) payload.confirm = String(confirm).trim()
+  return request(
+    `/email/accounts/${requiredId(accountId, 'Email account id')}/messages/${requiredId(locationId, 'Email location id')}/commands`,
+    {
+      method: 'POST',
+      body: JSON.stringify(payload)
+    }
+  )
+}
+
+export function fetchEmailMessageCommand(commandId) {
+  return request(`/email/commands/${requiredId(commandId, 'Email command id')}`, {
+    method: 'GET',
+    cache: 'no-store'
+  })
+}
+
+export function undoEmailMessageCommand(commandId) {
+  return request(`/email/commands/${requiredId(commandId, 'Email command id')}/undo`, {
+    method: 'POST',
+    body: JSON.stringify({})
+  })
+}
+
 export function requestEmailAi(messageId, {
   action,
   instruction = '',

@@ -37,7 +37,7 @@ test('mail store consumes an indefinite ReadableStream and falls back to visible
   assert.doesNotMatch(sse, /Missing stream completion event/)
 })
 
-test('mail workspace is a desktop three-pane and mobile single-pane read-only UI', async () => {
+test('mail workspace is a desktop three-pane and mobile single-pane remote-command UI', async () => {
   const view = await source('app/src/modules/mail/MailView.vue')
   const list = await source('app/src/modules/mail/components/MailMessageList.vue')
   const detail = await source('app/src/modules/mail/components/MailMessageDetail.vue')
@@ -52,7 +52,13 @@ test('mail workspace is a desktop three-pane and mobile single-pane read-only UI
   assert.match(list, /aria-current/)
   assert.match(detail, /aria-labelledby="message \? 'mail-message-detail-title'/)
   assert.match(detail, /aria-live="polite"/)
-  assert.doesNotMatch(view, /删除邮件|deleteEmail|moveEmail|sendEmail/)
+  assert.match(view, /@command="runMessageCommand"/)
+  assert.match(detail, /mark_read/)
+  assert.match(detail, /mark_unread/)
+  assert.match(detail, /archive/)
+  assert.match(detail, /永久删除/)
+  assert.match(detail, /MailMessageActionDialog/)
+  assert.doesNotMatch(view, /sendEmail/)
 })
 
 test('mail attachment UI uploads sequentially, reviews metadata and downloads only on demand', async () => {

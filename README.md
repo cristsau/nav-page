@@ -10,6 +10,12 @@ DOMO NAV 是面向个人与小团队的私有化导航工作台。它把导航�
 
 精确生产版本、验收证据和已知缺口见 [STATUS_REPORT.md](./STATUS_REPORT.md)。
 
+最新留档的生产验收基线（2026-08-27）为
+`15fd83e3f197afb7a03fe119ce118feae26ab10f`，release 为
+`/opt/nav-stack/releases/20260827-231729-15fd83e`；下一次发布前仍须现场复核。
+2026-08-28 运维收口批次为 `LOCAL_DONE / READY_FOR_CI / NOT_DEPLOYED`，不会因
+源码存在而自动启用 timer、执行清理或宣称已有异地备份。
+
 ## 当前源码已实现
 
 - 用户登录、注册审批、Telegram 审批同步、用户名/密码修改、会话撤销、恢复码和密码恢复
@@ -20,6 +26,8 @@ DOMO NAV 是面向个人与小团队的私有化导航工作台。它把导航�
 - 不保存问答内容的 AI 日聚合用量、7/30/90 天面板、CSV 与可选单价成本估算
 - 图片附件经 NAV 后端上传到个人图床，不写入 NAV 磁盘
 - `/media` 图片库：瀑布流、搜索、分页、引用关系、保留策略、分享、删除与对账
+- 桌面三栏/手机渐进式邮件工作台、服务端搜索筛选、分层通知规则与关键通知保护
+- 带来源邮件摘要、跨邮件检索和预览确认后保存的加密 AI 草稿
 - 上传与库管理双 Token 最小权限分离，图片最后引用移除后的受控清理
 - 图床删除结果严格校验与持久化，区分物理删除、仅解除引用和缓存状态
 - PostgreSQL 共享限流、最小化安全审计、后台任务状态与管理员审计面板
@@ -33,6 +41,10 @@ DOMO NAV 是面向个人与小团队的私有化导航工作台。它把导航�
 - 已访问工作区的完整离线编辑、幂等 outbox、Yjs IndexedDB 持久化及跨设备增量同步
 - 128 MiB NDJSON 流式上传恢复、250 条批处理和 6,500 条 PostgreSQL 16 集成演练
 - 图床对象、Nginx Proxy Manager 与外层代理配置纳入完整备份/双门禁一键灾难恢复候选
+- 书签健康检查与 AI 用量保留的有界生产配置、后台状态和回归门禁
+- `/opt/nav-stack/current`/`rollback` 原子 release 指针与备份并发互斥
+- 默认仅本地的自动备份、保留和定期隔离恢复 timer 启用前门禁
+- 保留 current+rollback、30 天日志且不触碰容器/卷/网络的受控磁盘清理候选
 
 Passkey/WebAuthn、BM25/本地向量语义搜索、Web Push、块编辑器、多人协作、离线同步、流式
 恢复和整套灾难恢复的源码状态与生产状态可能不同，必须以状态页的精确证据为准；异地加密备份
@@ -92,5 +104,6 @@ PostgreSQL 迁移校验、API 测试与 Vite 生产构建由
 14. [BM25/本地向量、Web Push 与单用户块编辑器](./docs/NAV_ADVANCED_SEARCH_PUSH_BLOCK_EDITOR.md)
 15. [多人协作、离线同步、整套灾难恢复与流式恢复](./docs/NAV_COLLABORATION_OFFLINE_DR_STREAMING.md)
 16. [实时评论事件流](./docs/NAV_REALTIME_COMMENTS_20260824.md)
+17. [2026-08-28 运维收口候选与启用边界](./docs/NAV_OPERATIONS_COMPLETION_20260828.md)
 
 继续开发或发布前，应重新核对 GitHub、当前工作区和实时生产状态；仓库文档不是生产写入授权。

@@ -5,6 +5,7 @@ import {
   prepareMailAcceptanceFixture
 } from './mailAcceptanceFixture.js'
 import { applyManagedIntegrationsToRuntime } from '../lib/managedIntegrations.js'
+import { applyManagedOauthToRuntime } from '../lib/managedOauthIntegrations.js'
 
 const MAX_STDIN_BYTES = 8 * 1024
 
@@ -36,6 +37,7 @@ async function main() {
   // otherwise production installations that keep the mailbox encryption key
   // in the managed integration directory cannot create the encrypted fixture.
   await applyManagedIntegrationsToRuntime()
+  await applyManagedOauthToRuntime()
   const input = await readJsonInput()
   const result = await withTransaction((client) => (
     command === 'prepare'

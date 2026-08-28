@@ -58,6 +58,9 @@ const activeAccountLabel = computed(() => {
   const account = state.accounts.find((item) => String(item.id) === state.activeAccountId)
   return account?.label || account?.displayName || account?.address || account?.email || '当前邮箱'
 })
+const selectedCommand = computed(() => (
+  state.commandsByLocation?.[String(state.selectedMessageId || '')] || null
+))
 
 function queryText(value) {
   return Array.isArray(value) ? String(value[0] || '') : String(value || '')
@@ -289,6 +292,26 @@ function onRulesManagerChanged() {
   void refreshWorkspace().catch(() => {})
 }
 
+async function runMessageCommand(payload) {
+  localError.value = ''
+  state.commandError = ''
+  try {
+    await mail.executeCommand(payload)
+  } catch (error) {
+    localError.value = error?.message || '邮件操作提交失败'
+  }
+}
+
+async function undoMessageCommand() {
+  localError.value = ''
+  state.commandError = ''
+  try {
+    await mail.undoCommand()
+  } catch (error) {
+    localError.value = error?.message || '邮件操作撤销失败'
+  }
+}
+
 watch(() => route.fullPath, async () => {
   if (updatingRoute || initialLoading.value) return
   const requestedAccountId = queryText(route.query.account)
@@ -315,6 +338,11 @@ watch(() => route.fullPath, async () => {
   }
 }, { flush: 'post' })
 
+watch(() => state.selectedMessageId, async (messageId, previousMessageId) => {
+  if (messageId || !previousMessageId || !queryText(route.query.message)) return
+  await replaceMailQuery()
+})
+
 onMounted(initializeWorkspace)
 onBeforeUnmount(mail.deactivate)
 </script>
@@ -325,7 +353,7 @@ onBeforeUnmount(mail.deactivate)
       <div>
         <span>智能邮箱</span>
         <h1>邮件</h1>
-        <p>已同步邮件保持只读；在一个工作区里完成检索、会话阅读、通知降噪、AI 分析和安全回信。原邮箱不会被删除或移动，任何外发都必须先保存预览并由你再次确认。</p>
+        <p>在一个工作区里完成实时收发、检索、会话阅读、通知降噪和 AI 分析。远端已读、重要、归档、移动与删除操作进入安全队列，冲突时不会覆盖新状态；永久删除与外发必须再次确认。</p>
       </div>
       <div class="mail-hero__actions">
         <button type="button" :disabled="!hasAccounts" @click="openCompose()">
@@ -401,11 +429,18 @@ onBeforeUnmount(mail.deactivate)
           :account-id="state.activeAccountId"
           :folder-id="state.activeFolderId"
           :location-id="state.selectedMessageId"
+          :folders="activeFolders"
+          :active-folder="activeFolder"
+          :command="selectedCommand"
+          :command-busy="state.commandBusy"
+          :command-error="state.commandError"
           :loading="state.loadingDetail"
           @close="closeMessage"
           @reply="openCompose"
           @notification="openNotificationRule"
           @open-source="openAiSearchSource"
+          @command="runMessageCommand"
+          @undo-command="undoMessageCommand"
         />
       </div>
     </section>

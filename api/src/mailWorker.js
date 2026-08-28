@@ -6,6 +6,7 @@ import { pool } from './db/index.js'
 import { clearEmailEncryptionKeyCache } from './lib/emailCrypto.js'
 import { configureEmailRuntime, refreshEmailRuntime, stopEmailRuntime } from './lib/emailRuntimeController.js'
 import { applyManagedIntegrationsToRuntime } from './lib/managedIntegrations.js'
+import { applyManagedOauthToRuntime } from './lib/managedOauthIntegrations.js'
 import {
   createMaintenanceJobObserver,
   MAINTENANCE_JOB_NAMES
@@ -66,7 +67,8 @@ async function main() {
   }
   const logger = createWorkerLogger()
   const initialIntegration = await applyManagedIntegrationsToRuntime()
-  let currentRevision = integrationRevision(initialIntegration)
+  const initialOauthIntegration = await applyManagedOauthToRuntime()
+  let currentRevision = `${integrationRevision(initialIntegration)}:${integrationRevision(initialOauthIntegration)}`
   // The API container owns migrations. Its healthy dependency guarantees the
   // migration runner finished; resolve every mailbox table here as a final
   // contract check before this process can acquire an ingest lease.
@@ -105,9 +107,12 @@ async function main() {
   const configTimer = setInterval(() => {
     if (refreshActive) return
     refreshActive = true
-    void applyManagedIntegrationsToRuntime()
-      .then(async (applied) => {
-        const nextRevision = integrationRevision(applied)
+    void Promise.all([
+      applyManagedIntegrationsToRuntime(),
+      applyManagedOauthToRuntime()
+    ])
+      .then(async ([applied, oauthApplied]) => {
+        const nextRevision = `${integrationRevision(applied)}:${integrationRevision(oauthApplied)}`
         if (nextRevision === currentRevision) return
         clearEmailEncryptionKeyCache()
         await refreshEmailRuntime()

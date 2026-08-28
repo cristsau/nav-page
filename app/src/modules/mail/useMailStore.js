@@ -1,12 +1,15 @@
 import { computed, reactive, watch } from 'vue'
 import { useAuth } from '@/shared/composables/useAuth'
 import {
+  createEmailMessageCommand,
   fetchEmailAccounts,
   fetchEmailEvent,
   fetchEmailFolders,
   fetchEmailMessage,
+  fetchEmailMessageCommand,
   fetchEmailMessages,
-  openEmailEventStream
+  openEmailEventStream,
+  undoEmailMessageCommand
 } from '@/shared/services/emailApi'
 import {
   createRequestGenerationGate,
@@ -21,6 +24,11 @@ import { consumeMailSseBody, waitForMailReconnect } from './mailSse'
 
 const PAGE_SIZE = 40
 const FALLBACK_POLL_MS = 60_000
+const COMMAND_POLL_MS = 900
+const COMMAND_POLL_LIMIT = 150
+const TERMINAL_COMMAND_STATUSES = new Set([
+  'succeeded', 'failed', 'conflict', 'cancelled', 'canceled', 'undone', 'expired'
+])
 
 function initialMailState() {
   return {
@@ -45,7 +53,10 @@ function initialMailState() {
     streamState: 'idle',
     streamNotice: '',
     lastEventId: '',
-    lastRealtimeAt: ''
+    lastRealtimeAt: '',
+    commandsByLocation: {},
+    commandBusy: false,
+    commandError: ''
   }
 }
 
@@ -62,6 +73,7 @@ let refreshTimer = null
 const folderRequests = new Map()
 const pageRefreshRequests = new Map()
 const pageLoadMoreRequests = new Map()
+const commandPollTimers = new Map()
 
 function arrayFrom(payload, key) {
   return Array.isArray(payload?.[key]) ? payload[key] : []
@@ -96,6 +108,8 @@ function requestStillCurrent(ticket, ownerUserId) {
 
 function resetMailStore({ ownerUserId = '' } = {}) {
   stopMailRealtime()
+  for (const timer of commandPollTimers.values()) globalThis.clearTimeout(timer)
+  commandPollTimers.clear()
   requestGate.reset()
   accountsPromise = null
   folderRequests.clear()
@@ -103,6 +117,42 @@ function resetMailStore({ ownerUserId = '' } = {}) {
   pageLoadMoreRequests.clear()
   boundAuthUserId = normalizedId(ownerUserId)
   Object.assign(state, initialMailState())
+}
+
+function normalizedCommand(payload, fallback = {}) {
+  const source = payload?.command && typeof payload.command === 'object' ? payload.command : payload
+  return {
+    ...fallback,
+    ...(source && typeof source === 'object' ? source : {}),
+    id: normalizedId(source?.id || source?.commandId || fallback.id),
+    locationId: normalizedId(source?.locationId || fallback.locationId),
+    status: String(source?.status || fallback.status || 'scheduled').trim().toLowerCase(),
+    undoUntil: source?.undoUntil || payload?.undoUntil || fallback.undoUntil || null,
+    errorCode: String(source?.errorCode || source?.lastErrorCode || fallback.errorCode || '').trim(),
+    errorMessage: String(source?.errorMessage || source?.lastError || fallback.errorMessage || '').trim()
+  }
+}
+
+function commandCanUndo(command) {
+  if (!command?.id || !['scheduled', 'queued', 'pending'].includes(String(command.status || '').toLowerCase())) return false
+  const deadline = new Date(command.undoUntil || 0).getTime()
+  return Number.isFinite(deadline) && deadline > Date.now()
+}
+
+function messageCommandExpected(message) {
+  const remote = message?.remote && typeof message.remote === 'object' ? message.remote : message
+  return {
+    uidValidity: remote?.uidValidity ?? remote?.uid_validity ?? null,
+    modseq: remote?.modseq ?? null,
+    seen: message?.flags?.seen === true,
+    flagged: message?.flags?.flagged === true,
+    deleted: message?.flags?.deleted === true
+  }
+}
+
+function newIdempotencyKey() {
+  if (typeof globalThis.crypto?.randomUUID === 'function') return globalThis.crypto.randomUUID()
+  return `mail-${Date.now()}-${Math.random().toString(16).slice(2)}`
 }
 
 function bindMailStoreToCurrentUser() {
@@ -406,6 +456,111 @@ export async function loadMailMessage(locationId) {
   }
 }
 
+function commandForLocation(locationId) {
+  return state.commandsByLocation[normalizedId(locationId)] || null
+}
+
+async function settleMailMessageCommand(command) {
+  const status = String(command?.status || '').toLowerCase()
+  const locationId = normalizedId(command?.locationId)
+  if (!TERMINAL_COMMAND_STATUSES.has(status)) return
+  if (['succeeded', 'undone'].includes(status)) {
+    const movesLocation = ['archive', 'move', 'trash', 'delete'].includes(String(command?.action || '').toLowerCase())
+    if (movesLocation && state.selectedMessageId === locationId) clearSelectedMailMessage()
+    await refreshVisibleMailbox({ replace: true }).catch(() => {})
+  }
+}
+
+function scheduleMailMessageCommandPoll(command, attempt = 0) {
+  const commandId = normalizedId(command?.id)
+  const locationId = normalizedId(command?.locationId)
+  if (!commandId || !locationId || TERMINAL_COMMAND_STATUSES.has(String(command?.status || '').toLowerCase())) return
+  const existing = commandPollTimers.get(commandId)
+  if (existing) globalThis.clearTimeout(existing)
+  const timer = globalThis.setTimeout(async () => {
+    commandPollTimers.delete(commandId)
+    if (attempt >= COMMAND_POLL_LIMIT || !currentAuthUserId()) return
+    try {
+      const payload = await fetchEmailMessageCommand(commandId)
+      const latest = normalizedCommand(payload, commandForLocation(locationId) || command)
+      state.commandsByLocation[locationId] = latest
+      if (TERMINAL_COMMAND_STATUSES.has(latest.status)) await settleMailMessageCommand(latest)
+      else scheduleMailMessageCommandPoll(latest, attempt + 1)
+    } catch (error) {
+      if (attempt + 1 < COMMAND_POLL_LIMIT) scheduleMailMessageCommandPoll(command, attempt + 1)
+      else state.commandError = error?.message || '邮件操作状态读取失败'
+    }
+  }, COMMAND_POLL_MS)
+  commandPollTimers.set(commandId, timer)
+}
+
+export async function executeMailMessageCommand({
+  action,
+  targetFolderId = '',
+  confirm = '',
+  locationId = state.selectedMessageId,
+  message = state.selectedMessage
+} = {}) {
+  const ownerUserId = bindMailStoreToCurrentUser()
+  const accountId = normalizedId(state.activeAccountId)
+  const targetLocationId = normalizedId(locationId)
+  const normalizedAction = String(action || '').trim().toLowerCase()
+  const allowedActions = new Set(['mark_read', 'mark_unread', 'star', 'unstar', 'archive', 'move', 'trash', 'delete'])
+  if (!ownerUserId || !accountId || !targetLocationId || !allowedActions.has(normalizedAction)) {
+    throw new Error('邮件操作参数无效')
+  }
+  if (state.commandBusy) return commandForLocation(targetLocationId)
+  state.commandBusy = true
+  state.commandError = ''
+  try {
+    const payload = await createEmailMessageCommand({
+      accountId,
+      locationId: targetLocationId,
+      action: normalizedAction,
+      targetFolderId,
+      idempotencyKey: newIdempotencyKey(),
+      expected: messageCommandExpected(message),
+      confirm
+    })
+    const command = normalizedCommand(payload, {
+      locationId: targetLocationId,
+      action: normalizedAction,
+      targetFolderId: normalizedId(targetFolderId),
+      status: 'scheduled'
+    })
+    state.commandsByLocation[targetLocationId] = command
+    if (TERMINAL_COMMAND_STATUSES.has(command.status)) await settleMailMessageCommand(command)
+    else scheduleMailMessageCommandPoll(command)
+    return command
+  } catch (error) {
+    state.commandError = error?.message || '邮件操作提交失败'
+    throw error
+  } finally {
+    state.commandBusy = false
+  }
+}
+
+export async function undoMailMessageCommand(locationId = state.selectedMessageId) {
+  const targetLocationId = normalizedId(locationId)
+  const current = commandForLocation(targetLocationId)
+  if (!commandCanUndo(current)) throw new Error('该邮件操作已无法撤销')
+  state.commandBusy = true
+  state.commandError = ''
+  try {
+    const payload = await undoEmailMessageCommand(current.id)
+    const command = normalizedCommand(payload, current)
+    state.commandsByLocation[targetLocationId] = command
+    if (TERMINAL_COMMAND_STATUSES.has(command.status)) await settleMailMessageCommand(command)
+    else scheduleMailMessageCommandPoll(command)
+    return command
+  } catch (error) {
+    state.commandError = error?.message || '撤销邮件操作失败'
+    throw error
+  } finally {
+    state.commandBusy = false
+  }
+}
+
 export async function loadLegacyMailEvent(emailEventId) {
   const ownerUserId = bindMailStoreToCurrentUser()
   const targetId = normalizedId(emailEventId)
@@ -596,6 +751,10 @@ export function useMailStore() {
     selectFolder: selectMailFolder,
     loadMessage: loadMailMessage,
     loadLegacyEvent: loadLegacyMailEvent,
+    executeCommand: executeMailMessageCommand,
+    undoCommand: undoMailMessageCommand,
+    commandForLocation,
+    commandCanUndo,
     loadMore: loadMoreMailMessages,
     search: setMailSearch,
     refresh: refreshVisibleMailbox,

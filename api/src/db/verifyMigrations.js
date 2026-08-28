@@ -867,6 +867,7 @@ async function verifyMaintenanceObservabilitySchema() {
       'email_cache_retention',
       'email_digest',
       'email_ingest',
+      'email_remote_commands',
       'email_sent_append',
       'mail_delivery',
       'media_delete_retry',
@@ -2548,6 +2549,155 @@ async function verifyEmailSentAppendSchema() {
   }
 }
 
+async function verifyEmailRemoteCommandSchema() {
+  const expectedColumns = [
+    'id', 'user_id', 'account_id', 'source_location_id', 'source_folder_id',
+    'source_message_id', 'target_folder_id', 'action', 'status',
+    'idempotency_key', 'request_hash', 'expected_uid_validity', 'expected_uid',
+    'expected_modseq', 'expected_seen', 'expected_flagged', 'expected_deleted',
+    'undo_until', 'next_attempt_at', 'attempt_count', 'max_attempts',
+    'started_at', 'remote_mutation_started_at', 'remote_mutation_completed_at',
+    'completed_at', 'last_error_code', 'result_folder_id',
+    'result_uid_validity', 'result_uid', 'permanent_confirmed_at',
+    'created_at', 'updated_at'
+  ]
+  const columns = await query(`
+    SELECT column_name
+    FROM information_schema.columns
+    WHERE table_schema = current_schema()
+      AND table_name = 'email_remote_commands'
+  `)
+  assertExactSet(
+    'email remote command columns',
+    columns.rows.map((row) => row.column_name),
+    expectedColumns
+  )
+
+  const expectedConstraintDefinitions = new Map([
+    ['email_folder_messages_identity_account_user_unique', [
+      'unique (id, account_id, user_id)'
+    ]],
+    ['email_remote_commands_pkey', ['primary key (id)']],
+    ['email_remote_commands_user_id_fkey', [
+      'foreign key (user_id)', 'references users(id)', 'on delete cascade'
+    ]],
+    ['email_remote_commands_account_user_fkey', [
+      'foreign key (account_id, user_id)',
+      'references email_accounts(id, user_id)', 'on delete cascade'
+    ]],
+    ['email_remote_commands_source_location_account_user_fkey', [
+      'foreign key (source_location_id, account_id, user_id)',
+      'references email_folder_messages(id, account_id, user_id)', 'on delete cascade'
+    ]],
+    ['email_remote_commands_source_folder_account_user_fkey', [
+      'foreign key (source_folder_id, account_id, user_id)',
+      'references email_folders(id, account_id, user_id)', 'on delete cascade'
+    ]],
+    ['email_remote_commands_source_message_account_user_fkey', [
+      'foreign key (source_message_id, account_id, user_id)',
+      'references email_messages(id, account_id, user_id)', 'on delete cascade'
+    ]],
+    ['email_remote_commands_target_folder_account_user_fkey', [
+      'foreign key (target_folder_id, account_id, user_id)',
+      'references email_folders(id, account_id, user_id)', 'on delete restrict'
+    ]],
+    ['email_remote_commands_result_folder_account_user_fkey', [
+      'foreign key (result_folder_id, account_id, user_id)',
+      'references email_folders(id, account_id, user_id)', 'on delete restrict'
+    ]],
+    ['email_remote_commands_action_check', [
+      'mark_read', 'mark_unread', 'star', 'unstar', 'archive', 'move', 'trash', 'delete'
+    ]],
+    ['email_remote_commands_status_check', [
+      'scheduled', 'running', 'retry_wait', 'succeeded', 'conflict', 'failed', 'cancelled'
+    ]],
+    ['email_remote_commands_idempotency_key_check', [
+      'char_length', 'idempotency_key', '16', '128', 'A-Za-z0-9._:-'
+    ]],
+    ['email_remote_commands_request_hash_check', ['request_hash', '[0-9a-f]{64}']],
+    ['email_remote_commands_uid_validity_check', [
+      'expected_uid_validity', '1', '4294967295'
+    ]],
+    ['email_remote_commands_uid_check', ['expected_uid', '1', '4294967295']],
+    ['email_remote_commands_modseq_check', [
+      'expected_modseq is null', 'expected_modseq', '18446744073709551615'
+    ]],
+    ['email_remote_commands_attempt_count_check', [
+      'attempt_count', '0', '20', 'max_attempts', '1'
+    ]],
+    ['email_remote_commands_error_code_check', [
+      'last_error_code is null', 'last_error_code', '[A-Z0-9_.-]+'
+    ]],
+    ['email_remote_commands_result_uid_validity_check', [
+      'result_uid_validity is null', 'result_uid_validity', '4294967295'
+    ]],
+    ['email_remote_commands_result_uid_check', [
+      'result_uid is null', 'result_uid', '4294967295'
+    ]],
+    ['email_remote_commands_move_target_check', [
+      "action = 'move'", 'target_folder_id is not null'
+    ]],
+    ['email_remote_commands_delete_confirmation_check', [
+      "action = 'delete'", 'permanent_confirmed_at is not null'
+    ]],
+    ['email_remote_commands_undo_window_check', [
+      'undo_until >= created_at', 'next_attempt_at >= created_at'
+    ]],
+    ['email_remote_commands_user_idempotency_unique', [
+      'unique (user_id, idempotency_key)'
+    ]]
+  ])
+  const constraints = await query(`
+    SELECT conname, convalidated, pg_get_constraintdef(oid) AS definition
+    FROM pg_constraint
+    WHERE conname = ANY($1::text[])
+      AND connamespace = current_schema()::regnamespace
+  `, [[...expectedConstraintDefinitions.keys()]])
+  assertExactSet(
+    'email remote command constraints',
+    constraints.rows.map((row) => row.conname),
+    [...expectedConstraintDefinitions.keys()]
+  )
+  if (constraints.rows.some((row) => row.convalidated !== true)) {
+    throw new Error('email remote command constraints must be validated')
+  }
+  for (const [constraintName, fragments] of expectedConstraintDefinitions) {
+    const constraint = constraints.rows.find((row) => row.conname === constraintName)
+    assertDefinitionIncludes(
+      `email remote command constraint ${constraintName}`,
+      constraint?.definition,
+      fragments
+    )
+  }
+
+  const expectedIndexDefinitions = new Map([
+    ['idx_email_remote_commands_due', [
+      '(next_attempt_at, created_at, id)', 'where', 'scheduled', 'retry_wait'
+    ]],
+    ['idx_email_remote_commands_user_created', [
+      '(user_id, created_at desc, id desc)'
+    ]],
+    ['idx_email_remote_commands_source_location', [
+      '(source_location_id, created_at desc, id desc)'
+    ]]
+  ])
+  const indexes = await query(`
+    SELECT indexname, indexdef
+    FROM pg_indexes
+    WHERE schemaname = current_schema()
+      AND indexname = ANY($1::text[])
+  `, [[...expectedIndexDefinitions.keys()]])
+  assertExactSet(
+    'email remote command indexes',
+    indexes.rows.map((row) => row.indexname),
+    [...expectedIndexDefinitions.keys()]
+  )
+  for (const [indexName, fragments] of expectedIndexDefinitions) {
+    const index = indexes.rows.find((row) => row.indexname === indexName)
+    assertDefinitionIncludes(`email remote command index ${indexName}`, index?.indexdef, fragments)
+  }
+}
+
 async function verifyAssistantAgentOperationsSchema() {
   const expectedColumns = [
     'user_id',
@@ -2645,6 +2795,76 @@ async function verifyAssistantAgentOperationsSchema() {
   )
 }
 
+async function verifyOauthIdentitySchema() {
+  const identityColumns = await query(`
+    SELECT column_name FROM information_schema.columns
+    WHERE table_schema = current_schema() AND table_name = 'oauth_identities'
+  `)
+  assertExactSet(
+    'oauth identity columns',
+    identityColumns.rows.map((row) => row.column_name),
+    ['id', 'user_id', 'provider', 'subject_digest', 'email_verified_at', 'created_at', 'last_used_at']
+  )
+
+  const requestColumns = await query(`
+    SELECT column_name FROM information_schema.columns
+    WHERE table_schema = current_schema() AND table_name = 'oauth_authorization_requests'
+  `)
+  assertExactSet(
+    'oauth authorization request columns',
+    requestColumns.rows.map((row) => row.column_name),
+    [
+      'id', 'provider', 'flow', 'user_id', 'state_digest', 'nonce_digest',
+      'origin', 'return_path', 'expires_at', 'consumed_at', 'created_at'
+    ]
+  )
+
+  const expectedConstraints = [
+    'oauth_identities_pkey',
+    'oauth_identities_user_id_fkey',
+    'oauth_identities_provider_check',
+    'oauth_identities_subject_digest_check',
+    'oauth_identities_provider_subject_unique',
+    'oauth_identities_user_provider_unique',
+    'oauth_authorization_requests_pkey',
+    'oauth_authorization_requests_user_id_fkey',
+    'oauth_authorization_requests_provider_check',
+    'oauth_authorization_requests_flow_check',
+    'oauth_authorization_requests_flow_user_check',
+    'oauth_authorization_requests_state_digest_key',
+    'oauth_authorization_requests_state_digest_check',
+    'oauth_authorization_requests_nonce_digest_check',
+    'oauth_authorization_requests_origin_check',
+    'oauth_authorization_requests_return_path_check',
+    'oauth_authorization_requests_expiry_check'
+  ]
+  const constraints = await query(`
+    SELECT conname, convalidated FROM pg_constraint
+    WHERE conrelid = ANY(ARRAY['oauth_identities'::regclass, 'oauth_authorization_requests'::regclass])
+      AND conname = ANY($1::text[])
+  `, [expectedConstraints])
+  assertExactSet(
+    'oauth identity constraints',
+    constraints.rows.map((row) => row.conname),
+    expectedConstraints
+  )
+  if (constraints.rows.some((row) => row.convalidated !== true)) {
+    throw new Error('oauth identity constraints must be validated')
+  }
+
+  const expectedIndexes = [
+    'idx_oauth_identities_user_created',
+    'idx_oauth_authorization_requests_expiry',
+    'idx_oauth_authorization_requests_user_created'
+  ]
+  const indexes = await query(`
+    SELECT indexname FROM pg_indexes
+    WHERE schemaname = current_schema()
+      AND indexname = ANY($1::text[])
+  `, [expectedIndexes])
+  assertExactSet('oauth identity indexes', indexes.rows.map((row) => row.indexname), expectedIndexes)
+}
+
 async function main() {
   await verifyMigrationLedger()
   await verifyNavigationMaintenanceSchema()
@@ -2667,6 +2887,8 @@ async function main() {
   await verifyEmailNotificationRuleSchema()
   await verifyEmailAttachmentSchema()
   await verifyEmailSentAppendSchema()
+  await verifyOauthIdentitySchema()
+  await verifyEmailRemoteCommandSchema()
   await verifyAssistantAgentOperationsSchema()
   console.log('migration schema verification complete')
 }
