@@ -5,6 +5,11 @@ import os from 'node:os'
 import path from 'node:path'
 import test, { after, before, beforeEach } from 'node:test'
 import { simpleParser } from 'mailparser'
+import { Pool } from 'pg'
+import {
+  MINIMUM_MAIL_WORKER_DATABASE_POOL_SIZE,
+  normalizeDatabasePoolMax
+} from '../src/config.js'
 
 const EXPECTED_DATABASE_NAME = 'nav_email_mailbox_test'
 const ALLOWED_DATABASE_HOSTS = new Set(['127.0.0.1', 'localhost'])
@@ -141,6 +146,36 @@ function mailboxFixture(overrides = {}) {
     ...overrides
   }
 }
+
+test('mail worker pool remains live with three reserved sessions and nested work', async () => {
+  assert.equal(normalizeDatabasePoolMax(undefined, 'worker'), 8)
+  const boundedPool = new Pool({
+    connectionString: process.env.DATABASE_URL,
+    max: MINIMUM_MAIL_WORKER_DATABASE_POOL_SIZE,
+    connectionTimeoutMillis: 1_000
+  })
+  const clients = []
+  try {
+    // Models the advisory lease plus the ingest and classification LISTEN
+    // sessions that remain checked out for the lifetime of the worker.
+    for (let index = 0; index < 3; index += 1) {
+      clients.push(await boundedPool.connect())
+    }
+    // Models a scheduler holding one client while a nested persistence step
+    // requires another. This is the production liveness boundary: max=4
+    // starves, while the enforced minimum of 5 must complete.
+    const outer = await boundedPool.connect()
+    clients.push(outer)
+    const nested = await boundedPool.connect()
+    clients.push(nested)
+    const result = await nested.query('SELECT 1 AS live')
+    assert.equal(Number(result.rows[0]?.live), 1)
+    assert.equal(boundedPool.waitingCount, 0)
+  } finally {
+    for (const client of clients.reverse()) client.release()
+    await boundedPool.end()
+  }
+})
 
 test('canonical replay is idempotent and plaintext remains encrypted at rest', async () => {
   const first = await persistEmailMailboxMessage(mailboxFixture())

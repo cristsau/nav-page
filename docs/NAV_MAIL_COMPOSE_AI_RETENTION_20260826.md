@@ -24,7 +24,7 @@
 - 每次维护最多删除 200 条，并使用 PostgreSQL advisory lock 和 `FOR UPDATE SKIP LOCKED` 防止并发清理。
 - 带星标或草稿标志的邮箱缓存受保护。
 - 清理只作用于 NAV PostgreSQL 本地缓存、过期加密草稿及已经清除正文的终态 outbox；绝不向 IMAP 发送删除、移动或 `EXPUNGE`。
-- API 数据库连接池默认最大 6，worker 默认最大 2，并有严格上限，适合当前小内存 OVH 主机。
+- API 数据库连接池默认最大 6，worker 默认最大 8、硬性安全下限为 5、统一上限为 32。worker 的 IMAP 主租约与两个 PostgreSQL 唤醒监听会长期占用 3 个连接，低于下限时直接拒绝启动，避免邮件分类和维护任务饥饿。
 
 ## CI 和发布门禁
 
