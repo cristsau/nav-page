@@ -1,7 +1,10 @@
 import fs from 'node:fs/promises'
 import os from 'node:os'
 import path from 'node:path'
-import { config } from './config.js'
+import {
+  assertSafeMailWorkerDatabasePoolSize,
+  config
+} from './config.js'
 import { pool } from './db/index.js'
 import { clearEmailEncryptionKeyCache } from './lib/emailCrypto.js'
 import { configureEmailRuntime, refreshEmailRuntime, stopEmailRuntime } from './lib/emailRuntimeController.js'
@@ -65,6 +68,7 @@ async function main() {
   if (config.emailRuntimeRole !== 'worker') {
     throw new Error('nav-mail-worker requires NAV_EMAIL_RUNTIME_ROLE=worker')
   }
+  assertSafeMailWorkerDatabasePoolSize(config.databasePoolMax)
   const logger = createWorkerLogger()
   const initialIntegration = await applyManagedIntegrationsToRuntime()
   const initialOauthIntegration = await applyManagedOauthToRuntime()
@@ -147,6 +151,7 @@ async function main() {
   process.once('SIGTERM', () => closeAndExit('SIGTERM'))
   logger.info({
     jobName: MAINTENANCE_JOB_NAMES.EMAIL_INGEST,
+    databasePoolMax: config.databasePoolMax,
     releaseSha: String(process.env.NAV_RELEASE_SHA || 'development')
   }, 'mail worker started')
 }

@@ -44,6 +44,36 @@ function normalizeEmailRuntimeRole(value) {
 const nodeEnv = process.env.NODE_ENV || 'development'
 const emailRuntimeRole = normalizeEmailRuntimeRole(process.env.NAV_EMAIL_RUNTIME_ROLE)
 
+// The dedicated mail worker permanently reserves one pooled connection for
+// the IMAP advisory lease plus one LISTEN connection for each ingest and
+// classification wake channel. Keep two additional slots available so normal
+// work and maintenance observation cannot be starved by those three long-lived
+// connections.
+export const MINIMUM_MAIL_WORKER_DATABASE_POOL_SIZE = 5
+
+export function normalizeDatabasePoolMax(value, role = emailRuntimeRole) {
+  const normalizedRole = normalizeEmailRuntimeRole(role)
+  const fallback = normalizedRole === 'worker' ? 8 : 6
+  const normalized = normalizeBoundedPositiveInteger(value, fallback, {
+    minimum: 1,
+    maximum: 32
+  })
+  // Preserve an explicit, syntactically valid low worker value so the worker
+  // can fail closed with an actionable error instead of silently ignoring an
+  // operator's unsafe override. Missing or malformed values use the safe
+  // role-specific default.
+  return normalized
+}
+
+export function assertSafeMailWorkerDatabasePoolSize(value) {
+  if (value < MINIMUM_MAIL_WORKER_DATABASE_POOL_SIZE) {
+    const error = new Error('nav-mail-worker database pool is below the safe runtime minimum')
+    error.code = 'MAIL_WORKER_DATABASE_POOL_TOO_SMALL'
+    throw error
+  }
+  return value
+}
+
 function normalizeTrustedProxyAddresses(value) {
   return String(value || '')
     .split(',')
@@ -74,10 +104,9 @@ export const config = {
   port: Number(process.env.PORT || 3001),
   host: process.env.HOST || '0.0.0.0',
   databaseUrl: process.env.DATABASE_URL || 'postgres://nav:nav_password@127.0.0.1:5432/nav',
-  databasePoolMax: normalizeBoundedPositiveInteger(
+  databasePoolMax: normalizeDatabasePoolMax(
     process.env.NAV_DATABASE_POOL_MAX,
-    emailRuntimeRole === 'worker' ? 2 : 6,
-    { maximum: 32 }
+    emailRuntimeRole
   ),
   sessionCookieName: process.env.SESSION_COOKIE_NAME || 'nav_session',
   sessionTtlDays: Number(process.env.SESSION_TTL_DAYS || 14),
