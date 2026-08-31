@@ -220,6 +220,7 @@ export async function processEmailClassificationJobs({
         userId: context.user_id,
         sourceKey: context.source_key,
         emailMessageId: context.email_message_id,
+        notificationEligible: context.notification_eligible === true,
         email: inboundEmailFromStored(context, stored),
         logger
       })

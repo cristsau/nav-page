@@ -334,6 +334,7 @@ export async function persistEmailMailboxMessage({
   accountLabel,
   capabilities,
   folder,
+  notificationEligible = false,
   message: rawMessage
 }) {
   const source = normalizedSourceKey(sourceKey)
@@ -469,9 +470,9 @@ export async function persistEmailMailboxMessage({
     // This keeps old incomplete notification metadata from becoming new push.
     const classificationJob = await client.query(
       `INSERT INTO email_classification_jobs (
-         user_id, account_id, email_message_id
+         user_id, account_id, email_message_id, notification_eligible
        )
-       SELECT $1, $2, $3
+       SELECT $1, $2, $3, $7::boolean
        WHERE ($4::boolean OR $5::char(64) IS NOT NULL)
          AND NOT EXISTS (
            SELECT 1 FROM email_events AS event
@@ -487,7 +488,15 @@ export async function persistEmailMailboxMessage({
          )
        ON CONFLICT (user_id, email_message_id) DO NOTHING
        RETURNING id`,
-      [userId, account.id, message.id, inserted, canonical.messageIdHash, source]
+      [
+        userId,
+        account.id,
+        message.id,
+        inserted,
+        canonical.messageIdHash,
+        source,
+        Boolean(notificationEligible)
+      ]
     )
     classificationQueued = classificationJob.rowCount > 0
     await client.query('COMMIT')

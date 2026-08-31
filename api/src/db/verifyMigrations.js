@@ -2209,6 +2209,7 @@ async function verifyEmailMailboxSchema() {
 async function verifyEmailIngestPipelineSchema() {
   const expectedColumns = [
     'id', 'user_id', 'account_id', 'email_message_id', 'status',
+    'notification_eligible',
     'attempt_count', 'max_attempts', 'next_attempt_at', 'started_at',
     'completed_at', 'last_error_at', 'last_error_code', 'created_at', 'updated_at'
   ]
@@ -2229,6 +2230,7 @@ async function verifyEmailIngestPipelineSchema() {
     ['user_id', 'uuid', 'NO', null],
     ['account_id', 'uuid', 'NO', null],
     ['email_message_id', 'uuid', 'NO', null],
+    ['notification_eligible', 'bool', 'NO', 'false'],
     ['status', 'varchar', 'NO', "'pending'"],
     ['attempt_count', 'int2', 'NO', '0'],
     ['max_attempts', 'int2', 'NO', '5'],

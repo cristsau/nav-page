@@ -124,6 +124,7 @@ export async function processInboundEmail({
   userId,
   sourceKey,
   emailMessageId = null,
+  notificationEligible = false,
   email: rawEmail,
   logger = null,
   queryFn = query
@@ -152,7 +153,9 @@ export async function processInboundEmail({
         [existingMessage.rows[0].id, userId, emailMessageId]
       )
     }
-    await ensureEmailNotification(existingMessage.rows[0], userId, queryFn)
+    if (notificationEligible) {
+      await ensureEmailNotification(existingMessage.rows[0], userId, queryFn)
+    }
     return { inserted: false, duplicate: true, event: null }
   }
   const previousResult = await queryFn(
@@ -176,20 +179,26 @@ export async function processInboundEmail({
     emailMessageId,
     queryFn
   })
-  const notificationDecision = notificationContext
-    ? await resolveEmailNotificationDecision({
-        userId,
-        accountId: notificationContext.account_id,
-        senderAddress: email.senderAddress,
-        category,
-        conversationKey: notificationContext.thread_key_hash || signatures.eventSignature,
-        tier: classification.tier,
-        queryFn
-      })
+  const notificationDecision = notificationEligible
+    ? (notificationContext
+        ? await resolveEmailNotificationDecision({
+            userId,
+            accountId: notificationContext.account_id,
+            senderAddress: email.senderAddress,
+            category,
+            conversationKey: notificationContext.thread_key_hash || signatures.eventSignature,
+            tier: classification.tier,
+            queryFn
+          })
+        : {
+            action: defaultEmailNotificationAction(classification.tier),
+            ruleId: null,
+            reason: '邮箱账号上下文尚未建立，已使用保守的默认通知策略。'
+          })
     : {
-        action: defaultEmailNotificationAction(classification.tier),
+        action: 'silent',
         ruleId: null,
-        reason: '邮箱账号上下文尚未建立，已使用保守的默认通知策略。'
+        reason: '首次同步或历史补齐邮件已完成分类，但不会作为新邮件触发通知。'
       }
 
   let canonicalPreviousRow = previousResult.rows[0] || null
