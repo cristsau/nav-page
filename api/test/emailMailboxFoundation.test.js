@@ -63,10 +63,11 @@ test('mailbox normalization preserves plain-text line breaks and rejects unsafe 
 })
 
 test('mailbox storage encrypts message fields and queues classification before cursor progress', async () => {
-  const [store, migration, pipelineMigration, ingest] = await Promise.all([
+  const [store, migration, pipelineMigration, eligibilityMigration, ingest] = await Promise.all([
     source('../src/lib/emailMailboxStore.js'),
     source('../src/db/migrations/035_email_mailbox_foundation.sql'),
     source('../src/db/migrations/042_email_ingest_pipeline.sql'),
+    source('../src/db/migrations/043_email_notification_eligibility.sql'),
     source('../src/lib/emailIngestScheduler.js')
   ])
 
@@ -86,7 +87,13 @@ test('mailbox storage encrypts message fields and queues classification before c
   assert.match(store, /event\.message_id_hash = \$5::char\(64\)/)
   assert.doesNotMatch(store, /notification_action IN \('immediate', 'in_app_only'\)/)
   assert.match(store, /ON CONFLICT \(user_id, email_message_id\) DO NOTHING/)
+  assert.match(store, /email_message_id, notification_eligible/)
+  assert.match(store, /notificationEligible = false/)
+  assert.match(store, /Boolean\(notificationEligible\)/)
   assert.match(pipelineMigration, /UNIQUE \(user_id, email_message_id\)/)
+  assert.match(eligibilityMigration, /notification_eligible BOOLEAN NOT NULL DEFAULT FALSE/)
+  assert.match(ingest, /notificationEligible: batchNotificationState\.notificationEligible/)
+  assert.match(ingest, /completedNotificationState\.nextInitialSyncComplete/)
   assert.doesNotMatch(ingest, /processInboundEmail/)
   assert.match(ingest, /await assertHostImpl\(runtimeConfig\.imapHost/)
 

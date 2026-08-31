@@ -15,7 +15,10 @@ import {
   parseEmailWakePayload,
   startEmailWakeListener
 } from '../src/lib/emailIngestWake.js'
-import { drainEmailMailboxBatches } from '../src/lib/emailIngestScheduler.js'
+import {
+  drainEmailMailboxBatches,
+  mailboxBatchNotificationState
+} from '../src/lib/emailIngestScheduler.js'
 
 const ACCOUNT_ID = 'aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa'
 
@@ -235,6 +238,49 @@ test('classification failures move to durable retry_wait without losing the job'
   assert.equal(finishes[0][3], 'AI_PROVIDER_UNAVAILABLE')
 })
 
+test('classification worker preserves the durable notification eligibility decision', async () => {
+  const jobs = [
+    { id: '11111111-aaaa-4aaa-8aaa-111111111111', attempt_count: 1, max_attempts: 5 },
+    { id: '22222222-bbbb-4bbb-8bbb-222222222222', attempt_count: 1, max_attempts: 5 }
+  ]
+  const payloads = []
+  const finishes = []
+  const summary = await processEmailClassificationJobs({
+    poolInstance: {
+      async query() {
+        return { rows: [{ count: 0, due_count: 0, oldest_seconds: 0 }] }
+      }
+    },
+    policy: { batchSize: 10, maxAttempts: 5 },
+    runtimeConfig: { emailSourceKey: 'mxroute' },
+    claimFn: async () => jobs.shift() || null,
+    loadFn: async (_pool, job) => ({
+      user_id: 'dddddddd-dddd-4ddd-8ddd-dddddddddddd',
+      source_key: 'mxroute',
+      email_message_id: job.id,
+      mailbox_uid: 7,
+      received_at: '2026-08-31T00:00:00.000Z',
+      notification_eligible: job.id.startsWith('2222')
+    }),
+    decryptFn: async () => ({
+      envelope: {
+        messageId: '<eligibility@example.test>',
+        sender: { name: 'Sender', address: 'sender@example.test' },
+        to: [{ address: 'owner@example.test' }],
+        subject: 'Eligibility'
+      },
+      content: { text: 'Eligibility body' }
+    }),
+    processFn: async (payload) => { payloads.push(payload) },
+    finishFn: async (...parameters) => { finishes.push(parameters) }
+  })
+
+  assert.equal(summary.processed, 2)
+  assert.equal(summary.succeeded, 2)
+  assert.deepEqual(payloads.map((payload) => payload.notificationEligible), [false, true])
+  assert.deepEqual(finishes.map((parameters) => parameters[2]), ['succeeded', 'succeeded'])
+})
+
 test('backlog draining continues immediately but obeys batch and time budgets', async () => {
   let calls = 0
   const batchBounded = await drainEmailMailboxBatches({
@@ -270,6 +316,35 @@ test('backlog draining continues immediately but obeys batch and time budgets', 
   assert.equal(timedCalls, 1)
   assert.equal(timeBounded.batches, 1)
   assert.equal(timeBounded.continueImmediately, true)
+})
+
+test('mailbox notification eligibility arms only after the initial catch-up batch completes', () => {
+  const firstCatchUpBatch = mailboxBatchNotificationState({
+    initialSyncComplete: false,
+    caughtUp: true
+  })
+  assert.deepEqual(firstCatchUpBatch, {
+    notificationEligible: false,
+    nextInitialSyncComplete: true
+  })
+
+  const nextLiveBatch = mailboxBatchNotificationState({
+    initialSyncComplete: firstCatchUpBatch.nextInitialSyncComplete,
+    caughtUp: true
+  })
+  assert.deepEqual(nextLiveBatch, {
+    notificationEligible: true,
+    nextInitialSyncComplete: true
+  })
+
+  const uidValidityReset = mailboxBatchNotificationState({
+    initialSyncComplete: false,
+    caughtUp: false
+  })
+  assert.deepEqual(uidValidityReset, {
+    notificationEligible: false,
+    nextInitialSyncComplete: false
+  })
 })
 
 test('ingest cursor follows durable cache and queue commit, not AI classification', async () => {

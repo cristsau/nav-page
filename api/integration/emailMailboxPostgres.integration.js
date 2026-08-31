@@ -113,6 +113,7 @@ function mailboxFixture(overrides = {}) {
     userId: OWNER_ID,
     sourceKey: 'integration-mail',
     accountLabel: 'Integration mailbox',
+    notificationEligible: true,
     capabilities: ['IDLE', 'UIDPLUS'],
     folder: {
       path: 'INBOX',
@@ -169,7 +170,7 @@ test('canonical replay is idempotent and plaintext remains encrypted at rest', a
   assert.deepEqual(row.keywords, ['custom-keyword'])
 
   const jobs = await pool.query(
-    `SELECT status, attempt_count, account_id, email_message_id
+    `SELECT status, attempt_count, account_id, email_message_id, notification_eligible
      FROM email_classification_jobs
      WHERE user_id = $1 AND email_message_id = $2`,
     [OWNER_ID, first.message.id]
@@ -178,6 +179,7 @@ test('canonical replay is idempotent and plaintext remains encrypted at rest', a
   assert.equal(jobs.rows[0].status, 'pending')
   assert.equal(jobs.rows[0].attempt_count, 0)
   assert.equal(jobs.rows[0].account_id, first.account.id)
+  assert.equal(jobs.rows[0].notification_eligible, true)
 
   const decrypted = await decryptStoredMailboxMessage(row, {
     userId: OWNER_ID,
@@ -189,6 +191,38 @@ test('canonical replay is idempotent and plaintext remains encrypted at rest', a
   await assert.rejects(
     decryptStoredMailboxMessage(row, { userId: OTHER_USER_ID, sourceKey: row.source_key })
   )
+})
+
+test('043 upgrades an existing pending classification job to fail-closed notification eligibility', async () => {
+  const saved = await persistEmailMailboxMessage(mailboxFixture())
+  const migration = await fs.readFile(
+    new URL('../src/db/migrations/043_email_notification_eligibility.sql', import.meta.url),
+    'utf8'
+  )
+  const client = await pool.connect()
+  try {
+    await client.query('BEGIN')
+    await client.query('ALTER TABLE email_classification_jobs DROP COLUMN notification_eligible')
+    const legacyJob = await client.query(
+      `SELECT status FROM email_classification_jobs
+       WHERE user_id = $1 AND email_message_id = $2`,
+      [OWNER_ID, saved.message.id]
+    )
+    assert.equal(legacyJob.rows[0].status, 'pending')
+
+    await client.query(migration)
+    const upgradedJob = await client.query(
+      `SELECT status, notification_eligible
+       FROM email_classification_jobs
+       WHERE user_id = $1 AND email_message_id = $2`,
+      [OWNER_ID, saved.message.id]
+    )
+    assert.equal(upgradedJob.rows[0].status, 'pending')
+    assert.equal(upgradedJob.rows[0].notification_eligible, false)
+  } finally {
+    await client.query('ROLLBACK')
+    client.release()
+  }
 })
 
 test('durable classification queue processes encrypted mail independently and exactly once', async () => {
@@ -215,6 +249,7 @@ test('durable classification queue processes encrypted mail independently and ex
   assert.equal(processed.length, 1)
   assert.equal(processed[0].emailMessageId, saved.message.id)
   assert.equal(processed[0].email.subject, 'Queued classification subject')
+  assert.equal(processed[0].notificationEligible, true)
 
   const job = await pool.query(
     `SELECT status, attempt_count, completed_at, last_error_code
@@ -314,6 +349,7 @@ test('042 backfill and runtime replay never requeue linked or legacy hash-matche
       userId: OWNER_ID,
       sourceKey: 'integration-mail',
       emailMessageId: saved.message.id,
+      notificationEligible: true,
       email: {
         messageId: rawMessage.messageId,
         mailboxUid: rawMessage.mailboxUid,
@@ -369,7 +405,7 @@ test('042 backfill and runtime replay never requeue linked or legacy hash-matche
   assert.equal(backfillReplay.rowCount, 0)
 
   const backfillJobs = await pool.query(
-    `SELECT email_message_id
+    `SELECT email_message_id, notification_eligible
      FROM email_classification_jobs
      WHERE user_id = $1 AND email_message_id = ANY($2::uuid[])
      ORDER BY email_message_id`,
@@ -379,6 +415,7 @@ test('042 backfill and runtime replay never requeue linked or legacy hash-matche
     backfillJobs.rows.map((row) => row.email_message_id),
     [unclassified.message.id]
   )
+  assert.equal(backfillJobs.rows[0].notification_eligible, false)
   const untouchedEvents = await pool.query(
     `SELECT id, email_message_id, notified_at
      FROM email_events
@@ -429,6 +466,87 @@ test('042 backfill and runtime replay never requeue linked or legacy hash-matche
   }))
   assert.equal(newMessageWithoutMessageId.inserted, true)
   assert.equal(newMessageWithoutMessageId.classificationQueued, true)
+})
+
+test('initial mailbox catch-up is classified and searchable without creating a notification', async () => {
+  const historicalMessage = {
+    ...mailboxFixture().message,
+    mailboxUid: 17,
+    messageId: '<historical-catch-up-silent@example.test>',
+    rawHash: '2'.repeat(64),
+    subject: '安全警报：历史邮件需要分类但不得补发通知',
+    text: '这是首次同步发现的历史邮件。'
+  }
+  const historical = await persistEmailMailboxMessage(mailboxFixture({
+    notificationEligible: false,
+    message: historicalMessage
+  }))
+  const historicalRun = await processEmailClassificationJobs({
+    poolInstance: pool,
+    policy: { batchSize: 10, maxAttempts: 5 },
+    runtimeConfig: { emailSourceKey: 'integration-mail' }
+  })
+  assert.equal(historicalRun.succeeded, 1)
+
+  const historicalJob = await pool.query(
+    `SELECT status, notification_eligible
+     FROM email_classification_jobs
+     WHERE user_id = $1 AND email_message_id = $2`,
+    [OWNER_ID, historical.message.id]
+  )
+  assert.equal(historicalJob.rows[0].status, 'succeeded')
+  assert.equal(historicalJob.rows[0].notification_eligible, false)
+  const historicalEvent = await pool.query(
+    `SELECT id, notification_action, notification_reason, notified_at
+     FROM email_events
+     WHERE user_id = $1 AND email_message_id = $2`,
+    [OWNER_ID, historical.message.id]
+  )
+  assert.equal(historicalEvent.rowCount, 1)
+  assert.equal(historicalEvent.rows[0].notification_action, 'silent')
+  assert.match(historicalEvent.rows[0].notification_reason, /历史补齐邮件/)
+  assert.equal(historicalEvent.rows[0].notified_at, null)
+  const historicalNotifications = await pool.query(
+    `SELECT id FROM notifications
+     WHERE user_id = $1 AND source_type = 'email' AND source_id = $2`,
+    [OWNER_ID, historicalEvent.rows[0].id]
+  )
+  assert.equal(historicalNotifications.rowCount, 0)
+
+  const liveMessage = {
+    ...mailboxFixture().message,
+    mailboxUid: 18,
+    messageId: '<live-mail-notifies@example.test>',
+    rawHash: '3'.repeat(64),
+    subject: '安全警报：账号异常登录，需要立即处理',
+    text: '检测到新的异常登录，请立即核对。'
+  }
+  const live = await persistEmailMailboxMessage(mailboxFixture({
+    notificationEligible: true,
+    message: liveMessage
+  }))
+  const liveRun = await processEmailClassificationJobs({
+    poolInstance: pool,
+    policy: { batchSize: 10, maxAttempts: 5 },
+    runtimeConfig: { emailSourceKey: 'integration-mail' }
+  })
+  assert.equal(liveRun.succeeded, 1)
+  const liveEvent = await pool.query(
+    `SELECT id, notification_action, notified_at
+     FROM email_events
+     WHERE user_id = $1 AND email_message_id = $2`,
+    [OWNER_ID, live.message.id]
+  )
+  assert.equal(liveEvent.rowCount, 1)
+  assert.equal(liveEvent.rows[0].notification_action, 'immediate')
+  assert.ok(liveEvent.rows[0].notified_at)
+  const liveNotifications = await pool.query(
+    `SELECT id, push_enabled FROM notifications
+     WHERE user_id = $1 AND source_type = 'email' AND source_id = $2`,
+    [OWNER_ID, liveEvent.rows[0].id]
+  )
+  assert.equal(liveNotifications.rowCount, 1)
+  assert.equal(liveNotifications.rows[0].push_enabled, true)
 })
 
 test('notification rules are owner-bound, encrypted at rest and protect critical mail', async () => {
@@ -573,6 +691,7 @@ test('notification rules are owner-bound, encrypted at rest and protect critical
   const firstInbound = await processInboundEmail({
     userId: OWNER_ID,
     sourceKey: 'integration-mail',
+    notificationEligible: true,
     email: inbound,
     queryFn: (text, parameters) => pool.query(text, parameters)
   })
@@ -587,6 +706,7 @@ test('notification rules are owner-bound, encrypted at rest and protect critical
   const duplicateInbound = await processInboundEmail({
     userId: OWNER_ID,
     sourceKey: 'integration-mail',
+    notificationEligible: true,
     email: inbound,
     queryFn: (text, parameters) => pool.query(text, parameters)
   })

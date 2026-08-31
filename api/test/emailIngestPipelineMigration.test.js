@@ -6,6 +6,10 @@ const migrationUrl = new URL(
   '../src/db/migrations/042_email_ingest_pipeline.sql',
   import.meta.url
 )
+const notificationEligibilityMigrationUrl = new URL(
+  '../src/db/migrations/043_email_notification_eligibility.sql',
+  import.meta.url
+)
 const verifierUrl = new URL('../src/db/verifyMigrations.js', import.meta.url)
 const classificationWorkerUrl = new URL('../src/lib/emailClassificationWorker.js', import.meta.url)
 const runtimeUrl = new URL('../src/lib/emailRuntimeController.js', import.meta.url)
@@ -44,11 +48,12 @@ test('email ingest pipeline migration keeps queue payload identity-only and owne
 })
 
 test('migration verifier and runtime wire the classification queue and observability', async () => {
-  const [verifier, classificationWorker, runtime, maintenance] = await Promise.all([
+  const [verifier, classificationWorker, runtime, maintenance, notificationEligibilityMigration] = await Promise.all([
     readFile(verifierUrl, 'utf8'),
     readFile(classificationWorkerUrl, 'utf8'),
     readFile(runtimeUrl, 'utf8'),
-    readFile(maintenanceUrl, 'utf8')
+    readFile(maintenanceUrl, 'utf8'),
+    readFile(notificationEligibilityMigrationUrl, 'utf8')
   ])
   assert.match(verifier, /async function verifyEmailIngestPipelineSchema\(\)/)
   assert.match(verifier, /email_accounts_sync_generation_check/)
@@ -58,8 +63,13 @@ test('migration verifier and runtime wire the classification queue and observabi
   assert.match(verifier, /email classification job constraints must be validated/)
   assert.match(verifier, /idx_email_classification_jobs_due/)
   assert.match(verifier, /await verifyEmailIngestPipelineSchema\(\)/)
+  assert.match(verifier, /'notification_eligible'/)
+  assert.match(verifier, /\['notification_eligible', 'bool', 'NO', 'false'\]/)
+  assert.match(notificationEligibilityMigration, /ADD COLUMN IF NOT EXISTS notification_eligible BOOLEAN NOT NULL DEFAULT FALSE/)
+  assert.match(notificationEligibilityMigration, /historical synchronization classifiable but silent/)
   assert.match(classificationWorker, /SET status = \$2::varchar\(16\)/)
   assert.match(classificationWorker, /last_error_code = \$5::varchar\(64\)/)
+  assert.match(classificationWorker, /notificationEligible: context\.notification_eligible === true/)
   assert.match(runtime, /startEmailClassificationScheduler/)
   assert.match(runtime, /emailClassificationIntervalSeconds/)
   assert.match(runtime, /drainMaxMilliseconds: config\.imapDrainMaxMilliseconds/)

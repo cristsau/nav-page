@@ -96,6 +96,17 @@ export async function drainEmailMailboxBatches({ syncMailbox, policy, clock = ()
   return combined
 }
 
+export function mailboxBatchNotificationState({
+  initialSyncComplete = false,
+  caughtUp = false
+} = {}) {
+  const notificationEligible = initialSyncComplete === true
+  return {
+    notificationEligible,
+    nextInitialSyncComplete: notificationEligible || caughtUp === true
+  }
+}
+
 export function validateImapConfig(runtimeConfig = config) {
   const sourceKey = String(runtimeConfig.emailSourceKey || '').trim().toLowerCase()
   if (!/^[a-z0-9_.-]{1,80}$/.test(sourceKey)) throw new Error('Email source key is invalid')
@@ -525,6 +536,7 @@ export function startEmailIngestScheduler({
     const listedCurrent = listedFolders.find((folder) => folder.path === runtimeConfig.imapMailbox)
     let sourceBytes = 0
     let sourceBudgetExhausted = false
+    const batchNotificationState = mailboxBatchNotificationState({ initialSyncComplete })
 
     const persistOptions = (message) => ({
       poolInstance,
@@ -532,6 +544,10 @@ export function startEmailIngestScheduler({
       sourceKey,
       accountLabel: '个人邮箱',
       capabilities,
+      // Messages discovered while the folder is still performing its bounded
+      // initial catch-up remain fully searchable/classified, but must not be
+      // announced as newly arrived mail.
+      notificationEligible: batchNotificationState.notificationEligible,
       folder: {
         path: runtimeConfig.imapMailbox,
         delimiter: listedCurrent?.delimiter || null,
@@ -710,6 +726,10 @@ export function startEmailIngestScheduler({
       lastUid = Math.max(lastUid, candidateEndUid)
     }
     const caughtUp = lastUid >= Math.max(0, Number(mailboxUidNext || 1) - 1)
+    const completedNotificationState = mailboxBatchNotificationState({
+      initialSyncComplete,
+      caughtUp
+    })
     summary.caughtUp = caughtUp
     summary.remaining = Math.max(0, Number(mailboxUidNext || 1) - 1 - lastUid)
     await poolInstance.query(
@@ -721,7 +741,13 @@ export function startEmailIngestScheduler({
            last_error_code = $5,
            updated_at = NOW()
        WHERE id = $1 AND user_id = $4`,
-      [currentFolder.id, lastUid, caughtUp || initialSyncComplete, userId, mailboxErrorCode]
+      [
+        currentFolder.id,
+        lastUid,
+        completedNotificationState.nextInitialSyncComplete,
+        userId,
+        mailboxErrorCode
+      ]
     )
     await writeMailboxState({ uid: lastUid, errorCode: mailboxErrorCode, messageAt: false })
     const completed = await poolInstance.query(
