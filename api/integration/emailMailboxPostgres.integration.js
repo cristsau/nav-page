@@ -275,48 +275,84 @@ test('cache retention cannot cascade-delete a message required by a non-terminal
   assert.equal(removed.rowCount, 0)
 })
 
-test('042 backfill requeues an event whose immediate notification was not finalized', async () => {
-  const rawMessage = {
+test('042 backfill and runtime replay never requeue linked or legacy hash-matched events', async () => {
+  const unclassifiedMessage = {
     ...mailboxFixture().message,
     mailboxUid: 13,
-    messageId: '<cutover-notification-recovery@example.test>',
+    messageId: '<migration-backfill-without-event@example.test>',
     rawHash: 'd'.repeat(64),
+    subject: 'Message committed before classification existed',
+    text: 'This canonical message has no classification event.'
+  }
+  const interruptedMessage = {
+    ...mailboxFixture().message,
+    mailboxUid: 14,
+    messageId: '<runtime-notification-recovery@example.test>',
+    rawHash: 'e'.repeat(64),
     subject: '安全警报：账号异常登录，需要立即处理',
     text: '检测到新的异常登录，请立即核对。'
   }
-  const saved = await persistEmailMailboxMessage(mailboxFixture({ message: rawMessage }))
-  const classified = await processInboundEmail({
-    userId: OWNER_ID,
-    sourceKey: 'integration-mail',
-    emailMessageId: saved.message.id,
-    email: {
-      messageId: rawMessage.messageId,
-      mailboxUid: rawMessage.mailboxUid,
-      senderName: rawMessage.sender.name,
-      senderAddress: rawMessage.sender.address,
-      recipient: rawMessage.to[0].address,
-      subject: rawMessage.subject,
-      text: rawMessage.text,
-      receivedAt: rawMessage.receivedAt
-    }
-  })
-  assert.equal(classified.inserted, true)
-  assert.equal(classified.event.notificationAction, 'immediate')
+  const legacyUnlinkedMessage = {
+    ...mailboxFixture().message,
+    mailboxUid: 15,
+    messageId: '<legacy-unlinked-notification@example.test>',
+    rawHash: 'f'.repeat(64),
+    subject: '安全警报：历史事件尚未关联新缓存',
+    text: '这是一条迁移前已完成分类的历史事件。'
+  }
+  const unclassified = await persistEmailMailboxMessage(
+    mailboxFixture({ message: unclassifiedMessage })
+  )
+  const interrupted = await persistEmailMailboxMessage(
+    mailboxFixture({ message: interruptedMessage })
+  )
+  const legacyUnlinked = await persistEmailMailboxMessage(
+    mailboxFixture({ message: legacyUnlinkedMessage })
+  )
+  async function createInterruptedEvent(saved, rawMessage) {
+    const result = await processInboundEmail({
+      userId: OWNER_ID,
+      sourceKey: 'integration-mail',
+      emailMessageId: saved.message.id,
+      email: {
+        messageId: rawMessage.messageId,
+        mailboxUid: rawMessage.mailboxUid,
+        senderName: rawMessage.sender.name,
+        senderAddress: rawMessage.sender.address,
+        recipient: rawMessage.to[0].address,
+        subject: rawMessage.subject,
+        text: rawMessage.text,
+        receivedAt: rawMessage.receivedAt
+      }
+    })
+    assert.equal(result.inserted, true)
+    assert.equal(result.event.notificationAction, 'immediate')
+    await pool.query(
+      `DELETE FROM notifications
+       WHERE user_id = $1 AND source_type = 'email' AND source_id = $2`,
+      [OWNER_ID, result.event.id]
+    )
+    await pool.query(
+      `UPDATE email_events
+       SET notified_at = NULL, updated_at = NOW()
+       WHERE id = $1 AND user_id = $2`,
+      [result.event.id, OWNER_ID]
+    )
+    return result
+  }
+  const classified = await createInterruptedEvent(interrupted, interruptedMessage)
+  const legacyClassified = await createInterruptedEvent(legacyUnlinked, legacyUnlinkedMessage)
 
   await pool.query(
-    `DELETE FROM notifications
-     WHERE user_id = $1 AND source_type = 'email' AND source_id = $2`,
-    [OWNER_ID, classified.event.id]
-  )
-  await pool.query(
     `UPDATE email_events
-     SET notified_at = NULL, updated_at = NOW()
+     SET email_message_id = NULL, updated_at = NOW()
      WHERE id = $1 AND user_id = $2`,
-    [classified.event.id, OWNER_ID]
+    [legacyClassified.event.id, OWNER_ID]
   )
   await pool.query(
-    'DELETE FROM email_classification_jobs WHERE user_id = $1 AND email_message_id = $2',
-    [OWNER_ID, saved.message.id]
+    `DELETE FROM email_classification_jobs
+     WHERE user_id = $1 AND email_message_id = ANY($2::uuid[])`,
+    [OWNER_ID, [unclassified.message.id, interrupted.message.id, legacyUnlinked.message.id]]
   )
 
   const migration = await fs.readFile(
@@ -332,31 +368,67 @@ test('042 backfill requeues an event whose immediate notification was not finali
   const backfillReplay = await pool.query(backfillSql)
   assert.equal(backfillReplay.rowCount, 0)
 
-  const recovered = await processEmailClassificationJobs({
-    poolInstance: pool,
-    policy: { batchSize: 10, maxAttempts: 5 },
-    runtimeConfig: { emailSourceKey: 'integration-mail' }
-  })
-  assert.equal(recovered.succeeded, 1)
-
-  const event = await pool.query(
-    'SELECT notified_at FROM email_events WHERE id = $1 AND user_id = $2',
-    [classified.event.id, OWNER_ID]
+  const backfillJobs = await pool.query(
+    `SELECT email_message_id
+     FROM email_classification_jobs
+     WHERE user_id = $1 AND email_message_id = ANY($2::uuid[])
+     ORDER BY email_message_id`,
+    [OWNER_ID, [unclassified.message.id, interrupted.message.id, legacyUnlinked.message.id]]
   )
-  assert.ok(event.rows[0].notified_at)
-  const notification = await pool.query(
+  assert.deepEqual(
+    backfillJobs.rows.map((row) => row.email_message_id),
+    [unclassified.message.id]
+  )
+  const untouchedEvents = await pool.query(
+    `SELECT id, email_message_id, notified_at
+     FROM email_events
+     WHERE user_id = $1 AND id = ANY($2::uuid[])
+     ORDER BY id`,
+    [OWNER_ID, [classified.event.id, legacyClassified.event.id]]
+  )
+  assert.equal(untouchedEvents.rowCount, 2)
+  const linkedEvent = untouchedEvents.rows.find((row) => row.id === classified.event.id)
+  const unlinkedEvent = untouchedEvents.rows.find((row) => row.id === legacyClassified.event.id)
+  assert.equal(linkedEvent.email_message_id, interrupted.message.id)
+  assert.equal(linkedEvent.notified_at, null)
+  assert.equal(unlinkedEvent.email_message_id, null)
+  assert.equal(unlinkedEvent.notified_at, null)
+  const historicalNotification = await pool.query(
     `SELECT id FROM notifications
-     WHERE user_id = $1 AND source_type = 'email' AND source_id = $2`,
-    [OWNER_ID, classified.event.id]
+     WHERE user_id = $1 AND source_type = 'email' AND source_id = ANY($2::uuid[])`,
+    [OWNER_ID, [classified.event.id, legacyClassified.event.id]]
   )
-  assert.equal(notification.rowCount, 1)
-  const job = await pool.query(
-    `SELECT status, attempt_count FROM email_classification_jobs
-     WHERE user_id = $1 AND email_message_id = $2`,
-    [OWNER_ID, saved.message.id]
+  assert.equal(historicalNotification.rowCount, 0)
+
+  const linkedRuntimeReplay = await persistEmailMailboxMessage(
+    mailboxFixture({ message: interruptedMessage })
   )
-  assert.equal(job.rows[0].status, 'succeeded')
-  assert.equal(Number(job.rows[0].attempt_count), 1)
+  const unlinkedRuntimeReplay = await persistEmailMailboxMessage(
+    mailboxFixture({ message: legacyUnlinkedMessage })
+  )
+  assert.equal(linkedRuntimeReplay.inserted, false)
+  assert.equal(linkedRuntimeReplay.classificationQueued, false)
+  assert.equal(unlinkedRuntimeReplay.inserted, false)
+  assert.equal(unlinkedRuntimeReplay.classificationQueued, false)
+  const historicalJobs = await pool.query(
+    `SELECT email_message_id
+     FROM email_classification_jobs
+     WHERE user_id = $1 AND email_message_id = ANY($2::uuid[])`,
+    [OWNER_ID, [interrupted.message.id, legacyUnlinked.message.id]]
+  )
+  assert.equal(historicalJobs.rowCount, 0)
+
+  const newMessageWithoutMessageId = await persistEmailMailboxMessage(mailboxFixture({
+    message: {
+      ...mailboxFixture().message,
+      mailboxUid: 16,
+      messageId: '',
+      rawHash: '1'.repeat(64),
+      subject: 'New message without a Message-ID'
+    }
+  }))
+  assert.equal(newMessageWithoutMessageId.inserted, true)
+  assert.equal(newMessageWithoutMessageId.classificationQueued, true)
 })
 
 test('notification rules are owner-bound, encrypted at rest and protect critical mail', async () => {

@@ -80,10 +80,11 @@ test('mailbox storage encrypts message fields and queues classification before c
   assert.match(ingest, /slice\(-validated\.initialLookback\)/)
   assert.match(ingest, /persistEmailMailboxMessage/)
   assert.match(store, /INSERT INTO email_classification_jobs/)
-  assert.match(
-    store,
-    /notification_action IN \('immediate', 'in_app_only'\)[\s\S]*event\.notified_at IS NULL/
-  )
+  assert.match(store, /WHERE \(\$4::boolean OR \$5::char\(64\) IS NOT NULL\)/)
+  assert.match(store, /event\.email_message_id = \$3/)
+  assert.match(store, /event\.source_key = \$6/)
+  assert.match(store, /event\.message_id_hash = \$5::char\(64\)/)
+  assert.doesNotMatch(store, /notification_action IN \('immediate', 'in_app_only'\)/)
   assert.match(store, /ON CONFLICT \(user_id, email_message_id\) DO NOTHING/)
   assert.match(pipelineMigration, /UNIQUE \(user_id, email_message_id\)/)
   assert.doesNotMatch(ingest, /processInboundEmail/)

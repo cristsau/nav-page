@@ -463,25 +463,31 @@ export async function persistEmailMailboxMessage({
       ]
     )
     location = locationResult.rows[0]
+    // A newly inserted canonical row always receives its durable job in this
+    // transaction. Replays may recover an eventless row only when its stable
+    // Message-ID hash can prove that no linked or legacy event already exists.
+    // This keeps old incomplete notification metadata from becoming new push.
     const classificationJob = await client.query(
       `INSERT INTO email_classification_jobs (
          user_id, account_id, email_message_id
        )
        SELECT $1, $2, $3
-       WHERE NOT EXISTS (
-         SELECT 1 FROM email_events AS event
-         WHERE event.user_id = $1 AND event.email_message_id = $3
-       )
-       OR EXISTS (
-         SELECT 1 FROM email_events AS event
-         WHERE event.user_id = $1
-           AND event.email_message_id = $3
-           AND event.notification_action IN ('immediate', 'in_app_only')
-           AND event.notified_at IS NULL
-       )
+       WHERE ($4::boolean OR $5::char(64) IS NOT NULL)
+         AND NOT EXISTS (
+           SELECT 1 FROM email_events AS event
+           WHERE event.user_id = $1
+             AND (
+               event.email_message_id = $3
+               OR (
+                 $5::char(64) IS NOT NULL
+                 AND event.source_key = $6
+                 AND event.message_id_hash = $5::char(64)
+               )
+             )
+         )
        ON CONFLICT (user_id, email_message_id) DO NOTHING
        RETURNING id`,
-      [userId, account.id, message.id]
+      [userId, account.id, message.id, inserted, canonical.messageIdHash, source]
     )
     classificationQueued = classificationJob.rowCount > 0
     await client.query('COMMIT')
