@@ -8,10 +8,13 @@ import {
   createWorkspaceDatabaseProperty,
   createWorkspaceDatabaseRow,
   createWorkspaceDatabaseView,
+  deleteWorkspaceDatabase,
   deleteWorkspaceDatabaseProperty,
   fetchWorkspaceDatabaseRows,
   fetchWorkspaceDatabases,
   restoreWorkspaceDatabaseRow,
+  updateWorkspaceDatabase,
+  updateWorkspaceDatabaseProperty,
   updateWorkspaceDatabaseRow,
   updateWorkspaceDatabaseView
 } from '@/shared/services/workspaceDatabasesApi'
@@ -30,15 +33,18 @@ const loading = ref(true)
 const busy = ref(false)
 const error = ref('')
 const showDatabaseModal = ref(false)
+const showDatabaseSettings = ref(false)
 const showPropertyModal = ref(false)
 const showViewModal = ref(false)
 const showViewSettings = ref(false)
 const showRowModal = ref(false)
 const showArchived = ref(false)
 const editingRow = ref(null)
+const editingProperty = ref(null)
 const relationChoices = ref({})
 
 const databaseDraft = ref({ name: '', description: '', template: 'project' })
+const databaseSettingsDraft = ref({ name: '', description: '' })
 const propertyDraft = ref({ name: '', type: 'text', options: '', targetDatabaseId: '' })
 const viewDraft = ref({ name: '', type: 'table', groupByPropertyId: '' })
 const rowDraft = ref({ title: '', values: {} })
@@ -254,17 +260,82 @@ async function saveDatabase() {
   }
 }
 
+function openDatabaseSettings() {
+  databaseSettingsDraft.value = {
+    name: database.value?.name || '',
+    description: database.value?.description || ''
+  }
+  showDatabaseSettings.value = true
+}
+
+async function saveDatabaseSettings() {
+  if (!databaseSettingsDraft.value.name.trim()) return
+  busy.value = true
+  try {
+    const payload = await updateWorkspaceDatabase(activeDatabaseId.value, databaseSettingsDraft.value)
+    database.value = payload.database
+    showDatabaseSettings.value = false
+    await loadDatabases({ selectFirst: false })
+    setStatus('数据库设置已保存')
+  } catch (cause) {
+    setStatus(cause.message || '数据库设置保存失败', 'error')
+  } finally {
+    busy.value = false
+  }
+}
+
+async function removeDatabase() {
+  const expected = database.value?.name || ''
+  if (window.prompt(`永久删除数据库“${expected}”及其全部记录。请输入数据库名称确认：`) !== expected) return
+  busy.value = true
+  try {
+    await deleteWorkspaceDatabase(activeDatabaseId.value)
+    activeDatabaseId.value = ''
+    showDatabaseSettings.value = false
+    await loadDatabases()
+    setStatus('数据库已永久删除')
+  } catch (cause) {
+    setStatus(cause.message || '数据库删除失败', 'error')
+  } finally {
+    busy.value = false
+  }
+}
+
+function resetPropertyDraft() {
+  editingProperty.value = null
+  propertyDraft.value = { name: '', type: 'text', options: '', targetDatabaseId: '' }
+}
+
+function openPropertyEditor(property = null) {
+  editingProperty.value = property
+  propertyDraft.value = property
+    ? {
+        name: property.name,
+        type: property.type,
+        options: (property.config?.options || []).map((option) => option.name).join('\n'),
+        targetDatabaseId: property.config?.targetDatabaseId || ''
+      }
+    : { name: '', type: 'text', options: '', targetDatabaseId: '' }
+  showPropertyModal.value = true
+}
+
 function propertyConfigFromDraft() {
   const type = propertyDraft.value.type
   if (['select', 'multi_select', 'status'].includes(type)) {
+    const existingOptions = new Map((editingProperty.value?.config?.options || [])
+      .map((option) => [option.name.toLocaleLowerCase('zh-CN'), option]))
     const options = propertyDraft.value.options
       .split(/[,，\n]/)
       .map((name) => name.trim())
       .filter(Boolean)
-      .map((name, index) => ({
-        name,
-        color: ['gray', 'blue', 'green', 'yellow', 'red', 'purple'][index % 6]
-      }))
+      .map((name, index) => {
+        const existing = existingOptions.get(name.toLocaleLowerCase('zh-CN'))
+        return {
+          ...(existing?.id ? { id: existing.id } : {}),
+          name,
+          color: existing?.color || ['gray', 'blue', 'green', 'yellow', 'red', 'purple'][index % 6]
+        }
+      })
     return { options }
   }
   if (type === 'relation') {
@@ -278,16 +349,22 @@ function propertyConfigFromDraft() {
 async function saveProperty() {
   busy.value = true
   try {
-    await createWorkspaceDatabaseProperty(activeDatabaseId.value, {
+    const input = {
       name: propertyDraft.value.name,
       type: propertyDraft.value.type,
       config: propertyConfigFromDraft()
-    })
+    }
+    if (editingProperty.value) {
+      await updateWorkspaceDatabaseProperty(activeDatabaseId.value, editingProperty.value.id, input)
+    } else {
+      await createWorkspaceDatabaseProperty(activeDatabaseId.value, input)
+    }
     showPropertyModal.value = false
-    propertyDraft.value = { name: '', type: 'text', options: '', targetDatabaseId: '' }
+    const wasEditing = Boolean(editingProperty.value)
+    resetPropertyDraft()
     await reloadRows()
     await loadRelationChoices()
-    setStatus('属性已添加')
+    setStatus(wasEditing ? '属性已更新' : '属性已添加')
   } catch (cause) {
     setStatus(cause.message || '属性添加失败', 'error')
   } finally {
@@ -301,6 +378,7 @@ async function removeProperty(property) {
   busy.value = true
   try {
     await deleteWorkspaceDatabaseProperty(activeDatabaseId.value, property.id)
+    if (editingProperty.value?.id === property.id) resetPropertyDraft()
     await reloadRows()
     setStatus('属性已删除')
   } catch (cause) {
@@ -543,7 +621,8 @@ onMounted(() => loadDatabases())
             <p v-if="database.description">{{ database.description }}</p>
           </div>
           <div class="database-heading__actions">
-            <button type="button" @click="showPropertyModal = true"><Icon name="plus" :size="16" />属性</button>
+            <button type="button" @click="openDatabaseSettings"><Icon name="settings" :size="16" />设置</button>
+            <button type="button" @click="openPropertyEditor()"><Icon name="plus" :size="16" />属性</button>
             <button type="button" @click="showViewModal = true"><Icon name="plus" :size="16" />视图</button>
             <button type="button" @click="openRow()"><Icon name="plus" :size="16" />记录</button>
           </div>
@@ -628,20 +707,30 @@ onMounted(() => loadDatabases())
     <template #footer><button type="button" @click="showDatabaseModal = false">取消</button><button type="button" class="database-primary" :disabled="busy || !databaseDraft.name.trim()" @click="saveDatabase">创建</button></template>
   </Modal>
 
-  <Modal :show="showPropertyModal" title="管理属性" width="640px" @close="showPropertyModal = false">
+  <Modal :show="showDatabaseSettings" title="数据库设置" width="560px" initial-focus-selector="#database-settings-name" @close="showDatabaseSettings = false">
+    <form class="database-form" @submit.prevent="saveDatabaseSettings">
+      <label for="database-settings-name">名称</label><input id="database-settings-name" v-model="databaseSettingsDraft.name" required maxlength="120">
+      <label for="database-settings-description">说明</label><textarea id="database-settings-description" v-model="databaseSettingsDraft.description" rows="3" maxlength="8000" />
+      <p class="database-danger-help">永久删除会同时删除属性、视图、记录和关系，无法撤销。</p>
+      <button type="button" class="database-danger" :disabled="busy" @click="removeDatabase"><Icon name="trash" :size="16" />永久删除数据库</button>
+    </form>
+    <template #footer><button type="button" @click="showDatabaseSettings = false">取消</button><button type="button" class="database-primary" :disabled="busy || !databaseSettingsDraft.name.trim()" @click="saveDatabaseSettings">保存</button></template>
+  </Modal>
+
+  <Modal :show="showPropertyModal" title="管理属性" width="640px" @close="showPropertyModal = false; resetPropertyDraft()">
     <div class="database-property-list">
-      <div v-for="property in properties" :key="property.id"><span><strong>{{ property.name }}</strong><small>{{ property.type }}</small></span><button v-if="property.type !== 'title'" type="button" aria-label="删除属性" @click="removeProperty(property)"><Icon name="trash" :size="16" /></button></div>
+      <div v-for="property in properties" :key="property.id"><span><strong>{{ property.name }}</strong><small>{{ property.type }}</small></span><span class="database-property-list__actions"><button type="button" :aria-label="`编辑属性 ${property.name}`" @click="openPropertyEditor(property)"><Icon name="edit" :size="16" /></button><button v-if="property.type !== 'title'" type="button" :aria-label="`删除属性 ${property.name}`" @click="removeProperty(property)"><Icon name="trash" :size="16" /></button></span></div>
     </div>
     <form class="database-form" @submit.prevent="saveProperty">
-      <label for="property-name">新属性名称</label><input id="property-name" v-model="propertyDraft.name" required maxlength="80">
+      <label for="property-name">{{ editingProperty ? '属性名称' : '新属性名称' }}</label><input id="property-name" v-model="propertyDraft.name" required maxlength="80">
       <label for="property-type">类型</label>
-      <select id="property-type" v-model="propertyDraft.type">
+      <select id="property-type" v-model="propertyDraft.type" :disabled="Boolean(editingProperty)">
         <option value="text">文本</option><option value="number">数字</option><option value="select">单选</option><option value="multi_select">多选</option><option value="status">状态</option><option value="date">日期</option><option value="checkbox">复选框</option><option value="url">网址</option><option value="relation">关联</option>
       </select>
       <template v-if="['select', 'multi_select', 'status'].includes(propertyDraft.type)"><label for="property-options">选项（逗号或换行分隔）</label><textarea id="property-options" v-model="propertyDraft.options" rows="3" /></template>
       <template v-if="propertyDraft.type === 'relation'"><label for="property-target">目标数据库</label><select id="property-target" v-model="propertyDraft.targetDatabaseId" required><option value="">请选择</option><option v-for="item in databases.filter((item) => item.id !== activeDatabaseId)" :key="item.id" :value="item.id">{{ item.name }}</option></select></template>
     </form>
-    <template #footer><button type="button" @click="showPropertyModal = false">关闭</button><button type="button" class="database-primary" :disabled="busy || !propertyDraft.name.trim()" @click="saveProperty">添加属性</button></template>
+    <template #footer><button v-if="editingProperty" type="button" @click="resetPropertyDraft">新建另一个属性</button><button type="button" @click="showPropertyModal = false; resetPropertyDraft()">关闭</button><button type="button" class="database-primary" :disabled="busy || !propertyDraft.name.trim()" @click="saveProperty">{{ editingProperty ? '保存属性' : '添加属性' }}</button></template>
   </Modal>
 
   <Modal :show="showViewModal" title="新建视图" width="520px" @close="showViewModal = false">
@@ -730,6 +819,8 @@ onMounted(() => loadDatabases())
 .database-board__add { display: inline-flex; min-height: 44px; align-items: center; gap: 6px; color: var(--text-muted); background: transparent; border: 0; cursor: pointer; }
 .database-primary { display: inline-flex; min-height: 44px; padding: 0 18px; align-items: center; justify-content: center; gap: 7px; color: var(--accent-text, #fff) !important; background: var(--accent-color) !important; border: 0; border-radius: 13px; cursor: pointer; }
 .database-primary:disabled { opacity: .48; cursor: not-allowed; }
+.database-danger { display: inline-flex; min-height: 44px; padding: 0 14px; align-items: center; justify-content: center; gap: 7px; color: var(--danger-color); background: var(--bg-card); border: 1px solid color-mix(in srgb, var(--danger-color) 45%, var(--border-light)); border-radius: 12px; cursor: pointer; }
+.database-danger-help { margin: 10px 0 0; color: var(--text-muted); font-size: .86rem; line-height: 1.6; }
 .database-form { display: grid; gap: 10px; }
 .database-form label, .database-form legend { color: var(--text-secondary); font-size: .82rem; font-weight: 650; }
 .database-form input:not([type="radio"]):not([type="checkbox"]), .database-form textarea, .database-form select, .database-config-row input, .database-config-row select { width: 100%; min-height: 44px; padding: 10px 12px; color: var(--text-primary); background: var(--bg-secondary); border: 1px solid var(--border-light); border-radius: 12px; }
@@ -741,6 +832,7 @@ onMounted(() => loadDatabases())
 .database-property-list { display: grid; gap: 6px; margin-bottom: 18px; }
 .database-property-list > div { display: flex; min-height: 52px; padding: 7px 8px 7px 12px; align-items: center; justify-content: space-between; background: var(--bg-secondary); border-radius: 12px; }
 .database-property-list span { display: grid; gap: 2px; }.database-property-list small { color: var(--text-muted); }
+.database-property-list .database-property-list__actions { display: flex; gap: 2px; }
 .database-config-section { margin-bottom: 18px; }.database-config-section > header { display: flex; min-height: 44px; align-items: center; justify-content: space-between; }.database-config-section header button { display: inline-flex; align-items: center; gap: 5px; }
 .database-config-row { display: grid; margin-bottom: 7px; grid-template-columns: minmax(140px, 1fr) minmax(120px, .7fr) minmax(120px, 1fr) 44px; gap: 7px; }
 .database-config-row__empty, .database-config-section__hint { display: inline-flex; min-height: 44px; align-items: center; color: var(--text-muted); font-size: .86rem; }

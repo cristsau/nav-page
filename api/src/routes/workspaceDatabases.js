@@ -191,6 +191,86 @@ async function syncRelations(client, userId, sourceRowId, relations) {
   }
 }
 
+async function assertPropertyConfigCompatible(client, userId, databaseId, property, nextConfig) {
+  if (['select', 'multi_select', 'status'].includes(property.type)) {
+    const nextIds = new Set((nextConfig.options || []).map((option) => option.id))
+    const removedIds = (property.config?.options || [])
+      .map((option) => option.id)
+      .filter((id) => !nextIds.has(id))
+    if (removedIds.length) {
+      const expression = property.type === 'multi_select'
+        ? '(values -> $3) ?| $4::text[]'
+        : 'values ->> $3 = ANY($4::text[])'
+      const used = await client.query(
+        `
+          SELECT 1
+          FROM workspace_database_rows
+          WHERE database_id = $1 AND user_id = $2
+            AND ${expression}
+          LIMIT 1
+        `,
+        [databaseId, userId, property.id, removedIds]
+      )
+      if (used.rows.length) {
+        throw new WorkspaceDatabaseError('仍有记录使用即将删除的选项，请先迁移这些记录', {
+          code: 'workspace_database_property_option_in_use',
+          statusCode: 409
+        })
+      }
+    }
+  }
+  if (property.type === 'relation'
+      && nextConfig.targetDatabaseId !== property.config?.targetDatabaseId) {
+    const used = await client.query(
+      `
+        SELECT 1
+        FROM workspace_database_rows
+        WHERE database_id = $1 AND user_id = $2
+          AND jsonb_typeof(values -> $3) = 'array'
+          AND jsonb_array_length(values -> $3) > 0
+        LIMIT 1
+      `,
+      [databaseId, userId, property.id]
+    )
+    if (used.rows.length) {
+      throw new WorkspaceDatabaseError('关联属性已有数据，不能直接更换目标数据库', {
+        code: 'workspace_database_relation_target_in_use',
+        statusCode: 409
+      })
+    }
+  }
+}
+
+async function repairViewsAfterPropertyDeletion(client, userId, databaseId, deletedPropertyId) {
+  const properties = await loadProperties(client, userId, databaseId)
+  const fallbackPropertyId = properties.find((property) => property.type === 'title')?.id
+    || properties[0]?.id
+  const views = await loadViews(client, userId, databaseId)
+  for (const view of views) {
+    const config = view.config || {}
+    const visiblePropertyIds = (config.visiblePropertyIds || [])
+      .filter((id) => id !== deletedPropertyId)
+    const normalized = normalizeWorkspaceDatabaseViewConfig({
+      filters: (config.filters || []).filter((filter) => filter.propertyId !== deletedPropertyId),
+      sorts: (config.sorts || []).filter((sort) => sort.propertyId !== deletedPropertyId),
+      visiblePropertyIds: visiblePropertyIds.length
+        ? visiblePropertyIds
+        : [fallbackPropertyId],
+      groupByPropertyId: config.groupByPropertyId === deletedPropertyId
+        ? null
+        : (config.groupByPropertyId || null)
+    }, properties)
+    await client.query(
+      `
+        UPDATE workspace_database_views
+        SET config = $4::jsonb, updated_at = NOW()
+        WHERE id = $1 AND database_id = $2 AND user_id = $3
+      `,
+      [view.id, databaseId, userId, JSON.stringify(normalized)]
+    )
+  }
+}
+
 async function loadBacklinks(userId, rowIds) {
   if (!rowIds.length) return {}
   const { rows } = await query(
@@ -469,6 +549,13 @@ export default async function workspaceDatabaseRoutes(fastify) {
         if (existing.type === 'relation') {
           await requireDatabase(client, request.currentUser.id, config.targetDatabaseId)
         }
+        await assertPropertyConfigCompatible(
+          client,
+          request.currentUser.id,
+          database.id,
+          existing,
+          config
+        )
         const displayOrder = request.body?.displayOrder === undefined
           ? Number(existing.display_order || 0)
           : Math.max(0, Math.min(10000, Number(request.body.displayOrder) || 0))
@@ -508,6 +595,12 @@ export default async function workspaceDatabaseRoutes(fastify) {
         await client.query(
           'DELETE FROM workspace_database_properties WHERE id = $1 AND database_id = $2 AND user_id = $3',
           [property.id, database.id, request.currentUser.id]
+        )
+        await repairViewsAfterPropertyDeletion(
+          client,
+          request.currentUser.id,
+          database.id,
+          property.id
         )
         await client.query('UPDATE workspace_databases SET updated_at = NOW() WHERE id = $1', [database.id])
       })
