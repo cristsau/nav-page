@@ -212,7 +212,7 @@ test('migration and source keep proposals durable, mail encrypted, outbox atomic
   assert.match(advanced, /target: '邮件操作'/)
   assert.match(route, /selectExplicitAssistantAdvancedTool/)
   assert.doesNotMatch(route, /selectedWriteTool === '\*'/)
-  assert.match(route, /sensitiveMailOperation/)
+  assert.match(route, /const sensitiveMailOperation = isSensitiveAssistantMailWriteRequest\(question\)/)
   assert.match(route, /forceSensitive: sensitiveMailOperation/)
   assert.match(route, /selectedWriteTool && isAssistantAdvancedTool\(selectedWriteTool\)[\s\S]*?等待页面中的单独确认/)
   assert.match(route, /用户当前消息明确授权使用 \$\{selectedWriteTool\} 立即创建/)

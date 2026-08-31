@@ -6,6 +6,7 @@ import {
   decryptEmailPayloadWithKey,
   encryptEmailPayloadWithKey
 } from '../src/lib/emailCrypto.js'
+import { isSensitiveAssistantMailWriteRequest } from '../src/lib/assistantAuthorization.js'
 import { prepareAssistantAnswerForStorage } from '../src/routes/assistant.js'
 
 async function source(path) {
@@ -179,4 +180,36 @@ test('advanced mail actions encrypt both user and assistant history while keepin
     decryptEmailPayloadWithKey(assistantStorage.contentEncrypted, key, { context }).content,
     /private-recipient-advanced@example\.test.*PRIVATE-ADVANCED-MAIL-SUBJECT-9137.*PRIVATE-ADVANCED-MAIL-BODY-4271/
   )
+})
+
+test('mail write confidentiality is fail-closed even when execution intent is ambiguous or rejected', () => {
+  const sensitiveRequests = [
+    '请帮我起草并发送邮件给 alice@example.com，正文是合同金额 100 万',
+    '请帮我写一封邮件给 alice@example.com，正文是合同金额 100 万',
+    '请撰写一封邮件，收件人：alice@example.com，主题：合同，正文：金额 100 万',
+    '请回复这封邮件，正文：我已确认',
+    'Compose an email to alice@example.com. Subject: Contract. Body: Approved.',
+    'Draft and send an email to alice@example.com with the confidential terms.',
+    'Reply to this email with the private account details.',
+    '查看这封邮件，然后回复它',
+    'Recipient: alice@example.com; Subject: Contract; Body: confidential'
+  ]
+  for (const request of sensitiveRequests) {
+    assert.equal(isSensitiveAssistantMailWriteRequest(request), true, request)
+  }
+})
+
+test('ordinary mail retrieval does not force write-history encryption', () => {
+  const retrievalRequests = [
+    '搜索今天收到的邮件',
+    '查找已发送邮件',
+    '查看我发送给张三的邮件',
+    '搜索发送失败的邮件',
+    '查看我的收件箱',
+    'search my email for invoices',
+    'show sent mail from Alice'
+  ]
+  for (const request of retrievalRequests) {
+    assert.equal(isSensitiveAssistantMailWriteRequest(request), false, request)
+  }
 })

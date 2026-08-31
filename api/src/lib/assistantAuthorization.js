@@ -8,6 +8,15 @@ const CREATE_TARGET_PATTERNS = Object.freeze({
   advanced: /(?:笔记|分享|邮件草稿|草稿|数据库|数据表|记录|note|share|draft|database|row)/iu
 })
 
+const SENSITIVE_MAIL_COMPOSE_ACTION_PATTERN = /(?:撰写|起草|草拟|写(?:一封|封)?|\b(?:compose|draft|write)\b)/iu
+const SENSITIVE_MAIL_DELIVERY_ACTION_PATTERN = /(?:(?<!已)发送|寄出|回复|回信|转发|\b(?:send|reply|respond|forward)\b)/iu
+const SENSITIVE_MAIL_TARGET_PATTERN = /(?:电子邮件|电邮|邮件|邮箱|草稿|\b(?:e-?mail|mail|message|draft)\b)/iu
+const SENSITIVE_MAIL_ADDRESS_PATTERN = /\b[^\s@,;，；<>]+@[^\s@,;，；<>]+\.[^\s@,;，；<>]+\b/iu
+const SENSITIVE_MAIL_RECIPIENT_FIELD_PATTERN = /(?:收件人|收信人|发给|发送给|寄给|回复给|\b(?:to|recipient)\s*[:：])/iu
+const SENSITIVE_MAIL_CONTENT_FIELD_PATTERN = /(?:主题|邮件标题|正文|邮件内容|\b(?:subject|body|message)\s*[:：])/iu
+const MAIL_RETRIEVAL_ACTION_PATTERN = /(?:搜索|查找|查询|检索|查看|读取|列出|找出|展示|总结|分析|\b(?:search|find|show|list|read|summari[sz]e|analy[sz]e)\b)/iu
+const MAIL_RETRIEVAL_THEN_WRITE_PATTERN = /(?:并|然后|再|接着|随后|[,，。；;]|\band(?:\s+then)?\b|\bthen\b).{0,24}(?:请(?:你)?(?:帮我)?|帮我|please\s+)?(?:发送|寄出|回复|回信|转发|\b(?:send|reply|respond|forward)\b)/iu
+
 const NEGATED_MUTATION_PATTERN = /(?:不要|别(?:再)?|无需|不需要|禁止|取消|do\s+not|don't|dont|never)\s*.{0,24}(?:创建|新建|添加|保存|收藏|记录|写|修改|更新|编辑|移动|删除|归档|置顶|标记|发送|回复|create|add|save|bookmark|write|update|edit|move|delete|archive|pin|send|reply)/iu
 
 const NON_EXECUTION_OPERATOR_PATTERN = /(?:翻译|译成|翻成|改写|重写|润色|总结|概括|解释|说明|引用|摘录|复述|转述|举例|举(?:一个|个)?例子|示例|例句|例子|为例|造句|\b(?:translate|rewrite|rephrase|paraphrase|summari[sz]e|explain|quote|cite|give\s+(?:an?\s+)?example)\b)/iu
@@ -119,6 +128,24 @@ export function isExplicitAssistantMutationRequest(commandText) {
   if (!Object.values(CREATE_TARGET_PATTERNS).some((pattern) => pattern.test(command))) return false
   return DIRECT_CREATE_CUE_PATTERN.test(command)
     || STARTS_WITH_MUTATION_ACTION_PATTERN.test(command)
+}
+
+// Message confidentiality is intentionally independent from mutation
+// authorization. A request can be ambiguous or rejected and still contain a
+// private recipient, subject, or body that must never enter plaintext history.
+export function isSensitiveAssistantMailWriteRequest(commandText) {
+  const command = normalizeCommand(commandText)
+  if (!command || command.length > 2_000) return false
+  const hasExplicitFields = SENSITIVE_MAIL_RECIPIENT_FIELD_PATTERN.test(command)
+    && SENSITIVE_MAIL_CONTENT_FIELD_PATTERN.test(command)
+  if (hasExplicitFields) return true
+  const hasMailTarget = SENSITIVE_MAIL_TARGET_PATTERN.test(command)
+    || SENSITIVE_MAIL_ADDRESS_PATTERN.test(command)
+  if (!hasMailTarget) return false
+  if (SENSITIVE_MAIL_COMPOSE_ACTION_PATTERN.test(command)) return true
+  if (!SENSITIVE_MAIL_DELIVERY_ACTION_PATTERN.test(command)) return false
+  return !MAIL_RETRIEVAL_ACTION_PATTERN.test(command)
+    || MAIL_RETRIEVAL_THEN_WRITE_PATTERN.test(command)
 }
 
 export function isExplicitAssistantCreateCommand(commandText, toolName) {

@@ -32,6 +32,7 @@ import {
   classifyAssistantIntent
 } from '../lib/assistantIntent.js'
 import {
+  isSensitiveAssistantMailWriteRequest,
   selectAssistantBookmarkGroup,
   selectExplicitAssistantAdvancedTool,
   selectExplicitAssistantCreateTool
@@ -1306,7 +1307,7 @@ export default async function assistantRoutes(fastify) {
       timeZone: request.body?.timeZone
     })
     const selectedMutationTool = intent.action ? explicitMutationToolForQuestion(question) : ''
-    const sensitiveMailOperation = ['create_email_draft', 'send_email_draft'].includes(selectedMutationTool)
+    const sensitiveMailOperation = isSensitiveAssistantMailWriteRequest(question)
     const requestedConversationId = normalizeText(request.body?.conversationId)
     if (requestedConversationId && !isUuid(requestedConversationId)) {
       reply.code(400)
