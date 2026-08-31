@@ -27,11 +27,18 @@ test('email ingest pipeline migration keeps queue payload identity-only and owne
   assert.match(queueDefinition, /status = 'dead_letter' AND completed_at IS NOT NULL AND last_error_code IS NOT NULL/)
   assert.match(queueDefinition, /status IN \('pending', 'running', 'retry_wait'\) AND completed_at IS NULL/)
   assert.doesNotMatch(queueDefinition, /subject|sender|recipient|body|content|envelope|password|secret|token/i)
-  assert.match(migration, /WHERE NOT EXISTS \([\s\S]*FROM email_events/)
-  assert.match(
+  assert.match(migration, /JOIN email_accounts AS account/)
+  assert.match(migration, /WHERE message\.message_id_hash IS NOT NULL/)
+  assert.match(migration, /event\.email_message_id = message\.id/)
+  assert.match(migration, /event\.source_key = account\.source_key/)
+  assert.match(migration, /event\.message_id_hash = message\.message_id_hash/)
+  assert.doesNotMatch(
     migration,
     /OR EXISTS \([\s\S]*notification_action IN \('immediate', 'in_app_only'\)[\s\S]*notified_at IS NULL/
   )
+  assert.match(migration, /Existing events are historical completion evidence/)
+  assert.match(migration, /must not be[\s\S]*replayed during the first deployment/)
+  assert.match(migration, /without a Message-ID are intentionally excluded/)
   assert.match(migration, /ON CONFLICT \(user_id, email_message_id\) DO NOTHING/)
   assert.match(migration, /VALUES \('email_classification'\)/)
 })

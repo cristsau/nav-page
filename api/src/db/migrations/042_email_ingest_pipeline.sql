@@ -58,29 +58,33 @@ CREATE INDEX IF NOT EXISTS idx_email_classification_jobs_due
 CREATE INDEX IF NOT EXISTS idx_email_classification_jobs_account_status
   ON email_classification_jobs (user_id, account_id, status, created_at ASC, id ASC);
 
--- Recover any encrypted mailbox rows that were committed before classification
--- completed. The job contains identity and lifecycle metadata only; plaintext
--- remains exclusively in the encrypted canonical message cache.
+-- Backfill only encrypted mailbox rows that have never produced a classification
+-- event. Existing events are historical completion evidence and must not be
+-- replayed during the first deployment: older rows can legitimately have a NULL
+-- notified_at, and re-queuing them would fan out duplicate Web Push alerts.
+-- Legacy events may predate the email_message_id foreign key, so source_key plus
+-- the stable Message-ID hash is also treated as completion evidence. Historical
+-- messages without a Message-ID are intentionally excluded because they cannot
+-- be linked to a legacy event without decrypting content in a schema migration.
 INSERT INTO email_classification_jobs (user_id, account_id, email_message_id)
 SELECT message.user_id, message.account_id, message.id
 FROM email_messages AS message
-WHERE NOT EXISTS (
-  SELECT 1
-  FROM email_events AS event
-  WHERE event.user_id = message.user_id
-    AND event.email_message_id = message.id
-)
-OR EXISTS (
-  -- processInboundEmail writes the event before it creates the idempotent
-  -- notification. Recover the narrow cutover/crash window where that event is
-  -- durable but its immediate or in-app notification is not yet finalized.
-  SELECT 1
-  FROM email_events AS event
-  WHERE event.user_id = message.user_id
-    AND event.email_message_id = message.id
-    AND event.notification_action IN ('immediate', 'in_app_only')
-    AND event.notified_at IS NULL
-)
+JOIN email_accounts AS account
+  ON account.id = message.account_id
+ AND account.user_id = message.user_id
+WHERE message.message_id_hash IS NOT NULL
+  AND NOT EXISTS (
+    SELECT 1
+    FROM email_events AS event
+    WHERE event.user_id = message.user_id
+      AND (
+        event.email_message_id = message.id
+        OR (
+          event.source_key = account.source_key
+          AND event.message_id_hash = message.message_id_hash
+        )
+      )
+  )
 ON CONFLICT (user_id, email_message_id) DO NOTHING;
 
 INSERT INTO maintenance_job_status (job_name)
