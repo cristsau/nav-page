@@ -149,7 +149,12 @@ const ACTION_TARGET_PATTERN = new RegExp([
   '待办',
   '分组',
   '邮件',
-  '\\b(?:bookmark|note|diary|memo|reminder|todo|group|email)\\b'
+  '分享',
+  '草稿',
+  '数据库',
+  '数据表',
+  '记录',
+  '\\b(?:bookmark|note|diary|memo|reminder|todo|group|email|share|draft|database|row)\\b'
 ].join('|'), 'iu')
 
 const EMAIL_RETRIEVAL_CUE_PATTERN = new RegExp([

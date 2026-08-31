@@ -6,6 +6,7 @@ import {
   decryptEmailPayloadWithKey,
   encryptEmailPayloadWithKey
 } from '../src/lib/emailCrypto.js'
+import { prepareAssistantAnswerForStorage } from '../src/routes/assistant.js'
 
 async function source(path) {
   return readFile(new URL(path, import.meta.url), 'utf8')
@@ -128,4 +129,54 @@ test('email-derived assistant history is encrypted and persists only generic sou
   assert.match(preferencesMigration, /reasoning_effort/)
   assert.match(preferencesMigration, /model_mode/)
   assert.match(verifier, /assistant_conversations_reasoning_effort_check/)
+})
+
+test('advanced mail actions encrypt both user and assistant history while keeping generic plaintext', async () => {
+  const key = randomBytes(32)
+  const userId = '00000000-0000-4000-8000-000000000001'
+  const conversationId = '00000000-0000-4000-8000-000000000002'
+  const context = `assistant:${userId}:${conversationId}`
+  const uniqueRecipient = 'private-recipient-advanced@example.test'
+  const uniqueSubject = 'PRIVATE-ADVANCED-MAIL-SUBJECT-9137'
+  const uniqueBody = 'PRIVATE-ADVANCED-MAIL-BODY-4271'
+  const encryptPayloadFn = async (payload, options) => encryptEmailPayloadWithKey(
+    payload,
+    key,
+    options
+  )
+
+  const userStorage = await prepareAssistantAnswerForStorage({
+    answer: `发送给 ${uniqueRecipient}，主题 ${uniqueSubject}，正文 ${uniqueBody}`,
+    sources: [],
+    userId,
+    conversationId,
+    forceSensitive: true,
+    fallbackLabel: '邮件操作请求',
+    encryptPayloadFn
+  })
+  const assistantStorage = await prepareAssistantAnswerForStorage({
+    answer: `请确认向 ${uniqueRecipient} 发送 ${uniqueSubject}：${uniqueBody}`,
+    sources: [],
+    userId,
+    conversationId,
+    forceSensitive: true,
+    fallbackLabel: '邮件操作回答',
+    encryptPayloadFn
+  })
+
+  for (const stored of [userStorage, assistantStorage]) {
+    assert.equal(stored.contentSensitive, true)
+    assert.equal(Buffer.isBuffer(stored.contentEncrypted), true)
+    assert.doesNotMatch(stored.content, /private-recipient|PRIVATE-ADVANCED/)
+  }
+  assert.equal(userStorage.content, '[邮件操作请求已加密]')
+  assert.equal(assistantStorage.content, '[邮件操作回答已加密]')
+  assert.match(
+    decryptEmailPayloadWithKey(userStorage.contentEncrypted, key, { context }).content,
+    /private-recipient-advanced@example\.test.*PRIVATE-ADVANCED-MAIL-SUBJECT-9137.*PRIVATE-ADVANCED-MAIL-BODY-4271/
+  )
+  assert.match(
+    decryptEmailPayloadWithKey(assistantStorage.contentEncrypted, key, { context }).content,
+    /private-recipient-advanced@example\.test.*PRIVATE-ADVANCED-MAIL-SUBJECT-9137.*PRIVATE-ADVANCED-MAIL-BODY-4271/
+  )
 })

@@ -16,9 +16,8 @@ const OPERATION_ID = '00000000-0000-4000-8000-000000000002'
 const GROUP_ID = '00000000-0000-4000-8000-000000000003'
 
 test('assistant registry exposes bounded read/write tools without strict provider schemas', () => {
-  assert.deepEqual(
-    ASSISTANT_TOOL_DEFINITIONS.map(({ name, risk }) => [name, risk]),
-    [
+  const registry = ASSISTANT_TOOL_DEFINITIONS.map(({ name, risk }) => [name, risk])
+  assert.deepEqual(registry.slice(0, 8), [
       ['get_current_datetime', 'read'],
       ['search_workspace', 'read'],
       ['list_navigation_groups', 'read'],
@@ -27,14 +26,15 @@ test('assistant registry exposes bounded read/write tools without strict provide
       ['create_memo', 'write'],
       ['create_bookmark', 'write'],
       ['create_group', 'write']
-    ]
-  )
+  ])
+  assert.equal(registry.some(([name, risk]) => name === 'send_email_draft' && risk === 'risky'), true)
+  assert.equal(registry.some(([name, risk]) => name === 'archive_database_row' && risk === 'risky'), true)
 
   const providerTools = listAssistantToolDefinitions()
   assert.equal(providerTools.length, ASSISTANT_TOOL_DEFINITIONS.length)
   assert.equal(providerTools.every((tool) => tool.strict === false), true)
   assert.equal(providerTools.some((tool) => Object.hasOwn(tool, 'risk')), false)
-  assert.equal(listAssistantToolDefinitions({ includeWrite: false }).length, 4)
+  assert.equal(listAssistantToolDefinitions({ includeWrite: false }).every((tool) => !tool.name.startsWith('create_') && !tool.name.startsWith('update_') && !tool.name.startsWith('delete_') && !tool.name.startsWith('send_') && !tool.name.startsWith('revoke_') && !tool.name.startsWith('archive_')), true)
   const bookmarkTool = providerTools.find((tool) => tool.name === 'create_bookmark')
   assert.equal(Object.hasOwn(bookmarkTool.parameters.properties, 'deduplicate'), false)
 })

@@ -369,6 +369,55 @@ export function normalizeWorkspaceDatabaseRowValues(value, properties) {
   return normalized
 }
 
+export async function assertWorkspaceDatabaseRelationTargets(client, userId, sourceRowId, properties, values) {
+  const expected = []
+  for (const property of properties) {
+    if (property.type !== 'relation') continue
+    const targetIds = values[property.id] || []
+    for (const targetId of targetIds) {
+      if (sourceRowId && targetId === sourceRowId) {
+        fail('记录不能关联自身', 'workspace_database_relation_self_invalid')
+      }
+      expected.push({
+        propertyId: property.id,
+        targetId,
+        targetDatabaseId: property.config.targetDatabaseId
+      })
+    }
+  }
+  if (!expected.length) return []
+  const targetIds = [...new Set(expected.map((item) => item.targetId))]
+  const { rows } = await client.query(
+    `SELECT id,database_id FROM workspace_database_rows
+     WHERE user_id=$1 AND id=ANY($2::uuid[]) AND archived=FALSE
+     FOR KEY SHARE`,
+    [userId, targetIds]
+  )
+  const targetMap = new Map(rows.map((row) => [row.id, row.database_id]))
+  for (const relation of expected) {
+    if (targetMap.get(relation.targetId) !== relation.targetDatabaseId) {
+      fail('关联记录不存在或不属于目标数据库', 'workspace_database_relation_target_invalid')
+    }
+  }
+  return expected
+}
+
+export async function syncWorkspaceDatabaseRelations(client, userId, sourceRowId, sourceDatabaseId, relations) {
+  await client.query(
+    'DELETE FROM workspace_database_relations WHERE source_row_id=$1 AND user_id=$2',
+    [sourceRowId, userId]
+  )
+  for (const relation of relations) {
+    await client.query(
+      `INSERT INTO workspace_database_relations(
+         source_row_id,source_database_id,source_property_id,
+         target_row_id,target_database_id,user_id
+       ) VALUES($1,$2,$3,$4,$5,$6) ON CONFLICT DO NOTHING`,
+      [sourceRowId, sourceDatabaseId, relation.propertyId, relation.targetId, relation.targetDatabaseId, userId]
+    )
+  }
+}
+
 export function mapWorkspaceDatabase(row) {
   return {
     id: row.id,

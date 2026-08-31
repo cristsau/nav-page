@@ -41,6 +41,27 @@ export async function deleteAssistantConversation(conversationId) {
   })
 }
 
+function assistantActionRequest(operationId, action) {
+  const id = String(operationId || '').trim()
+  if (!id) throw new Error('助理操作 ID 缺失')
+  return request(`/assistant/actions/${encodeURIComponent(id)}/${action}`, {
+    method: 'POST',
+    body: JSON.stringify({})
+  })
+}
+
+export function confirmAssistantAction(operationId) {
+  return assistantActionRequest(operationId, 'confirm')
+}
+
+export function cancelAssistantAction(operationId) {
+  return assistantActionRequest(operationId, 'cancel')
+}
+
+export function undoAssistantAction(operationId) {
+  return assistantActionRequest(operationId, 'undo')
+}
+
 export async function updateAssistantConversationPreferences(
   conversationId,
   preferences

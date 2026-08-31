@@ -2,6 +2,7 @@ import { query, withTransaction } from '../db/index.js'
 import {
   WorkspaceDatabaseError,
   applyWorkspaceDatabaseView,
+  assertWorkspaceDatabaseRelationTargets,
   mapWorkspaceDatabase,
   mapWorkspaceDatabaseProperty,
   mapWorkspaceDatabaseRow,
@@ -15,7 +16,8 @@ import {
   normalizeWorkspaceDatabaseRowTitle,
   normalizeWorkspaceDatabaseRowValues,
   normalizeWorkspaceDatabaseViewConfig,
-  normalizeWorkspaceDatabaseViewType
+  normalizeWorkspaceDatabaseViewType,
+  syncWorkspaceDatabaseRelations
 } from '../lib/workspaceDatabases.js'
 
 function sendWorkspaceDatabaseError(reply, error) {
@@ -132,72 +134,6 @@ async function requireRow(client, userId, databaseId, rowId, { lock = false } = 
     })
   }
   return rows[0]
-}
-
-async function assertRelationTargets(client, userId, sourceRowId, properties, values) {
-  const expected = []
-  for (const property of properties) {
-    if (property.type !== 'relation') continue
-    const targetIds = values[property.id] || []
-    for (const targetId of targetIds) {
-      if (sourceRowId && targetId === sourceRowId) {
-        throw new WorkspaceDatabaseError('记录不能关联自身', {
-          code: 'workspace_database_relation_self_invalid'
-        })
-      }
-      expected.push({
-        propertyId: property.id,
-        targetId,
-        targetDatabaseId: property.config.targetDatabaseId
-      })
-    }
-  }
-  if (!expected.length) return []
-  const targetIds = [...new Set(expected.map((item) => item.targetId))]
-  const { rows } = await client.query(
-    `
-      SELECT id, database_id
-      FROM workspace_database_rows
-      WHERE user_id = $1 AND id = ANY($2::uuid[]) AND archived = FALSE
-      FOR KEY SHARE
-    `,
-    [userId, targetIds]
-  )
-  const targetMap = new Map(rows.map((row) => [row.id, row.database_id]))
-  for (const relation of expected) {
-    if (targetMap.get(relation.targetId) !== relation.targetDatabaseId) {
-      throw new WorkspaceDatabaseError('关联记录不存在或不属于目标数据库', {
-        code: 'workspace_database_relation_target_invalid'
-      })
-    }
-  }
-  return expected
-}
-
-async function syncRelations(client, userId, sourceRowId, sourceDatabaseId, relations) {
-  await client.query(
-    'DELETE FROM workspace_database_relations WHERE source_row_id = $1 AND user_id = $2',
-    [sourceRowId, userId]
-  )
-  for (const relation of relations) {
-    await client.query(
-      `
-        INSERT INTO workspace_database_relations (
-          source_row_id, source_database_id, source_property_id,
-          target_row_id, target_database_id, user_id
-        ) VALUES ($1, $2, $3, $4, $5, $6)
-        ON CONFLICT DO NOTHING
-      `,
-      [
-        sourceRowId,
-        sourceDatabaseId,
-        relation.propertyId,
-        relation.targetId,
-        relation.targetDatabaseId,
-        userId
-      ]
-    )
-  }
 }
 
 async function assertPropertyConfigCompatible(client, userId, databaseId, property, nextConfig) {
@@ -776,7 +712,7 @@ export default async function workspaceDatabaseRoutes(fastify) {
         const properties = await loadProperties(client, request.currentUser.id, database.id)
         const title = normalizeWorkspaceDatabaseRowTitle(request.body?.title)
         const values = normalizeWorkspaceDatabaseRowValues(request.body?.values, properties)
-        const relations = await assertRelationTargets(client, request.currentUser.id, null, properties, values)
+        const relations = await assertWorkspaceDatabaseRelationTargets(client, request.currentUser.id, null, properties, values)
         const order = await client.query(
           `SELECT COALESCE(MAX(position), 0) + 1024 AS next_position FROM workspace_database_rows WHERE database_id = $1`,
           [database.id]
@@ -790,7 +726,7 @@ export default async function workspaceDatabaseRoutes(fastify) {
           `,
           [database.id, request.currentUser.id, title, JSON.stringify(values), String(order.rows[0]?.next_position || 1024)]
         )
-        await syncRelations(
+        await syncWorkspaceDatabaseRelations(
           client,
           request.currentUser.id,
           rows[0].id,
@@ -830,7 +766,7 @@ export default async function workspaceDatabaseRoutes(fastify) {
           }
         }
         const values = normalizeWorkspaceDatabaseRowValues(mergedValues, properties)
-        const relations = await assertRelationTargets(client, request.currentUser.id, existing.id, properties, values)
+        const relations = await assertWorkspaceDatabaseRelationTargets(client, request.currentUser.id, existing.id, properties, values)
         const archived = request.body?.archived === undefined
           ? Boolean(existing.archived)
           : Boolean(request.body.archived)
@@ -847,7 +783,7 @@ export default async function workspaceDatabaseRoutes(fastify) {
           `,
           [existing.id, database.id, request.currentUser.id, title, JSON.stringify(values), archived, position]
         )
-        await syncRelations(
+        await syncWorkspaceDatabaseRelations(
           client,
           request.currentUser.id,
           existing.id,

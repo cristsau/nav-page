@@ -3189,6 +3189,82 @@ async function verifyWorkspaceDatabaseSchema() {
   )
 }
 
+async function verifyAssistantConfirmedOperationSchema() {
+  const columns = await query(`
+    SELECT column_name
+    FROM information_schema.columns
+    WHERE table_schema = current_schema()
+      AND table_name = 'assistant_agent_operation_payloads'
+  `)
+  assertExactSet(
+    'assistant confirmed operation payload columns',
+    columns.rows.map((row) => row.column_name),
+    [
+      'user_id', 'operation_id', 'arguments', 'preview', 'sensitive_payload', 'before_snapshot', 'confirmation_fingerprint', 'after_fingerprint',
+      'expires_at', 'created_at', 'updated_at'
+    ]
+  )
+  const confirmationFingerprint = await query(`
+    SELECT is_nullable
+    FROM information_schema.columns
+    WHERE table_schema = current_schema()
+      AND table_name = 'assistant_agent_operation_payloads'
+      AND column_name = 'confirmation_fingerprint'
+  `)
+  if (confirmationFingerprint.rows[0]?.is_nullable !== 'NO') {
+    throw new Error('assistant confirmation fingerprint must be required')
+  }
+  const expectedConstraints = [
+    'assistant_agent_operation_payloads_pkey',
+    'assistant_agent_operation_payloads_operation_fkey',
+    'assistant_agent_operation_payloads_arguments_check',
+    'assistant_agent_operation_payloads_preview_check',
+    'assistant_agent_operation_payloads_snapshot_check',
+    'assistant_agent_operation_payloads_sensitive_size_check',
+    'assistant_agent_operation_payloads_fingerprint_check',
+    'assistant_agent_operation_payloads_expiry_check'
+  ]
+  const constraints = await query(`
+    SELECT conname, convalidated
+    FROM pg_constraint
+    WHERE connamespace = current_schema()::regnamespace
+      AND conname = ANY($1::text[])
+  `, [expectedConstraints])
+  assertExactSet(
+    'assistant confirmed operation payload constraints',
+    constraints.rows.map((row) => row.conname),
+    expectedConstraints
+  )
+  if (constraints.rows.some((row) => row.convalidated !== true)) {
+    throw new Error('assistant confirmed operation payload constraints must be validated')
+  }
+  const snapshotConstraint = await query(`
+    SELECT pg_get_constraintdef(oid, FALSE) AS definition
+    FROM pg_constraint
+    WHERE connamespace = current_schema()::regnamespace
+      AND conname = 'assistant_agent_operation_payloads_snapshot_check'
+  `)
+  const snapshotDefinition = String(snapshotConstraint.rows[0]?.definition || '').toLowerCase()
+  if (!/octet_length\(\(?before_snapshot\)?::text\)\s*<=\s*1048576/.test(snapshotDefinition)) {
+    throw new Error('assistant confirmed operation snapshots must allow up to 1 MiB')
+  }
+  const expectedIndexes = [
+    'idx_assistant_agent_operation_payloads_expiry',
+    'idx_assistant_agent_operation_payloads_user_expiry'
+  ]
+  const indexes = await query(`
+    SELECT indexname
+    FROM pg_indexes
+    WHERE schemaname = current_schema()
+      AND indexname = ANY($1::text[])
+  `, [expectedIndexes])
+  assertExactSet(
+    'assistant confirmed operation payload indexes',
+    indexes.rows.map((row) => row.indexname),
+    expectedIndexes
+  )
+}
+
 async function main() {
   await verifyMigrationLedger()
   await verifyNavigationMaintenanceSchema()
@@ -3216,6 +3292,7 @@ async function main() {
   await verifyEmailRemoteCommandSchema()
   await verifyAssistantAgentOperationsSchema()
   await verifyWorkspaceDatabaseSchema()
+  await verifyAssistantConfirmedOperationSchema()
   console.log('migration schema verification complete')
 }
 
