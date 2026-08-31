@@ -35,6 +35,7 @@ import productivityImportRoutes from './routes/productivityImports.js'
 import securityEventRoutes from './routes/securityEvents.js'
 import settingsRoutes from './routes/settings.js'
 import workspaceRoutes from './routes/workspace.js'
+import workspaceDatabaseRoutes from './routes/workspaceDatabases.js'
 import webPushRoutes from './routes/webPush.js'
 
 function stripBodylessDeleteJsonContentType(request) {
@@ -179,6 +180,7 @@ export function createApp() {
   app.register(productivityImportRoutes, { prefix: '/api' })
   app.register(settingsRoutes, { prefix: '/api' })
   app.register(workspaceRoutes, { prefix: '/api' })
+  app.register(workspaceDatabaseRoutes, { prefix: '/api' })
   app.register(webPushRoutes, { prefix: '/api' })
 
   app.setErrorHandler((error, request, reply) => {

@@ -25,6 +25,7 @@ import NotePreview from './components/NotePreview.vue'
 import NoteVersionHistory from './components/NoteVersionHistory.vue'
 import ReminderCenter from './components/ReminderCenter.vue'
 import ShareManager from './components/ShareManager.vue'
+import DatabaseWorkspace from './components/DatabaseWorkspace.vue'
 import {
   mediaCleanupHasFailures,
   mediaCleanupMessage
@@ -65,6 +66,7 @@ const {
 const filterType = ref('all') // all | memo | diary
 const memoStatus = ref('open') // open | completed | all
 const searchQuery = ref('')
+const workspaceMode = ref('notes')
 
 // 编辑器
 const showEditor = ref(false)
@@ -193,6 +195,10 @@ function setStatus(message, type = 'success') {
   statusTimer = window.setTimeout(() => {
     status.value = { message: '', type: '' }
   }, 3200)
+}
+
+function handleDatabaseStatus(payload) {
+  setStatus(payload?.message || '', payload?.type || 'success')
 }
 
 // 筛选后的笔记
@@ -820,6 +826,28 @@ onBeforeUnmount(() => {
 
     <!-- 主内容 -->
     <main class="main">
+      <div class="workspace-switch" role="tablist" aria-label="时光工作区">
+        <button
+          type="button"
+          role="tab"
+          :aria-selected="workspaceMode === 'notes'"
+          :class="{ 'is-active': workspaceMode === 'notes' }"
+          @click="workspaceMode = 'notes'"
+        >
+          <Icon name="note" :size="16" />记录
+        </button>
+        <button
+          type="button"
+          role="tab"
+          :aria-selected="workspaceMode === 'databases'"
+          :class="{ 'is-active': workspaceMode === 'databases' }"
+          @click="workspaceMode = 'databases'"
+        >
+          <Icon name="database" :size="16" />数据库
+        </button>
+      </div>
+
+      <template v-if="workspaceMode === 'notes'">
       <section v-if="notes.length > 0" class="overview-strip" aria-label="记录概览">
         <div><strong>{{ noteStats.openMemos }}</strong><span>待办备忘</span></div>
         <div><strong>{{ noteStats.completedMemos }}</strong><span>已完成</span></div>
@@ -973,6 +1001,9 @@ onBeforeUnmount(() => {
           </section>
         </div>
       </div>
+      </template>
+
+      <DatabaseWorkspace v-else @status="handleDatabaseStatus" />
     </main>
 
     <!-- 编辑器弹窗 -->
@@ -1330,6 +1361,35 @@ onBeforeUnmount(() => {
   margin: 0 auto;
   padding: 24px;
   padding-bottom: 100px;
+}
+
+.workspace-switch {
+  display: inline-flex;
+  gap: 4px;
+  margin-bottom: 16px;
+  padding: 4px;
+  background: var(--bg-secondary);
+  border: 1px solid var(--border-light);
+  border-radius: 14px;
+}
+
+.workspace-switch button {
+  display: inline-flex;
+  min-height: 44px;
+  padding: 0 14px;
+  align-items: center;
+  gap: 7px;
+  color: var(--text-muted);
+  background: transparent;
+  border: 0;
+  border-radius: 10px;
+  cursor: pointer;
+}
+
+.workspace-switch button.is-active {
+  color: var(--text-primary);
+  background: var(--bg-card);
+  box-shadow: var(--shadow-sm);
 }
 
 .overview-strip {

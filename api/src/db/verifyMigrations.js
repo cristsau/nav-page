@@ -3026,6 +3026,122 @@ async function verifyOauthIdentitySchema() {
   assertExactSet('oauth identity indexes', indexes.rows.map((row) => row.indexname), expectedIndexes)
 }
 
+async function verifyWorkspaceDatabaseSchema() {
+  const expectedColumns = new Map([
+    ['workspace_databases', [
+      'id', 'user_id', 'name', 'description', 'icon', 'created_at', 'updated_at'
+    ]],
+    ['workspace_database_properties', [
+      'id', 'database_id', 'user_id', 'name', 'type', 'config',
+      'display_order', 'created_at', 'updated_at'
+    ]],
+    ['workspace_database_views', [
+      'id', 'database_id', 'user_id', 'name', 'type', 'config',
+      'display_order', 'created_at', 'updated_at'
+    ]],
+    ['workspace_database_rows', [
+      'id', 'database_id', 'user_id', 'title', 'values', 'position',
+      'archived', 'created_at', 'updated_at'
+    ]],
+    ['workspace_database_relations', [
+      'source_row_id', 'source_property_id', 'target_row_id', 'user_id', 'created_at'
+    ]]
+  ])
+  for (const [tableName, columns] of expectedColumns) {
+    const result = await query(
+      `
+        SELECT column_name
+        FROM information_schema.columns
+        WHERE table_schema = current_schema() AND table_name = $1
+      `,
+      [tableName]
+    )
+    assertExactSet(
+      `${tableName} columns`,
+      result.rows.map((row) => row.column_name),
+      columns
+    )
+  }
+
+  const expectedConstraints = [
+    'workspace_databases_pkey',
+    'workspace_databases_user_id_fkey',
+    'workspace_databases_user_identity_unique',
+    'workspace_databases_name_check',
+    'workspace_databases_description_check',
+    'workspace_databases_icon_check',
+    'workspace_database_properties_pkey',
+    'workspace_database_properties_database_user_fkey',
+    'workspace_database_properties_identity_unique',
+    'workspace_database_properties_name_unique',
+    'workspace_database_properties_name_check',
+    'workspace_database_properties_type_check',
+    'workspace_database_properties_config_check',
+    'workspace_database_properties_order_check',
+    'workspace_database_views_pkey',
+    'workspace_database_views_database_user_fkey',
+    'workspace_database_views_identity_unique',
+    'workspace_database_views_name_unique',
+    'workspace_database_views_name_check',
+    'workspace_database_views_type_check',
+    'workspace_database_views_config_check',
+    'workspace_database_views_order_check',
+    'workspace_database_rows_pkey',
+    'workspace_database_rows_database_user_fkey',
+    'workspace_database_rows_identity_unique',
+    'workspace_database_rows_database_identity_unique',
+    'workspace_database_rows_title_check',
+    'workspace_database_rows_values_check',
+    'workspace_database_relations_pkey',
+    'workspace_database_relations_source_row_fkey',
+    'workspace_database_relations_target_row_fkey',
+    'workspace_database_relations_source_property_fkey',
+    'workspace_database_relations_distinct_rows_check'
+  ]
+  const constraints = await query(
+    `
+      SELECT conname, convalidated
+      FROM pg_constraint
+      WHERE connamespace = current_schema()::regnamespace
+        AND conname = ANY($1::text[])
+    `,
+    [expectedConstraints]
+  )
+  assertExactSet(
+    'workspace database constraints',
+    constraints.rows.map((row) => row.conname),
+    expectedConstraints
+  )
+  if (constraints.rows.some((row) => row.convalidated !== true)) {
+    throw new Error('workspace database constraints must be validated')
+  }
+
+  const expectedIndexes = [
+    'idx_workspace_database_properties_one_title',
+    'idx_workspace_database_properties_order',
+    'idx_workspace_database_views_order',
+    'idx_workspace_database_rows_active',
+    'idx_workspace_database_rows_archived',
+    'idx_workspace_database_rows_values_gin',
+    'idx_workspace_database_relations_target',
+    'idx_workspace_databases_user_updated'
+  ]
+  const indexes = await query(
+    `
+      SELECT indexname
+      FROM pg_indexes
+      WHERE schemaname = current_schema()
+        AND indexname = ANY($1::text[])
+    `,
+    [expectedIndexes]
+  )
+  assertExactSet(
+    'workspace database indexes',
+    indexes.rows.map((row) => row.indexname),
+    expectedIndexes
+  )
+}
+
 async function main() {
   await verifyMigrationLedger()
   await verifyNavigationMaintenanceSchema()
@@ -3052,6 +3168,7 @@ async function main() {
   await verifyOauthIdentitySchema()
   await verifyEmailRemoteCommandSchema()
   await verifyAssistantAgentOperationsSchema()
+  await verifyWorkspaceDatabaseSchema()
   console.log('migration schema verification complete')
 }
 
