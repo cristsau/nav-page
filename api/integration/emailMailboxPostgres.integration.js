@@ -395,7 +395,7 @@ test('042 backfill and runtime replay never requeue linked or legacy hash-matche
   assert.equal(unlinkedEvent.notified_at, null)
   const historicalNotification = await pool.query(
     `SELECT id FROM notifications
-     WHERE user_id = $1 AND source_type = 'email' AND source_id = ANY($2::uuid[])`,
+     WHERE user_id = $1 AND source_type = 'email' AND source_id = ANY($2::text[])`,
     [OWNER_ID, [classified.event.id, legacyClassified.event.id]]
   )
   assert.equal(historicalNotification.rowCount, 0)
