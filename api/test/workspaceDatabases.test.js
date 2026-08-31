@@ -144,6 +144,8 @@ test('migration and route preserve user ownership, relations, backlinks and arch
     'idx_workspace_database_rows_values_gin'
   ]) assert.match(migration, new RegExp(fragment))
   assert.match(migration, /FOREIGN KEY \(database_id, user_id\)/)
+  assert.match(migration, /FOREIGN KEY \(source_property_id, source_database_id, user_id\)/)
+  assert.match(migration, /FOREIGN KEY \(target_row_id, target_database_id, user_id\)/)
   assert.match(migration, /CHECK \(source_row_id <> target_row_id\)/)
   assert.match(route, /relation\.user_id = \$1/)
   assert.match(route, /assertPropertyConfigCompatible/)
@@ -152,5 +154,6 @@ test('migration and route preserve user ownership, relations, backlinks and arch
   assert.match(route, /filter\.propertyId !== deletedPropertyId/)
   assert.match(route, /SET archived = TRUE/)
   assert.match(route, /SET archived = FALSE/)
-  assert.match(route, /LIMIT 5000/)
+  assert.match(route, /LIMIT 5001/)
+  assert.match(route, /truncated: hasMore/)
 })

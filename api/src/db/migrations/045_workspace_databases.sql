@@ -130,30 +130,35 @@ CREATE INDEX IF NOT EXISTS idx_workspace_database_rows_values_gin
 
 CREATE TABLE IF NOT EXISTS workspace_database_relations (
   source_row_id UUID NOT NULL,
+  source_database_id UUID NOT NULL,
   source_property_id UUID NOT NULL,
   target_row_id UUID NOT NULL,
+  target_database_id UUID NOT NULL,
   user_id UUID NOT NULL,
   created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
   CONSTRAINT workspace_database_relations_pkey
     PRIMARY KEY (source_row_id, source_property_id, target_row_id),
   CONSTRAINT workspace_database_relations_source_row_fkey
-    FOREIGN KEY (source_row_id, user_id)
-    REFERENCES workspace_database_rows(id, user_id)
+    FOREIGN KEY (source_row_id, source_database_id, user_id)
+    REFERENCES workspace_database_rows(id, database_id, user_id)
     ON DELETE CASCADE,
   CONSTRAINT workspace_database_relations_target_row_fkey
-    FOREIGN KEY (target_row_id, user_id)
-    REFERENCES workspace_database_rows(id, user_id)
+    FOREIGN KEY (target_row_id, target_database_id, user_id)
+    REFERENCES workspace_database_rows(id, database_id, user_id)
     ON DELETE CASCADE,
   CONSTRAINT workspace_database_relations_source_property_fkey
-    FOREIGN KEY (source_property_id)
-    REFERENCES workspace_database_properties(id)
+    FOREIGN KEY (source_property_id, source_database_id, user_id)
+    REFERENCES workspace_database_properties(id, database_id, user_id)
     ON DELETE CASCADE,
   CONSTRAINT workspace_database_relations_distinct_rows_check
     CHECK (source_row_id <> target_row_id)
 );
 
 CREATE INDEX IF NOT EXISTS idx_workspace_database_relations_target
-  ON workspace_database_relations (target_row_id, source_property_id, source_row_id);
+  ON workspace_database_relations (
+    target_row_id, target_database_id, user_id,
+    source_property_id, source_row_id
+  );
 
 CREATE INDEX IF NOT EXISTS idx_workspace_databases_user_updated
   ON workspace_databases (user_id, updated_at DESC, id);

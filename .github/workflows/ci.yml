@@ -612,3 +612,52 @@ jobs:
             NAV_BACKUP_GATE_INTEGRATION_TEST="$NAV_BACKUP_GATE_INTEGRATION_TEST" \
             NAV_RATE_LIMIT_KEY_SECRET="$NAV_RATE_LIMIT_KEY_SECRET" \
             npm run test:backup-gate:integration --prefix api
+
+  workspace-database-postgres-integration:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    env:
+      NODE_ENV: test
+      DATABASE_URL: postgres://nav:nav_password@127.0.0.1:5432/nav_workspace_database_test
+      NAV_WORKSPACE_DATABASE_INTEGRATION_TEST: "true"
+      NAV_RATE_LIMIT_KEY_SECRET: nav-workspace-database-ci-only-secret-20260901
+      NAV_LOG_LEVEL: silent
+      CORS_ORIGIN: http://localhost:5174
+
+    services:
+      postgres:
+        image: postgres:16-alpine
+        env:
+          POSTGRES_USER: nav
+          POSTGRES_PASSWORD: nav_password
+          POSTGRES_DB: nav_workspace_database_test
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd "pg_isready -U nav -d nav_workspace_database_test"
+          --health-interval 5s
+          --health-timeout 5s
+          --health-retries 10
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v6
+
+      - name: Set up Node.js
+        uses: actions/setup-node@v6
+        with:
+          node-version: 24
+          cache: npm
+          cache-dependency-path: api/package-lock.json
+
+      - name: Install API dependencies
+        run: npm ci --prefix api
+
+      - name: Apply and verify PostgreSQL migrations twice
+        run: |
+          npm run migrate --prefix api
+          npm run migrate --prefix api
+          npm run verify:migrations --prefix api
+
+      - name: Exercise workspace database ownership and lifecycle
+        run: npm run test:workspace-database:integration --prefix api

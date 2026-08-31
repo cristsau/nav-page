@@ -3055,7 +3055,8 @@ async function verifyWorkspaceDatabaseSchema() {
       'archived', 'created_at', 'updated_at'
     ]],
     ['workspace_database_relations', [
-      'source_row_id', 'source_property_id', 'target_row_id', 'user_id', 'created_at'
+      'source_row_id', 'source_database_id', 'source_property_id',
+      'target_row_id', 'target_database_id', 'user_id', 'created_at'
     ]]
   ])
   for (const [tableName, columns] of expectedColumns) {
@@ -3111,7 +3112,7 @@ async function verifyWorkspaceDatabaseSchema() {
   ]
   const constraints = await query(
     `
-      SELECT conname, convalidated
+      SELECT conname, convalidated, pg_get_constraintdef(oid, FALSE) AS definition
       FROM pg_constraint
       WHERE connamespace = current_schema()::regnamespace
         AND conname = ANY($1::text[])
@@ -3126,6 +3127,31 @@ async function verifyWorkspaceDatabaseSchema() {
   if (constraints.rows.some((row) => row.convalidated !== true)) {
     throw new Error('workspace database constraints must be validated')
   }
+  const expectedRelationDefinitions = new Map([
+    ['workspace_database_relations_source_row_fkey', [
+      'foreign key (source_row_id, source_database_id, user_id)',
+      'references workspace_database_rows(id, database_id, user_id)',
+      'on delete cascade'
+    ]],
+    ['workspace_database_relations_target_row_fkey', [
+      'foreign key (target_row_id, target_database_id, user_id)',
+      'references workspace_database_rows(id, database_id, user_id)',
+      'on delete cascade'
+    ]],
+    ['workspace_database_relations_source_property_fkey', [
+      'foreign key (source_property_id, source_database_id, user_id)',
+      'references workspace_database_properties(id, database_id, user_id)',
+      'on delete cascade'
+    ]]
+  ])
+  for (const [constraintName, fragments] of expectedRelationDefinitions) {
+    const constraint = constraints.rows.find((row) => row.conname === constraintName)
+    assertDefinitionIncludes(
+      `workspace database constraint ${constraintName}`,
+      constraint?.definition,
+      fragments
+    )
+  }
 
   const expectedIndexes = [
     'idx_workspace_database_properties_one_title',
@@ -3139,7 +3165,7 @@ async function verifyWorkspaceDatabaseSchema() {
   ]
   const indexes = await query(
     `
-      SELECT indexname
+      SELECT indexname, indexdef
       FROM pg_indexes
       WHERE schemaname = current_schema()
         AND indexname = ANY($1::text[])
@@ -3150,6 +3176,16 @@ async function verifyWorkspaceDatabaseSchema() {
     'workspace database indexes',
     indexes.rows.map((row) => row.indexname),
     expectedIndexes
+  )
+  const relationTargetIndex = indexes.rows.find(
+    (row) => row.indexname === 'idx_workspace_database_relations_target'
+  )
+  assertDefinitionIncludes(
+    'workspace database relation target index',
+    relationTargetIndex?.indexdef,
+    [
+      '(target_row_id, target_database_id, user_id, source_property_id, source_row_id)'
+    ]
   )
 }
 

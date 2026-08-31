@@ -28,6 +28,8 @@ const properties = ref([])
 const views = ref([])
 const rows = ref([])
 const backlinksByRow = ref({})
+const rowLimit = ref(5000)
+const rowsTruncated = ref(false)
 const activeViewId = ref('')
 const loading = ref(true)
 const busy = ref(false)
@@ -155,6 +157,7 @@ async function loadDatabases({ selectFirst = true } = {}) {
       properties.value = []
       views.value = []
       rows.value = []
+      rowsTruncated.value = false
     }
   } catch (cause) {
     error.value = cause.message || '数据库工作区加载失败'
@@ -176,6 +179,8 @@ async function selectDatabase(databaseId) {
     views.value = payload.views || []
     activeViewId.value = payload.selectedViewId || views.value[0]?.id || ''
     rows.value = payload.rows || []
+    rowLimit.value = Number(payload.limit || 5000)
+    rowsTruncated.value = Boolean(payload.truncated || payload.hasMore)
     backlinksByRow.value = payload.backlinksByRow || {}
     await loadRelationChoices()
   } catch (cause) {
@@ -196,6 +201,8 @@ async function reloadRows(viewId = activeViewId.value) {
   views.value = payload.views || []
   activeViewId.value = payload.selectedViewId || viewId || views.value[0]?.id || ''
   rows.value = payload.rows || []
+  rowLimit.value = Number(payload.limit || 5000)
+  rowsTruncated.value = Boolean(payload.truncated || payload.hasMore)
   backlinksByRow.value = payload.backlinksByRow || {}
 }
 
@@ -596,6 +603,7 @@ onMounted(() => loadDatabases())
         type="button"
         class="database-sidebar__item"
         :class="{ 'is-active': item.id === activeDatabaseId }"
+        :aria-current="item.id === activeDatabaseId ? 'page' : undefined"
         @click="selectDatabase(item.id)"
       >
         <Icon name="database" :size="17" />
@@ -614,6 +622,9 @@ onMounted(() => loadDatabases())
         <button type="button" class="database-primary" @click="showDatabaseModal = true"><Icon name="plus" :size="17" />创建数据库</button>
       </div>
       <template v-else>
+        <p v-if="rowsTruncated" class="database-limit-notice" role="status">
+          当前数据库超过 {{ rowLimit.toLocaleString() }} 条记录；本页和当前视图仅处理前 {{ rowLimit.toLocaleString() }} 条。请先归档或拆分数据库后再核对完整结果。
+        </p>
         <header class="database-heading">
           <div>
             <span class="database-heading__eyebrow">结构化资料</span>
@@ -644,7 +655,7 @@ onMounted(() => loadDatabases())
           </div>
           <div class="database-viewbar__actions">
             <button type="button" @click="openViewSettings"><Icon name="settings" :size="16" />筛选与排序</button>
-            <button type="button" :class="{ 'is-active': showArchived }" @click="toggleArchived"><Icon name="archive" :size="16" />归档</button>
+            <button type="button" :class="{ 'is-active': showArchived }" :aria-pressed="showArchived" @click="toggleArchived"><Icon name="archive" :size="16" />归档</button>
           </div>
         </div>
 
@@ -664,6 +675,7 @@ onMounted(() => loadDatabases())
 
         <div v-else class="database-table-wrap">
           <table class="database-table">
+            <caption class="sr-only">{{ database.name }} 的记录</caption>
             <thead>
               <tr>
                 <th v-for="property in visibleProperties" :key="property.id">{{ property.name }}</th>
@@ -783,6 +795,7 @@ onMounted(() => loadDatabases())
 .database-sidebar__item strong, .database-sidebar__item small { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .database-sidebar__empty { padding: 20px 8px; color: var(--text-muted); font-size: .86rem; text-align: center; }
 .database-main { min-width: 0; padding: clamp(16px, 2.5vw, 30px); }
+.database-limit-notice { margin: 0 0 12px; padding: 10px 12px; color: var(--text-secondary); background: color-mix(in srgb, var(--warning-color, #b7791f) 12%, var(--bg-card)); border: 1px solid color-mix(in srgb, var(--warning-color, #b7791f) 35%, var(--border-light)); border-radius: 12px; font-size: .88rem; line-height: 1.55; }
 .database-state, .database-empty { display: grid; min-height: 480px; place-content: center; justify-items: center; gap: 12px; color: var(--text-muted); text-align: center; }
 .database-state.is-error { color: var(--danger-color, #b42318); }
 .database-empty span { display: grid; width: 72px; height: 72px; place-items: center; color: var(--accent-color); background: color-mix(in srgb, var(--accent-color) 10%, transparent); border-radius: 22px; }
@@ -806,7 +819,7 @@ onMounted(() => loadDatabases())
 .database-table tr.is-archived { opacity: .6; }
 .database-title-cell { color: var(--text-primary); font-weight: 650; background: transparent; border: 0; cursor: pointer; }
 .database-row-actions { display: flex; justify-content: flex-end; }
-.database-row-actions button { min-width: 38px; min-height: 38px; }
+.database-row-actions button { min-width: 44px; min-height: 44px; }
 .database-table__empty { padding: 42px !important; color: var(--text-muted); text-align: center !important; }
 .database-board { display: grid; grid-auto-columns: minmax(250px, 320px); grid-auto-flow: column; gap: 14px; overflow-x: auto; padding-bottom: 10px; }
 .database-board__column { min-height: 420px; padding: 12px; background: var(--bg-secondary); border: 1px solid var(--border-light); border-radius: 16px; }

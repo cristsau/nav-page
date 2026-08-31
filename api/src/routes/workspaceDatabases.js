@@ -159,6 +159,7 @@ async function assertRelationTargets(client, userId, sourceRowId, properties, va
       SELECT id, database_id
       FROM workspace_database_rows
       WHERE user_id = $1 AND id = ANY($2::uuid[]) AND archived = FALSE
+      FOR KEY SHARE
     `,
     [userId, targetIds]
   )
@@ -173,7 +174,7 @@ async function assertRelationTargets(client, userId, sourceRowId, properties, va
   return expected
 }
 
-async function syncRelations(client, userId, sourceRowId, relations) {
+async function syncRelations(client, userId, sourceRowId, sourceDatabaseId, relations) {
   await client.query(
     'DELETE FROM workspace_database_relations WHERE source_row_id = $1 AND user_id = $2',
     [sourceRowId, userId]
@@ -182,11 +183,19 @@ async function syncRelations(client, userId, sourceRowId, relations) {
     await client.query(
       `
         INSERT INTO workspace_database_relations (
-          source_row_id, source_property_id, target_row_id, user_id
-        ) VALUES ($1, $2, $3, $4)
+          source_row_id, source_database_id, source_property_id,
+          target_row_id, target_database_id, user_id
+        ) VALUES ($1, $2, $3, $4, $5, $6)
         ON CONFLICT DO NOTHING
       `,
-      [sourceRowId, relation.propertyId, relation.targetId, userId]
+      [
+        sourceRowId,
+        sourceDatabaseId,
+        relation.propertyId,
+        relation.targetId,
+        relation.targetDatabaseId,
+        userId
+      ]
     )
   }
 }
@@ -286,13 +295,14 @@ async function loadBacklinks(userId, rowIds) {
       FROM workspace_database_relations AS relation
       JOIN workspace_database_rows AS source_row
         ON source_row.id = relation.source_row_id
+       AND source_row.database_id = relation.source_database_id
        AND source_row.user_id = relation.user_id
       JOIN workspace_databases AS source_database
         ON source_database.id = source_row.database_id
        AND source_database.user_id = relation.user_id
       JOIN workspace_database_properties AS source_property
         ON source_property.id = relation.source_property_id
-       AND source_property.database_id = source_row.database_id
+       AND source_property.database_id = relation.source_database_id
        AND source_property.user_id = relation.user_id
       WHERE relation.user_id = $1
         AND relation.target_row_id = ANY($2::uuid[])
@@ -730,11 +740,12 @@ export default async function workspaceDatabaseRoutes(fastify) {
           WHERE database_id = $1 AND user_id = $2
             AND ($3::boolean OR archived = FALSE)
           ORDER BY position ASC, created_at ASC, id ASC
-          LIMIT 5000
+          LIMIT 5001
         `,
         [database.id, request.currentUser.id, includeArchived]
       )
-      const mappedRows = rows.map(mapWorkspaceDatabaseRow)
+      const hasMore = rows.length > 5000
+      const mappedRows = rows.slice(0, 5000).map(mapWorkspaceDatabaseRow)
       const visibleRows = selectedView
         ? applyWorkspaceDatabaseView(mappedRows, properties, selectedView.config)
         : mappedRows
@@ -744,6 +755,9 @@ export default async function workspaceDatabaseRoutes(fastify) {
         views,
         selectedViewId: selectedView?.id || null,
         rows: visibleRows,
+        limit: 5000,
+        hasMore,
+        truncated: hasMore,
         backlinksByRow: await loadBacklinks(
           request.currentUser.id,
           visibleRows.map((row) => row.id)
@@ -776,7 +790,13 @@ export default async function workspaceDatabaseRoutes(fastify) {
           `,
           [database.id, request.currentUser.id, title, JSON.stringify(values), String(order.rows[0]?.next_position || 1024)]
         )
-        await syncRelations(client, request.currentUser.id, rows[0].id, relations)
+        await syncRelations(
+          client,
+          request.currentUser.id,
+          rows[0].id,
+          database.id,
+          relations
+        )
         await client.query('UPDATE workspace_databases SET updated_at = NOW() WHERE id = $1', [database.id])
         return rows[0]
       })
@@ -827,7 +847,13 @@ export default async function workspaceDatabaseRoutes(fastify) {
           `,
           [existing.id, database.id, request.currentUser.id, title, JSON.stringify(values), archived, position]
         )
-        await syncRelations(client, request.currentUser.id, existing.id, relations)
+        await syncRelations(
+          client,
+          request.currentUser.id,
+          existing.id,
+          database.id,
+          relations
+        )
         await client.query('UPDATE workspace_databases SET updated_at = NOW() WHERE id = $1', [database.id])
         return rows[0]
       })

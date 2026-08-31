@@ -24,6 +24,10 @@ test('workspace database client and Whisper entry expose the owned database work
   assert.match(view, /可见属性/)
   assert.match(view, /反向关联/)
   assert.match(view, /恢复记录/)
+  assert.match(view, /rowsTruncated/)
+  assert.match(view, /本页和当前视图仅处理前/)
+  assert.match(view, /:aria-current=/)
+  assert.match(view, /<caption class="sr-only">/)
 })
 
 test('workspace database view editor renders type-aware filters and mobile-accessible controls', async () => {
@@ -34,6 +38,7 @@ test('workspace database view editor renders type-aware filters and mobile-acces
   assert.match(view, /filterProperty\(filter\)\?\.type === 'relation'/)
   assert.match(view, /visiblePropertyIds/)
   assert.match(view, /min-width: 44px; min-height: 44px/)
+  assert.match(view, /\.database-row-actions button \{ min-width: 44px; min-height: 44px; \}/)
   assert.match(view, /@media \(max-width: 820px\)/)
   assert.match(view, /initial-focus-selector="#database-row-title"/)
 })
