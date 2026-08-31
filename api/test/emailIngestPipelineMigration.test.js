@@ -7,6 +7,7 @@ const migrationUrl = new URL(
   import.meta.url
 )
 const verifierUrl = new URL('../src/db/verifyMigrations.js', import.meta.url)
+const classificationWorkerUrl = new URL('../src/lib/emailClassificationWorker.js', import.meta.url)
 const runtimeUrl = new URL('../src/lib/emailRuntimeController.js', import.meta.url)
 const maintenanceUrl = new URL('../src/lib/maintenanceJobStatus.js', import.meta.url)
 
@@ -36,8 +37,9 @@ test('email ingest pipeline migration keeps queue payload identity-only and owne
 })
 
 test('migration verifier and runtime wire the classification queue and observability', async () => {
-  const [verifier, runtime, maintenance] = await Promise.all([
+  const [verifier, classificationWorker, runtime, maintenance] = await Promise.all([
     readFile(verifierUrl, 'utf8'),
+    readFile(classificationWorkerUrl, 'utf8'),
     readFile(runtimeUrl, 'utf8'),
     readFile(maintenanceUrl, 'utf8')
   ])
@@ -49,6 +51,8 @@ test('migration verifier and runtime wire the classification queue and observabi
   assert.match(verifier, /email classification job constraints must be validated/)
   assert.match(verifier, /idx_email_classification_jobs_due/)
   assert.match(verifier, /await verifyEmailIngestPipelineSchema\(\)/)
+  assert.match(classificationWorker, /SET status = \$2::varchar\(16\)/)
+  assert.match(classificationWorker, /last_error_code = \$5::varchar\(64\)/)
   assert.match(runtime, /startEmailClassificationScheduler/)
   assert.match(runtime, /emailClassificationIntervalSeconds/)
   assert.match(runtime, /drainMaxMilliseconds: config\.imapDrainMaxMilliseconds/)

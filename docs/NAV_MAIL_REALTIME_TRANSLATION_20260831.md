@@ -137,17 +137,20 @@ P1 还必须增加真实支持 CONDSTORE/QRESYNC 的测试邮箱演练，以及�
   发现的旧轮询覆盖、新同步失败误报、保留级联删除和切换漏通知四个竞态均已修复。
 - 前端 Vite 生产构建通过（356 个模块）；`git diff --check` 通过。
 - 当前电脑没有 Docker 命令，也没有 `127.0.0.1:5432` PostgreSQL 监听，因此没有把 mock 测试
-  冒充真实 PostgreSQL 16 证据。迁移 `042` 的重复执行、回滚和邮件集成必须在 GitHub CI 通过。
-- 尚未推送分支、创建 PR、修改生产数据库或发布 OVH；状态不得标记为 `VERIFIED_LIVE`。
+  冒充真实 PostgreSQL 16 证据。迁移 `042` 的重复执行、结构校验和邮件集成必须在 GitHub CI 通过。
+- 源码已进入 GitHub PR/CI 流程，但尚未修改生产数据库或发布 OVH；状态不得标记为
+  `VERIFIED_LIVE`。
 
 ## 6. 发布和回滚边界
 
 - 完成源码和测试后先标记 `LOCAL_DONE / READY_FOR_CI / NOT_DEPLOYED`；GitHub 全量 CI、
   canonical 备份、PostgreSQL 16 隔离恢复、精确 merge SHA 发布和双域真实设备验收全部通过后，
   才能标记 `VERIFIED_LIVE`。
-- 首次发布保持新 AI 队列 worker、立即同步入口和附件翻译开关可独立关闭。只重建授权范围内的
-  `nav-api`、`nav-mail-worker`、`nav-web`；PostgreSQL、CLIProxyAPI、Nginx Proxy Manager
-  和其他服务不因本功能重建。
-- 回滚优先关闭新入口和新任务消费、回到发布前应用 release，并保留加法迁移和已经安全入库的
-  邮件；不得清表、倒退游标、重复通知或删除远端邮件。
+- 本候选没有为 AI 队列 worker、立即同步入口和附件翻译伪造三个独立开关。生产预检必须读取
+  现有 `NAV_EMAIL_INGEST_ENABLED`：为 `true` 时，新队列消费与立即同步会在新 API/worker
+  启动后一起生效；如需分阶段观察，应在发布授权中先明确关闭现有邮件抓取总开关，再在迁移、
+  API 和 worker 健康验收后统一启用。附件翻译仍只在用户明确点击时执行。
+- 只重建授权范围内的 `nav-api`、`nav-mail-worker`、`nav-web`；PostgreSQL、CLIProxyAPI、
+  Nginx Proxy Manager 和其他服务不因本功能重建。失败时三组件一起回到发布前应用 release，
+  并保留加法迁移和已经安全入库的邮件；不得清表、倒退游标、重复通知或删除远端邮件。
 - 本文不构成生产发布、迁移执行、服务重建、配置修改或真实邮箱写操作授权。

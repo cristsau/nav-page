@@ -219,8 +219,8 @@ PR #30 的图片删除重试告警正确性、PR #31 的云端安全恢复、PR 
 
 ## 2026-08-31 邮件实时收取与附件翻译候选
 
-- 状态：`LOCAL_DONE / READY_FOR_CI / NOT_DEPLOYED`。源码、迁移、定向测试和前端生产构建已
-  完成；本批没有推送、创建 PR、执行生产迁移或修改 OVH 容器。
+- 状态：`LOCAL_DONE / PR_CI_IN_PROGRESS / NOT_DEPLOYED`。源码、迁移、定向测试和前端生产
+  构建已完成并进入 GitHub PR/CI；本批没有执行生产迁移或修改 OVH 容器。
 - 邮件正文 AI 翻译继续沿用既有能力；新增附件内容 AI 翻译只在用户明确点击后从 IMAP 重取
   所选附件，并仅处理通过归属、类型、UTF-8 编码、512 KiB 和 12,000 字符门禁的安全文本。
 - `042_email_ingest_pipeline.sql` 新增无明文载荷的持久分类队列和同步 generation。IMAP 抓取
@@ -231,7 +231,8 @@ PR #30 的图片删除重试告警正确性、PR #31 的云端安全恢复、PR 
   泛化状态，不保存邮件明文或附件内容。
 - 本地 API 全量测试为 745 项、734 通过、0 失败、11 跳过；邮件定向回归和独立竞态审查通过，
   Vite 生产构建通过。当前电脑没有 Docker 或本地 PostgreSQL 16 监听，因此真实 PostgreSQL 16
-  迁移/回滚与集成演练仍是 GitHub CI 合并前硬门禁。
+  迁移重复执行、结构校验与邮件集成仍是 GitHub CI 合并前硬门禁；加法迁移不做 schema down，
+  应用回滚保留 `042` 和已安全入库的数据。
 - P1 仍计划在 Provider 支持时启用 CONDSTORE/QRESYNC，对 flags 与 expunge 做有界主动对账；
   PDF/Office 仅在独立安全评审后做隔离、无网络、受限的纯文本提取，不执行宏、远程资源或 OCR。
 - 完整实施边界和验收门槛见
@@ -285,8 +286,8 @@ PR #30 的图片删除重试告警正确性、PR #31 的云端安全恢复、PR 
 ## 仍未完成
 
 1. 邮件 P0 低延迟收取、持久 AI 队列、连续排空、API 唤醒 worker、延迟观测和安全文本附件
-   翻译仍处于开发中；完成定向测试和全量 CI 前不得标记 `LOCAL_DONE`，发布验收前不得标记
-   `VERIFIED_LIVE`。
+   翻译已完成本地开发并进入 PR/CI；GitHub 全量 CI 通过前不得标记 `CI_VERIFIED`，发布验收前
+   不得标记 `VERIFIED_LIVE`。
 2. 邮件 P1 的 CONDSTORE/QRESYNC、flags/expunge 对账与 PDF/Office 安全文本提取尚未实现；
    需要独立门禁，不能用正文翻译或普通附件下载冒充完成。
 3. 让 2026-08-28 运维收口批次通过 GitHub Linux CI；之后按发布前备份/隔离恢复/回滚/双域

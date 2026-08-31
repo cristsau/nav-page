@@ -170,14 +170,14 @@ async function finishClassificationJob(poolInstance, job, status, errorCode = nu
   const terminal = status === 'succeeded' || status === 'dead_letter'
   await poolInstance.query(
     `UPDATE email_classification_jobs
-     SET status = $2,
+     SET status = $2::varchar(16),
          completed_at = CASE WHEN $3 THEN NOW() ELSE NULL END,
          next_attempt_at = CASE
-           WHEN $2 = 'retry_wait' THEN NOW() + ($4::integer * INTERVAL '1 second')
+           WHEN $2::varchar(16) = 'retry_wait' THEN NOW() + ($4::integer * INTERVAL '1 second')
            ELSE next_attempt_at
          END,
-         last_error_at = CASE WHEN $5::text IS NULL THEN NULL ELSE NOW() END,
-         last_error_code = $5,
+         last_error_at = CASE WHEN $5::varchar(64) IS NULL THEN NULL ELSE NOW() END,
+         last_error_code = $5::varchar(64),
          updated_at = NOW()
      WHERE id = $1 AND status = 'running'`,
     [job.id, status, terminal, retryDelaySeconds(job.attempt_count), errorCode]
