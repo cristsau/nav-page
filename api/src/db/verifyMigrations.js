@@ -2286,14 +2286,18 @@ async function verifyEmailIngestPipelineSchema() {
       'last_error_code is null', '^[A-Z0-9_.-]+$'
     ]],
     ['email_classification_jobs_lifecycle_check', [
-      "status = 'succeeded'", "status = 'dead_letter'", 'completed_at is not null'
+      "(status)::text = 'succeeded'::text",
+      "(status)::text = 'dead_letter'::text",
+      'pending', 'running', 'retry_wait',
+      'completed_at is not null', 'completed_at is null',
+      'last_error_code is null', 'last_error_code is not null'
     ]],
     ['email_classification_jobs_message_unique', [
       'unique (user_id, email_message_id)'
     ]]
   ])
   const constraints = await query(`
-    SELECT conname, pg_get_constraintdef(oid) AS definition
+    SELECT conname, convalidated, pg_get_constraintdef(oid) AS definition
     FROM pg_constraint
     WHERE connamespace = current_schema()::regnamespace
       AND conname = ANY($1::text[])
@@ -2303,6 +2307,9 @@ async function verifyEmailIngestPipelineSchema() {
     constraints.rows.map((row) => row.conname),
     [...expectedConstraintDefinitions.keys()]
   )
+  if (constraints.rows.some((row) => row.convalidated !== true)) {
+    throw new Error('email classification job constraints must be validated')
+  }
   for (const [constraintName, fragments] of expectedConstraintDefinitions) {
     const constraint = constraints.rows.find((row) => row.conname === constraintName)
     assertDefinitionIncludes(
