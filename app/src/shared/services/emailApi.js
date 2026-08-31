@@ -34,6 +34,20 @@ export function fetchEmailAccounts() {
   return request('/email/accounts', { method: 'GET', cache: 'no-store' })
 }
 
+export function requestEmailAccountSync(accountId) {
+  return request(`/email/accounts/${requiredId(accountId, 'Email account id')}/sync`, {
+    method: 'POST',
+    body: JSON.stringify({})
+  })
+}
+
+export function fetchEmailAccountSyncStatus(accountId) {
+  return request(`/email/accounts/${requiredId(accountId, 'Email account id')}/sync-status`, {
+    method: 'GET',
+    cache: 'no-store'
+  })
+}
+
 export function fetchEmailFolders(accountId) {
   return request(`/email/accounts/${requiredId(accountId, 'Email account id')}/folders`, {
     method: 'GET',
@@ -309,6 +323,26 @@ export async function downloadEmailAttachment({
     blob: await response.blob(),
     filename: responseFilename(response, filename)
   }
+}
+
+export function translateEmailAttachment({
+  accountId,
+  locationId,
+  attachmentId,
+  folderId,
+  language = 'zh-CN'
+} = {}) {
+  return request(
+    `/email/accounts/${requiredId(accountId, 'Email account id')}/messages/${requiredId(locationId, 'Email location id')}/attachments/${requiredId(attachmentId, 'Email attachment id')}/ai`,
+    {
+      method: 'POST',
+      body: JSON.stringify({
+        action: 'translate',
+        folderId: requiredId(folderId, 'Email folder id'),
+        language: String(language || 'zh-CN').trim() || 'zh-CN'
+      })
+    }
+  )
 }
 
 export function confirmEmailDraft(draftId, contentHash) {

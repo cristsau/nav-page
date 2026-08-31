@@ -61,7 +61,7 @@ test('mail workspace is a desktop three-pane and mobile single-pane remote-comma
   assert.doesNotMatch(view, /sendEmail/)
 })
 
-test('mail attachment UI uploads sequentially, reviews metadata and downloads only on demand', async () => {
+test('mail attachment UI uploads sequentially and fetches downloads or text translation only on demand', async () => {
   const [api, compose, detail, view] = await Promise.all([
     source('app/src/shared/services/emailApi.js'),
     source('app/src/modules/mail/components/MailComposeDialog.vue'),
@@ -94,6 +94,13 @@ test('mail attachment UI uploads sequentially, reviews metadata and downloads on
   assert.match(compose, /onBeforeUnmount\(stopQueuedStatusPolling\)/)
   assert.match(compose, /window\.clearTimeout\(statusPollTimer\)/)
   assert.match(detail, /downloadEmailAttachment/)
+  assert.match(api, /export function translateEmailAttachment/)
+  assert.match(api, /attachments\/\$\{requiredId\(attachmentId[\s\S]*?\/ai/)
+  assert.match(detail, /translateEmailAttachment/)
+  assert.match(detail, /AI 翻译/)
+  assert.match(detail, /PDF 和 Office 文件暂不支持/)
+  assert.match(detail, /12,000 字符/)
+  assert.match(detail, /attachmentTranslations/)
   assert.match(detail, /URL\.createObjectURL/)
   assert.match(detail, /URL\.revokeObjectURL/)
   assert.match(detail, /页面不会自动预览或执行附件/)

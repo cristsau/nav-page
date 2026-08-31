@@ -5,7 +5,6 @@ import { config } from '../config.js'
 import { sanitizeMaintenanceErrorCode } from './maintenanceJobStatus.js'
 import { readOwnerSecretFile } from './ownerSecretFile.js'
 import { resolveImapAuth } from './emailOauth2.js'
-import { processInboundEmail } from './emailEvents.js'
 import { EMAIL_ENCRYPTION_MAX_PLAINTEXT_BYTES } from './emailCrypto.js'
 import {
   persistEmailMailboxMessage,
@@ -13,6 +12,10 @@ import {
   upsertEmailFolder
 } from './emailMailboxStore.js'
 import { assertSafeOutboundHost } from './outboundEndpoints.js'
+import {
+  EMAIL_INGEST_WAKE_CHANNEL,
+  startEmailWakeListener
+} from './emailIngestWake.js'
 import {
   deriveEmailBatchSourceBudget,
   emailMessageFailureState,
@@ -48,9 +51,49 @@ export function validateEmailIngestPolicy(policy = {}) {
     batchSize: boundedInteger(policy.batchSize, 100, 1, 500),
     maxMessageBytes,
     maxBatchSourceBytes: deriveEmailBatchSourceBudget(maxMessageBytes, policy.maxBatchSourceBytes),
-    maxMessageAttempts: normalizeEmailMessageAttempts(policy.maxMessageAttempts)
+    maxMessageAttempts: normalizeEmailMessageAttempts(policy.maxMessageAttempts),
+    drainMaxBatches: boundedInteger(policy.drainMaxBatches, 10, 1, 50),
+    drainMaxMilliseconds: boundedInteger(policy.drainMaxMilliseconds, 15_000, 1_000, 60_000)
   }
   return normalized
+}
+
+export async function drainEmailMailboxBatches({ syncMailbox, policy, clock = () => Date.now() }) {
+  if (typeof syncMailbox !== 'function') throw new TypeError('syncMailbox is required')
+  const validated = validateEmailIngestPolicy(policy)
+  const drainStartedAt = clock()
+  const combined = {
+    processed: 0,
+    inserted: 0,
+    duplicates: 0,
+    classificationQueued: 0,
+    remaining: 0,
+    caughtUp: false,
+    syncRequestPending: false,
+    maxIngestLatencyMs: 0,
+    batches: 0
+  }
+  do {
+    const batch = await syncMailbox()
+    combined.processed += Number(batch.processed || 0)
+    combined.inserted += Number(batch.inserted || 0)
+    combined.duplicates += Number(batch.duplicates || 0)
+    combined.classificationQueued += Number(batch.classificationQueued || 0)
+    combined.maxIngestLatencyMs = Math.max(
+      combined.maxIngestLatencyMs,
+      Number(batch.maxIngestLatencyMs || 0)
+    )
+    combined.remaining = Number(batch.remaining || 0)
+    combined.caughtUp = batch.caughtUp === true
+    combined.syncRequestPending = batch.syncRequestPending === true
+    combined.batches += 1
+    if (combined.caughtUp && !combined.syncRequestPending) break
+  } while (
+    combined.batches < validated.drainMaxBatches
+    && clock() - drainStartedAt < validated.drainMaxMilliseconds
+  )
+  combined.continueImmediately = !combined.caughtUp || combined.syncRequestPending
+  return combined
 }
 
 export function validateImapConfig(runtimeConfig = config) {
@@ -223,8 +266,8 @@ export function startEmailIngestScheduler({
   observer,
   ImapClient = ImapFlow,
   readSecretImpl = readOwnerSecretFile,
-  processFn = processInboundEmail,
   assertHostImpl = assertSafeOutboundHost,
+  wakeListenerFactory = startEmailWakeListener,
   timerApi = globalThis,
   clock = () => Date.now()
 }) {
@@ -237,6 +280,7 @@ export function startEmailIngestScheduler({
   let timer = null
   let reconnectTimer = null
   let rerunRequested = false
+  let stopWakeListener = null
 
   const scheduleSoon = (delay = 250) => {
     if (stopped || reconnectTimer) return
@@ -246,6 +290,21 @@ export function startEmailIngestScheduler({
     }, delay)
     reconnectTimer?.unref?.()
   }
+
+  const recordIdleEvent = () => poolInstance.query(
+    `UPDATE email_accounts AS account
+     SET last_idle_event_at = NOW(), updated_at = NOW()
+     FROM users AS owner
+     WHERE account.user_id = owner.id
+       AND account.source_key = $1
+       AND owner.username = $2`,
+    [sourceKey, runtimeConfig.emailOwnerUsername]
+  ).catch((error) => {
+    logger?.warn?.(
+      { errorCode: sanitizeMaintenanceErrorCode(error) },
+      'IMAP IDLE event timestamp could not be recorded'
+    )
+  })
 
   const ensureConnected = async () => {
     if (imap?.usable) return imap
@@ -262,7 +321,10 @@ export function startEmailIngestScheduler({
       tls: { minVersion: 'TLSv1.2', rejectUnauthorized: true },
       logger: false
     })
-    client.on('exists', () => scheduleSoon())
+    client.on('exists', () => {
+      void recordIdleEvent()
+      scheduleSoon()
+    })
     client.on('error', (error) => logger?.warn?.({ errorCode: sanitizeMaintenanceErrorCode(error) }, 'IMAP connection error'))
     client.on('close', () => {
       if (imap === client) imap = null
@@ -344,6 +406,14 @@ export function startEmailIngestScheduler({
     } finally {
       catalogClient.release()
     }
+    const syncStarted = await poolInstance.query(
+      `UPDATE email_accounts
+       SET last_sync_started_at = NOW(), updated_at = NOW()
+       WHERE id = $1 AND user_id = $2
+       RETURNING sync_request_generation`,
+      [account.id, userId]
+    )
+    const syncRequestGeneration = Number(syncStarted.rows[0]?.sync_request_generation || 0)
     const lock = await client.getMailboxLock(runtimeConfig.imapMailbox)
     let messages
     let uidValidity
@@ -442,7 +512,16 @@ export function startEmailIngestScheduler({
       lock.release()
     }
 
-    const summary = { processed: 0, inserted: 0, duplicates: 0, tier1: 0, tier2: 0, tier3: 0 }
+    const summary = {
+      processed: 0,
+      inserted: 0,
+      duplicates: 0,
+      classificationQueued: 0,
+      remaining: 0,
+      caughtUp: false,
+      maxIngestLatencyMs: 0,
+      batches: 1
+    }
     const listedCurrent = listedFolders.find((folder) => folder.path === runtimeConfig.imapMailbox)
     let sourceBytes = 0
     let sourceBudgetExhausted = false
@@ -569,19 +648,17 @@ export function startEmailIngestScheduler({
         try {
           parsed = await parseImapMessage(message, validated.maxMessageBytes)
           stored = await persistEmailMailboxMessage(persistOptions(parsed))
-          const result = await processFn({
-            userId,
-            sourceKey,
-            emailMessageId: stored.message.id,
-            email: parsed,
-            logger
-          })
           summary.processed += 1
-          if (result.inserted) {
-            summary.inserted += 1
-            summary[`tier${result.event.tier}`] += 1
-            if (result.duplicate) summary.duplicates += 1
-          } else summary.duplicates += 1
+          if (stored.inserted) summary.inserted += 1
+          else summary.duplicates += 1
+          if (stored.classificationQueued) summary.classificationQueued += 1
+          const internalTime = new Date(parsed.internalDate || parsed.receivedAt || 0).getTime()
+          if (Number.isFinite(internalTime) && internalTime > 0) {
+            summary.maxIngestLatencyMs = Math.max(0, summary.maxIngestLatencyMs, clock() - internalTime)
+          }
+          // Cursor progress is coupled only to the encrypted mailbox row and
+          // its durable classification job, both committed in one transaction.
+          // Slow AI and notification delivery can no longer block later UIDs.
           await writeMailboxState({ uid })
         } catch (error) {
           const failure = emailMessageFailureState({
@@ -608,6 +685,9 @@ export function startEmailIngestScheduler({
             }
             await markDeadLetter(stored)
             summary.processed += 1
+            if (stored.inserted) summary.inserted += 1
+            else summary.duplicates += 1
+            if (stored.classificationQueued) summary.classificationQueued += 1
             await writeMailboxState({ uid, errorCode: failure.code })
             logger?.warn?.({ uid, errorCode: failure.code }, 'email message moved to the encrypted dead-letter cache')
           } catch {
@@ -630,6 +710,8 @@ export function startEmailIngestScheduler({
       lastUid = Math.max(lastUid, candidateEndUid)
     }
     const caughtUp = lastUid >= Math.max(0, Number(mailboxUidNext || 1) - 1)
+    summary.caughtUp = caughtUp
+    summary.remaining = Math.max(0, Number(mailboxUidNext || 1) - 1 - lastUid)
     await poolInstance.query(
       `UPDATE email_folders
        SET last_uid = GREATEST(last_uid, $2),
@@ -642,7 +724,32 @@ export function startEmailIngestScheduler({
       [currentFolder.id, lastUid, caughtUp || initialSyncComplete, userId, mailboxErrorCode]
     )
     await writeMailboxState({ uid: lastUid, errorCode: mailboxErrorCode, messageAt: false })
+    const completed = await poolInstance.query(
+      `UPDATE email_accounts
+       SET sync_completed_generation = CASE
+             WHEN $4::boolean THEN GREATEST(sync_completed_generation, $3)
+             ELSE sync_completed_generation
+           END,
+           last_sync_completed_at = CASE
+             WHEN $4::boolean THEN NOW()
+             ELSE last_sync_completed_at
+           END,
+           updated_at = NOW()
+       WHERE id = $1 AND user_id = $2
+       RETURNING sync_request_generation, sync_completed_generation`,
+      [account.id, userId, syncRequestGeneration, caughtUp]
+    )
+    summary.syncRequestPending = Number(completed.rows[0]?.sync_request_generation || 0)
+      > Number(completed.rows[0]?.sync_completed_generation || 0)
     return summary
+  }
+
+  const syncMailboxWithDrain = async () => {
+    return drainEmailMailboxBatches({
+      syncMailbox,
+      policy: validated,
+      clock
+    })
   }
 
   const run = () => {
@@ -652,9 +759,11 @@ export function startEmailIngestScheduler({
       return activeRun
     }
     const startedAtMs = clock()
-    activeRun = syncMailbox()
+    let continueImmediately = false
+    activeRun = syncMailboxWithDrain()
       .then(async (result) => {
         const finishedAtMs = clock()
+        continueImmediately = result.continueImmediately === true
         await notifyObserver(observer, 'succeeded', {
           result,
           startedAt: new Date(startedAtMs),
@@ -701,9 +810,9 @@ export function startEmailIngestScheduler({
       })
       .finally(() => {
         activeRun = null
-        if (rerunRequested && !stopped) {
+        if ((rerunRequested || continueImmediately) && !stopped) {
           rerunRequested = false
-          scheduleSoon(0)
+          scheduleSoon(100)
         }
       })
     return activeRun
@@ -711,11 +820,22 @@ export function startEmailIngestScheduler({
 
   timer = timerApi.setInterval(() => void run(), validated.pollIntervalSeconds * 1000)
   timer?.unref?.()
+  stopWakeListener = wakeListenerFactory({
+    poolInstance,
+    channel: EMAIL_INGEST_WAKE_CHANNEL,
+    logger,
+    timerApi,
+    onWake: (payload) => {
+      if (payload.sourceKey !== sourceKey) return
+      void run()
+    }
+  })
   void run()
   return async () => {
     stopped = true
     if (timer) timerApi.clearInterval(timer)
     if (reconnectTimer) timerApi.clearTimeout(reconnectTimer)
+    await stopWakeListener?.()
     const activeClient = imap
     imap = null
     try { activeClient?.close?.() } catch {}

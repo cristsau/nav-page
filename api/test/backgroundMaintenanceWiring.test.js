@@ -27,6 +27,7 @@ test('server, config and Compose keep maintenance and logs bounded', async () =>
   assert.match(server, /stopEmailRuntime/)
   assert.match(emailRuntime, /startMailDeliveryScheduler/)
   assert.match(emailRuntime, /startEmailIngestWorker/)
+  assert.match(emailRuntime, /startEmailClassificationScheduler/)
   assert.match(emailRuntime, /startEmailSentAppendScheduler/)
   assert.match(emailRuntime, /startEmailCacheRetention/)
   assert.match(emailRuntime, /startEmailDigestScheduler/)
@@ -139,7 +140,7 @@ test('local timers cannot claim offsite backup and the release cleanup is bounde
   assert.match(backupConfig, /NAV_DR_COMPOSE_PROJECT_DIR=\/opt\/nav-stack\/current/)
 })
 
-test('migration verification keeps all twelve maintenance jobs after feature integration', async () => {
+test('migration verification keeps all maintenance jobs after feature integration', async () => {
   const [verifier, statusService, maintenanceRoute] = await Promise.all([
     source('../src/db/verifyMigrations.js'),
     source('../src/lib/maintenanceJobStatus.js'),
@@ -156,6 +157,7 @@ test('migration verification keeps all twelve maintenance jobs after feature int
     'web_push_delivery',
     'mail_delivery',
     'email_ingest',
+    'email_classification',
     'email_sent_append',
     'email_digest',
     'email_cache_retention'
@@ -170,6 +172,7 @@ test('migration verification keeps all twelve maintenance jobs after feature int
   assert.match(maintenanceRoute, /NOTE_REMINDER_GENERATION/)
   assert.match(maintenanceRoute, /BOOKMARK_HEALTH_CHECK/)
   assert.match(maintenanceRoute, /EMAIL_CACHE_RETENTION/)
+  assert.match(maintenanceRoute, /EMAIL_CLASSIFICATION/)
 })
 
 test('routes expose retention, export and media retry status without secrets', async () => {

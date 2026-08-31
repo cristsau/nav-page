@@ -1,6 +1,10 @@
 import { createHash } from 'node:crypto'
 import { decryptEmailPayload, encryptEmailPayload } from './emailCrypto.js'
 import { decorateIncomingAttachmentMetadata } from './emailIncomingAttachmentMetadata.js'
+import {
+  EMAIL_CLASSIFICATION_WAKE_CHANNEL,
+  notifyEmailWake
+} from './emailIngestWake.js'
 
 export const EMAIL_MAILBOX_CHANGE_CHANNEL = 'nav_email_mailbox_changes'
 
@@ -359,6 +363,7 @@ export async function persistEmailMailboxMessage({
   let message
   let location
   let inserted = false
+  let classificationQueued = false
   try {
     await client.query('BEGIN')
     account = await upsertEmailAccount(client, {
@@ -371,10 +376,9 @@ export async function persistEmailMailboxMessage({
       accountId: account.id,
       userId,
       ...folder,
-      // Persisting the encrypted cache is deliberately separate from advancing
-      // the ingest cursor. The scheduler advances last_uid only after the
-      // classification/notification pipeline succeeds, so a downstream
-      // failure is retried instead of silently skipping this message forever.
+      // Cursor movement remains a scheduler concern. This transaction commits
+      // the encrypted canonical row and its durable classification job first;
+      // only then may the scheduler advance last_uid.
       lastUid: 0,
       markSynced: true
     })
@@ -459,6 +463,27 @@ export async function persistEmailMailboxMessage({
       ]
     )
     location = locationResult.rows[0]
+    const classificationJob = await client.query(
+      `INSERT INTO email_classification_jobs (
+         user_id, account_id, email_message_id
+       )
+       SELECT $1, $2, $3
+       WHERE NOT EXISTS (
+         SELECT 1 FROM email_events AS event
+         WHERE event.user_id = $1 AND event.email_message_id = $3
+       )
+       OR EXISTS (
+         SELECT 1 FROM email_events AS event
+         WHERE event.user_id = $1
+           AND event.email_message_id = $3
+           AND event.notification_action IN ('immediate', 'in_app_only')
+           AND event.notified_at IS NULL
+       )
+       ON CONFLICT (user_id, email_message_id) DO NOTHING
+       RETURNING id`,
+      [userId, account.id, message.id]
+    )
+    classificationQueued = classificationJob.rowCount > 0
     await client.query('COMMIT')
   } catch (error) {
     await client.query('ROLLBACK')
@@ -474,16 +499,29 @@ export async function persistEmailMailboxMessage({
     locationId: String(location.id),
     revision: new Date(location.updated_at || Date.now()).getTime()
   }
-  let notified = true
-  try {
-    await poolInstance.query('SELECT pg_notify($1, $2)', [EMAIL_MAILBOX_CHANGE_CHANNEL, JSON.stringify(event)])
-  } catch {
-    // The encrypted cache is durable and the UI also performs authoritative
-    // polling/reconnect refreshes. A transient LISTEN/NOTIFY failure must not
-    // prevent classification or cursor progress.
-    notified = false
+  const [mailboxNotification, classificationNotification] = await Promise.allSettled([
+    poolInstance.query('SELECT pg_notify($1, $2)', [EMAIL_MAILBOX_CHANGE_CHANNEL, JSON.stringify(event)]),
+    classificationQueued
+      ? notifyEmailWake(poolInstance.query.bind(poolInstance), EMAIL_CLASSIFICATION_WAKE_CHANNEL, {
+          accountId: account.id,
+          sourceKey: source
+        })
+      : Promise.resolve()
+  ])
+  const notified = mailboxNotification.status === 'fulfilled'
+  return {
+    account,
+    folder: savedFolder,
+    message,
+    location,
+    inserted,
+    classificationQueued,
+    event,
+    notified,
+    classificationWakeDelivered: classificationQueued
+      ? classificationNotification.status === 'fulfilled'
+      : null
   }
-  return { account, folder: savedFolder, message, location, inserted, event, notified }
 }
 
 export async function decryptStoredMailboxMessage(row, { userId, sourceKey }) {

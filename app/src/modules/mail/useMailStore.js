@@ -2,6 +2,7 @@ import { computed, reactive, watch } from 'vue'
 import { useAuth } from '@/shared/composables/useAuth'
 import {
   createEmailMessageCommand,
+  fetchEmailAccountSyncStatus,
   fetchEmailAccounts,
   fetchEmailEvent,
   fetchEmailFolders,
@@ -9,6 +10,7 @@ import {
   fetchEmailMessageCommand,
   fetchEmailMessages,
   openEmailEventStream,
+  requestEmailAccountSync,
   undoEmailMessageCommand
 } from '@/shared/services/emailApi'
 import {
@@ -20,10 +22,18 @@ import {
   mergeMessagePage,
   pageKey
 } from './mailState'
+import {
+  createMailSyncPollEpochGate,
+  mailSyncFailureForRequest
+} from './mailSyncState'
 import { consumeMailSseBody, waitForMailReconnect } from './mailSse'
 
 const PAGE_SIZE = 40
 const FALLBACK_POLL_MS = 60_000
+const SYNC_STATUS_FAST_POLL_MS = 1_200
+const SYNC_STATUS_FAST_POLL_LIMIT = 25
+const SYNC_STATUS_SLOW_POLL_MS = 10_000
+const SYNC_STATUS_SLOW_POLL_LIMIT = 24
 const COMMAND_POLL_MS = 900
 const COMMAND_POLL_LIMIT = 150
 const TERMINAL_COMMAND_STATUSES = new Set([
@@ -54,6 +64,13 @@ function initialMailState() {
     streamNotice: '',
     lastEventId: '',
     lastRealtimeAt: '',
+    syncState: 'idle',
+    syncNotice: '',
+    syncError: '',
+    syncRequestGeneration: 0,
+    syncCompletedGeneration: 0,
+    syncRequestedAt: '',
+    syncCompletedAt: '',
     commandsByLocation: {},
     commandBusy: false,
     commandError: ''
@@ -63,6 +80,7 @@ function initialMailState() {
 const state = reactive(initialMailState())
 const { currentUser: authCurrentUser } = useAuth()
 const requestGate = createRequestGenerationGate()
+const syncPollGate = createMailSyncPollEpochGate()
 
 let accountsPromise = null
 let boundAuthUserId = ''
@@ -70,6 +88,8 @@ let streamController = null
 let streamPromise = null
 let pollTimer = null
 let refreshTimer = null
+let syncStatusTimer = null
+let syncRequest = null
 const folderRequests = new Map()
 const pageRefreshRequests = new Map()
 const pageLoadMoreRequests = new Map()
@@ -108,10 +128,12 @@ function requestStillCurrent(ticket, ownerUserId) {
 
 function resetMailStore({ ownerUserId = '' } = {}) {
   stopMailRealtime()
+  stopMailSyncStatusPolling({ invalidate: true })
   for (const timer of commandPollTimers.values()) globalThis.clearTimeout(timer)
   commandPollTimers.clear()
   requestGate.reset()
   accountsPromise = null
+  syncRequest = null
   folderRequests.clear()
   pageRefreshRequests.clear()
   pageLoadMoreRequests.clear()
@@ -377,6 +399,15 @@ export async function selectMailAccount(accountId, { preferredFolderId = '' } = 
   const changed = targetAccountId !== state.activeAccountId
   state.activeAccountId = targetAccountId
   if (changed) {
+    stopMailSyncStatusPolling({ invalidate: true })
+    syncRequest = null
+    state.syncState = 'idle'
+    state.syncNotice = ''
+    state.syncError = ''
+    state.syncRequestGeneration = 0
+    state.syncCompletedGeneration = 0
+    state.syncRequestedAt = ''
+    state.syncCompletedAt = ''
     state.activeFolderId = ''
     state.lastEventId = ''
     clearSelectedMailMessage()
@@ -622,6 +653,137 @@ async function refreshVisibleMailbox({ replace = false } = {}) {
   }
 }
 
+function syncGeneration(value) {
+  const parsed = Number(value)
+  return Number.isSafeInteger(parsed) && parsed >= 0 ? parsed : 0
+}
+
+function syncStatusStillCurrent(accountId, ownerUserId, pollEpoch) {
+  return Boolean(
+    accountId
+    && ownerUserId
+    && accountId === state.activeAccountId
+    && ownerUserId === boundAuthUserId
+    && ownerUserId === currentAuthUserId()
+    && syncPollGate.isCurrent(pollEpoch)
+  )
+}
+
+function stopMailSyncStatusPolling({ invalidate = false } = {}) {
+  if (syncStatusTimer) globalThis.clearTimeout(syncStatusTimer)
+  syncStatusTimer = null
+  if (invalidate) syncPollGate.invalidate()
+}
+
+function finishMailSyncStatus(payload = {}) {
+  state.syncState = 'completed'
+  state.syncError = ''
+  state.syncCompletedAt = String(payload?.completedAt || new Date().toISOString())
+  const lag = Math.max(0, Number(payload?.ingestLagMessages || 0))
+  state.syncNotice = lag > 0
+    ? `服务器已完成本轮检查，仍有 ${lag} 封邮件正在连续收录。`
+    : '服务器同步已完成，邮件列表已刷新。'
+  void refreshVisibleMailbox({ replace: true }).catch(() => {})
+}
+
+function scheduleMailSyncStatusPoll({ accountId, ownerUserId, generation, pollEpoch, attempt = 0 }) {
+  if (!syncStatusStillCurrent(accountId, ownerUserId, pollEpoch)) return
+  stopMailSyncStatusPolling()
+  if (!syncStatusStillCurrent(accountId, ownerUserId, pollEpoch)) return
+  const pollLimit = SYNC_STATUS_FAST_POLL_LIMIT + SYNC_STATUS_SLOW_POLL_LIMIT
+  if (attempt >= pollLimit) {
+    state.syncState = 'stalled'
+    state.syncNotice = '服务器检查仍未回报完成；可再次点“立即收信”重新检查。'
+    return
+  }
+  const pollDelay = attempt < SYNC_STATUS_FAST_POLL_LIMIT
+    ? SYNC_STATUS_FAST_POLL_MS
+    : SYNC_STATUS_SLOW_POLL_MS
+  syncStatusTimer = globalThis.setTimeout(async () => {
+    syncStatusTimer = null
+    if (!syncStatusStillCurrent(accountId, ownerUserId, pollEpoch)) return
+    try {
+      const payload = await fetchEmailAccountSyncStatus(accountId)
+      if (!syncStatusStillCurrent(accountId, ownerUserId, pollEpoch)) return
+      const requested = syncGeneration(payload?.requestGeneration)
+      const completed = syncGeneration(payload?.completedGeneration)
+      state.syncRequestGeneration = Math.max(state.syncRequestGeneration, requested, generation)
+      state.syncCompletedGeneration = Math.max(state.syncCompletedGeneration, completed)
+      state.syncRequestedAt = String(payload?.requestedAt || state.syncRequestedAt || '')
+      state.syncCompletedAt = String(payload?.completedAt || state.syncCompletedAt || '')
+      const targetCompleted = generation > 0
+        ? completed >= generation
+        : payload?.pending === false
+      if (targetCompleted) {
+        finishMailSyncStatus(payload)
+        return
+      }
+      const failure = mailSyncFailureForRequest(payload, state.syncRequestedAt)
+      if (failure) {
+        state.syncState = 'error'
+        state.syncError = failure.code
+        state.syncNotice = `服务器收信失败（错误代码：${failure.code}），可再次点“立即收信”重试。`
+        return
+      }
+      state.syncState = 'waiting'
+      state.syncError = ''
+      state.syncNotice = '已请求服务器同步，正在等待新邮件…'
+      if (!syncStatusStillCurrent(accountId, ownerUserId, pollEpoch)) return
+      scheduleMailSyncStatusPoll({ accountId, ownerUserId, generation, pollEpoch, attempt: attempt + 1 })
+    } catch {
+      if (!syncStatusStillCurrent(accountId, ownerUserId, pollEpoch)) return
+      scheduleMailSyncStatusPoll({ accountId, ownerUserId, generation, pollEpoch, attempt: attempt + 1 })
+    }
+  }, pollDelay)
+}
+
+export async function requestActiveMailboxSync() {
+  const ownerUserId = bindMailStoreToCurrentUser()
+  const accountId = normalizedId(state.activeAccountId)
+  if (!ownerUserId || !accountId) throw new Error('当前没有可同步的邮箱账号')
+  if (syncRequest?.accountId === accountId) return syncRequest.promise
+
+  stopMailSyncStatusPolling()
+  const pollEpoch = syncPollGate.begin()
+  state.syncState = 'requesting'
+  state.syncNotice = '正在请求服务器检查新邮件…'
+  state.syncError = ''
+  let requestPromise
+  requestPromise = (async () => {
+    try {
+      const payload = await requestEmailAccountSync(accountId)
+      if (!syncStatusStillCurrent(accountId, ownerUserId, pollEpoch)) return payload
+      const generation = syncGeneration(payload?.generation ?? payload?.requestGeneration)
+      const completed = syncGeneration(payload?.completedGeneration)
+      const status = String(payload?.status || (payload?.coalesced ? 'coalesced' : 'queued')).toLowerCase()
+      state.syncRequestGeneration = Math.max(state.syncRequestGeneration, generation)
+      state.syncCompletedGeneration = Math.max(state.syncCompletedGeneration, completed)
+      state.syncRequestedAt = String(payload?.requestedAt || new Date().toISOString())
+      if (generation > 0 && completed >= generation) {
+        finishMailSyncStatus(payload)
+      } else {
+        state.syncState = 'waiting'
+        state.syncNotice = status === 'coalesced'
+          ? '服务器已在检查邮箱，正在等待新邮件…'
+          : '已请求服务器同步，正在等待新邮件…'
+        scheduleMailSyncStatusPoll({ accountId, ownerUserId, generation, pollEpoch })
+      }
+      return payload
+    } catch (error) {
+      if (syncStatusStillCurrent(accountId, ownerUserId, pollEpoch)) {
+        state.syncState = 'error'
+        state.syncNotice = ''
+        state.syncError = error?.message || '服务器收信请求失败'
+      }
+      throw error
+    } finally {
+      if (syncRequest?.promise === requestPromise) syncRequest = null
+    }
+  })()
+  syncRequest = { accountId, promise: requestPromise }
+  return requestPromise
+}
+
 function scheduleMailboxRefresh({ replace = false } = {}) {
   if (refreshTimer) window.clearTimeout(refreshTimer)
   refreshTimer = window.setTimeout(() => {
@@ -653,6 +815,9 @@ function applyStreamEvent({ event, id, payload } = {}) {
     }
   }
   if (!isMailInvalidationEvent(normalizedEvent)) return
+  if (state.syncState === 'waiting') {
+    state.syncNotice = '服务器已发现邮件更新，正在刷新列表…'
+  }
   const key = pageKey(state.activeAccountId, folderId)
   const marked = markPageInvalidated(state.pages[key], { revision: payload?.revision })
   if (marked.changed) {
@@ -757,6 +922,7 @@ export function useMailStore() {
     commandCanUndo,
     loadMore: loadMoreMailMessages,
     search: setMailSearch,
+    requestSync: requestActiveMailboxSync,
     refresh: refreshVisibleMailbox,
     clearSelection: clearSelectedMailMessage,
     startRealtime: startMailRealtime,

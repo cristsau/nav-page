@@ -161,9 +161,17 @@ test('email retention skips concurrent work and releases the unused session', as
   assert.deepEqual(client.releases, [undefined])
 })
 
-test('email retention SQL protects flagged/draft cache and cannot mutate IMAP', () => {
+test('email retention SQL protects flagged/draft and non-terminal classification cache', () => {
   assert.match(DELETE_EXCESS_EMAIL_MESSAGES_SQL, /flagged = TRUE/)
   assert.match(DELETE_EXCESS_EMAIL_MESSAGES_SQL, /folder_message\.draft = TRUE/)
+  assert.match(DELETE_EXCESS_EMAIL_MESSAGES_SQL, /FROM email_classification_jobs AS classification_job/)
+  assert.match(DELETE_EXCESS_EMAIL_MESSAGES_SQL, /classification_job\.email_message_id = message\.id/)
+  assert.match(DELETE_EXCESS_EMAIL_MESSAGES_SQL, /classification_job\.account_id = message\.account_id/)
+  assert.match(DELETE_EXCESS_EMAIL_MESSAGES_SQL, /classification_job\.user_id = message\.user_id/)
+  assert.match(
+    DELETE_EXCESS_EMAIL_MESSAGES_SQL,
+    /classification_job\.status IN \('pending', 'running', 'retry_wait'\)/
+  )
   assert.match(DELETE_EXCESS_EMAIL_MESSAGES_SQL, /FOR UPDATE OF message SKIP LOCKED/)
   assert.doesNotMatch(
     DELETE_EXCESS_EMAIL_MESSAGES_SQL,

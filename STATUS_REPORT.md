@@ -217,6 +217,26 @@ PR #30 的图片删除重试告警正确性、PR #31 的云端安全恢复、PR 
   待处理 0，旧 `ERR_DLOPEN_FAILED` 已清零。
 - 合成邮件与一次性管理员完成双域验收后已清理；真实发信和远端邮箱修改未在验收中执行。
 
+## 2026-08-31 邮件实时收取与附件翻译候选
+
+- 状态：`LOCAL_DONE / READY_FOR_CI / NOT_DEPLOYED`。源码、迁移、定向测试和前端生产构建已
+  完成；本批没有推送、创建 PR、执行生产迁移或修改 OVH 容器。
+- 邮件正文 AI 翻译继续沿用既有能力；新增附件内容 AI 翻译只在用户明确点击后从 IMAP 重取
+  所选附件，并仅处理通过归属、类型、UTF-8 编码、512 KiB 和 12,000 字符门禁的安全文本。
+- `042_email_ingest_pipeline.sql` 新增无明文载荷的持久分类队列和同步 generation。IMAP 抓取
+  完成加密入库即提交并发布 SSE，AI 分类/通知随后独立消费；积压会连续有界排空。
+- 邮件页“立即收信”通过 PostgreSQL generation/NOTIFY 唤醒唯一 worker，5 秒内重复请求在
+  数据库合并；页面显示等待、追平或失败，API 不创建第二条 IMAP 同步链路。
+- 分类 worker 支持 `SKIP LOCKED` 抢占、未来重试、死信和陈旧任务恢复；任务行只保存身份和
+  泛化状态，不保存邮件明文或附件内容。
+- 本地 API 全量测试为 745 项、734 通过、0 失败、11 跳过；邮件定向回归和独立竞态审查通过，
+  Vite 生产构建通过。当前电脑没有 Docker 或本地 PostgreSQL 16 监听，因此真实 PostgreSQL 16
+  迁移/回滚与集成演练仍是 GitHub CI 合并前硬门禁。
+- P1 仍计划在 Provider 支持时启用 CONDSTORE/QRESYNC，对 flags 与 expunge 做有界主动对账；
+  PDF/Office 仅在独立安全评审后做隔离、无网络、受限的纯文本提取，不执行宏、远程资源或 OCR。
+- 完整实施边界和验收门槛见
+  [`docs/NAV_MAIL_REALTIME_TRANSLATION_20260831.md`](./docs/NAV_MAIL_REALTIME_TRANSLATION_20260831.md)。
+
 ## PR #37/#38 高级功能发布与恢复证据（历史）
 
 - PR #37 与 #38 已合并；`a9eff0d` master CI `32685311488` 和最终 `788be84` master CI
@@ -264,14 +284,19 @@ PR #30 的图片删除重试告警正确性、PR #31 的云端安全恢复、PR 
 
 ## 仍未完成
 
-1. 让 2026-08-28 运维收口批次通过 GitHub Linux CI；之后按发布前备份/隔离恢复/回滚/双域
+1. 邮件 P0 低延迟收取、持久 AI 队列、连续排空、API 唤醒 worker、延迟观测和安全文本附件
+   翻译仍处于开发中；完成定向测试和全量 CI 前不得标记 `LOCAL_DONE`，发布验收前不得标记
+   `VERIFIED_LIVE`。
+2. 邮件 P1 的 CONDSTORE/QRESYNC、flags/expunge 对账与 PDF/Office 安全文本提取尚未实现；
+   需要独立门禁，不能用正文翻译或普通附件下载冒充完成。
+3. 让 2026-08-28 运维收口批次通过 GitHub Linux CI；之后按发布前备份/隔离恢复/回滚/双域
    验收门禁发布，不能直接用本地测试替代。
-2. 现场建立并核验 `/opt/nav-stack/current` 与 `rollback`；先运行 local timer `--check`，
+4. 现场建立并核验 `/opt/nav-stack/current` 与 `rollback`；先运行 local timer `--check`，
    经单独授权、一次真实本地备份和隔离恢复后再启用三个 timer。
-3. 仅在 dry-run 审阅确认后，另行授权受控清理；本批没有删除任何 release、镜像或日志。
-4. 用户选定免费存储后填写通用异地备份 Secret，再验收首次加密快照、远端保留、exact-ID
+5. 仅在 dry-run 审阅确认后，另行授权受控清理；本批没有删除任何 release、镜像或日志。
+6. 用户选定免费存储后填写通用异地备份 Secret，再验收首次加密快照、远端保留、exact-ID
    恢复与外部 dead-man；未提供 Secret 时保持未配置。
-5. 外部 OAuth provider 的开发者应用、回调域名、凭据与同意屏幕仍需用户/平台流程；扩展商店
+7. 外部 OAuth provider 的开发者应用、回调域名、凭据与同意屏幕仍需用户/平台流程；扩展商店
    开发者账号、签名、提交与审核继续暂缓。
 
 ## 仍建议用户手工验收

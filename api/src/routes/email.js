@@ -1,4 +1,4 @@
-import { randomUUID } from 'node:crypto'
+import { createHash, randomUUID } from 'node:crypto'
 import { config } from '../config.js'
 import { pool, query } from '../db/index.js'
 import { getUserSettingValue } from '../lib/userSettings.js'
@@ -56,6 +56,10 @@ import {
   fetchIncomingAttachment,
   safeAttachmentDownloadName
 } from '../lib/emailIncomingAttachments.js'
+import {
+  EmailAttachmentTranslationError,
+  extractEmailAttachmentTranslationInput
+} from '../lib/emailAttachmentTranslation.js'
 import { createEmailMailboxEventBroker } from '../lib/emailMailboxEventBroker.js'
 import { createEmailSseConnectionLimiter, writeEmailSse } from '../lib/emailSse.js'
 import {
@@ -102,6 +106,17 @@ const EMAIL_AI_MESSAGE_ACTIONS = new Set([
   'propose_notification_rule'
 ])
 const EMAIL_AI_PROPOSAL_KINDS = new Set(['create_diary', 'create_memo', 'create_draft'])
+const EMAIL_ATTACHMENT_FETCH_ERROR_CODES = new Set([
+  'EMAIL_ATTACHMENT_CONTENT_UNAVAILABLE',
+  'EMAIL_ATTACHMENT_ID_INVALID',
+  'EMAIL_ATTACHMENT_NOT_FOUND',
+  'EMAIL_ATTACHMENT_TOO_LARGE',
+  'EMAIL_FOLDER_INVALID',
+  'EMAIL_REMOTE_ID_INVALID',
+  'EMAIL_SOURCE_INCOMPLETE',
+  'EMAIL_SOURCE_TOO_LARGE',
+  'EMAIL_UIDVALIDITY_CHANGED'
+])
 
 function boundedLimit(value) {
   const parsed = Number(value)
@@ -642,6 +657,9 @@ export default async function emailRoutes(fastify) {
       `SELECT account.id, account.source_key, account.label, account.enabled,
               account.capabilities, account.last_connected_at, account.last_error_at,
               account.last_error_code, account.updated_at,
+              account.sync_request_generation, account.sync_completed_generation,
+              account.last_sync_requested_at, account.last_sync_started_at,
+              account.last_sync_completed_at, account.last_idle_event_at,
               COUNT(DISTINCT location.message_id) FILTER (WHERE location.expunged_at IS NULL)::integer AS message_count,
               COUNT(DISTINCT location.message_id) FILTER (WHERE location.expunged_at IS NULL AND location.seen = FALSE)::integer AS unread_count
        FROM email_accounts AS account
@@ -662,6 +680,16 @@ export default async function emailRoutes(fastify) {
         syncState: row.last_error_at ? 'error' : row.last_connected_at ? 'connected' : 'pending',
         lastConnectedAt: row.last_connected_at,
         lastErrorCode: row.last_error_code,
+        sync: {
+          pending: Number(row.sync_request_generation || 0)
+            > Number(row.sync_completed_generation || 0),
+          requestGeneration: Number(row.sync_request_generation || 0),
+          completedGeneration: Number(row.sync_completed_generation || 0),
+          requestedAt: row.last_sync_requested_at,
+          startedAt: row.last_sync_started_at,
+          completedAt: row.last_sync_completed_at,
+          lastIdleEventAt: row.last_idle_event_at
+        },
         messageCount: Number(row.message_count || 0),
         unreadCount: Number(row.unread_count || 0),
         revision: row.updated_at
@@ -1088,6 +1116,158 @@ export default async function emailRoutes(fastify) {
       else if (code === 'EMAIL_SOURCE_TOO_LARGE' || code === 'EMAIL_ATTACHMENT_TOO_LARGE') reply.code(413)
       else reply.code(503)
       return { error: code || 'Email attachment could not be downloaded' }
+    }
+  })
+
+  fastify.post('/email/accounts/:accountId/messages/:locationId/attachments/:attachmentId/ai', async (request, reply) => {
+    await fastify.requireAuth(request, reply)
+    reply.header('Cache-Control', 'private, no-store')
+    const accountId = String(request.params.accountId || '')
+    const locationId = String(request.params.locationId || '')
+    const attachmentId = String(request.params.attachmentId || '').trim().toLowerCase()
+    const folderId = String(request.body?.folderId || '')
+    const action = String(request.body?.action || '').trim().toLowerCase()
+    if (![accountId, locationId, folderId].every((value) => UUID_PATTERN.test(value))
+      || !/^[0-9a-f]{32}$/.test(attachmentId)
+      || action !== 'translate') {
+      reply.code(400)
+      return { error: 'Invalid email attachment AI request' }
+    }
+
+    const { rows } = await query(
+      `SELECT location.message_id, folder.path AS folder_path,
+              location.uid_validity, location.uid, location.size_bytes
+       FROM email_folder_messages AS location
+       JOIN email_folders AS folder
+         ON folder.id = location.folder_id
+        AND folder.account_id = location.account_id
+        AND folder.user_id = location.user_id
+       WHERE location.id = $1 AND location.account_id = $2
+         AND location.user_id = $3 AND location.folder_id = $4
+         AND location.expunged_at IS NULL
+       LIMIT 1`,
+      [locationId, accountId, request.currentUser.id, folderId]
+    )
+    if (!rows[0]) {
+      reply.code(404)
+      return { error: 'Email attachment location not found' }
+    }
+
+    const rateLimited = await enforceAiRateLimit(request, reply, {
+      deniedError: '邮件附件翻译请求过于频繁，请稍后再试'
+    })
+    if (rateLimited) return rateLimited
+
+    const startedAt = Date.now()
+    let provider = null
+    let attachment = null
+    try {
+      provider = await resolveEmailAiProviderForUser(request.currentUser.id)
+      attachment = await fetchIncomingAttachment(rows[0], attachmentId)
+      const input = extractEmailAttachmentTranslationInput(attachment)
+      const contentDigest = createHash('sha256').update(attachment.content).digest('hex')
+      const resourceVersion = createHash('sha256').update(JSON.stringify({
+        accountId,
+        locationId,
+        folderId,
+        uidValidity: String(rows[0].uid_validity || ''),
+        uid: String(rows[0].uid || ''),
+        attachmentId,
+        contentDigest
+      })).digest('hex')
+      const language = String(request.body?.language || 'zh-CN').trim().slice(0, 80) || 'zh-CN'
+      const cacheKey = buildEmailAiCacheKey({
+        userId: request.currentUser.id,
+        action: 'attachment_translate',
+        resourceVersion,
+        language,
+        model: provider.config?.model
+      })
+      const cached = emailAiResponseCache.get(cacheKey)
+      const publicAttachment = {
+        id: attachmentId,
+        filename: input.filename,
+        contentType: input.contentType,
+        sourceBytes: input.sourceBytes,
+        sourceCharacters: input.sourceCharacters
+      }
+      if (cached) {
+        await recordSecurityEventBestEffort({
+          request,
+          eventType: 'email.ai.request',
+          outcome: 'success',
+          actorUserId: request.currentUser.id,
+          subjectUserId: request.currentUser.id,
+          resourceType: 'email_message',
+          resourceId: rows[0].message_id,
+          affectedCount: 1
+        }, request.log)
+        return {
+          result: publicEmailAiResult(cached, { cached: true }),
+          attachment: publicAttachment,
+          resourceVersion
+        }
+      }
+
+      const result = await runEmailAi(provider, {
+        action: 'translate',
+        subject: `附件：${input.filename}`,
+        text: input.text,
+        targetLanguage: language
+      }, request.currentUser.id)
+      emailAiResponseCache.set(cacheKey, result)
+      await recordRuntimeAiUsageSafely({
+        userId: request.currentUser.id,
+        feature: AI_USAGE_FEATURES.EMAIL_ASSIST,
+        provider: result.provider,
+        model: result.model,
+        apiMode: result.apiMode,
+        success: true,
+        usage: result.usage,
+        latencyMs: result.latencyMs
+      }, request.log)
+      await recordSecurityEventBestEffort({
+        request,
+        eventType: 'email.ai.request',
+        outcome: 'success',
+        actorUserId: request.currentUser.id,
+        subjectUserId: request.currentUser.id,
+        resourceType: 'email_message',
+        resourceId: rows[0].message_id,
+        affectedCount: 1
+      }, request.log)
+      return {
+        result: publicEmailAiResult(result),
+        attachment: publicAttachment,
+        resourceVersion
+      }
+    } catch (error) {
+      if (error instanceof EmailAttachmentTranslationError) {
+        reply.code(error.statusCode)
+        return { error: error.message, code: error.code }
+      }
+      const code = String(error?.code || '')
+      if (EMAIL_ATTACHMENT_FETCH_ERROR_CODES.has(code)) {
+        if (code === 'EMAIL_ATTACHMENT_NOT_FOUND') reply.code(404)
+        else if (code === 'EMAIL_UIDVALIDITY_CHANGED') reply.code(409)
+        else if (code === 'EMAIL_SOURCE_TOO_LARGE' || code === 'EMAIL_ATTACHMENT_TOO_LARGE') reply.code(413)
+        else reply.code(503)
+        return { error: code, code }
+      }
+      await recordRuntimeAiUsageSafely({
+        userId: request.currentUser.id,
+        feature: AI_USAGE_FEATURES.EMAIL_ASSIST,
+        provider: provider?.id || 'chatgpt',
+        model: provider?.config?.model || 'unknown',
+        apiMode: provider?.config?.apiMode || 'unknown',
+        success: false,
+        usage: null,
+        latencyMs: Math.max(0, Date.now() - startedAt)
+      }, request.log)
+      reply.code(502)
+      return { error: error.message || '邮件附件翻译失败' }
+    } finally {
+      if (Buffer.isBuffer(attachment?.content)) attachment.content.fill(0)
     }
   })
 
