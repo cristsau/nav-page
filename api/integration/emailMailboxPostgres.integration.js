@@ -6,10 +6,6 @@ import path from 'node:path'
 import test, { after, before, beforeEach } from 'node:test'
 import { simpleParser } from 'mailparser'
 import { Pool } from 'pg'
-import {
-  MINIMUM_MAIL_WORKER_DATABASE_POOL_SIZE,
-  normalizeDatabasePoolMax
-} from '../src/config.js'
 
 const EXPECTED_DATABASE_NAME = 'nav_email_mailbox_test'
 const ALLOWED_DATABASE_HOSTS = new Set(['127.0.0.1', 'localhost'])
@@ -58,12 +54,18 @@ let processInboundEmail
 let processEmailClassificationJobs
 let deleteExcessEmailMessagesSql
 let temporaryDirectory
+let minimumMailWorkerDatabasePoolSize
+let normalizeDatabasePoolMax
 
 before(async () => {
   temporaryDirectory = await fs.mkdtemp(path.join(os.tmpdir(), 'nav-email-mailbox-'))
   const keyPath = path.join(temporaryDirectory, 'email-encryption-key')
   await fs.writeFile(keyPath, randomBytes(32).toString('base64'), { encoding: 'utf8', mode: 0o600 })
   process.env.NAV_EMAIL_ENCRYPTION_KEY_FILE = keyPath
+  ;({
+    MINIMUM_MAIL_WORKER_DATABASE_POOL_SIZE: minimumMailWorkerDatabasePoolSize,
+    normalizeDatabasePoolMax
+  } = await import('../src/config.js'))
   ;({ pool } = await import('../src/db/index.js'))
   ;({ persistEmailMailboxMessage, decryptStoredMailboxMessage } = await import('../src/lib/emailMailboxStore.js'))
   ;({ clearEmailEncryptionKeyCache, encryptEmailPayload } = await import('../src/lib/emailCrypto.js'))
@@ -151,7 +153,7 @@ test('mail worker pool remains live with three reserved sessions and nested work
   assert.equal(normalizeDatabasePoolMax(undefined, 'worker'), 8)
   const boundedPool = new Pool({
     connectionString: process.env.DATABASE_URL,
-    max: MINIMUM_MAIL_WORKER_DATABASE_POOL_SIZE,
+    max: minimumMailWorkerDatabasePoolSize,
     connectionTimeoutMillis: 1_000
   })
   const clients = []
