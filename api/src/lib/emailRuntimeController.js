@@ -49,7 +49,12 @@ async function startCurrent() {
       batchSize: config.imapBatchSize,
       maxMessageBytes: config.imapMaxMessageBytes,
       drainMaxBatches: config.imapDrainMaxBatches,
-      drainMaxMilliseconds: config.imapDrainMaxMilliseconds
+      drainMaxMilliseconds: config.imapDrainMaxMilliseconds,
+      folderSyncIntervalSeconds: config.imapFolderSyncIntervalSeconds,
+      foldersPerRun: config.imapFoldersPerRun,
+      maxReconcileMessages: config.imapReconcileMaxMessages,
+      reconcileBatchSize: config.imapReconcileBatchSize,
+      telemetrySampleSize: config.imapTelemetrySampleSize
     },
     poolInstance,
     logger,

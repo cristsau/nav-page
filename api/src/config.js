@@ -404,6 +404,31 @@ export const config = {
     15_000,
     { minimum: 1_000, maximum: 60_000 }
   ),
+  imapFolderSyncIntervalSeconds: normalizeBoundedPositiveInteger(
+    process.env.NAV_IMAP_FOLDER_SYNC_INTERVAL_SECONDS,
+    900,
+    { minimum: 60, maximum: 86_400 }
+  ),
+  imapFoldersPerRun: normalizeBoundedPositiveInteger(
+    process.env.NAV_IMAP_FOLDERS_PER_RUN,
+    2,
+    { maximum: 20 }
+  ),
+  imapReconcileMaxMessages: normalizeBoundedPositiveInteger(
+    process.env.NAV_IMAP_RECONCILE_MAX_MESSAGES,
+    20_000,
+    { minimum: 100, maximum: 100_000 }
+  ),
+  imapReconcileBatchSize: normalizeBoundedPositiveInteger(
+    process.env.NAV_IMAP_RECONCILE_BATCH_SIZE,
+    500,
+    { minimum: 10, maximum: 2_000 }
+  ),
+  imapTelemetrySampleSize: normalizeBoundedPositiveInteger(
+    process.env.NAV_IMAP_TELEMETRY_SAMPLE_SIZE,
+    64,
+    { minimum: 8, maximum: 512 }
+  ),
   emailClassificationIntervalSeconds: normalizeBoundedPositiveInteger(
     process.env.NAV_EMAIL_CLASSIFICATION_INTERVAL_SECONDS,
     2,

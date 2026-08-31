@@ -22,6 +22,8 @@ import {
   normalizeEmailMessageAttempts,
   truncateUtf8
 } from './emailIngestLimits.js'
+import { createEmailIngestTelemetry } from './emailIngestTelemetry.js'
+import { syncDueEmailFolders } from './emailMailboxReconciliation.js'
 
 // Leave more than half of the encrypted content budget for bounded attachment
 // metadata and JSON overhead. This is byte-based because AES-GCM validates the
@@ -53,7 +55,12 @@ export function validateEmailIngestPolicy(policy = {}) {
     maxBatchSourceBytes: deriveEmailBatchSourceBudget(maxMessageBytes, policy.maxBatchSourceBytes),
     maxMessageAttempts: normalizeEmailMessageAttempts(policy.maxMessageAttempts),
     drainMaxBatches: boundedInteger(policy.drainMaxBatches, 10, 1, 50),
-    drainMaxMilliseconds: boundedInteger(policy.drainMaxMilliseconds, 15_000, 1_000, 60_000)
+    drainMaxMilliseconds: boundedInteger(policy.drainMaxMilliseconds, 15_000, 1_000, 60_000),
+    folderSyncIntervalSeconds: boundedInteger(policy.folderSyncIntervalSeconds, 900, 60, 86_400),
+    foldersPerRun: boundedInteger(policy.foldersPerRun, 2, 1, 20),
+    maxReconcileMessages: boundedInteger(policy.maxReconcileMessages, 20_000, 100, 100_000),
+    reconcileBatchSize: boundedInteger(policy.reconcileBatchSize, 500, 10, 2_000),
+    telemetrySampleSize: boundedInteger(policy.telemetrySampleSize, 64, 8, 512)
   }
   return normalized
 }
@@ -71,7 +78,17 @@ export async function drainEmailMailboxBatches({ syncMailbox, policy, clock = ()
     caughtUp: false,
     syncRequestPending: false,
     maxIngestLatencyMs: 0,
-    batches: 0
+    batches: 0,
+    foldersProcessed: 0,
+    foldersFailed: 0,
+    qresyncFolders: 0,
+    condstoreFolders: 0,
+    uidScanFolders: 0,
+    uidValidityResets: 0,
+    flagUpdates: 0,
+    expunged: 0,
+    secondaryProcessed: 0,
+    secondaryRemaining: 0
   }
   do {
     const batch = await syncMailbox()
@@ -87,6 +104,12 @@ export async function drainEmailMailboxBatches({ syncMailbox, policy, clock = ()
     combined.caughtUp = batch.caughtUp === true
     combined.syncRequestPending = batch.syncRequestPending === true
     combined.batches += 1
+    for (const key of [
+      'foldersProcessed', 'foldersFailed', 'qresyncFolders', 'condstoreFolders',
+      'uidScanFolders', 'uidValidityResets', 'flagUpdates', 'expunged',
+      'secondaryProcessed'
+    ]) combined[key] += Number(batch[key] || 0)
+    combined.secondaryRemaining = Number(batch.secondaryRemaining || 0)
     if (combined.caughtUp && !combined.syncRequestPending) break
   } while (
     combined.batches < validated.drainMaxBatches
@@ -287,11 +310,15 @@ export function startEmailIngestScheduler({
   const sourceKey = validateImapConfig(runtimeConfig)
   let stopped = false
   let imap = null
+  let reconcileImap = null
   let activeRun = null
   let timer = null
   let reconnectTimer = null
   let rerunRequested = false
   let stopWakeListener = null
+  let primaryConnectionAttempted = false
+  let reconcileConnectionAttempted = false
+  const telemetry = createEmailIngestTelemetry({ sampleSize: validated.telemetrySampleSize })
 
   const scheduleSoon = (delay = 250) => {
     if (stopped || reconnectTimer) return
@@ -320,6 +347,9 @@ export function startEmailIngestScheduler({
   const ensureConnected = async () => {
     if (imap?.usable) return imap
     try { imap?.close?.() } catch {}
+    const startedAt = clock()
+    const retry = primaryConnectionAttempted
+    primaryConnectionAttempted = true
     await assertHostImpl(runtimeConfig.imapHost, { label: 'IMAP ' })
     const auth = await resolveImapAuth(runtimeConfig, { readSecretImpl })
     const client = new ImapClient({
@@ -327,6 +357,7 @@ export function startEmailIngestScheduler({
       port: Number(runtimeConfig.imapPort),
       secure: true,
       auth,
+      qresync: true,
       disableAutoIdle: false,
       maxIdleTime: Math.max(60_000, validated.pollIntervalSeconds * 1000),
       tls: { minVersion: 'TLSv1.2', rejectUnauthorized: true },
@@ -339,10 +370,61 @@ export function startEmailIngestScheduler({
     client.on('error', (error) => logger?.warn?.({ errorCode: sanitizeMaintenanceErrorCode(error) }, 'IMAP connection error'))
     client.on('close', () => {
       if (imap === client) imap = null
+      telemetry.recordDisconnect('primary')
       scheduleSoon(5_000)
     })
-    await client.connect()
+    try {
+      await client.connect()
+      telemetry.recordConnectionAttempt({
+        connection: 'primary', durationMs: clock() - startedAt, succeeded: true, retry
+      })
+    } catch (error) {
+      telemetry.recordConnectionAttempt({
+        connection: 'primary', durationMs: clock() - startedAt, succeeded: false, retry
+      })
+      try { client.close?.() } catch {}
+      throw error
+    }
     imap = client
+    return client
+  }
+
+  const ensureReconcileConnected = async () => {
+    if (reconcileImap?.usable) return reconcileImap
+    try { reconcileImap?.close?.() } catch {}
+    const startedAt = clock()
+    const retry = reconcileConnectionAttempted
+    reconcileConnectionAttempted = true
+    await assertHostImpl(runtimeConfig.imapHost, { label: 'IMAP ' })
+    const auth = await resolveImapAuth(runtimeConfig, { readSecretImpl })
+    const client = new ImapClient({
+      host: runtimeConfig.imapHost,
+      port: Number(runtimeConfig.imapPort),
+      secure: true,
+      auth,
+      qresync: true,
+      disableAutoIdle: true,
+      tls: { minVersion: 'TLSv1.2', rejectUnauthorized: true },
+      logger: false
+    })
+    client.on('error', (error) => logger?.warn?.({ errorCode: sanitizeMaintenanceErrorCode(error) }, 'IMAP reconciliation connection error'))
+    client.on('close', () => {
+      if (reconcileImap === client) reconcileImap = null
+      telemetry.recordDisconnect('reconcile')
+    })
+    try {
+      await client.connect()
+      telemetry.recordConnectionAttempt({
+        connection: 'reconcile', durationMs: clock() - startedAt, succeeded: true, retry
+      })
+    } catch (error) {
+      telemetry.recordConnectionAttempt({
+        connection: 'reconcile', durationMs: clock() - startedAt, succeeded: false, retry
+      })
+      try { client.close?.() } catch {}
+      throw error
+    }
+    reconcileImap = client
     return client
   }
 
@@ -767,6 +849,21 @@ export function startEmailIngestScheduler({
     )
     summary.syncRequestPending = Number(completed.rows[0]?.sync_request_generation || 0)
       > Number(completed.rows[0]?.sync_completed_generation || 0)
+    if (caughtUp) {
+      const protocolClient = await ensureReconcileConnected()
+      const reconciled = await syncDueEmailFolders({
+        client: protocolClient,
+        poolInstance,
+        userId,
+        sourceKey,
+        primaryMailbox: runtimeConfig.imapMailbox,
+        policy: validated,
+        parseMessage: parseImapMessage,
+        logger
+      })
+      Object.assign(summary, reconciled)
+      summary.syncRequestPending = summary.syncRequestPending || reconciled.continueImmediately === true
+    }
     return summary
   }
 
@@ -790,6 +887,8 @@ export function startEmailIngestScheduler({
       .then(async (result) => {
         const finishedAtMs = clock()
         continueImmediately = result.continueImmediately === true
+        telemetry.recordSync(Math.max(0, finishedAtMs - startedAtMs))
+        Object.assign(result, telemetry.snapshot())
         await notifyObserver(observer, 'succeeded', {
           result,
           startedAt: new Date(startedAtMs),
@@ -865,9 +964,15 @@ export function startEmailIngestScheduler({
     const activeClient = imap
     imap = null
     try { activeClient?.close?.() } catch {}
+    const activeReconcileClient = reconcileImap
+    reconcileImap = null
+    try { activeReconcileClient?.close?.() } catch {}
     if (activeRun) await activeRun
     const client = imap
     imap = null
     try { await client?.logout?.() } catch { try { client?.close?.() } catch {} }
+    const reconcileClient = reconcileImap
+    reconcileImap = null
+    try { await reconcileClient?.logout?.() } catch { try { reconcileClient?.close?.() } catch {} }
   }
 }

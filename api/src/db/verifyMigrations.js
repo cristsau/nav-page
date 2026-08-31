@@ -2001,10 +2001,12 @@ async function verifyEmailMailboxSchema() {
     ]],
     ['email_folders', [
       'id', 'account_id', 'user_id', 'path', 'path_hash', 'delimiter',
-      'special_use', 'selectable', 'subscribed', 'uid_validity', 'uid_next',
-      'highest_modseq', 'last_uid', 'sync_generation',
-      'initial_sync_complete', 'last_listed_at', 'last_synced_at',
-      'last_error_at', 'last_error_code', 'created_at', 'updated_at'
+       'special_use', 'selectable', 'subscribed', 'uid_validity', 'uid_next',
+       'highest_modseq', 'reconciled_modseq', 'last_uid', 'sync_generation',
+       'initial_sync_complete', 'last_listed_at', 'last_synced_at',
+       'last_reconciled_at', 'last_reconcile_mode',
+       'last_reconcile_error_at', 'last_reconcile_error_code',
+       'last_error_at', 'last_error_code', 'created_at', 'updated_at'
     ]],
     ['email_messages', [
       'id', 'account_id', 'user_id', 'canonical_hash', 'message_id_hash',
@@ -2042,6 +2044,7 @@ async function verifyEmailMailboxSchema() {
     ['email_accounts', 'sync_completed_generation', 'int8', 'NO', '0'],
     ['email_folders', 'uid_validity', 'int8', 'YES', null],
     ['email_folders', 'highest_modseq', 'numeric', 'YES', null],
+    ['email_folders', 'reconciled_modseq', 'numeric', 'YES', null],
     ['email_folders', 'last_uid', 'int8', 'NO', '0'],
     ['email_messages', 'envelope_encrypted', 'bytea', 'NO', null],
     ['email_messages', 'content_encrypted', 'bytea', 'NO', null],
@@ -2104,6 +2107,11 @@ async function verifyEmailMailboxSchema() {
     ]],
     ['email_folders_uid_validity_check', ['uid_validity', '4294967295']],
     ['email_folders_highest_modseq_check', ['highest_modseq', '18446744073709551615']],
+    ['email_folders_reconciled_modseq_check', ['reconciled_modseq', '18446744073709551615']],
+    ['email_folders_reconcile_mode_check', [
+      'last_reconcile_mode', "'qresync'", "'condstore'", "'uid_flags_scan'", "'uidvalidity_reset'"
+    ]],
+    ['email_folders_reconcile_error_check', ['last_reconcile_error_code', "'^[a-z0-9_.-]+$'"]],
     ['email_folders_account_path_unique', ['unique (account_id, path_hash)']],
     ['email_folders_identity_account_user_unique', ['unique (id, account_id, user_id)']],
     ['email_messages_account_user_fkey', [
@@ -2166,6 +2174,9 @@ async function verifyEmailMailboxSchema() {
     ]],
     ['idx_email_folders_sync_due', [
       'last_synced_at', 'nulls first', 'where (selectable = true)'
+    ]],
+    ['idx_email_folders_reconcile_due', [
+      'last_reconciled_at', 'nulls first', 'where ((selectable = true) and (subscribed = true))'
     ]],
     ['idx_email_messages_user_received', [
       'user_id', 'received_at desc', 'id'
