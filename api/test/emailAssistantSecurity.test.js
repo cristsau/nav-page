@@ -186,9 +186,12 @@ test('mail write confidentiality is fail-closed even when execution intent is am
   const sensitiveRequests = [
     '请帮我起草并发送邮件给 alice@example.com，正文是合同金额 100 万',
     '请帮我写一封邮件给 alice@example.com，正文是合同金额 100 万',
+    '帮我发邮件给 alice@example.com，正文是合同金额 100 万',
+    '给 alice@example.com 回一封邮件，正文是已经收到',
     '请撰写一封邮件，收件人：alice@example.com，主题：合同，正文：金额 100 万',
     '请回复这封邮件，正文：我已确认',
     'Compose an email to alice@example.com. Subject: Contract. Body: Approved.',
+    'Email alice@example.com. Body: Approved.',
     'Draft and send an email to alice@example.com with the confidential terms.',
     'Reply to this email with the private account details.',
     '查看这封邮件，然后回复它',
@@ -206,6 +209,8 @@ test('ordinary mail retrieval does not force write-history encryption', () => {
     '查看我发送给张三的邮件',
     '搜索发送失败的邮件',
     '查看我的收件箱',
+    '分析邮件发送延迟',
+    '开发邮件功能',
     'search my email for invoices',
     'show sent mail from Alice'
   ]

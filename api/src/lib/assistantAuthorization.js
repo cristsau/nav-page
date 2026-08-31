@@ -9,7 +9,7 @@ const CREATE_TARGET_PATTERNS = Object.freeze({
 })
 
 const SENSITIVE_MAIL_COMPOSE_ACTION_PATTERN = /(?:撰写|起草|草拟|写(?:一封|封)?|\b(?:compose|draft|write)\b)/iu
-const SENSITIVE_MAIL_DELIVERY_ACTION_PATTERN = /(?:(?<!已)发送|寄出|回复|回信|转发|\b(?:send|reply|respond|forward)\b)/iu
+const SENSITIVE_MAIL_DELIVERY_ACTION_PATTERN = /(?:(?<!已)(?:发送|发给|(?<![开研触批])发(?:一封|封|个)?(?:电子邮件|电邮|邮件)|寄出|寄给|寄(?:一封|封|个)?(?:电子邮件|电邮|邮件)|回复|回信|回(?:一封|封)?(?:电子邮件|电邮|邮件)|转发)|\b(?:send|reply|respond|forward|email)\b)/iu
 const SENSITIVE_MAIL_TARGET_PATTERN = /(?:电子邮件|电邮|邮件|邮箱|草稿|\b(?:e-?mail|mail|message|draft)\b)/iu
 const SENSITIVE_MAIL_ADDRESS_PATTERN = /\b[^\s@,;，；<>]+@[^\s@,;，；<>]+\.[^\s@,;，；<>]+\b/iu
 const SENSITIVE_MAIL_RECIPIENT_FIELD_PATTERN = /(?:收件人|收信人|发给|发送给|寄给|回复给|\b(?:to|recipient)\s*[:：])/iu
@@ -136,8 +136,9 @@ export function isExplicitAssistantMutationRequest(commandText) {
 export function isSensitiveAssistantMailWriteRequest(commandText) {
   const command = normalizeCommand(commandText)
   if (!command || command.length > 2_000) return false
-  const hasExplicitFields = SENSITIVE_MAIL_RECIPIENT_FIELD_PATTERN.test(command)
-    && SENSITIVE_MAIL_CONTENT_FIELD_PATTERN.test(command)
+  const hasExplicitFields = SENSITIVE_MAIL_CONTENT_FIELD_PATTERN.test(command)
+    && (SENSITIVE_MAIL_RECIPIENT_FIELD_PATTERN.test(command)
+      || SENSITIVE_MAIL_ADDRESS_PATTERN.test(command))
   if (hasExplicitFields) return true
   const hasMailTarget = SENSITIVE_MAIL_TARGET_PATTERN.test(command)
     || SENSITIVE_MAIL_ADDRESS_PATTERN.test(command)
