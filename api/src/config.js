@@ -409,6 +409,8 @@ export const config = {
     900,
     { minimum: 60, maximum: 86_400 }
   ),
+  imapProtocolReconciliationEnabled: process.env.NAV_IMAP_PROTOCOL_RECONCILIATION_ENABLED === 'true',
+  imapSecondaryFolderSyncEnabled: process.env.NAV_IMAP_SECONDARY_FOLDER_SYNC_ENABLED === 'true',
   imapFoldersPerRun: normalizeBoundedPositiveInteger(
     process.env.NAV_IMAP_FOLDERS_PER_RUN,
     2,

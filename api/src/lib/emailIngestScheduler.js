@@ -56,6 +56,8 @@ export function validateEmailIngestPolicy(policy = {}) {
     maxMessageAttempts: normalizeEmailMessageAttempts(policy.maxMessageAttempts),
     drainMaxBatches: boundedInteger(policy.drainMaxBatches, 10, 1, 50),
     drainMaxMilliseconds: boundedInteger(policy.drainMaxMilliseconds, 15_000, 1_000, 60_000),
+    protocolReconciliationEnabled: policy.protocolReconciliationEnabled !== false,
+    secondaryFolderSyncEnabled: policy.secondaryFolderSyncEnabled !== false,
     folderSyncIntervalSeconds: boundedInteger(policy.folderSyncIntervalSeconds, 900, 60, 86_400),
     foldersPerRun: boundedInteger(policy.foldersPerRun, 2, 1, 20),
     maxReconcileMessages: boundedInteger(policy.maxReconcileMessages, 20_000, 100, 100_000),
@@ -849,7 +851,10 @@ export function startEmailIngestScheduler({
     )
     summary.syncRequestPending = Number(completed.rows[0]?.sync_request_generation || 0)
       > Number(completed.rows[0]?.sync_completed_generation || 0)
-    if (caughtUp) {
+    if (caughtUp && (
+      validated.protocolReconciliationEnabled
+      || validated.secondaryFolderSyncEnabled
+    )) {
       const protocolClient = await ensureReconcileConnected()
       const reconciled = await syncDueEmailFolders({
         client: protocolClient,

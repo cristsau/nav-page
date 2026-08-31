@@ -50,6 +50,8 @@ async function startCurrent() {
       maxMessageBytes: config.imapMaxMessageBytes,
       drainMaxBatches: config.imapDrainMaxBatches,
       drainMaxMilliseconds: config.imapDrainMaxMilliseconds,
+      protocolReconciliationEnabled: config.imapProtocolReconciliationEnabled,
+      secondaryFolderSyncEnabled: config.imapSecondaryFolderSyncEnabled,
       folderSyncIntervalSeconds: config.imapFolderSyncIntervalSeconds,
       foldersPerRun: config.imapFoldersPerRun,
       maxReconcileMessages: config.imapReconcileMaxMessages,

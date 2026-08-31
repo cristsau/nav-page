@@ -25,6 +25,15 @@
 
 本候选不执行远端写操作，不改变远端 flags，不移动或删除远端邮件，也不包含生产发布。
 
+协议对账与次级目录历史同步是两个独立 staging 能力，应用运行时默认都关闭：
+
+- `NAV_IMAP_PROTOCOL_RECONCILIATION_ENABLED=false`
+- `NAV_IMAP_SECONDARY_FOLDER_SYNC_ENABLED=false`
+
+两项关闭时不会建立第二条 IMAP 连接，也不会查询到期目录；原有 `INBOX` IDLE 与即时增量收件
+路径保持不变。直接调用底层调度函数而未传这两个新字段时继续沿用旧行为，以兼容既有测试和
+内部调用；生产配置始终显式传入上述默认关闭值。
+
 ## 2. 游标和状态模型
 
 `email_folders.highest_modseq` 表示最近一次从服务器观察到的值，不能直接证明所有变化已经写入
@@ -56,6 +65,8 @@ UIDVALIDITY 变化时，原目录的旧 UID 位置立即标记为 expunged，清
 主收件循环追平 `INBOX` 后才选择到期目录。每轮优先对账主目录，再处理有限个其他目录；未追平
 的次级目录通过现有连续排空时间片继续推进，不阻塞 `INBOX` IDLE。默认策略：
 
+- `NAV_IMAP_PROTOCOL_RECONCILIATION_ENABLED=false`
+- `NAV_IMAP_SECONDARY_FOLDER_SYNC_ENABLED=false`
 - `NAV_IMAP_FOLDER_SYNC_INTERVAL_SECONDS=900`
 - `NAV_IMAP_FOLDERS_PER_RUN=2`
 - `NAV_IMAP_RECONCILE_MAX_MESSAGES=20000`
@@ -87,6 +98,9 @@ UIDVALIDITY 变化时，原目录的旧 UID 位置立即标记为 expunged，清
 
 - `044` 是加法迁移。应用回滚可保留新增列、约束和索引；不得为回滚清表、删除规范邮件或倒退
   邮箱游标。
+- 首次发布保持两个 staging 开关为 `false`。完成迁移、worker 健康和现有 `INBOX` 路径验收后，
+  先单独启用协议对账并观察失败率、延迟和游标单调性；再独立启用次级目录同步。关闭任一开关
+  不需要回退迁移，也不得重置远端邮箱或本地游标。
 - 若真实邮箱验收出现 UIDVALIDITY/MODSEQ/VANISHED 异常，先关闭邮件抓取 worker 并保留错误
   状态，再回到发布前应用 release；不要重置远端邮箱。
 - fallback 权威扫描默认最多 20,000 封。更大目录会明确失败关闭；调整上限前必须评估 IMAP、

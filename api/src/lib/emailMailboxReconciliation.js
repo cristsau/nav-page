@@ -718,10 +718,28 @@ export async function syncDueEmailFolders({
   primaryMailbox,
   policy = {},
   parseMessage,
-  logger
+  logger,
+  reconcileFolderImpl = reconcileSelectedEmailFolder,
+  syncSecondaryFolderImpl = syncSecondaryEmailFolder
 }) {
   const folderIntervalSeconds = boundedInteger(policy.folderSyncIntervalSeconds, 900, 60, 86_400)
   const foldersPerRun = boundedInteger(policy.foldersPerRun, 2, 1, 20)
+  const protocolReconciliationEnabled = policy.protocolReconciliationEnabled !== false
+  const secondaryFolderSyncEnabled = policy.secondaryFolderSyncEnabled !== false
+  const summary = {
+    foldersProcessed: 0,
+    foldersFailed: 0,
+    qresyncFolders: 0,
+    condstoreFolders: 0,
+    uidScanFolders: 0,
+    uidValidityResets: 0,
+    flagUpdates: 0,
+    expunged: 0,
+    secondaryProcessed: 0,
+    secondaryRemaining: 0,
+    continueImmediately: false
+  }
+  if (!protocolReconciliationEnabled && !secondaryFolderSyncEnabled) return summary
   const due = await poolInstance.query(
     `SELECT folder.*, account.label AS account_label
      FROM email_folders AS folder
@@ -737,11 +755,17 @@ export async function syncDueEmailFolders({
          OR folder.last_reconcile_error_at <= NOW() - ($3::integer * INTERVAL '1 second')
        )
        AND (
-         folder.initial_sync_complete = FALSE
-         OR folder.last_reconciled_at IS NULL
-         OR folder.last_reconciled_at <= NOW() - ($3::integer * INTERVAL '1 second')
+         (
+           $6::boolean
+           AND (
+             folder.initial_sync_complete = FALSE
+             OR folder.last_reconciled_at IS NULL
+             OR folder.last_reconciled_at <= NOW() - ($3::integer * INTERVAL '1 second')
+           )
+         )
          OR (
-           folder.path <> $4
+           $7::boolean
+           AND folder.path <> $4
            AND (
              folder.last_synced_at IS NULL
              OR folder.last_synced_at <= NOW() - ($3::integer * INTERVAL '1 second')
@@ -754,41 +778,38 @@ export async function syncDueEmailFolders({
        folder.last_reconciled_at ASC NULLS FIRST,
        folder.id
      LIMIT $5`,
-    [userId, sourceKey, folderIntervalSeconds, primaryMailbox, foldersPerRun]
+    [
+      userId,
+      sourceKey,
+      folderIntervalSeconds,
+      primaryMailbox,
+      foldersPerRun,
+      protocolReconciliationEnabled,
+      secondaryFolderSyncEnabled
+    ]
   )
-  const summary = {
-    foldersProcessed: 0,
-    foldersFailed: 0,
-    qresyncFolders: 0,
-    condstoreFolders: 0,
-    uidScanFolders: 0,
-    uidValidityResets: 0,
-    flagUpdates: 0,
-    expunged: 0,
-    secondaryProcessed: 0,
-    secondaryRemaining: 0,
-    continueImmediately: false
-  }
   for (const folder of due.rows) {
     try {
-      const reconciled = await reconcileSelectedEmailFolder({
-        client,
-        poolInstance,
-        userId,
-        accountId: folder.account_id,
-        listedFolder: folder,
-        policy
-      })
-      summary.foldersProcessed += 1
-      if (reconciled.mode === 'qresync') summary.qresyncFolders += 1
-      else if (reconciled.mode === 'condstore') summary.condstoreFolders += 1
-      else summary.uidScanFolders += 1
-      if (reconciled.uidValidityReset) summary.uidValidityResets += 1
-      summary.flagUpdates += reconciled.flagsUpdated
-      summary.expunged += reconciled.expunged
+      if (protocolReconciliationEnabled) {
+        const reconciled = await reconcileFolderImpl({
+          client,
+          poolInstance,
+          userId,
+          accountId: folder.account_id,
+          listedFolder: folder,
+          policy
+        })
+        summary.foldersProcessed += 1
+        if (reconciled.mode === 'qresync') summary.qresyncFolders += 1
+        else if (reconciled.mode === 'condstore') summary.condstoreFolders += 1
+        else summary.uidScanFolders += 1
+        if (reconciled.uidValidityReset) summary.uidValidityResets += 1
+        summary.flagUpdates += reconciled.flagsUpdated
+        summary.expunged += reconciled.expunged
+      }
 
-      if (folder.path !== primaryMailbox) {
-        const secondary = await syncSecondaryEmailFolder({
+      if (secondaryFolderSyncEnabled && folder.path !== primaryMailbox) {
+        const secondary = await syncSecondaryFolderImpl({
           client,
           poolInstance,
           userId,

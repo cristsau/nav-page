@@ -3,8 +3,10 @@ import assert from 'node:assert/strict'
 import { readFile } from 'node:fs/promises'
 import {
   enabledImapCapabilities,
-  selectEmailReconcileMode
+  selectEmailReconcileMode,
+  syncDueEmailFolders
 } from '../src/lib/emailMailboxReconciliation.js'
+import { validateEmailIngestPolicy } from '../src/lib/emailIngestScheduler.js'
 import {
   createEmailIngestTelemetry,
   latencyPercentile
@@ -74,15 +76,206 @@ test('rolling telemetry reports bounded connection retries and nearest-rank p50/
   })
 })
 
+test('reconciliation feature policy keeps direct callers compatible when flags are omitted', async () => {
+  const policy = validateEmailIngestPolicy({})
+  assert.equal(policy.protocolReconciliationEnabled, true)
+  assert.equal(policy.secondaryFolderSyncEnabled, true)
+
+  const queries = []
+  const result = await syncDueEmailFolders({
+    client: {},
+    poolInstance: {
+      async query(sql, values) {
+        queries.push({ sql, values })
+        return { rows: [] }
+      }
+    },
+    userId: 'user-1',
+    sourceKey: 'mail-source',
+    primaryMailbox: 'INBOX'
+  })
+
+  assert.equal(result.foldersProcessed, 0)
+  assert.equal(queries.length, 1)
+  assert.match(queries[0].sql, /\$6::boolean/)
+  assert.match(queries[0].sql, /\$7::boolean/)
+  assert.match(
+    queries[0].sql,
+    /last_reconcile_error_at IS NULL[\s\S]*?\$6::boolean[\s\S]*?\$7::boolean/
+  )
+  assert.deepEqual(queries[0].values, [
+    'user-1',
+    'mail-source',
+    900,
+    'INBOX',
+    2,
+    true,
+    true
+  ])
+})
+
+test('both reconciliation staging flags off return before any database activity', async () => {
+  let databaseCalls = 0
+  const result = await syncDueEmailFolders({
+    client: {},
+    poolInstance: {
+      async query() {
+        databaseCalls += 1
+        throw new Error('database must not be touched while both staging flags are off')
+      }
+    },
+    userId: 'user-1',
+    sourceKey: 'mail-source',
+    primaryMailbox: 'INBOX',
+    policy: {
+      protocolReconciliationEnabled: false,
+      secondaryFolderSyncEnabled: false
+    }
+  })
+
+  assert.equal(databaseCalls, 0)
+  assert.deepEqual(result, {
+    foldersProcessed: 0,
+    foldersFailed: 0,
+    qresyncFolders: 0,
+    condstoreFolders: 0,
+    uidScanFolders: 0,
+    uidValidityResets: 0,
+    flagUpdates: 0,
+    expunged: 0,
+    secondaryProcessed: 0,
+    secondaryRemaining: 0,
+    continueImmediately: false
+  })
+})
+
+test('protocol-only staging reconciles without syncing secondary history', async () => {
+  const queries = []
+  let reconcileCalls = 0
+  let secondaryCalls = 0
+  const folder = {
+    id: 'folder-1',
+    account_id: 'account-1',
+    account_label: 'Personal',
+    path: 'Archive'
+  }
+  const result = await syncDueEmailFolders({
+    client: {},
+    poolInstance: {
+      async query(sql, values) {
+        queries.push({ sql, values })
+        return { rows: [folder] }
+      }
+    },
+    userId: 'user-1',
+    sourceKey: 'mail-source',
+    primaryMailbox: 'INBOX',
+    policy: {
+      protocolReconciliationEnabled: true,
+      secondaryFolderSyncEnabled: false
+    },
+    reconcileFolderImpl: async ({ listedFolder }) => {
+      reconcileCalls += 1
+      assert.equal(listedFolder, folder)
+      return {
+        mode: 'condstore',
+        uidValidityReset: false,
+        flagsUpdated: 2,
+        expunged: 1
+      }
+    },
+    syncSecondaryFolderImpl: async () => {
+      secondaryCalls += 1
+      throw new Error('secondary sync must stay disabled')
+    }
+  })
+
+  assert.equal(queries.length, 1)
+  assert.deepEqual(queries[0].values.slice(5), [true, false])
+  assert.equal(reconcileCalls, 1)
+  assert.equal(secondaryCalls, 0)
+  assert.equal(result.foldersProcessed, 1)
+  assert.equal(result.condstoreFolders, 1)
+  assert.equal(result.flagUpdates, 2)
+  assert.equal(result.expunged, 1)
+  assert.equal(result.secondaryProcessed, 0)
+})
+
+test('secondary-only staging syncs history without protocol reconciliation', async () => {
+  const queries = []
+  let reconcileCalls = 0
+  let secondaryCalls = 0
+  const folder = {
+    id: 'folder-1',
+    account_id: 'account-1',
+    account_label: 'Personal',
+    path: 'Archive'
+  }
+  const result = await syncDueEmailFolders({
+    client: {},
+    poolInstance: {
+      async query(sql, values) {
+        queries.push({ sql, values })
+        return { rows: [folder] }
+      }
+    },
+    userId: 'user-1',
+    sourceKey: 'mail-source',
+    primaryMailbox: 'INBOX',
+    policy: {
+      protocolReconciliationEnabled: false,
+      secondaryFolderSyncEnabled: true
+    },
+    reconcileFolderImpl: async () => {
+      reconcileCalls += 1
+      throw new Error('protocol reconciliation must stay disabled')
+    },
+    syncSecondaryFolderImpl: async ({ folderId }) => {
+      secondaryCalls += 1
+      assert.equal(folderId, folder.id)
+      return { processed: 3, remaining: 4, caughtUp: false }
+    }
+  })
+
+  assert.equal(queries.length, 1)
+  assert.deepEqual(queries[0].values.slice(5), [false, true])
+  assert.equal(reconcileCalls, 0)
+  assert.equal(secondaryCalls, 1)
+  assert.equal(result.foldersProcessed, 0)
+  assert.equal(result.secondaryProcessed, 3)
+  assert.equal(result.secondaryRemaining, 4)
+  assert.equal(result.continueImmediately, true)
+})
+
 test('ingest keeps a separate QRESYNC connection so INBOX IDLE remains selected', async () => {
-  const scheduler = await readFile(new URL('../src/lib/emailIngestScheduler.js', import.meta.url), 'utf8')
-  const runtime = await readFile(new URL('../src/lib/emailRuntimeController.js', import.meta.url), 'utf8')
+  const [scheduler, runtime, config, envExample] = await Promise.all([
+    readFile(new URL('../src/lib/emailIngestScheduler.js', import.meta.url), 'utf8'),
+    readFile(new URL('../src/lib/emailRuntimeController.js', import.meta.url), 'utf8'),
+    readFile(new URL('../src/config.js', import.meta.url), 'utf8'),
+    readFile(new URL('../.env.example', import.meta.url), 'utf8')
+  ])
   assert.match(scheduler, /let reconcileImap = null/)
   assert.match(scheduler, /let primaryConnectionAttempted = false/)
   assert.match(scheduler, /let reconcileConnectionAttempted = false/)
   assert.match(scheduler, /qresync: true/)
   assert.match(scheduler, /disableAutoIdle: true/)
   assert.match(scheduler, /syncDueEmailFolders\(\{/)
+  assert.match(
+    scheduler,
+    /validated\.protocolReconciliationEnabled[\s\S]*?validated\.secondaryFolderSyncEnabled[\s\S]*?ensureReconcileConnected\(\)/
+  )
+  assert.match(
+    config,
+    /imapProtocolReconciliationEnabled:\s*process\.env\.NAV_IMAP_PROTOCOL_RECONCILIATION_ENABLED === 'true'/
+  )
+  assert.match(
+    config,
+    /imapSecondaryFolderSyncEnabled:\s*process\.env\.NAV_IMAP_SECONDARY_FOLDER_SYNC_ENABLED === 'true'/
+  )
+  assert.match(envExample, /^NAV_IMAP_PROTOCOL_RECONCILIATION_ENABLED=false$/m)
+  assert.match(envExample, /^NAV_IMAP_SECONDARY_FOLDER_SYNC_ENABLED=false$/m)
+  assert.match(runtime, /protocolReconciliationEnabled: config\.imapProtocolReconciliationEnabled/)
+  assert.match(runtime, /secondaryFolderSyncEnabled: config\.imapSecondaryFolderSyncEnabled/)
   assert.match(runtime, /folderSyncIntervalSeconds: config\.imapFolderSyncIntervalSeconds/)
   assert.match(runtime, /maxReconcileMessages: config\.imapReconcileMaxMessages/)
 })
