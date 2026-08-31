@@ -77,6 +77,7 @@ services:
       NAV_EMAIL_RUNTIME_ROLE: worker
       NAV_MANAGED_INTEGRATIONS_DIR: "${NAV_INTEGRATIONS_DIR:-/etc/nav/integrations}"
       NAV_MAIL_WORKER_HEARTBEAT_FILE: /tmp/nav-mail-worker-heartbeat.json
+      NAV_MAIL_WORKER_POOL_WAIT_ALERT_SECONDS: ${NAV_MAIL_WORKER_POOL_WAIT_ALERT_SECONDS:-60}
     command: ["node", "src/mailWorker.js"]
     healthcheck:
       test: ["CMD", "node", "scripts/checkMailWorkerHealth.js"]

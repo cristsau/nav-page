@@ -248,6 +248,11 @@ export const config = {
     process.env.NAV_MAINTENANCE_ALERT_COOLDOWN_SECONDS,
     21_600
   ),
+  mailWorkerPoolWaitAlertSeconds: normalizeBoundedPositiveInteger(
+    process.env.NAV_MAIL_WORKER_POOL_WAIT_ALERT_SECONDS,
+    60,
+    { minimum: 30, maximum: 600 }
+  ),
   aiUsageRetentionEnabled:
     process.env.NAV_AI_USAGE_RETENTION_ENABLED === 'true',
   aiUsageRetentionDays: normalizePositiveInteger(

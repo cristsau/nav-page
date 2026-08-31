@@ -13,6 +13,11 @@ try {
   const updatedAt = new Date(payload.updatedAt).getTime()
   if (!Number.isSafeInteger(Number(payload.pid)) || Number(payload.pid) <= 0) process.exit(1)
   if (!Number.isFinite(updatedAt) || Date.now() - updatedAt > maximumAgeMs) process.exit(1)
+  const pool = payload.databasePool
+  if (!pool || !Number.isSafeInteger(Number(pool.totalCount)) || Number(pool.totalCount) < 0) process.exit(1)
+  if (!Number.isSafeInteger(Number(pool.idleCount)) || Number(pool.idleCount) < 0) process.exit(1)
+  if (!Number.isSafeInteger(Number(pool.waitingCount)) || Number(pool.waitingCount) < 0) process.exit(1)
+  if (pool.alerting === true) process.exit(1)
   process.exit(0)
 } catch {
   process.exit(1)

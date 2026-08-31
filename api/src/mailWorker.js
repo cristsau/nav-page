@@ -16,6 +16,7 @@ import {
 } from './lib/maintenanceJobStatus.js'
 import { configureOutboundNetwork } from './lib/network.js'
 import { sendMaintenanceNotification } from './lib/notificationDelivery.js'
+import { createMailWorkerPoolHealthMonitor } from './lib/mailWorkerPoolHealth.js'
 
 const CONFIG_REFRESH_MS = 10_000
 const HEARTBEAT_INTERVAL_MS = 15_000
@@ -46,12 +47,21 @@ function createWorkerLogger() {
   }
 }
 
-async function writeHeartbeat() {
+async function writeHeartbeat(poolHealth) {
   const temporary = `${heartbeatPath}.${process.pid}.tmp`
   const payload = `${JSON.stringify({
     pid: process.pid,
     releaseSha: String(process.env.NAV_RELEASE_SHA || 'development'),
-    updatedAt: new Date().toISOString()
+    updatedAt: new Date().toISOString(),
+    databasePool: {
+      totalCount: poolHealth.totalCount,
+      idleCount: poolHealth.idleCount,
+      waitingCount: poolHealth.waitingCount,
+      waitingSince: poolHealth.waitingSince,
+      waitingDurationMs: poolHealth.waitingDurationMs,
+      alertAfterMs: poolHealth.alertAfterMs,
+      alerting: poolHealth.alerting
+    }
   })}\n`
   await fs.mkdir(path.dirname(heartbeatPath), { recursive: true })
   await fs.writeFile(temporary, payload, { encoding: 'utf8', mode: 0o600 })
@@ -101,9 +111,42 @@ async function main() {
     })
   })
 
-  await writeHeartbeat()
+  const poolHealthMonitor = createMailWorkerPoolHealthMonitor({
+    alertAfterMs: config.mailWorkerPoolWaitAlertSeconds * 1000
+  })
+  const publishPoolTransition = (poolHealth) => {
+    if (!poolHealth.transition) return
+    const recovery = poolHealth.transition === 'recovery'
+    const context = {
+      errorCode: recovery ? null : 'MAIL_WORKER_DATABASE_POOL_WAITING',
+      totalCount: poolHealth.totalCount,
+      idleCount: poolHealth.idleCount,
+      waitingCount: poolHealth.waitingCount,
+      waitingDurationMs: poolHealth.waitingDurationMs
+    }
+    if (recovery) logger.info(context, 'mail worker database pool recovered')
+    else logger.warn(context, 'mail worker database pool wait threshold exceeded')
+    if (!config.maintenanceAlertsEnabled) return
+    void sendMaintenanceNotification({
+      jobName: 'email_worker_pool',
+      jobLabel: '邮件 Worker 数据库连接池',
+      kind: recovery ? 'recovery' : 'failure',
+      occurredAt: new Date(),
+      consecutiveFailures: recovery ? 0 : 1,
+      errorCode: recovery ? null : 'MAIL_WORKER_DATABASE_POOL_WAITING'
+    }).catch((error) => logger.warn({
+      errorCode: error?.code || 'POOL_ALERT_DELIVERY_FAILED'
+    }, 'mail worker database pool alert delivery failed'))
+  }
+  const writeCurrentHeartbeat = async () => {
+    const poolHealth = poolHealthMonitor.sample(pool)
+    publishPoolTransition(poolHealth)
+    await writeHeartbeat(poolHealth)
+  }
+
+  await writeCurrentHeartbeat()
   const heartbeatTimer = setInterval(() => {
-    void writeHeartbeat().catch((error) => logger.warn({ errorCode: error?.code || 'HEARTBEAT_WRITE_FAILED' }, 'mail worker heartbeat could not be written'))
+    void writeCurrentHeartbeat().catch((error) => logger.warn({ errorCode: error?.code || 'HEARTBEAT_WRITE_FAILED' }, 'mail worker heartbeat could not be written'))
   }, HEARTBEAT_INTERVAL_MS)
   heartbeatTimer.unref?.()
 
@@ -152,6 +195,7 @@ async function main() {
   logger.info({
     jobName: MAINTENANCE_JOB_NAMES.EMAIL_INGEST,
     databasePoolMax: config.databasePoolMax,
+    databasePoolWaitAlertSeconds: config.mailWorkerPoolWaitAlertSeconds,
     releaseSha: String(process.env.NAV_RELEASE_SHA || 'development')
   }, 'mail worker started')
 }
