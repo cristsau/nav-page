@@ -75,8 +75,10 @@ export const DELETE_SCRUBBED_LEGACY_MAIL_OUTBOX_SQL = `
 
 // This removes only the local encrypted cache. Cascading rows in
 // email_folder_messages are local IMAP snapshots; no IMAP mutation is issued.
-// A message that is currently flagged or marked as a draft is protected even
-// when it exceeds the age/count policy.
+// A message that is currently flagged, marked as a draft, or still needed by
+// the durable classification pipeline is protected even when it exceeds the
+// age/count policy. Advancing the IMAP cursor is safe only while a non-terminal
+// classification job cannot lose its encrypted canonical source to retention.
 export const DELETE_EXCESS_EMAIL_MESSAGES_SQL = `
   WITH ranked AS (
     SELECT
@@ -100,6 +102,14 @@ export const DELETE_EXCESS_EMAIL_MESSAGES_SQL = `
         WHERE folder_message.message_id = message.id
           AND folder_message.expunged_at IS NULL
           AND (folder_message.flagged = TRUE OR folder_message.draft = TRUE)
+      )
+      AND NOT EXISTS (
+        SELECT 1
+        FROM email_classification_jobs AS classification_job
+        WHERE classification_job.email_message_id = message.id
+          AND classification_job.account_id = message.account_id
+          AND classification_job.user_id = message.user_id
+          AND classification_job.status IN ('pending', 'running', 'retry_wait')
       )
     ORDER BY message.received_at ASC, message.id ASC
     LIMIT $3

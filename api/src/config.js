@@ -360,6 +360,31 @@ export const config = {
     process.env.NAV_IMAP_MAX_MESSAGE_BYTES,
     512 * 1024
   ),
+  imapDrainMaxBatches: normalizeBoundedPositiveInteger(
+    process.env.NAV_IMAP_DRAIN_MAX_BATCHES,
+    10,
+    { maximum: 50 }
+  ),
+  imapDrainMaxMilliseconds: normalizeBoundedPositiveInteger(
+    process.env.NAV_IMAP_DRAIN_MAX_MILLISECONDS,
+    15_000,
+    { minimum: 1_000, maximum: 60_000 }
+  ),
+  emailClassificationIntervalSeconds: normalizeBoundedPositiveInteger(
+    process.env.NAV_EMAIL_CLASSIFICATION_INTERVAL_SECONDS,
+    2,
+    { maximum: 300 }
+  ),
+  emailClassificationBatchSize: normalizeBoundedPositiveInteger(
+    process.env.NAV_EMAIL_CLASSIFICATION_BATCH_SIZE,
+    10,
+    { maximum: 50 }
+  ),
+  emailClassificationMaxAttempts: normalizeBoundedPositiveInteger(
+    process.env.NAV_EMAIL_CLASSIFICATION_MAX_ATTEMPTS,
+    5,
+    { maximum: 10 }
+  ),
   emailCacheRetentionEnabled:
     process.env.NAV_EMAIL_CACHE_RETENTION_ENABLED !== 'false',
   emailCacheRetentionDays: normalizeBoundedPositiveInteger(

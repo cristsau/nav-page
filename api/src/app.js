@@ -21,6 +21,7 @@ import mediaRoutes from './routes/media.js'
 import navigationRoutes from './routes/navigation.js'
 import notificationsRoutes from './routes/notifications.js'
 import emailRoutes from './routes/email.js'
+import emailSyncRoutes from './routes/emailSync.js'
 import integrationRoutes from './routes/integrations.js'
 import noteAiRoutes from './routes/noteAi.js'
 import noteImagesRoutes from './routes/noteImages.js'
@@ -166,6 +167,7 @@ export function createApp() {
   app.register(navigationRoutes, { prefix: '/api' })
   app.register(notificationsRoutes, { prefix: '/api' })
   app.register(emailRoutes, { prefix: '/api' })
+  app.register(emailSyncRoutes, { prefix: '/api' })
   app.register(integrationRoutes, { prefix: '/api' })
   app.register(noteAiRoutes, { prefix: '/api' })
   app.register(noteImagesRoutes, { prefix: '/api' })

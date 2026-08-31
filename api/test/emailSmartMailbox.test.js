@@ -10,6 +10,11 @@ test('mail API exposes authenticated AI, draft preview and explicit send routes'
   const route = await source('../src/routes/email.js')
 
   assert.match(route, /fastify\.post\('\/email\/messages\/:messageId\/ai'/)
+  assert.match(route, /fastify\.post\('\/email\/accounts\/:accountId\/messages\/:locationId\/attachments\/:attachmentId\/ai'/)
+  assert.match(route, /extractEmailAttachmentTranslationInput/)
+  assert.match(route, /Buffer\.isBuffer\(attachment\?\.content\)\) attachment\.content\.fill\(0\)/)
+  assert.match(route, /action !== 'translate'/)
+  assert.match(route, /location\.user_id = \$3 AND location\.folder_id = \$4/)
   assert.match(route, /fastify\.post\('\/email\/drafts'/)
   assert.match(route, /fastify\.get\('\/email\/drafts\/:draftId'/)
   assert.match(route, /fastify\.post\('\/email\/drafts\/:draftId\/send'/)

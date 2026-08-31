@@ -62,10 +62,11 @@ test('mailbox normalization preserves plain-text line breaks and rejects unsafe 
   assert.match(store, /UINT64_MAX/)
 })
 
-test('mailbox storage encrypts message fields and uses remote UID identity', async () => {
-  const [store, migration, ingest] = await Promise.all([
+test('mailbox storage encrypts message fields and queues classification before cursor progress', async () => {
+  const [store, migration, pipelineMigration, ingest] = await Promise.all([
     source('../src/lib/emailMailboxStore.js'),
     source('../src/db/migrations/035_email_mailbox_foundation.sql'),
+    source('../src/db/migrations/042_email_ingest_pipeline.sql'),
     source('../src/lib/emailIngestScheduler.js')
   ])
 
@@ -78,7 +79,14 @@ test('mailbox storage encrypts message fields and uses remote UID identity', asy
   assert.match(ingest, /90 \* 24 \* 60 \* 60 \* 1000/)
   assert.match(ingest, /slice\(-validated\.initialLookback\)/)
   assert.match(ingest, /persistEmailMailboxMessage/)
-  assert.match(ingest, /emailMessageId: stored\.message\.id/)
+  assert.match(store, /INSERT INTO email_classification_jobs/)
+  assert.match(
+    store,
+    /notification_action IN \('immediate', 'in_app_only'\)[\s\S]*event\.notified_at IS NULL/
+  )
+  assert.match(store, /ON CONFLICT \(user_id, email_message_id\) DO NOTHING/)
+  assert.match(pipelineMigration, /UNIQUE \(user_id, email_message_id\)/)
+  assert.doesNotMatch(ingest, /processInboundEmail/)
   assert.match(ingest, /await assertHostImpl\(runtimeConfig\.imapHost/)
 
   const persistBody = store.slice(
@@ -86,9 +94,9 @@ test('mailbox storage encrypts message fields and uses remote UID identity', asy
     store.indexOf('export async function decryptStoredMailboxMessage')
   )
   assert.doesNotMatch(persistBody, /UPDATE email_folders SET\s+last_uid/i)
-  const classifyAt = ingest.indexOf('const result = await processFn')
-  const advanceAt = ingest.indexOf('await writeMailboxState({ uid })', classifyAt)
-  assert.ok(classifyAt > 0 && advanceAt > classifyAt, 'cursor advancement must follow classification')
+  const persistAt = ingest.indexOf('stored = await persistEmailMailboxMessage')
+  const advanceAt = ingest.indexOf('await writeMailboxState({ uid })', persistAt)
+  assert.ok(persistAt > 0 && advanceAt > persistAt, 'cursor advancement must follow durable cache and queue commit')
 })
 
 test('mailbox REST uses user isolation, keyset pagination and metadata-only SSE', async () => {

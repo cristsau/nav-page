@@ -867,6 +867,7 @@ async function verifyMaintenanceObservabilitySchema() {
       'email_cache_retention',
       'email_digest',
       'email_ingest',
+      'email_classification',
       'email_remote_commands',
       'email_sent_append',
       'mail_delivery',
@@ -1993,6 +1994,9 @@ async function verifyEmailMailboxSchema() {
     ['email_accounts', [
       'id', 'user_id', 'source_key', 'label', 'enabled', 'capabilities',
       'last_connected_at', 'last_error_at', 'last_error_code',
+      'sync_request_generation', 'sync_completed_generation',
+      'last_sync_requested_at', 'last_sync_started_at',
+      'last_sync_completed_at', 'last_idle_event_at',
       'created_at', 'updated_at'
     ]],
     ['email_folders', [
@@ -2034,6 +2038,8 @@ async function verifyEmailMailboxSchema() {
     ['email_accounts', 'user_id', 'uuid', 'NO', null],
     ['email_accounts', 'source_key', 'varchar', 'NO', null],
     ['email_accounts', 'capabilities', 'jsonb', 'NO', "'{}'::jsonb"],
+    ['email_accounts', 'sync_request_generation', 'int8', 'NO', '0'],
+    ['email_accounts', 'sync_completed_generation', 'int8', 'NO', '0'],
     ['email_folders', 'uid_validity', 'int8', 'YES', null],
     ['email_folders', 'highest_modseq', 'numeric', 'YES', null],
     ['email_folders', 'last_uid', 'int8', 'NO', '0'],
@@ -2086,6 +2092,11 @@ async function verifyEmailMailboxSchema() {
     ['email_accounts_capabilities_check', ['jsonb_typeof', 'capabilities', "'object'"]],
     ['email_accounts_user_source_unique', ['unique (user_id, source_key)']],
     ['email_accounts_identity_user_unique', ['unique (id, user_id)']],
+    ['email_accounts_sync_generation_check', [
+      'sync_request_generation >= 0',
+      'sync_completed_generation >= 0',
+      'sync_completed_generation <= sync_request_generation'
+    ]],
     ['email_folders_account_user_fkey', [
       'foreign key (account_id, user_id)',
       'references email_accounts(id, user_id)',
@@ -2193,6 +2204,154 @@ async function verifyEmailMailboxSchema() {
     const index = indexes.rows.find((row) => row.indexname === indexName)
     assertDefinitionIncludes(`email mailbox index ${indexName}`, index?.indexdef, fragments)
   }
+}
+
+async function verifyEmailIngestPipelineSchema() {
+  const expectedColumns = [
+    'id', 'user_id', 'account_id', 'email_message_id', 'status',
+    'attempt_count', 'max_attempts', 'next_attempt_at', 'started_at',
+    'completed_at', 'last_error_at', 'last_error_code', 'created_at', 'updated_at'
+  ]
+  const columns = await query(`
+    SELECT column_name
+    FROM information_schema.columns
+    WHERE table_schema = current_schema()
+      AND table_name = 'email_classification_jobs'
+  `)
+  assertExactSet(
+    'email classification job columns',
+    columns.rows.map((row) => row.column_name),
+    expectedColumns
+  )
+
+  const criticalColumnSpecs = [
+    ['id', 'uuid', 'NO', 'gen_random_uuid()'],
+    ['user_id', 'uuid', 'NO', null],
+    ['account_id', 'uuid', 'NO', null],
+    ['email_message_id', 'uuid', 'NO', null],
+    ['status', 'varchar', 'NO', "'pending'"],
+    ['attempt_count', 'int2', 'NO', '0'],
+    ['max_attempts', 'int2', 'NO', '5'],
+    ['next_attempt_at', 'timestamptz', 'NO', 'now()'],
+    ['last_error_code', 'varchar', 'YES', null]
+  ]
+  const criticalColumns = await query(`
+    SELECT column_name, udt_name, is_nullable, column_default
+    FROM information_schema.columns
+    WHERE table_schema = current_schema()
+      AND table_name = 'email_classification_jobs'
+      AND column_name = ANY($1::text[])
+  `, [criticalColumnSpecs.map(([columnName]) => columnName)])
+  assertExactSet(
+    'email classification critical columns',
+    criticalColumns.rows.map((row) => row.column_name),
+    criticalColumnSpecs.map(([columnName]) => columnName)
+  )
+  for (const [columnName, expectedType, expectedNullable, expectedDefault] of criticalColumnSpecs) {
+    const column = criticalColumns.rows.find((row) => row.column_name === columnName)
+    if (column.udt_name !== expectedType || column.is_nullable !== expectedNullable) {
+      throw new Error(
+        `email_classification_jobs.${columnName} type mismatch: expected `
+        + `${expectedType}/${expectedNullable}, received ${column.udt_name}/${column.is_nullable}`
+      )
+    }
+    const actualDefault = normalizeSqlDefinition(column.column_default)
+    if (
+      (expectedDefault === null && actualDefault !== '')
+      || (expectedDefault !== null && !actualDefault.includes(normalizeSqlDefinition(expectedDefault)))
+    ) {
+      throw new Error(`email_classification_jobs.${columnName} default mismatch`)
+    }
+  }
+
+  const expectedConstraintDefinitions = new Map([
+    ['email_classification_jobs_account_user_fkey', [
+      'foreign key (account_id, user_id)',
+      'references email_accounts(id, user_id)',
+      'on delete cascade'
+    ]],
+    ['email_classification_jobs_message_account_user_fkey', [
+      'foreign key (email_message_id, account_id, user_id)',
+      'references email_messages(id, account_id, user_id)',
+      'on delete cascade'
+    ]],
+    ['email_classification_jobs_status_check', [
+      'pending', 'running', 'retry_wait', 'succeeded', 'dead_letter'
+    ]],
+    ['email_classification_jobs_attempt_count_check', [
+      'attempt_count >= 0', 'attempt_count <= max_attempts',
+      'max_attempts >= 1', 'max_attempts <= 10'
+    ]],
+    ['email_classification_jobs_error_code_check', [
+      'last_error_code is null', '^[A-Z0-9_.-]+$'
+    ]],
+    ['email_classification_jobs_lifecycle_check', [
+      "(status)::text = 'succeeded'::text",
+      "(status)::text = 'dead_letter'::text",
+      'pending', 'running', 'retry_wait',
+      'completed_at is not null', 'completed_at is null',
+      'last_error_code is null', 'last_error_code is not null'
+    ]],
+    ['email_classification_jobs_message_unique', [
+      'unique (user_id, email_message_id)'
+    ]]
+  ])
+  const constraints = await query(`
+    SELECT conname, convalidated, pg_get_constraintdef(oid) AS definition
+    FROM pg_constraint
+    WHERE connamespace = current_schema()::regnamespace
+      AND conname = ANY($1::text[])
+  `, [[...expectedConstraintDefinitions.keys()]])
+  assertExactSet(
+    'email classification job constraints',
+    constraints.rows.map((row) => row.conname),
+    [...expectedConstraintDefinitions.keys()]
+  )
+  if (constraints.rows.some((row) => row.convalidated !== true)) {
+    throw new Error('email classification job constraints must be validated')
+  }
+  for (const [constraintName, fragments] of expectedConstraintDefinitions) {
+    const constraint = constraints.rows.find((row) => row.conname === constraintName)
+    assertDefinitionIncludes(
+      `email classification job constraint ${constraintName}`,
+      constraint?.definition,
+      fragments
+    )
+  }
+
+  const expectedIndexDefinitions = new Map([
+    ['idx_email_classification_jobs_due', [
+      '(next_attempt_at, created_at, id)', 'where', 'pending', 'retry_wait'
+    ]],
+    ['idx_email_classification_jobs_account_status', [
+      '(user_id, account_id, status, created_at, id)'
+    ]]
+  ])
+  const indexes = await query(`
+    SELECT indexname, indexdef
+    FROM pg_indexes
+    WHERE schemaname = current_schema()
+      AND indexname = ANY($1::text[])
+  `, [[...expectedIndexDefinitions.keys()]])
+  assertExactSet(
+    'email classification job indexes',
+    indexes.rows.map((row) => row.indexname),
+    [...expectedIndexDefinitions.keys()]
+  )
+  for (const [indexName, fragments] of expectedIndexDefinitions) {
+    const index = indexes.rows.find((row) => row.indexname === indexName)
+    assertDefinitionIncludes(`email classification job index ${indexName}`, index?.indexdef, fragments)
+  }
+
+  const maintenanceJob = await query(`
+    SELECT job_name FROM maintenance_job_status
+    WHERE job_name = 'email_classification'
+  `)
+  assertExactSet(
+    'email classification maintenance job',
+    maintenanceJob.rows.map((row) => row.job_name),
+    ['email_classification']
+  )
 }
 
 async function verifyEmailAttachmentSchema() {
@@ -2884,6 +3043,7 @@ async function main() {
   await verifyNotificationMailSchema()
   await verifyEmailAssistantSchema()
   await verifyEmailMailboxSchema()
+  await verifyEmailIngestPipelineSchema()
   await verifyEmailNotificationRuleSchema()
   await verifyEmailAttachmentSchema()
   await verifyEmailSentAppendSchema()

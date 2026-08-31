@@ -53,9 +53,15 @@ const JOB_DEFINITIONS = Object.freeze([
   },
   {
     name: MAINTENANCE_JOB_NAMES.EMAIL_INGEST,
-    label: '邮件接收与分类',
+    label: '邮件接收',
     enabled: () => config.emailIngestEnabled,
     intervalSeconds: () => config.imapPollIntervalSeconds
+  },
+  {
+    name: MAINTENANCE_JOB_NAMES.EMAIL_CLASSIFICATION,
+    label: '邮件 AI 分类与通知',
+    enabled: () => config.emailIngestEnabled,
+    intervalSeconds: () => config.emailClassificationIntervalSeconds
   },
   {
     name: MAINTENANCE_JOB_NAMES.EMAIL_DIGEST,

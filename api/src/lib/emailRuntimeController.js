@@ -2,6 +2,7 @@ import { config } from '../config.js'
 import { startEmailCacheRetention } from './emailRetention.js'
 import { startEmailDigestScheduler } from './emailDigestScheduler.js'
 import { startEmailIngestWorker } from './emailIngestWorker.js'
+import { startEmailClassificationScheduler } from './emailClassificationWorker.js'
 import { startEmailSentAppendScheduler } from './emailSentAppend.js'
 import { startEmailRemoteCommandScheduler } from './emailRemoteCommandWorker.js'
 import { MAINTENANCE_JOB_NAMES } from './maintenanceJobStatus.js'
@@ -46,11 +47,28 @@ async function startCurrent() {
       pollIntervalSeconds: config.imapPollIntervalSeconds,
       initialLookback: config.imapInitialLookback,
       batchSize: config.imapBatchSize,
-      maxMessageBytes: config.imapMaxMessageBytes
+      maxMessageBytes: config.imapMaxMessageBytes,
+      drainMaxBatches: config.imapDrainMaxBatches,
+      drainMaxMilliseconds: config.imapDrainMaxMilliseconds
     },
     poolInstance,
     logger,
-    observer: observerFactory(MAINTENANCE_JOB_NAMES.EMAIL_INGEST, '邮件接收与分类')
+    observer: observerFactory(MAINTENANCE_JOB_NAMES.EMAIL_INGEST, '邮件接收')
+  }))
+  if (workerRuntimeEnabled) starters.push(() => startEmailClassificationScheduler({
+    enabled: config.emailIngestEnabled,
+    policy: {
+      intervalSeconds: config.emailClassificationIntervalSeconds,
+      batchSize: config.emailClassificationBatchSize,
+      maxAttempts: config.emailClassificationMaxAttempts,
+      staleRunningSeconds: 300
+    },
+    poolInstance,
+    logger,
+    observer: observerFactory(
+      MAINTENANCE_JOB_NAMES.EMAIL_CLASSIFICATION,
+      '邮件 AI 分类与通知'
+    )
   }))
   if (workerRuntimeEnabled) starters.push(() => startEmailSentAppendScheduler({
     enabled: config.emailSentAppendEnabled,

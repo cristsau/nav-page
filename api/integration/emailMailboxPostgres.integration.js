@@ -50,6 +50,8 @@ let resolveEmailNotificationDecision
 let updateEmailNotificationRule
 let deleteEmailNotificationRule
 let processInboundEmail
+let processEmailClassificationJobs
+let deleteExcessEmailMessagesSql
 let temporaryDirectory
 
 before(async () => {
@@ -75,6 +77,8 @@ before(async () => {
   ;({ decryptEmailSentMime } = await import('../src/lib/emailSentMimeCrypto.js'))
   ;({ UPDATE_MAILBOX_FAILURE_STATE_SQL: updateMailboxFailureStateSql } = await import('../src/lib/emailIngestScheduler.js'))
   ;({ processInboundEmail } = await import('../src/lib/emailEvents.js'))
+  ;({ processEmailClassificationJobs } = await import('../src/lib/emailClassificationWorker.js'))
+  ;({ DELETE_EXCESS_EMAIL_MESSAGES_SQL: deleteExcessEmailMessagesSql } = await import('../src/lib/emailRetention.js'))
   ;({
     upsertEmailNotificationRule,
     listEmailNotificationRules,
@@ -142,7 +146,9 @@ test('canonical replay is idempotent and plaintext remains encrypted at rest', a
   const replay = await persistEmailMailboxMessage(mailboxFixture())
 
   assert.equal(first.inserted, true)
+  assert.equal(first.classificationQueued, true)
   assert.equal(replay.inserted, false)
+  assert.equal(replay.classificationQueued, false)
   assert.equal(replay.message.id, first.message.id)
   assert.equal(replay.location.id, first.location.id)
 
@@ -162,6 +168,17 @@ test('canonical replay is idempotent and plaintext remains encrypted at rest', a
   assert.equal(row.seen, true)
   assert.deepEqual(row.keywords, ['custom-keyword'])
 
+  const jobs = await pool.query(
+    `SELECT status, attempt_count, account_id, email_message_id
+     FROM email_classification_jobs
+     WHERE user_id = $1 AND email_message_id = $2`,
+    [OWNER_ID, first.message.id]
+  )
+  assert.equal(jobs.rows.length, 1)
+  assert.equal(jobs.rows[0].status, 'pending')
+  assert.equal(jobs.rows[0].attempt_count, 0)
+  assert.equal(jobs.rows[0].account_id, first.account.id)
+
   const decrypted = await decryptStoredMailboxMessage(row, {
     userId: OWNER_ID,
     sourceKey: row.source_key
@@ -172,6 +189,174 @@ test('canonical replay is idempotent and plaintext remains encrypted at rest', a
   await assert.rejects(
     decryptStoredMailboxMessage(row, { userId: OTHER_USER_ID, sourceKey: row.source_key })
   )
+})
+
+test('durable classification queue processes encrypted mail independently and exactly once', async () => {
+  const saved = await persistEmailMailboxMessage(mailboxFixture({
+    message: {
+      ...mailboxFixture().message,
+      mailboxUid: 11,
+      messageId: '<classification-worker@example.test>',
+      rawHash: 'b'.repeat(64),
+      subject: 'Queued classification subject'
+    }
+  }))
+  const processed = []
+  const summary = await processEmailClassificationJobs({
+    poolInstance: pool,
+    policy: { batchSize: 10, maxAttempts: 5 },
+    runtimeConfig: { emailSourceKey: 'integration-mail' },
+    processFn: async (payload) => { processed.push(payload) }
+  })
+  assert.equal(summary.processed, 1)
+  assert.equal(summary.succeeded, 1)
+  assert.equal(summary.remaining, 0)
+  assert.equal(summary.dueRemaining, 0)
+  assert.equal(processed.length, 1)
+  assert.equal(processed[0].emailMessageId, saved.message.id)
+  assert.equal(processed[0].email.subject, 'Queued classification subject')
+
+  const job = await pool.query(
+    `SELECT status, attempt_count, completed_at, last_error_code
+     FROM email_classification_jobs
+     WHERE user_id = $1 AND email_message_id = $2`,
+    [OWNER_ID, saved.message.id]
+  )
+  assert.equal(job.rows[0].status, 'succeeded')
+  assert.equal(job.rows[0].attempt_count, 1)
+  assert.ok(job.rows[0].completed_at)
+  assert.equal(job.rows[0].last_error_code, null)
+
+  const replay = await processEmailClassificationJobs({
+    poolInstance: pool,
+    policy: { batchSize: 10, maxAttempts: 5 },
+    runtimeConfig: { emailSourceKey: 'integration-mail' },
+    processFn: async (payload) => { processed.push(payload) }
+  })
+  assert.equal(replay.processed, 0)
+  assert.equal(processed.length, 1)
+})
+
+test('cache retention cannot cascade-delete a message required by a non-terminal classification job', async () => {
+  const saved = await persistEmailMailboxMessage(mailboxFixture({
+    message: {
+      ...mailboxFixture().message,
+      mailboxUid: 12,
+      messageId: '<retention-classification-lease@example.test>',
+      rawHash: 'c'.repeat(64),
+      subject: 'Retention must preserve this queued message',
+      receivedAt: '2025-01-01T00:00:00.000Z',
+      internalDate: '2025-01-01T00:00:00.000Z'
+    }
+  }))
+
+  const protectedDelete = await pool.query(deleteExcessEmailMessagesSql, [1, 5_000, 10])
+  assert.equal(protectedDelete.rowCount, 0)
+  const stillPresent = await pool.query(
+    'SELECT id FROM email_messages WHERE id = $1 AND user_id = $2',
+    [saved.message.id, OWNER_ID]
+  )
+  assert.equal(stillPresent.rowCount, 1)
+
+  const processed = await processEmailClassificationJobs({
+    poolInstance: pool,
+    policy: { batchSize: 10, maxAttempts: 5 },
+    runtimeConfig: { emailSourceKey: 'integration-mail' },
+    processFn: async () => {}
+  })
+  assert.equal(processed.succeeded, 1)
+
+  const terminalDelete = await pool.query(deleteExcessEmailMessagesSql, [1, 5_000, 10])
+  assert.equal(terminalDelete.rowCount, 1)
+  const removed = await pool.query(
+    'SELECT id FROM email_messages WHERE id = $1 AND user_id = $2',
+    [saved.message.id, OWNER_ID]
+  )
+  assert.equal(removed.rowCount, 0)
+})
+
+test('042 backfill requeues an event whose immediate notification was not finalized', async () => {
+  const rawMessage = {
+    ...mailboxFixture().message,
+    mailboxUid: 13,
+    messageId: '<cutover-notification-recovery@example.test>',
+    rawHash: 'd'.repeat(64),
+    subject: '安全警报：账号异常登录，需要立即处理',
+    text: '检测到新的异常登录，请立即核对。'
+  }
+  const saved = await persistEmailMailboxMessage(mailboxFixture({ message: rawMessage }))
+  const classified = await processInboundEmail({
+    userId: OWNER_ID,
+    sourceKey: 'integration-mail',
+    emailMessageId: saved.message.id,
+    email: {
+      messageId: rawMessage.messageId,
+      mailboxUid: rawMessage.mailboxUid,
+      senderName: rawMessage.sender.name,
+      senderAddress: rawMessage.sender.address,
+      recipient: rawMessage.to[0].address,
+      subject: rawMessage.subject,
+      text: rawMessage.text,
+      receivedAt: rawMessage.receivedAt
+    }
+  })
+  assert.equal(classified.inserted, true)
+  assert.equal(classified.event.notificationAction, 'immediate')
+
+  await pool.query(
+    `DELETE FROM notifications
+     WHERE user_id = $1 AND source_type = 'email' AND source_id = $2`,
+    [OWNER_ID, classified.event.id]
+  )
+  await pool.query(
+    `UPDATE email_events
+     SET notified_at = NULL, updated_at = NOW()
+     WHERE id = $1 AND user_id = $2`,
+    [classified.event.id, OWNER_ID]
+  )
+  await pool.query(
+    'DELETE FROM email_classification_jobs WHERE user_id = $1 AND email_message_id = $2',
+    [OWNER_ID, saved.message.id]
+  )
+
+  const migration = await fs.readFile(
+    new URL('../src/db/migrations/042_email_ingest_pipeline.sql', import.meta.url),
+    'utf8'
+  )
+  const backfillSql = migration.match(
+    /INSERT INTO email_classification_jobs \(user_id, account_id, email_message_id\)[\s\S]*?ON CONFLICT \(user_id, email_message_id\) DO NOTHING;/
+  )?.[0]
+  assert.ok(backfillSql)
+  const backfilled = await pool.query(backfillSql)
+  assert.equal(backfilled.rowCount, 1)
+  const backfillReplay = await pool.query(backfillSql)
+  assert.equal(backfillReplay.rowCount, 0)
+
+  const recovered = await processEmailClassificationJobs({
+    poolInstance: pool,
+    policy: { batchSize: 10, maxAttempts: 5 },
+    runtimeConfig: { emailSourceKey: 'integration-mail' }
+  })
+  assert.equal(recovered.succeeded, 1)
+
+  const event = await pool.query(
+    'SELECT notified_at FROM email_events WHERE id = $1 AND user_id = $2',
+    [classified.event.id, OWNER_ID]
+  )
+  assert.ok(event.rows[0].notified_at)
+  const notification = await pool.query(
+    `SELECT id FROM notifications
+     WHERE user_id = $1 AND source_type = 'email' AND source_id = $2`,
+    [OWNER_ID, classified.event.id]
+  )
+  assert.equal(notification.rowCount, 1)
+  const job = await pool.query(
+    `SELECT status, attempt_count FROM email_classification_jobs
+     WHERE user_id = $1 AND email_message_id = $2`,
+    [OWNER_ID, saved.message.id]
+  )
+  assert.equal(job.rows[0].status, 'succeeded')
+  assert.equal(Number(job.rows[0].attempt_count), 1)
 })
 
 test('notification rules are owner-bound, encrypted at rest and protect critical mail', async () => {

@@ -6,7 +6,8 @@ import {
   confirmEmailAiProposal,
   createEmailAiProposal,
   downloadEmailAttachment,
-  requestEmailAi
+  requestEmailAi,
+  translateEmailAttachment
 } from '@/shared/services/emailApi'
 
 const props = defineProps({
@@ -42,6 +43,7 @@ const aiProposalConfirming = ref(false)
 const aiOperationResult = ref(null)
 const bodyMode = ref('plain')
 const attachmentDownloads = reactive({})
+const attachmentTranslations = reactive({})
 const actionDialogMode = ref('')
 const actionRestoreTarget = ref(null)
 let aiRequestSequence = 0
@@ -76,6 +78,15 @@ const aiProposalActions = [
 ]
 
 const aiActions = aiActionGroups.flatMap((group) => group.actions)
+
+const attachmentTranslationMimeTypes = new Set([
+  'application/csv', 'application/json', 'application/ld+json', 'application/toml',
+  'application/x-ndjson', 'application/x-yaml', 'application/xml', 'application/yaml'
+])
+const attachmentTranslationExtensions = new Set([
+  'csv', 'htm', 'html', 'json', 'jsonl', 'log', 'md', 'markdown',
+  'ndjson', 'sql', 'toml', 'tsv', 'txt', 'xml', 'yaml', 'yml'
+])
 
 const aiToneOptions = [
   { value: 'professional', label: '专业' },
@@ -313,6 +324,29 @@ function attachmentDownloadState(attachment) {
   return attachmentDownloads[attachmentId(attachment)] || { status: 'idle', error: '' }
 }
 
+function attachmentTranslationState(attachment) {
+  return attachmentTranslations[attachmentId(attachment)] || {
+    status: 'idle', error: '', text: '', model: ''
+  }
+}
+
+function attachmentTranslationSupport(attachment) {
+  const contentType = String(attachment?.contentType || '').split(';', 1)[0].trim().toLowerCase()
+  const filename = String(attachment?.filename || attachment?.name || '').trim().toLowerCase()
+  const extension = filename.match(/\.([a-z0-9]+)$/)?.[1] || ''
+  const supported = contentType.startsWith('text/')
+    || attachmentTranslationMimeTypes.has(contentType)
+    || /\+(?:json|xml)$/.test(contentType)
+    || (contentType === 'application/octet-stream' && attachmentTranslationExtensions.has(extension))
+  if (supported) return { supported: true, reason: '' }
+  if (contentType.includes('pdf')
+    || contentType.includes('officedocument')
+    || ['pdf', 'doc', 'docx', 'xls', 'xlsx', 'ppt', 'pptx'].includes(extension)) {
+    return { supported: false, reason: 'PDF 和 Office 文件暂不支持 AI 翻译' }
+  }
+  return { supported: false, reason: '目前仅支持 UTF-8 文本附件' }
+}
+
 function safeDownloadName(value) {
   return String(value || 'attachment').replace(/[\\/:*?"<>|\r\n]+/g, '_') || 'attachment'
 }
@@ -344,6 +378,47 @@ async function downloadAttachment(attachment, index) {
   } finally {
     if (objectUrl) window.setTimeout(() => URL.revokeObjectURL(objectUrl), 1_000)
   }
+}
+
+async function translateAttachment(attachment, index) {
+  const id = attachmentId(attachment)
+  const support = attachmentTranslationSupport(attachment)
+  if (!id || !aiAvailable.value || !support.supported
+    || attachmentTranslations[id]?.status === 'loading') return
+  const requestMessageId = safeMessageId.value
+  attachmentTranslations[id] = { status: 'loading', error: '', text: '', model: '' }
+  try {
+    const payload = await translateEmailAttachment({
+      accountId: props.accountId,
+      locationId: props.locationId || props.messageId,
+      attachmentId: id,
+      folderId: props.folderId,
+      language: 'zh-CN'
+    })
+    if (requestMessageId !== safeMessageId.value) return
+    const text = textFromAiPayload(payload)
+    if (!text) throw new Error('AI 没有返回可显示的附件翻译')
+    attachmentTranslations[id] = {
+      status: 'complete',
+      error: '',
+      text,
+      model: String(payload?.result?.model || '').trim(),
+      filename: attachmentName(attachment, index)
+    }
+  } catch (error) {
+    if (requestMessageId !== safeMessageId.value) return
+    attachmentTranslations[id] = {
+      status: 'error',
+      error: error?.message || '附件 AI 翻译失败',
+      text: '',
+      model: ''
+    }
+  }
+}
+
+function closeAttachmentTranslation(attachment) {
+  const id = attachmentId(attachment)
+  if (id) delete attachmentTranslations[id]
 }
 
 function formatSize(value) {
@@ -580,6 +655,7 @@ watch(() => safeMessageId.value, () => {
   actionRestoreTarget.value = null
   bodyMode.value = 'plain'
   for (const key of Object.keys(attachmentDownloads)) delete attachmentDownloads[key]
+  for (const key of Object.keys(attachmentTranslations)) delete attachmentTranslations[key]
 })
 </script>
 
@@ -812,13 +888,38 @@ watch(() => safeMessageId.value, () => {
         <h3 id="mail-attachments-title">附件</h3>
         <ul aria-live="polite">
           <li v-for="(attachment, index) in message.attachments" :key="attachmentId(attachment) || `${attachmentName(attachment, index)}-${index}`">
-            <div><span>{{ attachmentName(attachment, index) }}</span><small>{{ attachment.contentType || '文件' }}<template v-if="formatSize(attachment.size)"> · {{ formatSize(attachment.size) }}</template></small><small v-if="attachmentDownloadState(attachment).error" class="is-error" role="alert">{{ attachmentDownloadState(attachment).error }}</small></div>
-            <button type="button" :disabled="!attachmentId(attachment) || attachmentDownloadState(attachment).status === 'loading'" :aria-label="`${attachmentDownloadState(attachment).status === 'error' ? '重试下载' : '下载'} ${attachmentName(attachment, index)}`" @click="downloadAttachment(attachment, index)">
-              <Icon :name="attachmentDownloadState(attachment).status === 'error' ? 'refresh' : 'download'" :size="17" /><span>{{ attachmentDownloadState(attachment).status === 'loading' ? '下载中…' : attachmentDownloadState(attachment).status === 'error' ? '重试' : '下载' }}</span>
-            </button>
+            <div class="mail-message-detail__attachment-meta">
+              <span>{{ attachmentName(attachment, index) }}</span>
+              <small>{{ attachment.contentType || '文件' }}<template v-if="formatSize(attachment.size)"> · {{ formatSize(attachment.size) }}</template></small>
+              <small v-if="attachmentDownloadState(attachment).error" class="is-error" role="alert">{{ attachmentDownloadState(attachment).error }}</small>
+              <small v-if="attachmentTranslationState(attachment).error" class="is-error" role="alert">{{ attachmentTranslationState(attachment).error }}</small>
+              <small v-else-if="!attachmentTranslationSupport(attachment).supported" class="is-muted">{{ attachmentTranslationSupport(attachment).reason }}</small>
+            </div>
+            <div class="mail-message-detail__attachment-actions">
+              <button
+                type="button"
+                :disabled="!attachmentId(attachment) || !aiAvailable || !attachmentTranslationSupport(attachment).supported || attachmentTranslationState(attachment).status === 'loading'"
+                :title="attachmentTranslationSupport(attachment).supported ? 'AI 翻译附件中的文本内容' : attachmentTranslationSupport(attachment).reason"
+                :aria-label="`AI 翻译 ${attachmentName(attachment, index)}`"
+                @click="translateAttachment(attachment, index)"
+              >
+                <Icon name="book" :size="17" /><span>{{ attachmentTranslationState(attachment).status === 'loading' ? '翻译中…' : attachmentTranslationState(attachment).status === 'error' ? '重试翻译' : 'AI 翻译' }}</span>
+              </button>
+              <button type="button" :disabled="!attachmentId(attachment) || attachmentDownloadState(attachment).status === 'loading'" :aria-label="`${attachmentDownloadState(attachment).status === 'error' ? '重试下载' : '下载'} ${attachmentName(attachment, index)}`" @click="downloadAttachment(attachment, index)">
+                <Icon :name="attachmentDownloadState(attachment).status === 'error' ? 'refresh' : 'download'" :size="17" /><span>{{ attachmentDownloadState(attachment).status === 'loading' ? '下载中…' : attachmentDownloadState(attachment).status === 'error' ? '重试' : '下载' }}</span>
+              </button>
+            </div>
+            <section v-if="attachmentTranslationState(attachment).text" class="mail-message-detail__attachment-translation" :aria-label="`${attachmentName(attachment, index)} 的 AI 中文翻译`">
+              <header>
+                <div><Icon name="sparkles" :size="17" /><strong>AI 中文翻译<small v-if="attachmentTranslationState(attachment).model"> · {{ attachmentTranslationState(attachment).model }}</small></strong></div>
+                <button type="button" :aria-label="`关闭 ${attachmentName(attachment, index)} 的翻译`" title="关闭翻译" @click="closeAttachmentTranslation(attachment)"><Icon name="close" :size="16" /></button>
+              </header>
+              <pre>{{ attachmentTranslationState(attachment).text }}</pre>
+              <p>仅将脱敏后的安全文本交给已配置的 AI；原文件不会被修改、保存或自动下载到浏览器。</p>
+            </section>
           </li>
         </ul>
-        <p>附件只会在你点击下载后读取；页面不会自动预览或执行附件。</p>
+        <p>附件只会在你点击下载或 AI 翻译后读取；页面不会自动预览或执行附件。翻译仅支持不超过 512 KiB、12,000 字符的 UTF-8 文本，PDF 和 Office 文件暂不支持。</p>
       </section>
 
       <section class="mail-message-detail__body" aria-labelledby="mail-body-title">
@@ -972,13 +1073,23 @@ watch(() => safeMessageId.value, () => {
 .mail-message-detail h3 { margin: 0 0 12px; font-size: .72rem; }
 .mail-message-detail__attachments ul { display: grid; margin: 0; padding: 0; gap: 7px; list-style: none; }
 .mail-message-detail__attachments li { display: grid; min-height: 60px; padding: 8px 9px 8px 11px; align-items: center; grid-template-columns: minmax(0, 1fr) auto; gap: 10px; background: var(--bg-secondary); border: 1px solid var(--border-light); border-radius: 11px; }
-.mail-message-detail__attachments li > div { display: grid; min-width: 0; gap: 3px; }
+.mail-message-detail__attachment-meta { display: grid; min-width: 0; gap: 3px; }
+.mail-message-detail__attachment-actions { display: flex; align-items: center; justify-content: flex-end; flex-wrap: wrap; gap: 6px; }
 .mail-message-detail__attachments li span { overflow-wrap: anywhere; color: var(--text-secondary); font-size: .67rem; }
 .mail-message-detail__attachments li button { display: inline-flex; min-width: 92px; min-height: 44px; padding: 0 12px; align-items: center; justify-content: center; gap: 6px; color: var(--text-secondary); font: inherit; font-size: .63rem; font-weight: 700; background: var(--bg-card); border: 1px solid var(--border-light); border-radius: 10px; cursor: pointer; }
-.mail-message-detail__attachments li button:disabled { opacity: .48; cursor: wait; }
+.mail-message-detail__attachments li button:disabled { opacity: .48; cursor: not-allowed; }
 .mail-message-detail__attachments li small, .mail-message-detail__attachments > p { color: var(--text-muted); font-size: .58rem; }
 .mail-message-detail__attachments li small.is-error { color: var(--error-color); }
+.mail-message-detail__attachments li small.is-muted { overflow-wrap: anywhere; }
 .mail-message-detail__attachments > p { margin: 10px 0 0; }
+.mail-message-detail__attachment-translation { min-width: 0; padding: 12px; grid-column: 1 / -1; background: var(--bg-card); border: 1px solid color-mix(in srgb, var(--accent-color) 24%, var(--border-light)); border-radius: 10px; }
+.mail-message-detail__attachment-translation header { display: flex; align-items: center; justify-content: space-between; gap: 10px; }
+.mail-message-detail__attachment-translation header > div { display: flex; min-width: 0; align-items: center; gap: 7px; color: var(--accent-color); }
+.mail-message-detail__attachment-translation header strong { color: var(--text-secondary); font-size: .66rem; }
+.mail-message-detail__attachment-translation header small { font-weight: 500; }
+.mail-message-detail__attachment-translation header button { min-width: 44px; width: 44px; padding: 0; }
+.mail-message-detail__attachment-translation pre { max-height: 340px; margin: 11px 0 0; overflow: auto; white-space: pre-wrap; overflow-wrap: anywhere; color: var(--text-secondary); font: inherit; font-size: .66rem; line-height: 1.7; }
+.mail-message-detail__attachment-translation p { margin: 9px 0 0; color: var(--text-muted); font-size: .57rem; line-height: 1.55; }
 .mail-message-detail__ai, .mail-message-detail__ai-error { margin: 14px clamp(16px, 2.4vw, 28px) 0; padding: 14px; border-radius: 14px; }
 .mail-message-detail__ai { background: var(--accent-bg); border: 1px solid color-mix(in srgb, var(--accent-color) 25%, transparent); }
 .mail-message-detail__ai > div { display: grid; align-items: center; grid-template-columns: auto minmax(0, 1fr) auto; gap: 8px; }
@@ -1043,6 +1154,10 @@ watch(() => safeMessageId.value, () => {
   .mail-message-detail__sender { grid-template-columns: auto minmax(0, 1fr); }
   .mail-message-detail__sender time { grid-column: 2; }
   .mail-message-detail__recipients dl { grid-template-columns: 1fr; }
+  .mail-message-detail__attachments li { grid-template-columns: 1fr; }
+  .mail-message-detail__attachment-actions { justify-content: stretch; }
+  .mail-message-detail__attachment-actions button { flex: 1 1 120px; }
+  .mail-message-detail__attachment-translation { grid-column: 1; }
   .mail-message-detail__mobile-actions { position: fixed; z-index: 620; right: 14px; bottom: calc(86px + env(safe-area-inset-bottom)); left: 14px; display: grid; min-height: 64px; padding: 6px; grid-template-columns: repeat(5, minmax(0, 1fr)); gap: 3px; background: color-mix(in srgb, var(--bg-card) 94%, transparent); border: 1px solid var(--border-light); border-radius: 18px; box-shadow: var(--shadow-card); backdrop-filter: blur(18px); }
   .mail-message-detail__mobile-actions > button,
   .mail-message-detail__mobile-more > summary { display: grid; min-width: 44px; min-height: 50px; place-content: center; justify-items: center; gap: 3px; color: var(--text-secondary); font: inherit; font-size: .55rem; background: transparent; border: 0; border-radius: 12px; cursor: pointer; list-style: none; }

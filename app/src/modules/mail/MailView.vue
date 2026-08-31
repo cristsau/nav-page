@@ -61,6 +61,12 @@ const activeAccountLabel = computed(() => {
 const selectedCommand = computed(() => (
   state.commandsByLocation?.[String(state.selectedMessageId || '')] || null
 ))
+const syncRequesting = computed(() => state.syncState === 'requesting')
+const syncNoticeClass = computed(() => (
+  state.syncState === 'completed'
+    ? 'is-success'
+    : state.syncState === 'error' ? 'is-error' : 'is-info'
+))
 
 function queryText(value) {
   return Array.isArray(value) ? String(value[0] || '') : String(value || '')
@@ -132,17 +138,35 @@ async function initializeWorkspace() {
   }
 }
 
+async function reloadWorkspace() {
+  localError.value = ''
+  state.errorMessage = ''
+  const [nextStatus] = await Promise.all([
+    fetchEmailStatus(),
+    mail.refresh({ replace: true })
+  ])
+  featureStatus.value = nextStatus
+}
+
 async function refreshWorkspace() {
   localError.value = ''
   state.errorMessage = ''
+  let syncError = null
+  if (hasAccounts.value && state.activeAccountId) {
+    try {
+      await mail.requestSync()
+    } catch (error) {
+      syncError = error
+    }
+  }
   try {
-    const [nextStatus] = await Promise.all([
-      fetchEmailStatus(),
-      mail.refresh({ replace: true })
-    ])
-    featureStatus.value = nextStatus
+    await reloadWorkspace()
   } catch (error) {
     localError.value = error?.message || '邮件刷新失败'
+    return
+  }
+  if (syncError) {
+    localError.value = `已刷新本地邮件，但未能请求服务器收信：${syncError?.message || '请求失败'}`
   }
 }
 
@@ -256,7 +280,7 @@ function closeCompose() {
 }
 
 function onDraftQueued() {
-  void refreshWorkspace().catch(() => {})
+  void reloadWorkspace().catch(() => {})
 }
 
 function openNotificationRule(message) {
@@ -277,7 +301,7 @@ function onNotificationRuleSaved(rule) {
     state.selectedMessage.notificationAction = action
   }
   window.setTimeout(() => { ruleNotice.value = '' }, 5_000)
-  void refreshWorkspace().catch(() => {})
+  void reloadWorkspace().catch(() => {})
 }
 
 async function openRulesManager() {
@@ -289,7 +313,7 @@ async function openRulesManager() {
 function onRulesManagerChanged() {
   ruleNotice.value = '邮件提醒规则已更新；邮件仍会正常同步。'
   window.setTimeout(() => { ruleNotice.value = '' }, 5_000)
-  void refreshWorkspace().catch(() => {})
+  void reloadWorkspace().catch(() => {})
 }
 
 async function runMessageCommand(payload) {
@@ -364,9 +388,14 @@ onBeforeUnmount(mail.deactivate)
           <Icon name="sparkles" :size="17" />
           <span>问整个邮箱</span>
         </button>
-        <button type="button" :disabled="initialLoading || state.loadingMessages" @click="refreshWorkspace">
+        <button
+          type="button"
+          :disabled="initialLoading || state.loadingMessages || syncRequesting"
+          :aria-busy="syncRequesting"
+          @click="refreshWorkspace"
+        >
           <Icon name="refresh" :size="17" />
-          <span>{{ initialLoading || state.loadingMessages ? '读取中…' : '刷新' }}</span>
+          <span>{{ syncRequesting ? '请求中…' : initialLoading || state.loadingMessages ? '读取中…' : '立即收信' }}</span>
         </button>
       </div>
     </header>
@@ -374,6 +403,7 @@ onBeforeUnmount(mail.deactivate)
     <p v-if="errorMessage" class="mail-notice is-error" role="alert">{{ errorMessage }}</p>
     <p v-if="mailboxNotice" class="mail-notice is-warning" role="status">{{ mailboxNotice }}</p>
     <p v-if="ruleNotice" class="mail-notice is-success" role="status">{{ ruleNotice }}</p>
+    <p v-if="state.syncNotice" :class="['mail-notice', syncNoticeClass]" role="status" aria-live="polite">{{ state.syncNotice }}</p>
 
     <section v-if="initialLoading" class="mail-loading" role="status" aria-label="正在加载邮箱工作区">
       <span></span><span></span><span></span>
@@ -501,6 +531,7 @@ onBeforeUnmount(mail.deactivate)
 .mail-notice.is-error { color: var(--error-color); background: color-mix(in srgb, var(--error-color) 9%, var(--bg-card)); border: 1px solid color-mix(in srgb, var(--error-color) 28%, transparent); }
 .mail-notice.is-warning { color: var(--warning-color); background: color-mix(in srgb, var(--warning-color) 9%, var(--bg-card)); border: 1px solid color-mix(in srgb, var(--warning-color) 28%, transparent); }
 .mail-notice.is-success { color: var(--success-color, #4c8a64); background: color-mix(in srgb, var(--success-color, #4c8a64) 9%, var(--bg-card)); border: 1px solid color-mix(in srgb, var(--success-color, #4c8a64) 28%, transparent); }
+.mail-notice.is-info { color: var(--accent-color); background: var(--accent-bg); border: 1px solid color-mix(in srgb, var(--accent-color) 24%, transparent); }
 .mail-loading { display: grid; min-height: min(690px, calc(100vh - 180px)); overflow: hidden; grid-template-columns: 220px 360px 1fr; gap: 1px; background: var(--border-light); border: 1px solid var(--border-light); border-radius: 21px; }
 .mail-loading span { background: linear-gradient(105deg, var(--bg-card) 25%, var(--bg-hover) 40%, var(--bg-card) 55%); background-size: 240% 100%; animation: mail-shimmer 1.4s ease infinite; }
 @keyframes mail-shimmer { to { background-position-x: -240%; } }
