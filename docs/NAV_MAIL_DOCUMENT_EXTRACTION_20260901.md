@@ -1,7 +1,7 @@
 # NAV 邮件文档附件安全提取与 AI 翻译
 
-状态：`LOCAL_DONE / READY_FOR_CI / NOT_DEPLOYED`  
-基线：`a7c00709545644587bda6113c8039d7e1acbba67`  
+状态：`LOCAL_DONE / READY_FOR_CI / NOT_DEPLOYED`
+基线：`a7c00709545644587bda6113c8039d7e1acbba67`
 分支：`codex/nav-mail-doc-extract-20260901`
 
 ## 能力边界
