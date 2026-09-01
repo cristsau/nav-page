@@ -4,11 +4,15 @@ import Icon from '@/shared/components/Icon.vue'
 import OauthIntegrationSettings from './OauthIntegrationSettings.vue'
 import { useAuth } from '@/shared/composables/useAuth'
 import {
+  createManagedMailAccount,
   fetchManagedIntegrations,
   saveManagedCloudBackup,
   saveManagedMail,
+  saveManagedMailAccount,
   testManagedCloudBackup,
   testManagedImap,
+  testManagedMailAccountImap,
+  testManagedMailAccountSmtp,
   testManagedSmtp
 } from '@/shared/services/integrationApi'
 import {
@@ -23,6 +27,9 @@ const busyAction = ref('')
 const message = ref('')
 const error = ref('')
 const writable = ref(false)
+const managedState = ref(null)
+const activeMailAccountId = ref('primary')
+const mailPrimaryManaged = ref(false)
 const updatedAt = ref(null)
 const savedSmtpFingerprint = ref('')
 const savedImapFingerprint = ref('')
@@ -34,6 +41,10 @@ const busyActionLabel = computed(() => ({
   'save-mail': '正在安全保存邮件配置…',
   'test-smtp': '正在验证 SMTP 连接…',
   'test-imap': '正在验证 IMAP 连接…',
+  'create-mail-account': '正在添加邮箱账号…',
+  'save-mail-account': '正在安全保存邮箱账号…',
+  'test-account-smtp': '正在验证第二邮箱 SMTP…',
+  'test-account-imap': '正在验证第二邮箱 IMAP…',
   'save-cloud': '正在安全保存云备份配置…',
   'test-cloud': '正在验证对象存储连接…'
 }[busyAction.value] || '正在处理…'))
@@ -41,6 +52,7 @@ const busyActionLabel = computed(() => ({
 const SERVER_HOST_PATTERN = /^(?=.{1,253}$)(?:[a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])?\.)*[a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])?$/i
 
 const mail = reactive({
+  label: '个人邮箱',
   deliveryEnabled: false,
   registrationEnabled: false,
   ingestEnabled: false,
@@ -68,6 +80,20 @@ const mail = reactive({
   smtpVerifiedAt: null,
   imapVerified: false,
   imapVerifiedAt: null
+})
+
+const secondaryMailAccounts = computed(() => managedState.value?.mailAccounts || [])
+const isNewMailAccount = computed(() => activeMailAccountId.value === 'new')
+const isSecondaryMailAccount = computed(() => activeMailAccountId.value !== 'primary')
+const canAddMailAccount = computed(() => Boolean(
+  writable.value
+  && mailPrimaryManaged.value
+  && secondaryMailAccounts.value.length < Number(managedState.value?.mailAccountLimit || 2) - 1
+  && !busyAction.value
+))
+const activeMailAccountName = computed(() => {
+  if (!isSecondaryMailAccount.value) return mail.smtpFromAddress ? `主邮箱 · ${mail.smtpFromAddress}` : '主邮箱'
+  return mail.label || (isNewMailAccount.value ? '新邮箱' : '第二邮箱')
 })
 
 const cloud = reactive({
@@ -172,7 +198,7 @@ const mailSaveStatus = computed(() => {
   if (loading.value) return '正在读取服务器配置…'
   if (!writable.value) return '服务器集成目录当前为只读，无法保存。'
   if (smtpHostError.value || imapHostError.value) return '请先修正标红的服务器主机名。'
-  if (busyAction.value === 'save-mail') return '正在安全保存，请稍候…'
+  if (['save-mail', 'save-mail-account', 'create-mail-account'].includes(busyAction.value)) return '正在安全保存，请稍候…'
   return '点击保存后会写入服务器；保存成功后才能测试 SMTP / IMAP。'
 })
 
@@ -208,19 +234,16 @@ function statusLabel(ok, yes = '已验证', no = '待验证') {
   return ok ? yes : no
 }
 
-function applyState(state) {
-  writable.value = state.writable === true
-  updatedAt.value = state.updatedAt || null
-  const mailState = state.mail || {}
+function applyMailState(mailState = {}, { secondary = false } = {}) {
   const mailConfig = mailState.config || {}
-  const reuseSmtpPasswordForImap = mail.reuseSmtpPasswordForImap
   Object.assign(mail, {
     ...mailConfig,
+    label: secondary ? (mailState.label || '第二邮箱') : '个人邮箱',
     adminRecipientsText: (mailConfig.adminRecipients || []).join(', '),
     digestHoursText: (mailConfig.digestHours || [12, 20]).join(','),
     smtpPassword: '',
     imapPassword: '',
-    reuseSmtpPasswordForImap,
+    reuseSmtpPasswordForImap: false,
     smtpPasswordConfigured: mailState.secrets?.smtpPasswordConfigured === true,
     imapPasswordConfigured: mailState.secrets?.imapPasswordConfigured === true,
     encryptionConfigured: mailState.secrets?.encryptionConfigured === true,
@@ -229,6 +252,22 @@ function applyState(state) {
     imapVerified: mailState.verification?.imapVerified === true,
     imapVerifiedAt: mailState.verification?.imapVerifiedAt || null
   })
+  if (!mail.ownerUsername && currentUser.value?.username) mail.ownerUsername = currentUser.value.username
+  savedSmtpFingerprint.value = smtpFingerprint()
+  savedImapFingerprint.value = imapFingerprint()
+}
+
+function applyState(state) {
+  managedState.value = state
+  writable.value = state.writable === true
+  mailPrimaryManaged.value = state.mailPrimaryManaged === true
+  updatedAt.value = state.updatedAt || null
+  if (activeMailAccountId.value !== 'primary' && activeMailAccountId.value !== 'new') {
+    const selected = (state.mailAccounts || []).find((account) => account.id === activeMailAccountId.value)
+    if (selected) applyMailState(selected, { secondary: true })
+    else activeMailAccountId.value = 'primary'
+  }
+  if (activeMailAccountId.value === 'primary') applyMailState(state.mail || {})
   const cloudState = state.cloudBackup || {}
   const cloudConfig = cloudState.config || {}
   Object.assign(cloud, {
@@ -246,14 +285,47 @@ function applyState(state) {
     timerEnabled: cloudState.hostAgent?.timerEnabled === true,
     hostAgentUpdatedAt: cloudState.hostAgent?.updatedAt || null
   })
-  savedSmtpFingerprint.value = smtpFingerprint()
-  savedImapFingerprint.value = imapFingerprint()
   savedCloudFingerprint.value = cloudFingerprint()
-  if (!mail.ownerUsername && currentUser.value?.username) {
-    // Make the required value visible instead of disguising an empty field as
-    // a placeholder. It remains an unsaved change until the user saves it.
-    mail.ownerUsername = currentUser.value.username
+}
+
+function selectMailAccount(accountId) {
+  const nextId = String(accountId || 'primary')
+  activeMailAccountId.value = nextId
+  if (nextId === 'primary') {
+    applyMailState(managedState.value?.mail || {})
+    return
   }
+  const selected = secondaryMailAccounts.value.find((account) => account.id === nextId)
+  if (selected) applyMailState(selected, { secondary: true })
+}
+
+function startAddMailAccount() {
+  if (!canAddMailAccount.value) return
+  activeMailAccountId.value = 'new'
+  applyMailState({
+    label: '第二邮箱',
+    config: {
+      deliveryEnabled: false,
+      registrationEnabled: false,
+      ingestEnabled: false,
+      digestEnabled: false,
+      smtpHost: '',
+      smtpPort: 465,
+      smtpUsername: '',
+      smtpFromAddress: '',
+      smtpFromName: 'DOMO NAV',
+      adminRecipients: [],
+      ownerUsername: currentUser.value?.username || '',
+      imapHost: '',
+      imapPort: 993,
+      imapUsername: '',
+      imapMailbox: 'INBOX',
+      digestHours: [12, 20],
+      digestTimeZone: 'Asia/Shanghai'
+    }
+  }, { secondary: true })
+  message.value = '请填写第二邮箱配置并保存；保存后再分别测试 SMTP 和 IMAP。'
+  error.value = ''
 }
 
 async function refresh() {
@@ -270,16 +342,19 @@ async function refresh() {
 
 function mailPayload() {
   return {
+    ...(isSecondaryMailAccount.value ? { label: mail.label } : {}),
     deliveryEnabled: mail.deliveryEnabled,
-    registrationEnabled: mail.registrationEnabled,
+    registrationEnabled: isSecondaryMailAccount.value ? false : mail.registrationEnabled,
     ingestEnabled: mail.ingestEnabled,
-    digestEnabled: mail.digestEnabled,
+    digestEnabled: isSecondaryMailAccount.value ? false : mail.digestEnabled,
     smtpHost: mail.smtpHost,
     smtpPort: 465,
     smtpUsername: mail.smtpUsername,
     smtpFromAddress: mail.smtpFromAddress,
     smtpFromName: mail.smtpFromName,
-    adminRecipients: mail.adminRecipientsText.split(',').map((value) => value.trim()).filter(Boolean),
+    adminRecipients: isSecondaryMailAccount.value
+      ? []
+      : mail.adminRecipientsText.split(',').map((value) => value.trim()).filter(Boolean),
     ownerUsername: mail.ownerUsername,
     imapHost: mail.imapHost,
     imapPort: 993,
@@ -326,27 +401,37 @@ async function saveMail() {
     invalidHost.input?.scrollIntoView({ behavior: 'smooth', block: 'center' })
     return
   }
-  const result = await run('save-mail', '邮件配置已安全保存并应用。', () => saveManagedMail(mailPayload()))
-  if (result?.mail) {
-    const current = await fetchManagedIntegrations()
-    applyState(current)
-  }
+  const action = isNewMailAccount.value
+    ? 'create-mail-account'
+    : isSecondaryMailAccount.value ? 'save-mail-account' : 'save-mail'
+  const result = await run(action, isSecondaryMailAccount.value ? '邮箱账号已安全保存并应用。' : '邮件配置已安全保存并应用。', () => {
+    if (isNewMailAccount.value) return createManagedMailAccount(mailPayload())
+    if (isSecondaryMailAccount.value) return saveManagedMailAccount(activeMailAccountId.value, mailPayload())
+    return saveManagedMail(mailPayload())
+  })
+  const savedAccount = result?.account
+  if (savedAccount?.id) activeMailAccountId.value = savedAccount.id
+  if (result?.mail || savedAccount) applyState(await fetchManagedIntegrations())
 }
 
 async function testSmtp() {
-  const result = await run('test-smtp', 'SMTP 连接验证成功，现在可以启用邮件发送。', testManagedSmtp)
-  if (result?.mail) {
-    const current = await fetchManagedIntegrations()
-    applyState(current)
-  }
+  const action = isSecondaryMailAccount.value ? 'test-account-smtp' : 'test-smtp'
+  const result = await run(action, 'SMTP 连接验证成功，现在可以启用邮件发送。', () => (
+    isSecondaryMailAccount.value
+      ? testManagedMailAccountSmtp(activeMailAccountId.value)
+      : testManagedSmtp()
+  ))
+  if (result?.mail || result?.account) applyState(await fetchManagedIntegrations())
 }
 
 async function testImap() {
-  const result = await run('test-imap', 'IMAP 连接验证成功，现在可以启用智能收件。', testManagedImap)
-  if (result?.mail) {
-    const current = await fetchManagedIntegrations()
-    applyState(current)
-  }
+  const action = isSecondaryMailAccount.value ? 'test-account-imap' : 'test-imap'
+  const result = await run(action, 'IMAP 连接验证成功，现在可以启用智能收件。', () => (
+    isSecondaryMailAccount.value
+      ? testManagedMailAccountImap(activeMailAccountId.value)
+      : testManagedImap()
+  ))
+  if (result?.mail || result?.account) applyState(await fetchManagedIntegrations())
 }
 
 function cloudPayload() {
@@ -402,10 +487,40 @@ onMounted(refresh)
       <header class="card-header">
         <div class="card-icon"><Icon name="mail" :size="20" /></div>
         <div>
-          <h4>邮件服务（SMTP / IMAP）</h4>
-          <p>兼容密码或应用专用密码；OAuth-only 邮箱可在上方配置 Google / Microsoft Refresh Token Provider。</p>
+          <h4>{{ activeMailAccountName }}（SMTP / IMAP）</h4>
+          <p>最多连接两个真实邮箱；各账号使用独立 Secret，切换账号不会回显任何密码。</p>
         </div>
       </header>
+
+      <section class="mail-account-manager" aria-labelledby="managed-mail-accounts-title">
+        <div>
+          <label id="managed-mail-accounts-title" for="managed-mail-account-select">正在配置的邮箱</label>
+          <select
+            id="managed-mail-account-select"
+            :value="activeMailAccountId"
+            :disabled="loading || Boolean(busyAction)"
+            @change="selectMailAccount($event.target.value)"
+          >
+            <option value="primary">主邮箱</option>
+            <option v-for="account in secondaryMailAccounts" :key="account.id" :value="account.id">
+              {{ account.label || account.config?.smtpFromAddress || '第二邮箱' }}
+            </option>
+            <option v-if="isNewMailAccount" value="new">新邮箱（尚未保存）</option>
+          </select>
+        </div>
+        <button class="button button--secondary" type="button" :disabled="!canAddMailAccount" @click="startAddMailAccount">
+          <Icon name="plus" :size="16" />
+          添加第二邮箱
+        </button>
+        <p v-if="!mailPrimaryManaged">请先保存一次主邮箱配置，再添加第二邮箱。</p>
+        <p v-else-if="secondaryMailAccounts.length">已连接两个邮箱；可在上方切换并分别验证。</p>
+        <p v-else>第二邮箱可独立收信和外发，注册通知与每日摘要仍由主邮箱负责。</p>
+      </section>
+
+      <label v-if="isSecondaryMailAccount" class="field-wide mail-account-label">
+        <span>邮箱显示名称</span>
+        <input v-model.trim="mail.label" type="text" maxlength="80" autocomplete="off" placeholder="例如：工作邮箱">
+      </label>
 
       <div class="status-row" aria-label="邮件配置状态">
         <span :class="{ 'is-ok': writable }">配置 {{ writable ? '可保存' : '只读' }}</span>
@@ -438,7 +553,7 @@ onMounted(refresh)
           <label><span>发件人名称</span><input v-model.trim="mail.smtpFromName" type="text" autocomplete="off"></label>
         </div>
         <p id="smtp-tls-tip" class="field-tip">固定使用 465 / TLS 1.2+，不提供明文或降级连接。</p>
-        <label class="field-wide"><span>管理员通知邮箱（逗号分隔）</span><input v-model="mail.adminRecipientsText" type="text" autocomplete="off" placeholder="admin@example.com"></label>
+        <label v-if="!isSecondaryMailAccount" class="field-wide"><span>管理员通知邮箱（逗号分隔）</span><input v-model="mail.adminRecipientsText" type="text" autocomplete="off" placeholder="admin@example.com"></label>
         <div class="action-row">
           <span>{{ smtpTestDisabledReason || `配置已保存，可测试。最近验证：${formatDate(mail.smtpVerifiedAt)}` }}</span>
           <button
@@ -449,7 +564,7 @@ onMounted(refresh)
             :title="smtpTestDisabledReason || '验证 SMTP 连接'"
             @click="testSmtp"
           >
-            {{ busyAction === 'test-smtp' ? '测试中' : '测试 SMTP' }}
+            {{ ['test-smtp', 'test-account-smtp'].includes(busyAction) ? '测试中' : '测试 SMTP' }}
           </button>
         </div>
       </fieldset>
@@ -475,8 +590,8 @@ onMounted(refresh)
           <label><span>登录邮箱</span><input v-model.trim="mail.imapUsername" type="email" autocomplete="off" placeholder="nav@example.com"></label>
           <label><span>IMAP 密码</span><input v-model="mail.imapPassword" type="password" autocomplete="new-password" :disabled="mail.reuseSmtpPasswordForImap" :placeholder="mail.imapPasswordConfigured ? '已安全保存，留空保持不变' : '输入邮箱密码'"></label>
           <label><span>邮箱目录</span><input v-model.trim="mail.imapMailbox" type="text" autocomplete="off"></label>
-          <label><span>摘要时间（小时，逗号分隔）</span><input v-model="mail.digestHoursText" type="text" inputmode="numeric" autocomplete="off"></label>
-          <label><span>摘要时区</span><input v-model.trim="mail.digestTimeZone" type="text" autocomplete="off"></label>
+          <label v-if="!isSecondaryMailAccount"><span>摘要时间（小时，逗号分隔）</span><input v-model="mail.digestHoursText" type="text" inputmode="numeric" autocomplete="off"></label>
+          <label v-if="!isSecondaryMailAccount"><span>摘要时区</span><input v-model.trim="mail.digestTimeZone" type="text" autocomplete="off"></label>
         </div>
         <label class="check-row"><input v-model="mail.reuseSmtpPasswordForImap" type="checkbox">保存时将 SMTP 密码复制给 IMAP</label>
         <div class="action-row">
@@ -489,7 +604,7 @@ onMounted(refresh)
             :title="imapTestDisabledReason || '验证 IMAP 连接'"
             @click="testImap"
           >
-            {{ busyAction === 'test-imap' ? '测试中' : '测试 IMAP' }}
+            {{ ['test-imap', 'test-account-imap'].includes(busyAction) ? '测试中' : '测试 IMAP' }}
           </button>
         </div>
       </fieldset>
@@ -498,9 +613,9 @@ onMounted(refresh)
         <legend>功能开关</legend>
         <div class="toggle-grid">
           <label><input v-model="mail.deliveryEnabled" type="checkbox" :disabled="!mail.smtpVerified">邮件发送队列</label>
-          <label><input v-model="mail.registrationEnabled" type="checkbox" :disabled="!mail.deliveryEnabled">注册邮箱验证与审批通知</label>
+          <label v-if="!isSecondaryMailAccount"><input v-model="mail.registrationEnabled" type="checkbox" :disabled="!mail.deliveryEnabled">注册邮箱验证与审批通知</label>
           <label><input v-model="mail.ingestEnabled" type="checkbox" :disabled="!mail.imapVerified">IMAP 智能收件</label>
-          <label><input v-model="mail.digestEnabled" type="checkbox" :disabled="!mail.ingestEnabled">每日邮件摘要</label>
+          <label v-if="!isSecondaryMailAccount"><input v-model="mail.digestEnabled" type="checkbox" :disabled="!mail.ingestEnabled">每日邮件摘要</label>
         </div>
       </fieldset>
 
@@ -513,7 +628,7 @@ onMounted(refresh)
           :aria-describedby="!writable ? 'integration-write-warning' : undefined"
         >
           <Icon name="check" :size="16" />
-          {{ busyAction === 'save-mail' ? '保存中' : '保存邮件配置' }}
+          {{ ['save-mail', 'save-mail-account', 'create-mail-account'].includes(busyAction) ? '保存中' : isNewMailAccount ? '添加并保存邮箱' : '保存邮件配置' }}
         </button>
       </footer>
     </form>
@@ -590,6 +705,11 @@ onMounted(refresh)
 .card-icon { display: grid; width: 46px; height: 46px; place-items: center; color: var(--accent-color); background: color-mix(in srgb, var(--accent-color) 12%, var(--bg-secondary)); border: 1px solid color-mix(in srgb, var(--accent-color) 28%, var(--border-light)); border-radius: 15px; }
 .card-header h4 { margin: 0; color: var(--text-primary); font-size: 1rem; }
 .card-header p { margin: 5px 0 0; color: var(--text-muted); font-size: .75rem; line-height: 1.55; }
+.mail-account-manager { display: grid; padding: 14px; align-items: end; grid-template-columns: minmax(0, 1fr) auto; gap: 8px 12px; background: var(--bg-secondary); border: 1px solid var(--border-light); border-radius: 15px; }
+.mail-account-manager > div { display: grid; min-width: 0; gap: 7px; }
+.mail-account-manager label { color: var(--text-secondary); font-size: .72rem; font-weight: 680; }
+.mail-account-manager p { margin: 0; grid-column: 1 / -1; color: var(--text-muted); font-size: .68rem; line-height: 1.55; }
+.mail-account-label { margin-top: 0; }
 .status-row { display: flex; flex-wrap: wrap; gap: 8px; }
 .status-row span { padding: 7px 10px; color: var(--text-muted); font-size: .7rem; background: var(--bg-secondary); border: 1px solid var(--border-light); border-radius: 999px; }
 .status-row span.is-ok { color: var(--success-color, #4f8a5b); border-color: color-mix(in srgb, var(--success-color, #4f8a5b) 38%, var(--border-light)); }
@@ -634,6 +754,8 @@ input:disabled { opacity: .62; }
 @media (max-width: 680px) {
   .integration-heading, .action-row, .card-footer { align-items: stretch; flex-direction: column; }
   .field-grid, .toggle-grid { grid-template-columns: 1fr; }
+  .mail-account-manager { grid-template-columns: 1fr; }
+  .mail-account-manager p { grid-column: auto; }
   .button { width: 100%; }
   .integration-toast { right: max(12px, env(safe-area-inset-right)); bottom: calc(86px + env(safe-area-inset-bottom)); left: max(12px, env(safe-area-inset-left)); width: auto; }
 }
