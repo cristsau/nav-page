@@ -9,6 +9,8 @@ import { readOwnerSecretFile } from './ownerSecretFile.js'
 const DOCUMENT_VERSION = 1
 const CONFIG_FILE_NAME = 'integrations.json'
 const HOST_AGENT_MARKER = 'cloud-backup-agent.json'
+const MAIL_UPDATE_MARKER = 'mail-update-in-progress.json'
+const MANAGED_MAIL_PERSISTENCE_PATTERN = /^(?:integrations\.json|smtp-password|imap-password|email-encryption-key|mail-account-[a-f0-9]{24}-(?:smtp|imap)-password)$/
 const MAX_SECONDARY_MAIL_ACCOUNTS = 1
 const MAIL_ACCOUNT_ID_PATTERN = /^[a-f0-9]{24}$/
 const MAIL_SOURCE_KEY_PATTERN = /^managed\.[a-f0-9]{24}$/
@@ -26,6 +28,9 @@ const HOST_PATTERN = /^(?=.{1,253}$)(?:[a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])?\.)*[
 const BUCKET_PATTERN = /^[A-Za-z0-9][A-Za-z0-9._-]{1,61}[A-Za-z0-9]$/
 const CONTROL_PATTERN = /[\u0000-\u001F\u007F]/
 let mutationQueue = Promise.resolve()
+
+export const MANAGED_MAIL_PERSISTENCE_ROLLBACK_FAILED = 'MANAGED_MAIL_PERSISTENCE_ROLLBACK_FAILED'
+export const MANAGED_MAIL_UPDATE_IN_PROGRESS = 'MANAGED_MAIL_UPDATE_IN_PROGRESS'
 
 export function withManagedIntegrationMutation(callback) {
   if (typeof callback !== 'function') throw new TypeError('集成配置操作无效')
@@ -62,6 +67,85 @@ async function ensureDirectory(runtimeConfig = config) {
     await fs.chmod(directory, 0o700)
   }
   return directory
+}
+
+async function readManagedMailUpdateMarker(runtimeConfig = config) {
+  const markerPath = exactPath(MAIL_UPDATE_MARKER, runtimeConfig)
+  try {
+    const stat = await fs.lstat(markerPath)
+    if (!stat.isFile() || stat.isSymbolicLink() || stat.size < 2 || stat.size > 2048) {
+      throw new Error('邮件配置更新标记不安全')
+    }
+    const marker = JSON.parse(await fs.readFile(markerPath, 'utf8'))
+    if (
+      marker?.version !== 1
+      || !/^[a-f0-9]{32}$/.test(String(marker?.token || ''))
+      || !Number.isSafeInteger(marker?.pid)
+      || typeof marker?.startedAt !== 'string'
+    ) {
+      throw new Error('邮件配置更新标记无效')
+    }
+    return marker
+  } catch (error) {
+    if (error?.code === 'ENOENT') return null
+    const blocked = new Error('邮件配置更新事务仍在进行或需要人工恢复')
+    blocked.code = MANAGED_MAIL_UPDATE_IN_PROGRESS
+    throw blocked
+  }
+}
+
+export async function beginManagedMailUpdate(runtimeConfig = config, {
+  openFn = fs.open,
+  removeFn = fs.rm
+} = {}) {
+  const directory = await ensureDirectory(runtimeConfig)
+  const markerPath = exactPath(MAIL_UPDATE_MARKER, runtimeConfig)
+  const token = randomBytes(16).toString('hex')
+  const marker = `${JSON.stringify({
+    version: 1,
+    token,
+    pid: process.pid,
+    startedAt: new Date().toISOString()
+  })}\n`
+  let handle
+  let markerCreated = false
+  try {
+    handle = await openFn(markerPath, 'wx', 0o600)
+    markerCreated = true
+    await handle.writeFile(marker, { encoding: 'utf8' })
+    await handle.sync()
+    await handle.close()
+    handle = null
+  } catch (error) {
+    await handle?.close().catch(() => {})
+    if (markerCreated) await removeFn(markerPath, { force: true }).catch(() => {})
+    const blocked = new Error('邮件配置更新事务仍在进行或需要人工恢复')
+    blocked.code = MANAGED_MAIL_UPDATE_IN_PROGRESS
+    throw blocked
+  }
+  return { token, markerPath }
+}
+
+export async function assertManagedMailUpdateAvailable(
+  runtimeConfig = config,
+  { updateToken = null } = {}
+) {
+  const marker = await readManagedMailUpdateMarker(runtimeConfig)
+  if (!marker) return true
+  if (updateToken && marker.token === updateToken) return true
+  const error = new Error('邮件配置更新事务仍在进行或需要人工恢复')
+  error.code = MANAGED_MAIL_UPDATE_IN_PROGRESS
+  throw error
+}
+
+export async function completeManagedMailUpdate(
+  update,
+  runtimeConfig = config
+) {
+  const token = String(update?.token || '')
+  if (!/^[a-f0-9]{32}$/.test(token)) throw new TypeError('邮件配置更新令牌无效')
+  await assertManagedMailUpdateAvailable(runtimeConfig, { updateToken: token })
+  await fs.rm(exactPath(MAIL_UPDATE_MARKER, runtimeConfig))
 }
 
 async function atomicWrite(filePath, content, mode = 0o600) {
@@ -335,6 +419,77 @@ async function writeDocument(document, runtimeConfig = config) {
   return payload
 }
 
+function safePersistenceErrorCode(error, fallback) {
+  const code = String(error?.code || '').trim().toUpperCase()
+  return /^[A-Z0-9_]{1,80}$/.test(code) ? code : fallback
+}
+
+export async function snapshotManagedMailPersistence(runtimeConfig = config) {
+  const directory = await ensureDirectory(runtimeConfig)
+  const names = (await fs.readdir(directory))
+    .filter((name) => MANAGED_MAIL_PERSISTENCE_PATTERN.test(name))
+    .sort()
+  const files = []
+  for (const name of names) {
+    const filePath = exactPath(name, runtimeConfig)
+    const stat = await fs.lstat(filePath)
+    const maximum = name === CONFIG_FILE_NAME ? 128 * 1024 : 4096
+    if (!stat.isFile() || stat.isSymbolicLink() || stat.size > maximum) {
+      throw new Error('邮件集成持久化文件不安全或过大')
+    }
+    files.push({
+      name,
+      content: await fs.readFile(filePath, 'utf8'),
+      mode: process.platform === 'win32' ? 0o600 : stat.mode & 0o777
+    })
+  }
+  return { files }
+}
+
+export async function restoreManagedMailPersistence(snapshot, runtimeConfig = config) {
+  const directory = await ensureDirectory(runtimeConfig)
+  const expected = new Map((snapshot?.files || []).map((file) => [file.name, file]))
+  const failures = []
+  const currentNames = (await fs.readdir(directory))
+    .filter((name) => MANAGED_MAIL_PERSISTENCE_PATTERN.test(name))
+  for (const name of currentNames) {
+    if (expected.has(name)) continue
+    try { await fs.rm(exactPath(name, runtimeConfig), { force: true }) } catch (error) { failures.push(error) }
+  }
+  const ordered = [...expected.values()].sort((left, right) => (
+    left.name === CONFIG_FILE_NAME ? 1 : right.name === CONFIG_FILE_NAME ? -1 : left.name.localeCompare(right.name)
+  ))
+  for (const file of ordered) {
+    try {
+      await atomicWrite(exactPath(file.name, runtimeConfig), file.content, file.mode || 0o600)
+    } catch (error) {
+      failures.push(error)
+    }
+  }
+  if (!expected.has(CONFIG_FILE_NAME)) {
+    try { await fs.rm(exactPath(CONFIG_FILE_NAME, runtimeConfig), { force: true }) } catch (error) { failures.push(error) }
+  }
+  if (failures.length) {
+    const error = new Error('邮件集成持久化回滚未完成')
+    error.code = MANAGED_MAIL_PERSISTENCE_ROLLBACK_FAILED
+    error.rollbackErrorCode = safePersistenceErrorCode(failures[0], 'PERSISTENCE_RESTORE_FAILED')
+    throw error
+  }
+}
+
+async function restorePersistenceOrThrow(snapshot, originalError, runtimeConfig, restoreFn) {
+  try {
+    await restoreFn(snapshot, runtimeConfig)
+  } catch (rollbackError) {
+    const error = new Error('邮件集成保存失败且持久化回滚未完成；邮件运行时必须保持关闭')
+    error.code = MANAGED_MAIL_PERSISTENCE_ROLLBACK_FAILED
+    error.writeErrorCode = safePersistenceErrorCode(originalError, 'MAIL_INTEGRATION_WRITE_FAILED')
+    error.rollbackErrorCode = safePersistenceErrorCode(rollbackError, 'PERSISTENCE_RESTORE_FAILED')
+    throw error
+  }
+  throw originalError
+}
+
 async function secretConfigured(secretName, runtimeConfig = config) {
   try {
     await readOwnerSecretFile(exactPath(SECRET_FILES[secretName], runtimeConfig), {
@@ -527,8 +682,55 @@ async function managedIntegrationsWritable(runtimeConfig = config) {
   }
 }
 
-export async function applyManagedIntegrationsToRuntime(runtimeConfig = config) {
+const MANAGED_MAIL_RUNTIME_KEYS = Object.freeze([
+  'mailDeliveryEnabled',
+  'registrationEmailEnabled',
+  'emailIngestEnabled',
+  'emailDigestEnabled',
+  'smtpHost',
+  'smtpPort',
+  'smtpSecure',
+  'smtpUsername',
+  'smtpPasswordFile',
+  'smtpFromAddress',
+  'smtpFromName',
+  'adminEmailRecipients',
+  'emailOwnerUsername',
+  'emailEncryptionKeyFile',
+  'imapHost',
+  'imapPort',
+  'imapSecure',
+  'imapUsername',
+  'imapPasswordFile',
+  'imapMailbox',
+  'emailDigestHours',
+  'emailDigestTimeZone',
+  'emailPrimaryAccount',
+  'emailAccountLabel'
+])
+
+export function snapshotManagedMailRuntimeConfig(runtimeConfig = config) {
+  return Object.fromEntries(MANAGED_MAIL_RUNTIME_KEYS.map((key) => [
+    key,
+    Array.isArray(runtimeConfig[key]) ? [...runtimeConfig[key]] : runtimeConfig[key]
+  ]))
+}
+
+export function restoreManagedMailRuntimeConfig(snapshot, runtimeConfig = config) {
+  for (const key of MANAGED_MAIL_RUNTIME_KEYS) {
+    const value = snapshot?.[key]
+    runtimeConfig[key] = Array.isArray(value) ? [...value] : value
+  }
+  return runtimeConfig
+}
+
+export async function applyManagedIntegrationsToRuntime(
+  runtimeConfig = config,
+  { updateToken = null } = {}
+) {
+  await assertManagedMailUpdateAvailable(runtimeConfig, { updateToken })
   const document = await readDocument(runtimeConfig)
+  await assertManagedMailUpdateAvailable(runtimeConfig, { updateToken })
   if (!document.mail) return { source: 'environment', document }
   const mail = document.mail
   Object.assign(runtimeConfig, {
@@ -681,8 +883,13 @@ export async function getManagedIntegrationsState(runtimeConfig = config) {
   }
 }
 
-export async function saveManagedMailConfig(input = {}, runtimeConfig = config) {
+export async function saveManagedMailConfig(input = {}, runtimeConfig = config, {
+  writeDocumentFn = writeDocument,
+  restorePersistenceFn = restoreManagedMailPersistence,
+  updateToken = null
+} = {}) {
   await ensureDirectory(runtimeConfig)
+  await assertManagedMailUpdateAvailable(runtimeConfig, { updateToken })
   const document = await readDocument(runtimeConfig)
   const previous = document.mail || normalizeManagedMailConfig({}, mailDefaults(runtimeConfig))
   const next = normalizeManagedMailConfig(input, previous)
@@ -722,21 +929,25 @@ export async function saveManagedMailConfig(input = {}, runtimeConfig = config) 
   }
   validateMailActivation(next, verification)
 
-  if (nextSmtpPassword && nextSmtpPassword !== currentSmtpPassword) {
-    await writeSecret('smtpPassword', nextSmtpPassword, 'SMTP 密码', runtimeConfig)
-  } else if (!nextSmtpPassword && currentSmtpPassword) {
-    await removeSecret('smtpPassword', runtimeConfig)
+  const persistenceSnapshot = await snapshotManagedMailPersistence(runtimeConfig)
+  try {
+    if (nextSmtpPassword && nextSmtpPassword !== currentSmtpPassword) {
+      await writeSecret('smtpPassword', nextSmtpPassword, 'SMTP 密码', runtimeConfig)
+    } else if (!nextSmtpPassword && currentSmtpPassword) {
+      await removeSecret('smtpPassword', runtimeConfig)
+    }
+    if (nextImapPassword && nextImapPassword !== currentImapPassword) {
+      await writeSecret('imapPassword', nextImapPassword, 'IMAP 密码', runtimeConfig)
+    } else if (!nextImapPassword && currentImapPassword) {
+      await removeSecret('imapPassword', runtimeConfig)
+    }
+    await ensureEmailEncryptionKey(runtimeConfig)
+    document.mail = next
+    const written = await writeDocumentFn(document, runtimeConfig)
+    return mailPublicState(written, runtimeConfig)
+  } catch (error) {
+    return restorePersistenceOrThrow(persistenceSnapshot, error, runtimeConfig, restorePersistenceFn)
   }
-  if (nextImapPassword && nextImapPassword !== currentImapPassword) {
-    await writeSecret('imapPassword', nextImapPassword, 'IMAP 密码', runtimeConfig)
-  } else if (!nextImapPassword && currentImapPassword) {
-    await removeSecret('imapPassword', runtimeConfig)
-  }
-  await ensureEmailEncryptionKey(runtimeConfig)
-  document.mail = next
-  const written = await writeDocument(document, runtimeConfig)
-  await applyManagedIntegrationsToRuntime(runtimeConfig)
-  return mailPublicState(written, runtimeConfig)
 }
 
 export async function markManagedMailVerified(kind, runtimeConfig = config) {
@@ -808,8 +1019,13 @@ async function saveSecondaryMailSecrets(accountId, input, current, runtimeConfig
   }
 }
 
-export async function createManagedMailAccount(input = {}, runtimeConfig = config) {
+export async function createManagedMailAccount(input = {}, runtimeConfig = config, {
+  writeDocumentFn = writeDocument,
+  restorePersistenceFn = restoreManagedMailPersistence,
+  updateToken = null
+} = {}) {
   await ensureDirectory(runtimeConfig)
+  await assertManagedMailUpdateAvailable(runtimeConfig, { updateToken })
   const document = await readDocument(runtimeConfig)
   if (!document.mail) throw new TypeError('请先保存主邮箱配置')
   if ((document.mailAccounts || []).length >= MAX_SECONDARY_MAIL_ACCOUNTS) {
@@ -827,15 +1043,25 @@ export async function createManagedMailAccount(input = {}, runtimeConfig = confi
     id,
     sourceKey: `managed.${id}`
   }, fallback)
-  await saveSecondaryMailSecrets(id, input, next, runtimeConfig)
-  await ensureEmailEncryptionKey(runtimeConfig)
-  document.mailAccounts = [...(document.mailAccounts || []), next]
-  const written = await writeDocument(document, runtimeConfig)
-  return secondaryMailPublicState(written.mailAccounts.at(-1), runtimeConfig)
+  const persistenceSnapshot = await snapshotManagedMailPersistence(runtimeConfig)
+  try {
+    await saveSecondaryMailSecrets(id, input, next, runtimeConfig)
+    await ensureEmailEncryptionKey(runtimeConfig)
+    document.mailAccounts = [...(document.mailAccounts || []), next]
+    const written = await writeDocumentFn(document, runtimeConfig)
+    return secondaryMailPublicState(written.mailAccounts.at(-1), runtimeConfig)
+  } catch (error) {
+    return restorePersistenceOrThrow(persistenceSnapshot, error, runtimeConfig, restorePersistenceFn)
+  }
 }
 
-export async function saveManagedMailAccount(accountId, input = {}, runtimeConfig = config) {
+export async function saveManagedMailAccount(accountId, input = {}, runtimeConfig = config, {
+  writeDocumentFn = writeDocument,
+  restorePersistenceFn = restoreManagedMailPersistence,
+  updateToken = null
+} = {}) {
   await ensureDirectory(runtimeConfig)
+  await assertManagedMailUpdateAvailable(runtimeConfig, { updateToken })
   const document = await readDocument(runtimeConfig)
   const { account: previous, index } = findSecondaryMailAccount(document, accountId)
   const next = normalizeManagedMailAccount({
@@ -844,11 +1070,16 @@ export async function saveManagedMailAccount(accountId, input = {}, runtimeConfi
     sourceKey: previous.sourceKey
   }, previous)
   assertMailOwnerBindingUnchanged(previous, next)
-  await saveSecondaryMailSecrets(previous.id, input, next, runtimeConfig)
-  await ensureEmailEncryptionKey(runtimeConfig)
-  document.mailAccounts[index] = next
-  const written = await writeDocument(document, runtimeConfig)
-  return secondaryMailPublicState(written.mailAccounts[index], runtimeConfig)
+  const persistenceSnapshot = await snapshotManagedMailPersistence(runtimeConfig)
+  try {
+    await saveSecondaryMailSecrets(previous.id, input, next, runtimeConfig)
+    await ensureEmailEncryptionKey(runtimeConfig)
+    document.mailAccounts[index] = next
+    const written = await writeDocumentFn(document, runtimeConfig)
+    return secondaryMailPublicState(written.mailAccounts[index], runtimeConfig)
+  } catch (error) {
+    return restorePersistenceOrThrow(persistenceSnapshot, error, runtimeConfig, restorePersistenceFn)
+  }
 }
 
 export async function markManagedMailAccountVerified(kind, accountId, runtimeConfig = config) {
@@ -884,6 +1115,7 @@ function runtimeMailConfig(mail, runtimeConfig, { primary }) {
     mailDeliveryEnabled: mail.deliveryEnabled,
     registrationEmailEnabled: primary && mail.registrationEnabled,
     emailIngestEnabled: mail.ingestEnabled,
+    emailSentAppendEnabled: mail.ingestEnabled && runtimeConfig.emailSentAppendEnabled === true,
     emailDigestEnabled: primary && mail.digestEnabled,
     smtpHost: mail.smtpHost,
     smtpPort: mail.smtpPort,
@@ -1033,8 +1265,13 @@ export async function managedMailRuntimeConfig(runtimeConfig = config) {
   return document.mail || null
 }
 
-export async function managedMailRuntimeConfigs(runtimeConfig = config) {
+export async function managedMailRuntimeConfigs(
+  runtimeConfig = config,
+  { updateToken = null } = {}
+) {
+  await assertManagedMailUpdateAvailable(runtimeConfig, { updateToken })
   const document = await readDocument(runtimeConfig)
+  await assertManagedMailUpdateAvailable(runtimeConfig, { updateToken })
   if (!document.mail) {
     return [{
       ...runtimeConfig,

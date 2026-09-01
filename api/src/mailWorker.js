@@ -7,9 +7,16 @@ import {
 } from './config.js'
 import { pool } from './db/index.js'
 import { clearEmailEncryptionKeyCache } from './lib/emailCrypto.js'
-import { configureEmailRuntime, refreshEmailRuntime, stopEmailRuntime } from './lib/emailRuntimeController.js'
+import {
+  configureEmailRuntime,
+  refreshEmailRuntime,
+  stopEmailRuntime,
+  suspendEmailRuntime
+} from './lib/emailRuntimeController.js'
 import {
   applyManagedIntegrationsToRuntime,
+  assertManagedMailUpdateAvailable,
+  MANAGED_MAIL_UPDATE_IN_PROGRESS,
   managedMailRuntimeConfigs
 } from './lib/managedIntegrations.js'
 import { applyManagedOauthToRuntime } from './lib/managedOauthIntegrations.js'
@@ -22,6 +29,7 @@ import { sendMaintenanceNotification } from './lib/notificationDelivery.js'
 import { createMailWorkerPoolHealthMonitor } from './lib/mailWorkerPoolHealth.js'
 
 const CONFIG_REFRESH_MS = 10_000
+const MAIL_UPDATE_STALE_MS = 30_000
 const HEARTBEAT_INTERVAL_MS = 15_000
 const heartbeatPath = path.resolve(
   process.env.NAV_MAIL_WORKER_HEARTBEAT_FILE
@@ -83,6 +91,7 @@ async function main() {
   }
   assertSafeMailWorkerDatabasePoolSize(config.databasePoolMax)
   const logger = createWorkerLogger()
+  await assertManagedMailUpdateAvailable(config)
   const initialIntegration = await applyManagedIntegrationsToRuntime()
   const initialOauthIntegration = await applyManagedOauthToRuntime()
   const initialMailRuntimes = await managedMailRuntimeConfigs(config)
@@ -159,13 +168,18 @@ async function main() {
   heartbeatTimer.unref?.()
 
   let refreshActive = false
+  let mailUpdateBlockedSince = 0
   const configTimer = setInterval(() => {
     if (refreshActive) return
     refreshActive = true
-    void Promise.all([
-      applyManagedIntegrationsToRuntime(),
-      applyManagedOauthToRuntime()
-    ])
+    void assertManagedMailUpdateAvailable(config)
+      .then(() => {
+        mailUpdateBlockedSince = 0
+        return Promise.all([
+          applyManagedIntegrationsToRuntime(),
+          applyManagedOauthToRuntime()
+        ])
+      })
       .then(async ([applied, oauthApplied]) => {
         const nextRevision = `${integrationRevision(applied)}:${integrationRevision(oauthApplied)}`
         if (nextRevision === currentRevision) return
@@ -179,7 +193,35 @@ async function main() {
         currentRevision = nextRevision
         logger.info({ revision: nextRevision }, 'mail worker configuration refreshed')
       })
-      .catch((error) => logger.error({ errorCode: error?.code || 'CONFIG_REFRESH_FAILED' }, 'mail worker configuration refresh failed'))
+      .catch(async (error) => {
+        if (error?.code !== MANAGED_MAIL_UPDATE_IN_PROGRESS) {
+          logger.error({ errorCode: error?.code || 'CONFIG_REFRESH_FAILED' }, 'mail worker configuration refresh failed')
+          return
+        }
+        if (!mailUpdateBlockedSince) mailUpdateBlockedSince = Date.now()
+        const blockedMilliseconds = Date.now() - mailUpdateBlockedSince
+        if (blockedMilliseconds < MAIL_UPDATE_STALE_MS) {
+          logger.warn({
+            errorCode: MANAGED_MAIL_UPDATE_IN_PROGRESS,
+            blockedMilliseconds
+          }, 'mail worker kept the previous runtime while a managed mail update is in progress')
+          return
+        }
+        clearInterval(configTimer)
+        try {
+          await suspendEmailRuntime({ reason: 'MANAGED_MAIL_UPDATE_STALE' })
+          logger.error({
+            errorCode: 'MANAGED_MAIL_UPDATE_STALE',
+            blockedMilliseconds
+          }, 'mail worker stopped after a managed mail update marker remained stale')
+        } catch (suspendError) {
+          logger.error({
+            errorCode: suspendError?.code || 'EMAIL_RUNTIME_SUSPEND_FAILED',
+            blockedMilliseconds
+          }, 'mail worker could not confirm a clean stop after a stale update marker')
+        }
+        process.exit(1)
+      })
       .finally(() => { refreshActive = false })
   }, CONFIG_REFRESH_MS)
   configTimer.unref?.()

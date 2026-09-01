@@ -5,7 +5,9 @@ import {
   MANAGED_MAIL_MATERIALIZATION_WARNING,
   materializeManagedMailAccount,
   materializeManagedMailAccountBestEffort,
-  reconcileManagedMailRuntimeAccounts
+  reconcileManagedMailRuntimeAccounts,
+  restoreManagedMailAccountRows,
+  snapshotManagedMailAccountRows
 } from '../src/lib/managedMailAccountMaterialization.js'
 
 test('a new managed mailbox rejects an unknown NAV owner before configuration is written', async () => {
@@ -147,4 +149,102 @@ test('runtime reconciliation retries every saved managed account and eventually 
       ingestEnabled: false
     }
   })
+})
+
+test('managed account row snapshots are bounded to exact approved owner and source identities', async () => {
+  const queries = []
+  const snapshot = await snapshotManagedMailAccountRows([
+    {
+      emailManagedAccount: true,
+      emailOwnerUsername: 'owner-a',
+      emailSourceKey: 'mxroute'
+    },
+    {
+      emailManagedAccount: true,
+      emailOwnerUsername: 'owner-a',
+      emailSourceKey: 'managed.0123456789abcdef01234567'
+    },
+    {
+      emailManagedAccount: false,
+      emailOwnerUsername: 'owner-a',
+      emailSourceKey: 'environment-only'
+    }
+  ], {
+    queryFn: async (sql, values) => {
+      queries.push({ sql, values })
+      if (values[1] !== 'mxroute') {
+        return {
+          rows: [{
+            owner_user_id: '22222222-2222-4222-8222-222222222222',
+            id: null
+          }]
+        }
+      }
+      return {
+        rows: [{
+          owner_user_id: '22222222-2222-4222-8222-222222222222',
+          id: '11111111-1111-4111-8111-111111111111',
+          user_id: '22222222-2222-4222-8222-222222222222',
+          source_key: 'mxroute',
+          label: '旧主邮箱',
+          enabled: true,
+          updated_at: '2026-09-01T00:00:00.000Z'
+        }]
+      }
+    }
+  })
+  assert.equal(queries.length, 2)
+  assert.equal(queries.every(({ sql }) => /owner\.status = 'approved'/.test(sql)), true)
+  assert.deepEqual(queries.map(({ values }) => values), [
+    ['owner-a', 'mxroute'],
+    ['owner-a', 'managed.0123456789abcdef01234567']
+  ])
+  assert.equal(snapshot.accounts[0].row.label, '旧主邮箱')
+  assert.equal(snapshot.accounts[1].row, null)
+})
+
+test('managed account row rollback restores old rows and removes only newly materialized identities', async () => {
+  const calls = []
+  await restoreManagedMailAccountRows({
+    accounts: [
+      {
+        ownerUsername: 'owner-a',
+        sourceKey: 'mxroute',
+        row: {
+          id: '11111111-1111-4111-8111-111111111111',
+          userId: '22222222-2222-4222-8222-222222222222',
+          sourceKey: 'mxroute',
+          label: '旧主邮箱',
+          enabled: true,
+          updatedAt: '2026-09-01T00:00:00.000Z'
+        }
+      },
+      {
+        ownerUsername: 'owner-a',
+        ownerUserId: '22222222-2222-4222-8222-222222222222',
+        sourceKey: 'managed.0123456789abcdef01234567',
+        row: null
+      }
+    ]
+  }, {
+    queryFn: async (sql, values) => {
+      calls.push({ sql, values })
+      return { rowCount: 1, rows: [] }
+    }
+  })
+  assert.equal(calls.length, 2)
+  assert.match(calls[0].sql, /UPDATE email_accounts/)
+  assert.deepEqual(calls[0].values, [
+    '11111111-1111-4111-8111-111111111111',
+    '22222222-2222-4222-8222-222222222222',
+    'mxroute',
+    '旧主邮箱',
+    true,
+    '2026-09-01T00:00:00.000Z'
+  ])
+  assert.match(calls[1].sql, /DELETE FROM email_accounts/)
+  assert.deepEqual(calls[1].values, [
+    '22222222-2222-4222-8222-222222222222',
+    'managed.0123456789abcdef01234567'
+  ])
 })

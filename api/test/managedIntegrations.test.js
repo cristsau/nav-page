@@ -6,8 +6,13 @@ import path from 'node:path'
 import { config } from '../src/config.js'
 import {
   applyManagedIntegrationsToRuntime,
+  assertManagedMailUpdateAvailable,
+  beginManagedMailUpdate,
+  completeManagedMailUpdate,
   createManagedMailAccount,
   getManagedIntegrationsState,
+  MANAGED_MAIL_PERSISTENCE_ROLLBACK_FAILED,
+  MANAGED_MAIL_UPDATE_IN_PROGRESS,
   markManagedCloudVerified,
   markManagedMailAccountVerified,
   markManagedMailVerified,
@@ -18,6 +23,7 @@ import {
   withManagedIntegrationMutation
 } from '../src/lib/managedIntegrations.js'
 import { resolveImapAuth, resolveSmtpAuth } from '../src/lib/emailOauth2.js'
+import { loadEmailEncryptionKey } from '../src/lib/emailCrypto.js'
 
 async function withManagedDirectory(callback) {
   const directory = await fs.mkdtemp(path.join(os.tmpdir(), 'nav-integrations-'))
@@ -90,6 +96,7 @@ test('managed mail secrets are write-only and verified settings can be enabled',
       ingestEnabled: true,
       digestEnabled: true
     })
+    await applyManagedIntegrationsToRuntime()
     const state = await getManagedIntegrationsState()
     assert.equal(state.mail.config.deliveryEnabled, true)
     assert.equal(state.mail.config.registrationEnabled, true)
@@ -291,7 +298,199 @@ test('primary OAuth never leaks into a secondary password-backed mailbox runtime
       { user: 'work@example.com', pass: 'secondary-imap-password' }
     )
     assert.equal(tokenCalls, 0)
+
+    const update = await beginManagedMailUpdate(config)
+    let blockedSecretReads = 0
+    try {
+      await assert.rejects(
+        resolveSmtpAuth(secondaryRuntime, {
+          readSecretImpl: async () => {
+            blockedSecretReads += 1
+            return 'must-not-be-read'
+          },
+          tokenProvider
+        }),
+        (error) => error.code === MANAGED_MAIL_UPDATE_IN_PROGRESS
+      )
+      assert.equal(blockedSecretReads, 0)
+      assert.equal(tokenCalls, 0)
+      await assert.rejects(
+        loadEmailEncryptionKey(secondaryRuntime, {
+          bypassCache: true,
+          readSecretImpl: async () => {
+            blockedSecretReads += 1
+            return Buffer.alloc(32).toString('base64')
+          }
+        }),
+        (error) => error.code === MANAGED_MAIL_UPDATE_IN_PROGRESS
+      )
+      assert.equal(blockedSecretReads, 0)
+    } finally {
+      await completeManagedMailUpdate(update, config)
+    }
     assert.equal(directory, config.managedIntegrationsDir)
+  })
+})
+
+test('primary mail document write failure restores the previous document and secrets', async () => {
+  await withManagedDirectory(async (directory) => {
+    await saveManagedMailConfig({
+      ...baseMail,
+      smtpPassword: 'old-primary-smtp',
+      imapPassword: 'old-primary-imap'
+    })
+    const documentPath = path.join(directory, 'integrations.json')
+    const smtpPath = path.join(directory, 'smtp-password')
+    const imapPath = path.join(directory, 'imap-password')
+    const before = {
+      document: await fs.readFile(documentPath, 'utf8'),
+      smtp: await fs.readFile(smtpPath, 'utf8'),
+      imap: await fs.readFile(imapPath, 'utf8')
+    }
+    const injected = Object.assign(new Error('injected document failure'), { code: 'EIO' })
+
+    await assert.rejects(
+      saveManagedMailConfig({
+        ...baseMail,
+        smtpPassword: 'new-primary-smtp',
+        imapPassword: 'new-primary-imap'
+      }, config, {
+        writeDocumentFn: async () => { throw injected }
+      }),
+      (error) => error === injected
+    )
+
+    assert.equal(await fs.readFile(documentPath, 'utf8'), before.document)
+    assert.equal(await fs.readFile(smtpPath, 'utf8'), before.smtp)
+    assert.equal(await fs.readFile(imapPath, 'utf8'), before.imap)
+    assert.equal((await fs.readFile(smtpPath, 'utf8')).includes('new-primary-smtp'), false)
+    assert.equal((await fs.readFile(imapPath, 'utf8')).includes('new-primary-imap'), false)
+  })
+})
+
+test('secondary mail document write failure restores its isolated secrets', async () => {
+  await withManagedDirectory(async (directory) => {
+    await saveManagedMailConfig({
+      ...baseMail,
+      smtpPassword: 'primary-smtp',
+      imapPassword: 'primary-imap'
+    })
+    const account = await createManagedMailAccount({
+      ...baseMail,
+      label: '工作邮箱',
+      smtpUsername: 'work@example.com',
+      smtpFromAddress: 'work@example.com',
+      imapUsername: 'work@example.com',
+      smtpPassword: 'old-secondary-smtp',
+      imapPassword: 'old-secondary-imap'
+    })
+    const documentPath = path.join(directory, 'integrations.json')
+    const smtpPath = path.join(directory, `mail-account-${account.id}-smtp-password`)
+    const imapPath = path.join(directory, `mail-account-${account.id}-imap-password`)
+    const before = {
+      document: await fs.readFile(documentPath, 'utf8'),
+      smtp: await fs.readFile(smtpPath, 'utf8'),
+      imap: await fs.readFile(imapPath, 'utf8')
+    }
+
+    await assert.rejects(
+      saveManagedMailAccount(account.id, {
+        smtpPassword: 'new-secondary-smtp',
+        imapPassword: 'new-secondary-imap'
+      }, config, {
+        writeDocumentFn: async () => {
+          throw Object.assign(new Error('injected document failure'), { code: 'EIO' })
+        }
+      }),
+      (error) => error?.code === 'EIO'
+    )
+
+    assert.equal(await fs.readFile(documentPath, 'utf8'), before.document)
+    assert.equal(await fs.readFile(smtpPath, 'utf8'), before.smtp)
+    assert.equal(await fs.readFile(imapPath, 'utf8'), before.imap)
+  })
+})
+
+test('mail persistence rollback failure exposes only a stable safe error', async () => {
+  await withManagedDirectory(async () => {
+    await saveManagedMailConfig({
+      ...baseMail,
+      smtpPassword: 'old-primary-smtp',
+      imapPassword: 'old-primary-imap'
+    })
+    const leakedSecret = 'must-never-be-returned'
+    await assert.rejects(
+      saveManagedMailConfig({
+        ...baseMail,
+        smtpPassword: 'new-primary-smtp'
+      }, config, {
+        writeDocumentFn: async () => {
+          throw Object.assign(new Error(`write failed ${leakedSecret}`), { code: 'EIO' })
+        },
+        restorePersistenceFn: async () => {
+          throw new Error(`restore failed ${leakedSecret}`)
+        }
+      }),
+      (error) => {
+        assert.equal(error.code, MANAGED_MAIL_PERSISTENCE_ROLLBACK_FAILED)
+        assert.equal(error.writeErrorCode, 'EIO')
+        assert.equal(error.rollbackErrorCode, 'PERSISTENCE_RESTORE_FAILED')
+        assert.equal(String(error.message).includes(leakedSecret), false)
+        assert.equal(JSON.stringify({
+          code: error.code,
+          message: error.message,
+          writeErrorCode: error.writeErrorCode,
+          rollbackErrorCode: error.rollbackErrorCode
+        }).includes(leakedSecret), false)
+        return true
+      }
+    )
+  })
+})
+
+test('managed mail update marker blocks cross-process reads until committed or rolled back', async () => {
+  await withManagedDirectory(async (directory) => {
+    await saveManagedMailConfig({
+      ...baseMail,
+      smtpPassword: 'primary-smtp',
+      imapPassword: 'primary-imap'
+    })
+    const update = await beginManagedMailUpdate(config)
+    const markerPath = path.join(directory, 'mail-update-in-progress.json')
+    assert.equal((await fs.stat(markerPath)).isFile(), true)
+    await assert.rejects(
+      assertManagedMailUpdateAvailable(config),
+      (error) => error.code === MANAGED_MAIL_UPDATE_IN_PROGRESS
+    )
+    await assert.rejects(
+      applyManagedIntegrationsToRuntime(config),
+      (error) => error.code === MANAGED_MAIL_UPDATE_IN_PROGRESS
+    )
+    await assert.rejects(
+      managedMailRuntimeConfigs(config),
+      (error) => error.code === MANAGED_MAIL_UPDATE_IN_PROGRESS
+    )
+    await assert.rejects(
+      beginManagedMailUpdate(config),
+      (error) => error.code === MANAGED_MAIL_UPDATE_IN_PROGRESS
+    )
+    let unrelatedRemoveCalls = 0
+    await assert.rejects(
+      beginManagedMailUpdate(config, {
+        openFn: async () => {
+          throw Object.assign(new Error('permission denied before creation'), { code: 'EACCES' })
+        },
+        removeFn: async () => { unrelatedRemoveCalls += 1 }
+      }),
+      (error) => error.code === MANAGED_MAIL_UPDATE_IN_PROGRESS
+    )
+    assert.equal(unrelatedRemoveCalls, 0)
+    await assertManagedMailUpdateAvailable(config, { updateToken: update.token })
+    const runtimes = await managedMailRuntimeConfigs(config, { updateToken: update.token })
+    assert.equal(runtimes[0].emailManagedAccount, true)
+    await completeManagedMailUpdate(update, config)
+    await assert.doesNotReject(assertManagedMailUpdateAvailable(config))
+    await assert.rejects(fs.stat(markerPath), (error) => error.code === 'ENOENT')
   })
 })
 

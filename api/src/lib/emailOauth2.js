@@ -1,4 +1,5 @@
 import { config } from '../config.js'
+import { assertManagedMailUpdateAvailable } from './managedIntegrations.js'
 import { getEmailOauthRuntime } from './managedOauthIntegrations.js'
 
 const TOKEN_ENDPOINTS = Object.freeze({
@@ -59,13 +60,20 @@ export function emailOauthConfigured(runtimeConfig = config) {
   return provider === 'google' || provider === 'microsoft'
 }
 
+async function assertManagedCredentialReadStable(runtimeConfig) {
+  if (runtimeConfig?.emailManagedAccount !== true) return
+  await assertManagedMailUpdateAvailable(runtimeConfig)
+}
+
 export async function resolveImapAuth(runtimeConfig = config, {
   readSecretImpl,
   tokenProvider = refreshEmailAccessToken
 } = {}) {
+  await assertManagedCredentialReadStable(runtimeConfig)
   const provider = String(runtimeConfig.imapOauthProvider || '').trim().toLowerCase()
   if (provider) {
     const token = await tokenProvider(provider, { runtimeConfig })
+    await assertManagedCredentialReadStable(runtimeConfig)
     return { user: String(runtimeConfig.imapUsername || '').trim(), accessToken: token.accessToken }
   }
   if (!readSecretImpl || !runtimeConfig.imapPasswordFile) {
@@ -75,6 +83,7 @@ export async function resolveImapAuth(runtimeConfig = config, {
     label: 'IMAP password',
     maxBytes: 4096
   })
+  await assertManagedCredentialReadStable(runtimeConfig)
   return { user: String(runtimeConfig.imapUsername || '').trim(), pass: password }
 }
 
@@ -82,9 +91,11 @@ export async function resolveSmtpAuth(runtimeConfig = config, {
   readSecretImpl,
   tokenProvider = refreshEmailAccessToken
 } = {}) {
+  await assertManagedCredentialReadStable(runtimeConfig)
   const provider = String(runtimeConfig.smtpOauthProvider || '').trim().toLowerCase()
   if (provider) {
     const token = await tokenProvider(provider, { runtimeConfig })
+    await assertManagedCredentialReadStable(runtimeConfig)
     return {
       type: 'OAuth2',
       user: String(runtimeConfig.smtpUsername || '').trim(),
@@ -98,6 +109,7 @@ export async function resolveSmtpAuth(runtimeConfig = config, {
     label: 'SMTP password',
     maxBytes: 4096
   })
+  await assertManagedCredentialReadStable(runtimeConfig)
   return { user: String(runtimeConfig.smtpUsername || '').trim(), pass: password }
 }
 

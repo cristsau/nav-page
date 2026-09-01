@@ -18,9 +18,26 @@ import {
 
 let runtimeContext = null
 let stopFunctions = []
+let runtimeSuspended = false
+let runtimeSuspensionReason = null
 const reconfigureQueue = createRecoverableSerialQueue()
 
 export const MANAGED_MAIL_ACCOUNT_MATERIALIZATION_PENDING = 'MANAGED_MAIL_ACCOUNT_MATERIALIZATION_PENDING'
+export const EMAIL_RUNTIME_FAIL_CLOSED = 'EMAIL_RUNTIME_FAIL_CLOSED'
+export const EMAIL_RUNTIME_SUSPEND_FAILED = 'EMAIL_RUNTIME_SUSPEND_FAILED'
+
+function safeRuntimeErrorCode(error, fallback) {
+  const code = String(error?.code || '').trim().toUpperCase()
+  return /^[A-Z0-9_]{1,80}$/.test(code) ? code : fallback
+}
+
+export function assertEmailRuntimeAvailable() {
+  if (!runtimeSuspended) return true
+  const error = new Error('Email runtime is suspended after a failed configuration rollback')
+  error.code = EMAIL_RUNTIME_FAIL_CLOSED
+  error.suspensionReason = runtimeSuspensionReason
+  throw error
+}
 
 async function stopCurrent() {
   const current = stopFunctions
@@ -31,9 +48,10 @@ async function stopCurrent() {
 export async function preflightEmailRuntime({
   runtimeConfig = config,
   loadRuntimes = managedMailRuntimeConfigs,
-  reconcileFn = reconcileManagedMailRuntimeAccounts
+  reconcileFn = reconcileManagedMailRuntimeAccounts,
+  updateToken = null
 } = {}) {
-  const mailRuntimes = await loadRuntimes(runtimeConfig)
+  const mailRuntimes = await loadRuntimes(runtimeConfig, { updateToken })
   const reconciliation = await reconcileFn(mailRuntimes)
   if (reconciliation.pending > 0) {
     const error = new Error('Managed mailbox database registration is pending')
@@ -204,19 +222,48 @@ async function startCurrent(prepared) {
 
 export function configureEmailRuntime(context) {
   runtimeContext = context
+  runtimeSuspended = false
+  runtimeSuspensionReason = null
   return refreshEmailRuntime()
 }
 
-export function refreshEmailRuntime() {
-  return reconfigureQueue.run(() => replaceEmailRuntime({
-    preflight: () => preflightEmailRuntime(),
-    stop: stopCurrent,
-    start: startCurrent
-  }))
+export function refreshEmailRuntime({ updateToken = null } = {}) {
+  return reconfigureQueue.run(() => {
+    assertEmailRuntimeAvailable()
+    return replaceEmailRuntime({
+      preflight: () => preflightEmailRuntime({ updateToken }),
+      stop: stopCurrent,
+      start: startCurrent
+    })
+  })
+}
+
+export function suspendEmailRuntime({
+  reason = 'MAIL_CONFIGURATION_ROLLBACK_FAILED',
+  stopFn = stopCurrent
+} = {}) {
+  return reconfigureQueue.run(async () => {
+    runtimeSuspended = true
+    runtimeSuspensionReason = safeRuntimeErrorCode(
+      { code: reason },
+      'MAIL_CONFIGURATION_ROLLBACK_FAILED'
+    )
+    try {
+      await stopFn()
+    } catch (stopError) {
+      const error = new Error('Email runtime suspension could not be confirmed')
+      error.code = EMAIL_RUNTIME_SUSPEND_FAILED
+      error.stopErrorCode = safeRuntimeErrorCode(stopError, 'EMAIL_RUNTIME_STOP_FAILED')
+      throw error
+    }
+    return { suspended: true, reason: runtimeSuspensionReason }
+  })
 }
 
 export async function stopEmailRuntime() {
   await reconfigureQueue.wait()
   await stopCurrent()
   runtimeContext = null
+  runtimeSuspended = false
+  runtimeSuspensionReason = null
 }

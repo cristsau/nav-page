@@ -83,6 +83,95 @@ function accountStateFromRuntime(runtimeConfig) {
   }
 }
 
+function managedRuntimeIdentities(runtimeConfigs) {
+  const unique = new Map()
+  for (const runtimeConfig of Array.isArray(runtimeConfigs) ? runtimeConfigs : []) {
+    if (runtimeConfig?.emailManagedAccount !== true) continue
+    const ownerUsername = normalizedOwnerUsername(runtimeConfig.emailOwnerUsername)
+    const sourceKey = normalizedSourceKey(runtimeConfig.emailSourceKey)
+    unique.set(`${ownerUsername}\u0000${sourceKey}`, { ownerUsername, sourceKey })
+  }
+  return [...unique.values()]
+}
+
+export async function snapshotManagedMailAccountRows(
+  runtimeConfigs,
+  { queryFn = query } = {}
+) {
+  const accounts = []
+  for (const identity of managedRuntimeIdentities(runtimeConfigs)) {
+    const result = await queryFn(
+      `SELECT owner.id AS owner_user_id,
+              account.id, account.user_id, account.source_key,
+              account.label, account.enabled, account.updated_at
+       FROM users AS owner
+       LEFT JOIN email_accounts AS account
+         ON account.user_id = owner.id
+        AND account.source_key = $2
+       WHERE owner.username = $1
+         AND owner.status = 'approved'
+       LIMIT 1`,
+      [identity.ownerUsername, identity.sourceKey]
+    )
+    const row = result.rows?.[0]
+    if (!row?.owner_user_id) throw new TypeError('邮件归属用户不存在或尚未获批')
+    accounts.push({
+      ...identity,
+      ownerUserId: row.owner_user_id,
+      row: row.id
+        ? {
+            id: row.id,
+            userId: row.user_id,
+            sourceKey: row.source_key,
+            label: row.label,
+            enabled: row.enabled === true,
+            updatedAt: row.updated_at
+          }
+        : null
+    })
+  }
+  return { accounts }
+}
+
+export async function restoreManagedMailAccountRows(
+  snapshot,
+  { queryFn = query } = {}
+) {
+  for (const account of Array.isArray(snapshot?.accounts) ? snapshot.accounts : []) {
+    if (account.row) {
+      const result = await queryFn(
+        `UPDATE email_accounts
+         SET label = $4,
+             enabled = $5,
+             updated_at = $6
+         WHERE id = $1
+           AND user_id = $2
+           AND source_key = $3`,
+        [
+          account.row.id,
+          account.row.userId,
+          account.row.sourceKey,
+          account.row.label,
+          account.row.enabled,
+          account.row.updatedAt
+        ]
+      )
+      if (result.rowCount !== 1) {
+        throw Object.assign(new Error('Managed mailbox account rollback row is missing'), {
+          code: 'MANAGED_MAIL_ACCOUNT_ROLLBACK_ROW_MISSING'
+        })
+      }
+      continue
+    }
+    await queryFn(
+      `DELETE FROM email_accounts
+       WHERE user_id = $1
+         AND source_key = $2`,
+      [account.ownerUserId, account.sourceKey]
+    )
+  }
+}
+
 export async function reconcileManagedMailRuntimeAccounts(
   runtimeConfigs,
   { materializeFn = materializeManagedMailAccount } = {}

@@ -1,52 +1,185 @@
 import { config } from '../config.js'
 import {
-  MANAGED_MAIL_ACCOUNT_MATERIALIZATION_PENDING,
-  refreshEmailRuntime
+  assertEmailRuntimeAvailable,
+  EMAIL_RUNTIME_FAIL_CLOSED,
+  preflightEmailRuntime,
+  refreshEmailRuntime,
+  suspendEmailRuntime
 } from '../lib/emailRuntimeController.js'
 import { verifyImapConnection } from '../lib/emailIngestScheduler.js'
 import { clearEmailEncryptionKeyCache } from '../lib/emailCrypto.js'
 import { verifySmtpConnection } from '../lib/mailOutbox.js'
 import {
+  applyManagedIntegrationsToRuntime,
+  beginManagedMailUpdate,
+  completeManagedMailUpdate,
   createManagedMailAccount,
   getManagedIntegrationsState,
   managedCloudTestConfig,
   managedMailAccountTestConfig,
+  managedMailRuntimeConfigs,
+  MANAGED_MAIL_UPDATE_IN_PROGRESS,
   markManagedCloudVerified,
   markManagedMailAccountVerified,
   markManagedMailVerified,
+  restoreManagedMailPersistence,
+  restoreManagedMailRuntimeConfig,
   saveManagedMailAccount,
   saveManagedCloudBackupConfig,
   saveManagedMailConfig,
+  snapshotManagedMailPersistence,
+  snapshotManagedMailRuntimeConfig,
   withManagedIntegrationMutation
 } from '../lib/managedIntegrations.js'
 import { recordSecurityEventBestEffort } from '../lib/securityEvents.js'
 import { verifyS3Connection } from '../lib/s3ConnectionTest.js'
 import {
   assertManagedMailOwnerExists,
-  MANAGED_MAIL_MATERIALIZATION_WARNING
+  restoreManagedMailAccountRows,
+  snapshotManagedMailAccountRows
 } from '../lib/managedMailAccountMaterialization.js'
 
-const MANAGED_MAIL_RUNTIME_APPLY_WARNING = '邮箱配置已保存，但运行时应用仍待处理；请稍后重新保存重试。'
+export const MANAGED_MAIL_TRANSACTION_ROLLBACK_FAILED = 'MANAGED_MAIL_TRANSACTION_ROLLBACK_FAILED'
+export const MANAGED_MAIL_WORKER_PENDING_WARNING = '邮箱配置已保存并应用到当前 API；独立邮件 Worker 将在下一次配置刷新时应用。'
 
-export async function applySavedMailRuntime(request, { refreshFn = refreshEmailRuntime } = {}) {
+function successfulManagedMailRuntimeStatus() {
+  return {
+    saved: true,
+    materialized: true,
+    applied: true,
+    workerApplied: 'pending',
+    warning: MANAGED_MAIL_WORKER_PENDING_WARNING
+  }
+}
+
+function safeTransactionErrorCode(error, fallback) {
+  const code = String(error?.code || '').trim().toUpperCase()
+  return /^[A-Z0-9_]{1,80}$/.test(code) ? code : fallback
+}
+
+export async function runManagedMailSaveTransaction(request, {
+  saveFn,
+  runtimeConfig = config,
+  snapshotPersistenceFn = snapshotManagedMailPersistence,
+  restorePersistenceFn = restoreManagedMailPersistence,
+  snapshotRuntimeFn = snapshotManagedMailRuntimeConfig,
+  restoreRuntimeFn = restoreManagedMailRuntimeConfig,
+  assertRuntimeAvailableFn = assertEmailRuntimeAvailable,
+  loadRuntimeConfigsFn = managedMailRuntimeConfigs,
+  snapshotAccountRowsFn = snapshotManagedMailAccountRows,
+  restoreAccountRowsFn = restoreManagedMailAccountRows,
+  beginUpdateFn = beginManagedMailUpdate,
+  completeUpdateFn = completeManagedMailUpdate,
+  preflightFn = preflightEmailRuntime,
+  applyRuntimeFn = applyManagedIntegrationsToRuntime,
+  refreshFn = refreshEmailRuntime,
+  clearCacheFn = clearEmailEncryptionKeyCache,
+  suspendRuntimeFn = suspendEmailRuntime
+} = {}) {
+  if (typeof saveFn !== 'function') throw new TypeError('邮件配置保存操作无效')
+  assertRuntimeAvailableFn()
+  const update = await beginUpdateFn(runtimeConfig)
+  const updateToken = update.token
+  let persistenceSnapshot = null
+  let runtimeSnapshot = null
+  let accountRowsSnapshot = null
   try {
-    const prepared = await refreshFn()
-    return {
-      saved: true,
-      materialized: prepared?.reconciliation?.pending === 0,
-      applied: true
+    persistenceSnapshot = await snapshotPersistenceFn(runtimeConfig)
+    runtimeSnapshot = snapshotRuntimeFn(runtimeConfig)
+    const value = await saveFn({ updateToken })
+    const mailRuntimes = await loadRuntimeConfigsFn(runtimeConfig, { updateToken })
+    accountRowsSnapshot = await snapshotAccountRowsFn(mailRuntimes)
+    await clearCacheFn()
+    await preflightFn({ runtimeConfig, updateToken })
+    await applyRuntimeFn(runtimeConfig, { updateToken })
+    await refreshFn({ updateToken })
+    await completeUpdateFn(update, runtimeConfig)
+    return value
+  } catch (originalError) {
+    const rollbackFailures = []
+    if (persistenceSnapshot) {
+      try {
+        await restorePersistenceFn(persistenceSnapshot, runtimeConfig)
+      } catch (error) {
+        rollbackFailures.push(error)
+      }
     }
-  } catch (error) {
-    const materialization = error?.materialization
-    const materialized = materialization ? materialization.pending === 0 : false
-    const warning = error?.code === MANAGED_MAIL_ACCOUNT_MATERIALIZATION_PENDING
-      ? MANAGED_MAIL_MATERIALIZATION_WARNING
-      : MANAGED_MAIL_RUNTIME_APPLY_WARNING
+    if (accountRowsSnapshot) {
+      try {
+        await restoreAccountRowsFn(accountRowsSnapshot)
+      } catch (error) {
+        rollbackFailures.push(error)
+      }
+    }
+    if (runtimeSnapshot) {
+      try {
+        restoreRuntimeFn(runtimeSnapshot, runtimeConfig)
+      } catch (error) {
+        rollbackFailures.push(error)
+      }
+    }
+    try {
+      await clearCacheFn()
+    } catch (error) {
+      rollbackFailures.push(error)
+    }
+    if (rollbackFailures.length === 0 && persistenceSnapshot && runtimeSnapshot) {
+      try {
+        await refreshFn({ updateToken })
+      } catch (error) {
+        rollbackFailures.push(error)
+      }
+    }
+    if (rollbackFailures.length === 0) {
+      try {
+        await completeUpdateFn(update, runtimeConfig)
+      } catch (error) {
+        rollbackFailures.push(error)
+      }
+    }
+    if (rollbackFailures.length > 0) {
+      let suspensionError = null
+      let suspensionConfirmed = false
+      try {
+        const result = await suspendRuntimeFn({ reason: MANAGED_MAIL_TRANSACTION_ROLLBACK_FAILED })
+        suspensionConfirmed = result?.suspended === true
+      } catch (error) {
+        suspensionError = error
+      }
+      const error = new Error(suspensionConfirmed
+        ? '邮件配置回滚未完成；邮件运行时已暂停，请核对配置后重启邮件服务'
+        : '邮件配置回滚未完成且运行时暂停未确认；当前运行状态未知，请立即重启邮件服务')
+      error.code = MANAGED_MAIL_TRANSACTION_ROLLBACK_FAILED
+      error.suspensionConfirmed = suspensionConfirmed
+      error.originalErrorCode = safeTransactionErrorCode(
+        originalError,
+        'MAIL_INTEGRATION_TRANSACTION_FAILED'
+      )
+      error.rollbackErrorCode = safeTransactionErrorCode(
+        rollbackFailures[0],
+        'MAIL_INTEGRATION_ROLLBACK_FAILED'
+      )
+      error.suspensionErrorCode = suspensionError
+        ? safeTransactionErrorCode(suspensionError, 'MAIL_RUNTIME_SUSPEND_FAILED')
+        : null
+      request.log?.error?.({
+        errorCode: error.code,
+        originalErrorCode: error.originalErrorCode,
+        rollbackErrorCode: error.rollbackErrorCode,
+        suspensionConfirmed: error.suspensionConfirmed,
+        suspensionErrorCode: error.suspensionErrorCode
+      }, suspensionConfirmed
+        ? 'Managed mailbox save rollback failed; runtime was suspended'
+        : 'Managed mailbox save rollback failed; runtime suspension is unconfirmed')
+      throw error
+    }
     request.log?.warn?.({
-      errorCode: String(error?.code || 'EMAIL_RUNTIME_APPLY_FAILED'),
-      materialized
-    }, 'Managed mailbox configuration was saved but runtime apply is pending')
-    return { saved: true, materialized, applied: false, warning }
+      errorCode: safeTransactionErrorCode(
+        originalError,
+        'MAIL_INTEGRATION_TRANSACTION_FAILED'
+      )
+    }, 'Managed mailbox save failed and the previous configuration was restored')
+    throw originalError
   }
 }
 
@@ -65,6 +198,15 @@ async function audit(request, eventType, resourceType, outcome = 'success') {
 
 export function safeConnectionError(error, fallback) {
   const message = String(error?.message || '')
+  if (error?.code === MANAGED_MAIL_TRANSACTION_ROLLBACK_FAILED) {
+    return message.slice(0, 240)
+  }
+  if (error?.code === EMAIL_RUNTIME_FAIL_CLOSED) {
+    return '邮件运行时已因上次配置回滚失败而暂停，请核对配置后重启邮件服务'
+  }
+  if (error?.code === MANAGED_MAIL_UPDATE_IN_PROGRESS) {
+    return '邮件配置更新仍在进行或需要人工恢复，请先核对服务状态'
+  }
   if (
     /格式无效|不能指向|无法解析|必须使用|尚未启用|请先保存|不完整|未配置|不存在|最多支持/.test(message)
     || message === '启用云备份前，请完整填写对象存储配置并通过只读连接测试'
@@ -85,16 +227,20 @@ export default async function integrationRoutes(fastify) {
     await fastify.requireAdmin(request, reply)
     reply.header('Cache-Control', 'private, no-store')
     try {
-      const { mail, runtimeStatus } = await withManagedIntegrationMutation(async () => {
+      const mail = await withManagedIntegrationMutation(async () => {
         await assertManagedMailOwnerExists(
           request.body?.ownerUsername ?? config.emailOwnerUsername
         )
-        const saved = await saveManagedMailConfig(request.body || {})
-        clearEmailEncryptionKeyCache()
-        return { mail: saved, runtimeStatus: await applySavedMailRuntime(request) }
+        return runManagedMailSaveTransaction(request, {
+          saveFn: ({ updateToken }) => saveManagedMailConfig(
+            request.body || {},
+            config,
+            { updateToken }
+          )
+        })
       })
       await audit(request, 'admin.integrations.mail.updated', 'mail_integration')
-      return { mail, ...runtimeStatus }
+      return { mail, ...successfulManagedMailRuntimeStatus() }
     } catch (error) {
       await audit(request, 'admin.integrations.mail.updated', 'mail_integration', 'denied')
       reply.code(error instanceof TypeError ? 400 : 503)
@@ -140,17 +286,21 @@ export default async function integrationRoutes(fastify) {
     await fastify.requireAdmin(request, reply)
     reply.header('Cache-Control', 'private, no-store')
     try {
-      const { account, runtimeStatus } = await withManagedIntegrationMutation(async () => {
+      const account = await withManagedIntegrationMutation(async () => {
         await assertManagedMailOwnerExists(
           request.body?.ownerUsername ?? config.emailOwnerUsername
         )
-        const saved = await createManagedMailAccount(request.body || {})
-        clearEmailEncryptionKeyCache()
-        return { account: saved, runtimeStatus: await applySavedMailRuntime(request) }
+        return runManagedMailSaveTransaction(request, {
+          saveFn: ({ updateToken }) => createManagedMailAccount(
+            request.body || {},
+            config,
+            { updateToken }
+          )
+        })
       })
       await audit(request, 'admin.integrations.mail_account.created', 'mail_integration')
       reply.code(201)
-      return { account, ...runtimeStatus }
+      return { account, ...successfulManagedMailRuntimeStatus() }
     } catch (error) {
       await audit(request, 'admin.integrations.mail_account.created', 'mail_integration', 'denied')
       reply.code(error instanceof TypeError ? 400 : 503)
@@ -162,13 +312,18 @@ export default async function integrationRoutes(fastify) {
     await fastify.requireAdmin(request, reply)
     reply.header('Cache-Control', 'private, no-store')
     try {
-      const { account, runtimeStatus } = await withManagedIntegrationMutation(async () => {
-        const saved = await saveManagedMailAccount(request.params?.accountId, request.body || {})
-        clearEmailEncryptionKeyCache()
-        return { account: saved, runtimeStatus: await applySavedMailRuntime(request) }
+      const account = await withManagedIntegrationMutation(async () => {
+        return runManagedMailSaveTransaction(request, {
+          saveFn: ({ updateToken }) => saveManagedMailAccount(
+            request.params?.accountId,
+            request.body || {},
+            config,
+            { updateToken }
+          )
+        })
       })
       await audit(request, 'admin.integrations.mail_account.updated', 'mail_integration')
-      return { account, ...runtimeStatus }
+      return { account, ...successfulManagedMailRuntimeStatus() }
     } catch (error) {
       await audit(request, 'admin.integrations.mail_account.updated', 'mail_integration', 'denied')
       reply.code(error instanceof TypeError ? 400 : 503)

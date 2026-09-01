@@ -1,9 +1,14 @@
 import test from 'node:test'
 import assert from 'node:assert/strict'
 import {
+  EMAIL_RUNTIME_FAIL_CLOSED,
+  EMAIL_RUNTIME_SUSPEND_FAILED,
   MANAGED_MAIL_ACCOUNT_MATERIALIZATION_PENDING,
   preflightEmailRuntime,
-  replaceEmailRuntime
+  refreshEmailRuntime,
+  replaceEmailRuntime,
+  stopEmailRuntime,
+  suspendEmailRuntime
 } from '../src/lib/emailRuntimeController.js'
 import { reconcileManagedMailRuntimeAccounts } from '../src/lib/managedMailAccountMaterialization.js'
 
@@ -54,4 +59,46 @@ test('runtime preflight preserves the old workers until materialization succeeds
   assert.equal(stopCalls, 1)
   assert.equal(startCalls, 1)
   assert.deepEqual([...storedSources], ['managed.0123456789abcdef01234567'])
+})
+
+test('a fail-closed runtime suspension blocks later refresh until process reconfiguration', async () => {
+  let stopCalls = 0
+  await suspendEmailRuntime({
+    reason: 'TEST_ROLLBACK_FAILED',
+    stopFn: async () => { stopCalls += 1 }
+  })
+  try {
+    assert.equal(stopCalls, 1)
+    await assert.rejects(refreshEmailRuntime(), (error) => {
+      assert.equal(error.code, EMAIL_RUNTIME_FAIL_CLOSED)
+      assert.equal(error.suspensionReason, 'TEST_ROLLBACK_FAILED')
+      return true
+    })
+  } finally {
+    await stopEmailRuntime()
+  }
+})
+
+test('a failed worker stop keeps the refresh latch closed and reports suspension as unconfirmed', async () => {
+  await assert.rejects(
+    suspendEmailRuntime({
+      stopFn: async () => {
+        throw Object.assign(new Error('private worker stop details'), { code: 'EWORKER' })
+      }
+    }),
+    (error) => {
+      assert.equal(error.code, EMAIL_RUNTIME_SUSPEND_FAILED)
+      assert.equal(error.stopErrorCode, 'EWORKER')
+      assert.equal(error.message.includes('private worker stop details'), false)
+      return true
+    }
+  )
+  try {
+    await assert.rejects(
+      refreshEmailRuntime(),
+      (error) => error.code === EMAIL_RUNTIME_FAIL_CLOSED
+    )
+  } finally {
+    await stopEmailRuntime()
+  }
 })
