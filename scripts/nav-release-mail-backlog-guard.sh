@@ -103,21 +103,21 @@ fi
 
 readonly SNAPSHOT_SQL="COPY (
   SELECT
-    id::text,
-    user_id::text,
-    account_id::text,
-    email_message_id::text,
-    status::text,
-    attempt_count::text,
-    max_attempts::text,
-    notification_eligible::text,
-    to_char(next_attempt_at AT TIME ZONE 'UTC', 'YYYY-MM-DD\"T\"HH24:MI:SS.US\"Z\"'),
-    COALESCE(to_char(started_at AT TIME ZONE 'UTC', 'YYYY-MM-DD\"T\"HH24:MI:SS.US\"Z\"'), ''),
-    COALESCE(to_char(completed_at AT TIME ZONE 'UTC', 'YYYY-MM-DD\"T\"HH24:MI:SS.US\"Z\"'), ''),
-    COALESCE(to_char(last_error_at AT TIME ZONE 'UTC', 'YYYY-MM-DD\"T\"HH24:MI:SS.US\"Z\"'), ''),
-    COALESCE(last_error_code, ''),
-    to_char(created_at AT TIME ZONE 'UTC', 'YYYY-MM-DD\"T\"HH24:MI:SS.US\"Z\"'),
-    to_char(updated_at AT TIME ZONE 'UTC', 'YYYY-MM-DD\"T\"HH24:MI:SS.US\"Z\"')
+    id::text AS id,
+    user_id::text AS user_id,
+    account_id::text AS account_id,
+    email_message_id::text AS email_message_id,
+    status::text AS status,
+    attempt_count::text AS attempt_count,
+    max_attempts::text AS max_attempts,
+    notification_eligible::text AS notification_eligible,
+    to_char(next_attempt_at AT TIME ZONE 'UTC', 'YYYY-MM-DD\"T\"HH24:MI:SS.US\"Z\"') AS next_attempt_at,
+    COALESCE(to_char(started_at AT TIME ZONE 'UTC', 'YYYY-MM-DD\"T\"HH24:MI:SS.US\"Z\"'), '') AS started_at,
+    COALESCE(to_char(completed_at AT TIME ZONE 'UTC', 'YYYY-MM-DD\"T\"HH24:MI:SS.US\"Z\"'), '') AS completed_at,
+    COALESCE(to_char(last_error_at AT TIME ZONE 'UTC', 'YYYY-MM-DD\"T\"HH24:MI:SS.US\"Z\"'), '') AS last_error_at,
+    COALESCE(last_error_code, '') AS last_error_code,
+    to_char(created_at AT TIME ZONE 'UTC', 'YYYY-MM-DD\"T\"HH24:MI:SS.US\"Z\"') AS created_at,
+    to_char(updated_at AT TIME ZONE 'UTC', 'YYYY-MM-DD\"T\"HH24:MI:SS.US\"Z\"') AS updated_at
   FROM email_classification_jobs
   ORDER BY id
 ) TO STDOUT WITH (FORMAT csv, HEADER true, FORCE_QUOTE *);"
