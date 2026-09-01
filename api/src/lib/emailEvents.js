@@ -79,7 +79,7 @@ async function ensureEmailNotification(row, userId, queryFn) {
       : '完整原因和建议仅在登录 DOMO NAV 后显示。',
     sourceType: 'email',
     sourceId: row.id,
-    actionUrl: `/assistant?email=${encodeURIComponent(row.id)}`,
+    actionUrl: `/mail?email=${encodeURIComponent(row.id)}`,
     dedupeKey: `email:${row.event_signature}:${row.state_signature}`,
     sensitive: true,
     pushEnabled: action === 'immediate',
@@ -311,6 +311,10 @@ export async function processInboundEmail({
 function mapEmailDetail(row, content, { includeBody = false } = {}) {
   return {
     id: row.id,
+    accountId: row.account_id || null,
+    canonicalMessageId: row.email_message_id || null,
+    folderId: row.folder_id || null,
+    locationId: row.location_id || null,
     tier: Number(row.tier),
     urgency: row.urgency,
     senderName: content.senderName || '',
@@ -333,11 +337,39 @@ export async function getEmailNotificationDetails(userId, ids, { queryFn = query
   const mapped = new Map()
   if (!safeIds.length) return mapped
   const { rows } = await queryFn(
-    `SELECT id, source_key, tier, urgency, category, importance_score,
-            notification_action, notification_reason, notification_rule_id,
-            duplicate_of, classification_status,
-            received_at, created_at, content_encrypted
-     FROM email_events WHERE user_id = $1 AND id = ANY($2::uuid[])`,
+    `SELECT event.id, event.source_key, event.tier, event.urgency, event.category,
+            event.importance_score, event.notification_action,
+            event.notification_reason, event.notification_rule_id,
+            event.duplicate_of, event.classification_status,
+            event.received_at, event.created_at, event.content_encrypted,
+            event.email_message_id, message.account_id,
+            location.folder_id, location.location_id
+     FROM email_events AS event
+     LEFT JOIN email_messages AS message
+       ON message.id = event.email_message_id
+      AND message.user_id = event.user_id
+     LEFT JOIN LATERAL (
+       SELECT candidate.folder_id, candidate.id AS location_id
+       FROM email_folder_messages AS candidate
+       JOIN email_folders AS folder
+         ON folder.id = candidate.folder_id
+        AND folder.account_id = candidate.account_id
+        AND folder.user_id = candidate.user_id
+       WHERE candidate.message_id = message.id
+         AND candidate.account_id = message.account_id
+         AND candidate.user_id = message.user_id
+         AND candidate.expunged_at IS NULL
+       ORDER BY
+         CASE folder.special_use
+           WHEN 'inbox' THEN 0 WHEN 'flagged' THEN 1 WHEN 'sent' THEN 2
+           WHEN 'drafts' THEN 3 WHEN 'archive' THEN 4 WHEN 'trash' THEN 8
+           WHEN 'junk' THEN 9 ELSE 6
+         END,
+         candidate.internal_date DESC,
+         candidate.id DESC
+       LIMIT 1
+     ) AS location ON TRUE
+     WHERE event.user_id = $1 AND event.id = ANY($2::uuid[])`,
     [userId, safeIds]
   )
   for (const row of rows) {
@@ -349,6 +381,10 @@ export async function getEmailNotificationDetails(userId, ids, { queryFn = query
     } catch {
       mapped.set(String(row.id), {
         id: row.id,
+        accountId: row.account_id || null,
+        canonicalMessageId: row.email_message_id || null,
+        folderId: row.folder_id || null,
+        locationId: row.location_id || null,
         tier: Number(row.tier),
         urgency: row.urgency,
         subject: '邮件内容暂时无法解密',
@@ -391,7 +427,7 @@ export async function searchEmailSources(userId, search, { limit = 5, queryFn = 
         kindLabel: `邮件 Tier ${Number(row.tier)}`,
         title: content.subject || '(无主题)',
         snippet: `${content.reason || ''} ${content.suggestedAction || ''}`.trim(),
-        href: `/assistant?email=${encodeURIComponent(row.id)}`,
+        href: `/mail?email=${encodeURIComponent(row.id)}`,
         matchReasons: ['邮件标题或分类结果匹配']
       })
       if (results.length >= limit) break
@@ -403,11 +439,39 @@ export async function searchEmailSources(userId, search, { limit = 5, queryFn = 
 export async function getEmailEventForUser(userId, id, { queryFn = query } = {}) {
   if (!UUID_PATTERN.test(String(id || ''))) return null
   const { rows } = await queryFn(
-    `SELECT id, source_key, tier, urgency, category, importance_score,
-            notification_action, notification_reason, notification_rule_id,
-            duplicate_of, classification_status,
-            received_at, created_at, content_encrypted
-     FROM email_events WHERE id = $1 AND user_id = $2 LIMIT 1`,
+    `SELECT event.id, event.source_key, event.tier, event.urgency, event.category,
+            event.importance_score, event.notification_action,
+            event.notification_reason, event.notification_rule_id,
+            event.duplicate_of, event.classification_status,
+            event.received_at, event.created_at, event.content_encrypted,
+            event.email_message_id, message.account_id,
+            location.folder_id, location.location_id
+     FROM email_events AS event
+     LEFT JOIN email_messages AS message
+       ON message.id = event.email_message_id
+      AND message.user_id = event.user_id
+     LEFT JOIN LATERAL (
+       SELECT candidate.folder_id, candidate.id AS location_id
+       FROM email_folder_messages AS candidate
+       JOIN email_folders AS folder
+         ON folder.id = candidate.folder_id
+        AND folder.account_id = candidate.account_id
+        AND folder.user_id = candidate.user_id
+       WHERE candidate.message_id = message.id
+         AND candidate.account_id = message.account_id
+         AND candidate.user_id = message.user_id
+         AND candidate.expunged_at IS NULL
+       ORDER BY
+         CASE folder.special_use
+           WHEN 'inbox' THEN 0 WHEN 'flagged' THEN 1 WHEN 'sent' THEN 2
+           WHEN 'drafts' THEN 3 WHEN 'archive' THEN 4 WHEN 'trash' THEN 8
+           WHEN 'junk' THEN 9 ELSE 6
+         END,
+         candidate.internal_date DESC,
+         candidate.id DESC
+       LIMIT 1
+     ) AS location ON TRUE
+     WHERE event.id = $1 AND event.user_id = $2 LIMIT 1`,
     [id, userId]
   )
   if (!rows[0]) return null

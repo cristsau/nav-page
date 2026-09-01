@@ -64,6 +64,104 @@ function currentSnapshot(row) {
   }
 }
 
+const BULK_MARK_READ_KEY_PATTERN = /^[A-Za-z0-9._:-]{16,80}$/
+const BULK_MARK_READ_LIMIT = 5000
+
+/**
+ * Queue one fail-closed IMAP \Seen mutation for every unread message in an
+ * owned folder. The batch is deliberately bounded and inserted in one
+ * transaction so a partial queue cannot masquerade as "all read".
+ */
+export async function enqueueEmailFolderMarkAllRead({
+  poolInstance,
+  userId,
+  accountId,
+  folderId,
+  idempotencyKey
+}) {
+  const batchKey = String(idempotencyKey || '').normalize('NFKC').trim()
+  if (!BULK_MARK_READ_KEY_PATTERN.test(batchKey)) {
+    throw new EmailRemoteCommandError('A valid bulk idempotency key is required')
+  }
+  return inTransaction(poolInstance, async (client) => {
+    const folderResult = await client.query(
+      `SELECT id
+       FROM email_folders
+       WHERE id = $1 AND account_id = $2 AND user_id = $3 AND selectable = TRUE
+       FOR UPDATE`,
+      [folderId, accountId, userId]
+    )
+    if (!folderResult.rowCount) {
+      throw new EmailRemoteCommandError('Email folder not found', {
+        code: 'REMOTE_TARGET_MISSING', statusCode: 404
+      })
+    }
+
+    // The materialized candidate set makes the limit check and insert share
+    // one PostgreSQL snapshot. The folder row lock serializes simultaneous
+    // bulk requests for the same mailbox so distinct idempotency keys cannot
+    // enqueue duplicate mutations.
+    const inserted = await client.query(
+      `WITH candidates AS MATERIALIZED (
+         SELECT location.*
+         FROM email_folder_messages AS location
+         WHERE location.folder_id = $1 AND location.account_id = $2
+           AND location.user_id = $3 AND location.expunged_at IS NULL
+           AND location.seen = FALSE
+         ORDER BY location.internal_date ASC, location.id ASC
+       ), candidate_stats AS (
+         SELECT COUNT(*)::integer AS matched FROM candidates
+       ), inserted AS (
+         INSERT INTO email_remote_commands (
+           user_id, account_id, source_location_id, source_folder_id,
+           source_message_id, target_folder_id, action, status,
+           idempotency_key, request_hash, expected_uid_validity, expected_uid,
+           expected_modseq, expected_seen, expected_flagged, expected_deleted,
+           undo_until, next_attempt_at
+         )
+         SELECT
+           location.user_id, location.account_id, location.id, location.folder_id,
+           location.message_id, NULL, 'mark_read', 'scheduled',
+           LEFT($4, 80) || ':' || location.id::text,
+           ENCODE(DIGEST($4 || ':' || location.id::text || ':mark_read', 'sha256'), 'hex'),
+           location.uid_validity, location.uid, location.modseq,
+           location.seen, location.flagged, location.deleted,
+           NOW(), NOW()
+         FROM candidates AS location
+         CROSS JOIN candidate_stats AS stats
+         WHERE stats.matched <= $5
+           AND NOT EXISTS (
+             SELECT 1 FROM email_remote_commands AS pending
+             WHERE pending.user_id = location.user_id
+               AND pending.source_location_id = location.id
+               AND pending.action = 'mark_read'
+               AND pending.status IN ('scheduled', 'running', 'retry_wait')
+           )
+         ON CONFLICT (user_id, idempotency_key) DO NOTHING
+         RETURNING id
+       )
+       SELECT stats.matched, COUNT(inserted.id)::integer AS queued
+       FROM candidate_stats AS stats
+       LEFT JOIN inserted ON TRUE
+       GROUP BY stats.matched`,
+      [folderId, accountId, userId, batchKey, BULK_MARK_READ_LIMIT]
+    )
+    const matched = Number(inserted.rows[0]?.matched || 0)
+    const queued = Number(inserted.rows[0]?.queued || 0)
+    if (matched > BULK_MARK_READ_LIMIT) {
+      throw new EmailRemoteCommandError(
+        `Too many unread messages; the safe one-click limit is ${BULK_MARK_READ_LIMIT}`,
+        { code: 'REMOTE_BULK_LIMIT_EXCEEDED', statusCode: 409 }
+      )
+    }
+    return {
+      matched,
+      queued,
+      alreadyQueued: Math.max(0, matched - queued)
+    }
+  })
+}
+
 export async function enqueueEmailRemoteCommand({
   poolInstance,
   userId,

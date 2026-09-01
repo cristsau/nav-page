@@ -454,7 +454,7 @@ export function startEmailIngestScheduler({
       account = await upsertEmailAccount(catalogClient, {
         userId,
         sourceKey,
-        label: '个人邮箱',
+        label: String(runtimeConfig.emailAccountLabel || '个人邮箱').normalize('NFKC').trim().slice(0, 80) || '个人邮箱',
         capabilities
       })
       for (const listed of listedFolders) {

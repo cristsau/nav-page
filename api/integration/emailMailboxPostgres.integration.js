@@ -11,6 +11,12 @@ const EXPECTED_DATABASE_NAME = 'nav_email_mailbox_test'
 const ALLOWED_DATABASE_HOSTS = new Set(['127.0.0.1', 'localhost'])
 const OWNER_ID = '11111111-1111-4111-8111-111111111111'
 const OTHER_USER_ID = '22222222-2222-4222-8222-222222222222'
+const assertIntegrationDeliveryReady = async () => ({
+  ready: true,
+  enabled: true,
+  configured: true,
+  reason: 'integration_fixture'
+})
 
 function assertIsolatedDatabaseTarget() {
   assert.equal(process.env.NODE_ENV, 'test')
@@ -59,6 +65,8 @@ let normalizeDatabasePoolMax
 let applyEmailFolderReconciliation
 let syncDueEmailFolders
 let upsertEmailFolder
+let enqueueEmailFolderMarkAllRead
+let materializeManagedMailAccount
 
 before(async () => {
   temporaryDirectory = await fs.mkdtemp(path.join(os.tmpdir(), 'nav-email-mailbox-'))
@@ -96,6 +104,8 @@ before(async () => {
   } = await import('../src/lib/emailMailboxReconciliation.js'))
   ;({ processInboundEmail } = await import('../src/lib/emailEvents.js'))
   ;({ processEmailClassificationJobs } = await import('../src/lib/emailClassificationWorker.js'))
+  ;({ enqueueEmailFolderMarkAllRead } = await import('../src/lib/emailRemoteCommands.js'))
+  ;({ materializeManagedMailAccount } = await import('../src/lib/managedMailAccountMaterialization.js'))
   ;({ DELETE_EXCESS_EMAIL_MESSAGES_SQL: deleteExcessEmailMessagesSql } = await import('../src/lib/emailRetention.js'))
   ;({
     upsertEmailNotificationRule,
@@ -160,8 +170,147 @@ function mailboxFixture(overrides = {}) {
   }
 }
 
-test('mail worker pool remains live with three reserved sessions and nested work', async () => {
-  assert.equal(normalizeDatabasePoolMax(undefined, 'worker'), 8)
+async function seedUnreadFolderLocations({ accountId, folderId, count }) {
+  await pool.query(
+    `WITH created AS (
+       INSERT INTO email_messages (
+         account_id, user_id, canonical_hash, message_id_hash, thread_key_hash,
+         envelope_encrypted, content_encrypted, received_at, size_bytes
+       )
+       SELECT
+         $1, $2,
+         ENCODE(DIGEST('bulk-canonical-' || value::text, 'sha256'), 'hex'),
+         ENCODE(DIGEST('bulk-message-' || value::text, 'sha256'), 'hex'),
+         ENCODE(DIGEST('bulk-thread-' || value::text, 'sha256'), 'hex'),
+         DECODE(REPEAT('aa', 32), 'hex'), DECODE(REPEAT('bb', 32), 'hex'),
+         NOW() - (value * INTERVAL '1 millisecond'), 64
+       FROM GENERATE_SERIES(1, $4::integer) AS value
+       RETURNING id, received_at
+     ), numbered AS (
+       SELECT id, received_at, ROW_NUMBER() OVER (ORDER BY received_at, id) AS ordinal
+       FROM created
+     )
+     INSERT INTO email_folder_messages (
+       folder_id, message_id, account_id, user_id, uid_validity, uid,
+       seen, internal_date, size_bytes
+     )
+     SELECT $3, id, $1, $2, 100, 1000 + ordinal, FALSE, received_at, 64
+     FROM numbered`,
+    [accountId, OWNER_ID, folderId, count]
+  )
+}
+
+test('folder mark-all-read serializes concurrent bulk requests', async () => {
+  const stored = await persistEmailMailboxMessage(mailboxFixture({
+    message: { ...mailboxFixture().message, flags: [] }
+  }))
+  const results = await Promise.all([
+    enqueueEmailFolderMarkAllRead({
+      poolInstance: pool,
+      userId: OWNER_ID,
+      accountId: stored.account.id,
+      folderId: stored.folder.id,
+      idempotencyKey: 'bulk-concurrent-first-0001'
+    }),
+    enqueueEmailFolderMarkAllRead({
+      poolInstance: pool,
+      userId: OWNER_ID,
+      accountId: stored.account.id,
+      folderId: stored.folder.id,
+      idempotencyKey: 'bulk-concurrent-second-0002'
+    })
+  ])
+  assert.deepEqual(results.map((result) => result.queued).sort((a, b) => a - b), [0, 1])
+  assert.equal(
+    Number((await pool.query(
+      `SELECT COUNT(*) FROM email_remote_commands
+       WHERE user_id = $1 AND account_id = $2 AND action = 'mark_read'`,
+      [OWNER_ID, stored.account.id]
+    )).rows[0].count),
+    1
+  )
+})
+
+test('folder mark-all-read accepts exactly 5000 unread locations', async () => {
+  const stored = await persistEmailMailboxMessage(mailboxFixture())
+  await seedUnreadFolderLocations({ accountId: stored.account.id, folderId: stored.folder.id, count: 5000 })
+  const result = await enqueueEmailFolderMarkAllRead({
+    poolInstance: pool,
+    userId: OWNER_ID,
+    accountId: stored.account.id,
+    folderId: stored.folder.id,
+    idempotencyKey: 'bulk-limit-exactly-5000'
+  })
+  assert.deepEqual(result, { matched: 5000, queued: 5000, alreadyQueued: 0 })
+})
+
+test('folder mark-all-read rejects 5001 unread locations without partial commands', async () => {
+  const stored = await persistEmailMailboxMessage(mailboxFixture())
+  await seedUnreadFolderLocations({ accountId: stored.account.id, folderId: stored.folder.id, count: 5001 })
+  await assert.rejects(
+    enqueueEmailFolderMarkAllRead({
+      poolInstance: pool,
+      userId: OWNER_ID,
+      accountId: stored.account.id,
+      folderId: stored.folder.id,
+      idempotencyKey: 'bulk-limit-rejected-5001'
+    }),
+    (error) => error?.code === 'REMOTE_BULK_LIMIT_EXCEEDED'
+  )
+  assert.equal(
+    Number((await pool.query(
+      'SELECT COUNT(*) FROM email_remote_commands WHERE user_id = $1',
+      [OWNER_ID]
+    )).rows[0].count),
+    0
+  )
+})
+
+test('managed SMTP-only mailbox is selectable immediately without faking an IMAP connection', async () => {
+  const account = await materializeManagedMailAccount({
+    sourceKey: 'managed.0123456789abcdef01234567',
+    label: '工作邮箱',
+    config: {
+      ownerUsername: 'mail-owner',
+      deliveryEnabled: true,
+      ingestEnabled: false
+    }
+  }, { queryFn: pool.query.bind(pool) })
+  const persisted = await pool.query(
+    `SELECT source_key, label, enabled, last_connected_at
+     FROM email_accounts WHERE id = $1 AND user_id = $2`,
+    [account.id, OWNER_ID]
+  )
+  assert.deepEqual(persisted.rows[0], {
+    source_key: 'managed.0123456789abcdef01234567',
+    label: '工作邮箱',
+    enabled: true,
+    last_connected_at: null
+  })
+})
+
+test('managed mailbox materialization rejects an unknown owner without creating an account', async () => {
+  await assert.rejects(
+    materializeManagedMailAccount({
+      sourceKey: 'managed.abcdef0123456789abcdef01',
+      label: '未知归属',
+      config: {
+        ownerUsername: 'missing-owner',
+        deliveryEnabled: true,
+        ingestEnabled: false
+      }
+    }, { queryFn: pool.query.bind(pool) }),
+    /归属用户不存在/
+  )
+  const count = await pool.query(
+    `SELECT COUNT(*)::integer AS count FROM email_accounts
+     WHERE source_key = 'managed.abcdef0123456789abcdef01'`
+  )
+  assert.equal(Number(count.rows[0].count), 0)
+})
+
+test('mail worker pool remains live with two mailbox runtimes and nested work', async () => {
+  assert.equal(normalizeDatabasePoolMax(undefined, 'worker'), 12)
   const boundedPool = new Pool({
     connectionString: process.env.DATABASE_URL,
     max: minimumMailWorkerDatabasePoolSize,
@@ -169,18 +318,19 @@ test('mail worker pool remains live with three reserved sessions and nested work
   })
   const clients = []
   try {
-    // Models the advisory lease plus the ingest and classification LISTEN
-    // sessions that remain checked out for the lifetime of the worker.
-    for (let index = 0; index < 3; index += 1) {
+    // Two accounts retain one ingest advisory lease and one ingest LISTEN
+    // session each; classification owns the fifth long-lived LISTEN session.
+    for (let index = 0; index < 5; index += 1) {
       clients.push(await boundedPool.connect())
     }
-    // Models a scheduler holding one client while a nested persistence step
-    // requires another. This is the production liveness boundary: max=4
-    // starves, while the enforced minimum of 5 must complete.
+    // Keep three transient slots available for a scheduler plus its nested
+    // persistence work and one concurrent remote command.
     const outer = await boundedPool.connect()
     clients.push(outer)
     const nested = await boundedPool.connect()
     clients.push(nested)
+    const concurrent = await boundedPool.connect()
+    clients.push(concurrent)
     const result = await nested.query('SELECT 1 AS live')
     assert.equal(Number(result.rows[0]?.live), 1)
     assert.equal(boundedPool.waitingCount, 0)
@@ -1400,7 +1550,7 @@ test('confirmed encrypted draft is delivered once, scrubbed and never sent twice
     draftId: draft.id,
     contentHash: draft.contentHash,
     confirmed: true
-  }, { poolInstance: pool })
+  }, { poolInstance: pool, assertDeliveryReadyFn: assertIntegrationDeliveryReady })
   assert.equal(queued.status, 'queued')
   assert.ok(queued.outboxId)
   assert.ok(queued.confirmedAt)
@@ -1447,6 +1597,8 @@ test('confirmed encrypted draft is delivered once, scrubbed and never sent twice
     poolInstance: pool,
     policy: { batchSize: 10, maxAttempts: 3, intervalSeconds: 30 },
     runtimeConfig: {
+      emailSourceKey: 'integration-mail',
+      emailOwnerUsername: 'mail-owner',
       smtpFromAddress: 'nav@example.test',
       smtpFromName: 'DOMO NAV'
     },
@@ -1615,7 +1767,7 @@ test('attachment ciphertext lifecycle reaches an encrypted pending Sent job and 
       draftId: draft.id,
       contentHash: refreshedDraft.contentHash,
       confirmed: true
-    }, { poolInstance: pool })
+    }, { poolInstance: pool, assertDeliveryReadyFn: assertIntegrationDeliveryReady })
     assert.ok(queued.outboxId)
 
     const claimed = await pool.query(
@@ -1632,6 +1784,8 @@ test('attachment ciphertext lifecycle reaches an encrypted pending Sent job and 
     const runtimeConfig = {
       emailEncryptionKeyFile: process.env.NAV_EMAIL_ENCRYPTION_KEY_FILE,
       emailSentAppendEnabled: true,
+      emailSourceKey: 'integration-mail',
+      emailOwnerUsername: 'mail-owner',
       smtpFromAddress: 'nav@example.test',
       smtpFromName: 'DOMO NAV'
     }
@@ -1821,7 +1975,7 @@ test('stale sending lease expires as ambiguous without another SMTP attempt', as
     draftId: draft.id,
     contentHash: draft.contentHash,
     confirmed: true
-  }, { poolInstance: pool })
+  }, { poolInstance: pool, assertDeliveryReadyFn: assertIntegrationDeliveryReady })
   await pool.query(
     `UPDATE mail_outbox
      SET status = 'sending', updated_at = NOW() - INTERVAL '16 minutes'
@@ -1835,6 +1989,8 @@ test('stale sending lease expires as ambiguous without another SMTP attempt', as
     poolInstance: pool,
     policy: { batchSize: 10, maxAttempts: 3, intervalSeconds: 30 },
     runtimeConfig: {
+      emailSourceKey: 'integration-mail',
+      emailOwnerUsername: 'mail-owner',
       smtpFromAddress: 'nav@example.test',
       smtpFromName: 'DOMO NAV'
     },

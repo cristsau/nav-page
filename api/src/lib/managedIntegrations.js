@@ -9,6 +9,11 @@ import { readOwnerSecretFile } from './ownerSecretFile.js'
 const DOCUMENT_VERSION = 1
 const CONFIG_FILE_NAME = 'integrations.json'
 const HOST_AGENT_MARKER = 'cloud-backup-agent.json'
+const MAIL_UPDATE_MARKER = 'mail-update-in-progress.json'
+const MANAGED_MAIL_PERSISTENCE_PATTERN = /^(?:integrations\.json|smtp-password|imap-password|email-encryption-key|mail-account-[a-f0-9]{24}-(?:smtp|imap)-password)$/
+const MAX_SECONDARY_MAIL_ACCOUNTS = 1
+const MAIL_ACCOUNT_ID_PATTERN = /^[a-f0-9]{24}$/
+const MAIL_SOURCE_KEY_PATTERN = /^managed\.[a-f0-9]{24}$/
 const SECRET_FILES = Object.freeze({
   smtpPassword: 'smtp-password',
   imapPassword: 'imap-password',
@@ -24,6 +29,9 @@ const BUCKET_PATTERN = /^[A-Za-z0-9][A-Za-z0-9._-]{1,61}[A-Za-z0-9]$/
 const CONTROL_PATTERN = /[\u0000-\u001F\u007F]/
 let mutationQueue = Promise.resolve()
 
+export const MANAGED_MAIL_PERSISTENCE_ROLLBACK_FAILED = 'MANAGED_MAIL_PERSISTENCE_ROLLBACK_FAILED'
+export const MANAGED_MAIL_UPDATE_IN_PROGRESS = 'MANAGED_MAIL_UPDATE_IN_PROGRESS'
+
 export function withManagedIntegrationMutation(callback) {
   if (typeof callback !== 'function') throw new TypeError('集成配置操作无效')
   const operation = mutationQueue.then(callback, callback)
@@ -32,7 +40,7 @@ export function withManagedIntegrationMutation(callback) {
 }
 
 function emptyDocument() {
-  return { version: DOCUMENT_VERSION, mail: null, cloudBackup: null, updatedAt: null }
+  return { version: DOCUMENT_VERSION, mail: null, mailAccounts: [], cloudBackup: null, updatedAt: null }
 }
 
 function integrationsDir(runtimeConfig = config) {
@@ -59,6 +67,85 @@ async function ensureDirectory(runtimeConfig = config) {
     await fs.chmod(directory, 0o700)
   }
   return directory
+}
+
+async function readManagedMailUpdateMarker(runtimeConfig = config) {
+  const markerPath = exactPath(MAIL_UPDATE_MARKER, runtimeConfig)
+  try {
+    const stat = await fs.lstat(markerPath)
+    if (!stat.isFile() || stat.isSymbolicLink() || stat.size < 2 || stat.size > 2048) {
+      throw new Error('邮件配置更新标记不安全')
+    }
+    const marker = JSON.parse(await fs.readFile(markerPath, 'utf8'))
+    if (
+      marker?.version !== 1
+      || !/^[a-f0-9]{32}$/.test(String(marker?.token || ''))
+      || !Number.isSafeInteger(marker?.pid)
+      || typeof marker?.startedAt !== 'string'
+    ) {
+      throw new Error('邮件配置更新标记无效')
+    }
+    return marker
+  } catch (error) {
+    if (error?.code === 'ENOENT') return null
+    const blocked = new Error('邮件配置更新事务仍在进行或需要人工恢复')
+    blocked.code = MANAGED_MAIL_UPDATE_IN_PROGRESS
+    throw blocked
+  }
+}
+
+export async function beginManagedMailUpdate(runtimeConfig = config, {
+  openFn = fs.open,
+  removeFn = fs.rm
+} = {}) {
+  const directory = await ensureDirectory(runtimeConfig)
+  const markerPath = exactPath(MAIL_UPDATE_MARKER, runtimeConfig)
+  const token = randomBytes(16).toString('hex')
+  const marker = `${JSON.stringify({
+    version: 1,
+    token,
+    pid: process.pid,
+    startedAt: new Date().toISOString()
+  })}\n`
+  let handle
+  let markerCreated = false
+  try {
+    handle = await openFn(markerPath, 'wx', 0o600)
+    markerCreated = true
+    await handle.writeFile(marker, { encoding: 'utf8' })
+    await handle.sync()
+    await handle.close()
+    handle = null
+  } catch (error) {
+    await handle?.close().catch(() => {})
+    if (markerCreated) await removeFn(markerPath, { force: true }).catch(() => {})
+    const blocked = new Error('邮件配置更新事务仍在进行或需要人工恢复')
+    blocked.code = MANAGED_MAIL_UPDATE_IN_PROGRESS
+    throw blocked
+  }
+  return { token, markerPath }
+}
+
+export async function assertManagedMailUpdateAvailable(
+  runtimeConfig = config,
+  { updateToken = null } = {}
+) {
+  const marker = await readManagedMailUpdateMarker(runtimeConfig)
+  if (!marker) return true
+  if (updateToken && marker.token === updateToken) return true
+  const error = new Error('邮件配置更新事务仍在进行或需要人工恢复')
+  error.code = MANAGED_MAIL_UPDATE_IN_PROGRESS
+  throw error
+}
+
+export async function completeManagedMailUpdate(
+  update,
+  runtimeConfig = config
+) {
+  const token = String(update?.token || '')
+  if (!/^[a-f0-9]{32}$/.test(token)) throw new TypeError('邮件配置更新令牌无效')
+  await assertManagedMailUpdateAvailable(runtimeConfig, { updateToken: token })
+  await fs.rm(exactPath(MAIL_UPDATE_MARKER, runtimeConfig))
 }
 
 async function atomicWrite(filePath, content, mode = 0o600) {
@@ -220,6 +307,42 @@ export function normalizeManagedMailConfig(value = {}, fallback = mailDefaults()
   }
 }
 
+function assertMailOwnerBindingUnchanged(previous, next) {
+  if (String(previous?.ownerUsername || '') !== String(next?.ownerUsername || '')) {
+    throw new TypeError('邮箱归属用户创建后不可修改；如需更换归属，请使用后续专用迁移流程')
+  }
+}
+
+function normalizeMailAccountIdentity(value = {}, fallback = {}) {
+  const id = String(value.id ?? fallback.id ?? '').trim().toLowerCase()
+  const sourceKey = String(value.sourceKey ?? fallback.sourceKey ?? '').trim().toLowerCase()
+  if (!MAIL_ACCOUNT_ID_PATTERN.test(id) || !MAIL_SOURCE_KEY_PATTERN.test(sourceKey) || sourceKey !== `managed.${id}`) {
+    throw new TypeError('邮箱账号标识无效')
+  }
+  return {
+    id,
+    sourceKey,
+    label: boundedText(value.label ?? fallback.label ?? '其他邮箱', 80, {
+      required: true,
+      label: '邮箱账号名称'
+    })
+  }
+}
+
+export function normalizeManagedMailAccount(value = {}, fallback = {}) {
+  const identity = normalizeMailAccountIdentity(value, fallback)
+  const normalized = normalizeManagedMailConfig(value, fallback)
+  return {
+    ...normalized,
+    ...identity,
+    // Registration mail and digest generation are installation-wide. A
+    // secondary account is used only for user mail delivery and ingestion.
+    registrationEnabled: false,
+    digestEnabled: false,
+    adminRecipients: []
+  }
+}
+
 function cloudDefaults() {
   return {
     enabled: false,
@@ -270,6 +393,10 @@ async function readDocument(runtimeConfig = config) {
   return {
     version: DOCUMENT_VERSION,
     mail: parsed.mail ? normalizeManagedMailConfig(parsed.mail, parsed.mail) : null,
+    mailAccounts: Array.isArray(parsed.mailAccounts)
+      ? parsed.mailAccounts.slice(0, MAX_SECONDARY_MAIL_ACCOUNTS)
+        .map((account) => normalizeManagedMailAccount(account, account))
+      : [],
     cloudBackup: parsed.cloudBackup
       ? normalizeManagedCloudBackupConfig(parsed.cloudBackup, parsed.cloudBackup)
       : null,
@@ -282,11 +409,85 @@ async function writeDocument(document, runtimeConfig = config) {
   const payload = {
     version: DOCUMENT_VERSION,
     mail: document.mail || null,
+    mailAccounts: Array.isArray(document.mailAccounts)
+      ? document.mailAccounts.slice(0, MAX_SECONDARY_MAIL_ACCOUNTS)
+      : [],
     cloudBackup: document.cloudBackup || null,
     updatedAt: new Date().toISOString()
   }
   await atomicWrite(exactPath(CONFIG_FILE_NAME, runtimeConfig), `${JSON.stringify(payload, null, 2)}\n`)
   return payload
+}
+
+function safePersistenceErrorCode(error, fallback) {
+  const code = String(error?.code || '').trim().toUpperCase()
+  return /^[A-Z0-9_]{1,80}$/.test(code) ? code : fallback
+}
+
+export async function snapshotManagedMailPersistence(runtimeConfig = config) {
+  const directory = await ensureDirectory(runtimeConfig)
+  const names = (await fs.readdir(directory))
+    .filter((name) => MANAGED_MAIL_PERSISTENCE_PATTERN.test(name))
+    .sort()
+  const files = []
+  for (const name of names) {
+    const filePath = exactPath(name, runtimeConfig)
+    const stat = await fs.lstat(filePath)
+    const maximum = name === CONFIG_FILE_NAME ? 128 * 1024 : 4096
+    if (!stat.isFile() || stat.isSymbolicLink() || stat.size > maximum) {
+      throw new Error('邮件集成持久化文件不安全或过大')
+    }
+    files.push({
+      name,
+      content: await fs.readFile(filePath, 'utf8'),
+      mode: process.platform === 'win32' ? 0o600 : stat.mode & 0o777
+    })
+  }
+  return { files }
+}
+
+export async function restoreManagedMailPersistence(snapshot, runtimeConfig = config) {
+  const directory = await ensureDirectory(runtimeConfig)
+  const expected = new Map((snapshot?.files || []).map((file) => [file.name, file]))
+  const failures = []
+  const currentNames = (await fs.readdir(directory))
+    .filter((name) => MANAGED_MAIL_PERSISTENCE_PATTERN.test(name))
+  for (const name of currentNames) {
+    if (expected.has(name)) continue
+    try { await fs.rm(exactPath(name, runtimeConfig), { force: true }) } catch (error) { failures.push(error) }
+  }
+  const ordered = [...expected.values()].sort((left, right) => (
+    left.name === CONFIG_FILE_NAME ? 1 : right.name === CONFIG_FILE_NAME ? -1 : left.name.localeCompare(right.name)
+  ))
+  for (const file of ordered) {
+    try {
+      await atomicWrite(exactPath(file.name, runtimeConfig), file.content, file.mode || 0o600)
+    } catch (error) {
+      failures.push(error)
+    }
+  }
+  if (!expected.has(CONFIG_FILE_NAME)) {
+    try { await fs.rm(exactPath(CONFIG_FILE_NAME, runtimeConfig), { force: true }) } catch (error) { failures.push(error) }
+  }
+  if (failures.length) {
+    const error = new Error('邮件集成持久化回滚未完成')
+    error.code = MANAGED_MAIL_PERSISTENCE_ROLLBACK_FAILED
+    error.rollbackErrorCode = safePersistenceErrorCode(failures[0], 'PERSISTENCE_RESTORE_FAILED')
+    throw error
+  }
+}
+
+async function restorePersistenceOrThrow(snapshot, originalError, runtimeConfig, restoreFn) {
+  try {
+    await restoreFn(snapshot, runtimeConfig)
+  } catch (rollbackError) {
+    const error = new Error('邮件集成保存失败且持久化回滚未完成；邮件运行时必须保持关闭')
+    error.code = MANAGED_MAIL_PERSISTENCE_ROLLBACK_FAILED
+    error.writeErrorCode = safePersistenceErrorCode(originalError, 'MAIL_INTEGRATION_WRITE_FAILED')
+    error.rollbackErrorCode = safePersistenceErrorCode(rollbackError, 'PERSISTENCE_RESTORE_FAILED')
+    throw error
+  }
+  throw originalError
 }
 
 async function secretConfigured(secretName, runtimeConfig = config) {
@@ -318,6 +519,46 @@ async function removeSecret(secretName, runtimeConfig = config) {
   await fs.rm(exactPath(SECRET_FILES[secretName], runtimeConfig), { force: true })
 }
 
+function secondaryMailSecretFile(kind, accountId) {
+  const id = String(accountId || '').trim().toLowerCase()
+  if (!MAIL_ACCOUNT_ID_PATTERN.test(id) || !['smtpPassword', 'imapPassword'].includes(kind)) {
+    throw new TypeError('邮箱账号密钥标识无效')
+  }
+  const suffix = kind === 'smtpPassword' ? 'smtp-password' : 'imap-password'
+  return `mail-account-${id}-${suffix}`
+}
+
+async function secondaryMailSecretConfigured(kind, accountId, runtimeConfig = config) {
+  try {
+    await readOwnerSecretFile(exactPath(secondaryMailSecretFile(kind, accountId), runtimeConfig), {
+      label: kind,
+      maxBytes: 4096
+    })
+    return true
+  } catch {
+    return false
+  }
+}
+
+async function readSecondaryMailSecret(kind, accountId, runtimeConfig = config) {
+  return readOwnerSecretFile(exactPath(secondaryMailSecretFile(kind, accountId), runtimeConfig), {
+    label: kind,
+    maxBytes: 4096
+  })
+}
+
+async function writeSecondaryMailSecret(kind, accountId, value, label, runtimeConfig = config) {
+  await ensureDirectory(runtimeConfig)
+  await atomicWrite(
+    exactPath(secondaryMailSecretFile(kind, accountId), runtimeConfig),
+    `${normalizeSecret(value, label)}\n`
+  )
+}
+
+async function removeSecondaryMailSecret(kind, accountId, runtimeConfig = config) {
+  await fs.rm(exactPath(secondaryMailSecretFile(kind, accountId), runtimeConfig), { force: true })
+}
+
 function fingerprint(parts) {
   return createHash('sha256').update(JSON.stringify(parts)).digest('hex')
 }
@@ -346,6 +587,17 @@ async function imapFingerprint(mail, runtimeConfig = config) {
   return imapFingerprintForSecret(mail, await readSecret('imapPassword', runtimeConfig))
 }
 
+async function secondaryMailFingerprint(kind, mail, runtimeConfig = config) {
+  const secret = await readSecondaryMailSecret(
+    kind === 'smtp' ? 'smtpPassword' : 'imapPassword',
+    mail.id,
+    runtimeConfig
+  )
+  return kind === 'smtp'
+    ? smtpFingerprintForSecret(mail, secret)
+    : imapFingerprintForSecret(mail, secret)
+}
+
 function cloudFingerprintForSecrets(cloud, accessKeyId, secretAccessKey, sessionToken = '') {
   if (!accessKeyId || !secretAccessKey) return ''
   return fingerprint([
@@ -368,6 +620,17 @@ async function hasCurrentVerification(kind, integration, runtimeConfig = config)
     if (kind === 'smtp') return integration.smtpVerifiedFingerprint === await smtpFingerprint(integration, runtimeConfig)
     if (kind === 'imap') return integration.imapVerifiedFingerprint === await imapFingerprint(integration, runtimeConfig)
     return integration.verifiedFingerprint === await cloudFingerprint(integration, runtimeConfig)
+  } catch {
+    return false
+  }
+}
+
+async function hasCurrentSecondaryMailVerification(kind, integration, runtimeConfig = config) {
+  try {
+    const actual = await secondaryMailFingerprint(kind, integration, runtimeConfig)
+    return kind === 'smtp'
+      ? integration.smtpVerifiedFingerprint === actual
+      : integration.imapVerifiedFingerprint === actual
   } catch {
     return false
   }
@@ -419,8 +682,55 @@ async function managedIntegrationsWritable(runtimeConfig = config) {
   }
 }
 
-export async function applyManagedIntegrationsToRuntime(runtimeConfig = config) {
+const MANAGED_MAIL_RUNTIME_KEYS = Object.freeze([
+  'mailDeliveryEnabled',
+  'registrationEmailEnabled',
+  'emailIngestEnabled',
+  'emailDigestEnabled',
+  'smtpHost',
+  'smtpPort',
+  'smtpSecure',
+  'smtpUsername',
+  'smtpPasswordFile',
+  'smtpFromAddress',
+  'smtpFromName',
+  'adminEmailRecipients',
+  'emailOwnerUsername',
+  'emailEncryptionKeyFile',
+  'imapHost',
+  'imapPort',
+  'imapSecure',
+  'imapUsername',
+  'imapPasswordFile',
+  'imapMailbox',
+  'emailDigestHours',
+  'emailDigestTimeZone',
+  'emailPrimaryAccount',
+  'emailAccountLabel'
+])
+
+export function snapshotManagedMailRuntimeConfig(runtimeConfig = config) {
+  return Object.fromEntries(MANAGED_MAIL_RUNTIME_KEYS.map((key) => [
+    key,
+    Array.isArray(runtimeConfig[key]) ? [...runtimeConfig[key]] : runtimeConfig[key]
+  ]))
+}
+
+export function restoreManagedMailRuntimeConfig(snapshot, runtimeConfig = config) {
+  for (const key of MANAGED_MAIL_RUNTIME_KEYS) {
+    const value = snapshot?.[key]
+    runtimeConfig[key] = Array.isArray(value) ? [...value] : value
+  }
+  return runtimeConfig
+}
+
+export async function applyManagedIntegrationsToRuntime(
+  runtimeConfig = config,
+  { updateToken = null } = {}
+) {
+  await assertManagedMailUpdateAvailable(runtimeConfig, { updateToken })
   const document = await readDocument(runtimeConfig)
+  await assertManagedMailUpdateAvailable(runtimeConfig, { updateToken })
   if (!document.mail) return { source: 'environment', document }
   const mail = document.mail
   Object.assign(runtimeConfig, {
@@ -445,9 +755,35 @@ export async function applyManagedIntegrationsToRuntime(runtimeConfig = config) 
     imapPasswordFile: exactPath(SECRET_FILES.imapPassword, runtimeConfig),
     imapMailbox: mail.imapMailbox,
     emailDigestHours: mail.digestHours,
-    emailDigestTimeZone: mail.digestTimeZone
+    emailDigestTimeZone: mail.digestTimeZone,
+    emailPrimaryAccount: true,
+    emailAccountLabel: '个人邮箱'
   })
   return { source: 'managed', document }
+}
+
+function publicMailConfig(mail) {
+  return {
+    deliveryEnabled: mail.deliveryEnabled,
+    registrationEnabled: mail.registrationEnabled,
+    ingestEnabled: mail.ingestEnabled,
+    digestEnabled: mail.digestEnabled,
+    smtpHost: mail.smtpHost,
+    smtpPort: mail.smtpPort,
+    smtpSecure: true,
+    smtpUsername: mail.smtpUsername,
+    smtpFromAddress: mail.smtpFromAddress,
+    smtpFromName: mail.smtpFromName,
+    adminRecipients: mail.adminRecipients,
+    ownerUsername: mail.ownerUsername,
+    imapHost: mail.imapHost,
+    imapPort: mail.imapPort,
+    imapSecure: true,
+    imapUsername: mail.imapUsername,
+    imapMailbox: mail.imapMailbox,
+    digestHours: mail.digestHours,
+    digestTimeZone: mail.digestTimeZone
+  }
 }
 
 async function mailPublicState(document, runtimeConfig = config) {
@@ -460,27 +796,30 @@ async function mailPublicState(document, runtimeConfig = config) {
     hasCurrentVerification('imap', mail, runtimeConfig)
   ])
   return {
-    config: {
-      deliveryEnabled: mail.deliveryEnabled,
-      registrationEnabled: mail.registrationEnabled,
-      ingestEnabled: mail.ingestEnabled,
-      digestEnabled: mail.digestEnabled,
-      smtpHost: mail.smtpHost,
-      smtpPort: mail.smtpPort,
-      smtpSecure: true,
-      smtpUsername: mail.smtpUsername,
-      smtpFromAddress: mail.smtpFromAddress,
-      smtpFromName: mail.smtpFromName,
-      adminRecipients: mail.adminRecipients,
-      ownerUsername: mail.ownerUsername,
-      imapHost: mail.imapHost,
-      imapPort: mail.imapPort,
-      imapSecure: true,
-      imapUsername: mail.imapUsername,
-      imapMailbox: mail.imapMailbox,
-      digestHours: mail.digestHours,
-      digestTimeZone: mail.digestTimeZone
-    },
+    config: publicMailConfig(mail),
+    secrets: { smtpPasswordConfigured, imapPasswordConfigured, encryptionConfigured },
+    verification: {
+      smtpVerified,
+      smtpVerifiedAt: smtpVerified ? mail.smtpVerifiedAt : null,
+      imapVerified,
+      imapVerifiedAt: imapVerified ? mail.imapVerifiedAt : null
+    }
+  }
+}
+
+async function secondaryMailPublicState(mail, runtimeConfig = config) {
+  const [smtpPasswordConfigured, imapPasswordConfigured, encryptionConfigured, smtpVerified, imapVerified] = await Promise.all([
+    secondaryMailSecretConfigured('smtpPassword', mail.id, runtimeConfig),
+    secondaryMailSecretConfigured('imapPassword', mail.id, runtimeConfig),
+    secretConfigured('emailEncryptionKey', runtimeConfig),
+    hasCurrentSecondaryMailVerification('smtp', mail, runtimeConfig),
+    hasCurrentSecondaryMailVerification('imap', mail, runtimeConfig)
+  ])
+  return {
+    id: mail.id,
+    sourceKey: mail.sourceKey,
+    label: mail.label,
+    config: publicMailConfig(mail),
     secrets: { smtpPasswordConfigured, imapPasswordConfigured, encryptionConfigured },
     verification: {
       smtpVerified,
@@ -533,17 +872,28 @@ export async function getManagedIntegrationsState(runtimeConfig = config) {
   return {
     writable,
     source: document.mail || document.cloudBackup ? 'managed' : 'environment',
+    mailPrimaryManaged: Boolean(document.mail),
     mail: await mailPublicState(document, runtimeConfig),
+    mailAccounts: await Promise.all((document.mailAccounts || []).map(
+      (mail) => secondaryMailPublicState(mail, runtimeConfig)
+    )),
+    mailAccountLimit: 1 + MAX_SECONDARY_MAIL_ACCOUNTS,
     cloudBackup: await cloudPublicState(document, runtimeConfig),
     updatedAt: document.updatedAt
   }
 }
 
-export async function saveManagedMailConfig(input = {}, runtimeConfig = config) {
+export async function saveManagedMailConfig(input = {}, runtimeConfig = config, {
+  writeDocumentFn = writeDocument,
+  restorePersistenceFn = restoreManagedMailPersistence,
+  updateToken = null
+} = {}) {
   await ensureDirectory(runtimeConfig)
+  await assertManagedMailUpdateAvailable(runtimeConfig, { updateToken })
   const document = await readDocument(runtimeConfig)
   const previous = document.mail || normalizeManagedMailConfig({}, mailDefaults(runtimeConfig))
   const next = normalizeManagedMailConfig(input, previous)
+  if (document.mail) assertMailOwnerBindingUnchanged(previous, next)
   const currentSmtpPassword = await readSecret('smtpPassword', runtimeConfig).catch(() => '')
   const currentImapPassword = await readSecret('imapPassword', runtimeConfig).catch(() => '')
   const nextSmtpPassword = input.clearSmtpPassword === true
@@ -579,21 +929,25 @@ export async function saveManagedMailConfig(input = {}, runtimeConfig = config) 
   }
   validateMailActivation(next, verification)
 
-  if (nextSmtpPassword && nextSmtpPassword !== currentSmtpPassword) {
-    await writeSecret('smtpPassword', nextSmtpPassword, 'SMTP 密码', runtimeConfig)
-  } else if (!nextSmtpPassword && currentSmtpPassword) {
-    await removeSecret('smtpPassword', runtimeConfig)
+  const persistenceSnapshot = await snapshotManagedMailPersistence(runtimeConfig)
+  try {
+    if (nextSmtpPassword && nextSmtpPassword !== currentSmtpPassword) {
+      await writeSecret('smtpPassword', nextSmtpPassword, 'SMTP 密码', runtimeConfig)
+    } else if (!nextSmtpPassword && currentSmtpPassword) {
+      await removeSecret('smtpPassword', runtimeConfig)
+    }
+    if (nextImapPassword && nextImapPassword !== currentImapPassword) {
+      await writeSecret('imapPassword', nextImapPassword, 'IMAP 密码', runtimeConfig)
+    } else if (!nextImapPassword && currentImapPassword) {
+      await removeSecret('imapPassword', runtimeConfig)
+    }
+    await ensureEmailEncryptionKey(runtimeConfig)
+    document.mail = next
+    const written = await writeDocumentFn(document, runtimeConfig)
+    return mailPublicState(written, runtimeConfig)
+  } catch (error) {
+    return restorePersistenceOrThrow(persistenceSnapshot, error, runtimeConfig, restorePersistenceFn)
   }
-  if (nextImapPassword && nextImapPassword !== currentImapPassword) {
-    await writeSecret('imapPassword', nextImapPassword, 'IMAP 密码', runtimeConfig)
-  } else if (!nextImapPassword && currentImapPassword) {
-    await removeSecret('imapPassword', runtimeConfig)
-  }
-  await ensureEmailEncryptionKey(runtimeConfig)
-  document.mail = next
-  const written = await writeDocument(document, runtimeConfig)
-  await applyManagedIntegrationsToRuntime(runtimeConfig)
-  return mailPublicState(written, runtimeConfig)
 }
 
 export async function markManagedMailVerified(kind, runtimeConfig = config) {
@@ -609,6 +963,190 @@ export async function markManagedMailVerified(kind, runtimeConfig = config) {
   } else throw new TypeError('邮件验证类型无效')
   const written = await writeDocument(document, runtimeConfig)
   return mailPublicState(written, runtimeConfig)
+}
+
+function findSecondaryMailAccount(document, accountId) {
+  const id = String(accountId || '').trim().toLowerCase()
+  if (!MAIL_ACCOUNT_ID_PATTERN.test(id)) throw new TypeError('邮箱账号标识无效')
+  const index = (document.mailAccounts || []).findIndex((account) => account.id === id)
+  if (index < 0) throw new Error('邮箱账号不存在')
+  return { account: document.mailAccounts[index], index }
+}
+
+async function saveSecondaryMailSecrets(accountId, input, current, runtimeConfig = config) {
+  const currentSmtpPassword = await readSecondaryMailSecret('smtpPassword', accountId, runtimeConfig).catch(() => '')
+  const currentImapPassword = await readSecondaryMailSecret('imapPassword', accountId, runtimeConfig).catch(() => '')
+  const nextSmtpPassword = input.clearSmtpPassword === true
+    ? ''
+    : input.smtpPassword
+      ? normalizeSecret(input.smtpPassword, 'SMTP 密码')
+      : currentSmtpPassword
+  const nextImapPassword = input.clearImapPassword === true
+    ? ''
+    : input.reuseSmtpPasswordForImap === true
+      ? nextSmtpPassword
+      : input.imapPassword
+        ? normalizeSecret(input.imapPassword, 'IMAP 密码')
+        : currentImapPassword
+  const verification = {
+    smtp: Boolean(
+      current.smtpVerifiedFingerprint
+      && current.smtpVerifiedFingerprint === smtpFingerprintForSecret(current, nextSmtpPassword)
+    ),
+    imap: Boolean(
+      current.imapVerifiedFingerprint
+      && current.imapVerifiedFingerprint === imapFingerprintForSecret(current, nextImapPassword)
+    )
+  }
+  if (!verification.smtp) {
+    current.smtpVerifiedFingerprint = ''
+    current.smtpVerifiedAt = null
+  }
+  if (!verification.imap) {
+    current.imapVerifiedFingerprint = ''
+    current.imapVerifiedAt = null
+  }
+  validateMailActivation(current, verification)
+  if (nextSmtpPassword && nextSmtpPassword !== currentSmtpPassword) {
+    await writeSecondaryMailSecret('smtpPassword', accountId, nextSmtpPassword, 'SMTP 密码', runtimeConfig)
+  } else if (!nextSmtpPassword && currentSmtpPassword) {
+    await removeSecondaryMailSecret('smtpPassword', accountId, runtimeConfig)
+  }
+  if (nextImapPassword && nextImapPassword !== currentImapPassword) {
+    await writeSecondaryMailSecret('imapPassword', accountId, nextImapPassword, 'IMAP 密码', runtimeConfig)
+  } else if (!nextImapPassword && currentImapPassword) {
+    await removeSecondaryMailSecret('imapPassword', accountId, runtimeConfig)
+  }
+}
+
+export async function createManagedMailAccount(input = {}, runtimeConfig = config, {
+  writeDocumentFn = writeDocument,
+  restorePersistenceFn = restoreManagedMailPersistence,
+  updateToken = null
+} = {}) {
+  await ensureDirectory(runtimeConfig)
+  await assertManagedMailUpdateAvailable(runtimeConfig, { updateToken })
+  const document = await readDocument(runtimeConfig)
+  if (!document.mail) throw new TypeError('请先保存主邮箱配置')
+  if ((document.mailAccounts || []).length >= MAX_SECONDARY_MAIL_ACCOUNTS) {
+    throw new TypeError('目前最多支持两个邮箱账号')
+  }
+  const id = randomBytes(12).toString('hex')
+  const fallback = {
+    ...normalizeManagedMailConfig({}, mailDefaults(runtimeConfig)),
+    id,
+    sourceKey: `managed.${id}`,
+    label: '其他邮箱'
+  }
+  const next = normalizeManagedMailAccount({
+    ...input,
+    id,
+    sourceKey: `managed.${id}`
+  }, fallback)
+  const persistenceSnapshot = await snapshotManagedMailPersistence(runtimeConfig)
+  try {
+    await saveSecondaryMailSecrets(id, input, next, runtimeConfig)
+    await ensureEmailEncryptionKey(runtimeConfig)
+    document.mailAccounts = [...(document.mailAccounts || []), next]
+    const written = await writeDocumentFn(document, runtimeConfig)
+    return secondaryMailPublicState(written.mailAccounts.at(-1), runtimeConfig)
+  } catch (error) {
+    return restorePersistenceOrThrow(persistenceSnapshot, error, runtimeConfig, restorePersistenceFn)
+  }
+}
+
+export async function saveManagedMailAccount(accountId, input = {}, runtimeConfig = config, {
+  writeDocumentFn = writeDocument,
+  restorePersistenceFn = restoreManagedMailPersistence,
+  updateToken = null
+} = {}) {
+  await ensureDirectory(runtimeConfig)
+  await assertManagedMailUpdateAvailable(runtimeConfig, { updateToken })
+  const document = await readDocument(runtimeConfig)
+  const { account: previous, index } = findSecondaryMailAccount(document, accountId)
+  const next = normalizeManagedMailAccount({
+    ...input,
+    id: previous.id,
+    sourceKey: previous.sourceKey
+  }, previous)
+  assertMailOwnerBindingUnchanged(previous, next)
+  const persistenceSnapshot = await snapshotManagedMailPersistence(runtimeConfig)
+  try {
+    await saveSecondaryMailSecrets(previous.id, input, next, runtimeConfig)
+    await ensureEmailEncryptionKey(runtimeConfig)
+    document.mailAccounts[index] = next
+    const written = await writeDocumentFn(document, runtimeConfig)
+    return secondaryMailPublicState(written.mailAccounts[index], runtimeConfig)
+  } catch (error) {
+    return restorePersistenceOrThrow(persistenceSnapshot, error, runtimeConfig, restorePersistenceFn)
+  }
+}
+
+export async function markManagedMailAccountVerified(kind, accountId, runtimeConfig = config) {
+  const document = await readDocument(runtimeConfig)
+  const { account, index } = findSecondaryMailAccount(document, accountId)
+  const now = new Date().toISOString()
+  if (kind === 'smtp') {
+    account.smtpVerifiedFingerprint = await secondaryMailFingerprint('smtp', account, runtimeConfig)
+    account.smtpVerifiedAt = now
+  } else if (kind === 'imap') {
+    account.imapVerifiedFingerprint = await secondaryMailFingerprint('imap', account, runtimeConfig)
+    account.imapVerifiedAt = now
+  } else throw new TypeError('邮件验证类型无效')
+  document.mailAccounts[index] = account
+  const written = await writeDocument(document, runtimeConfig)
+  return secondaryMailPublicState(written.mailAccounts[index], runtimeConfig)
+}
+
+function runtimeMailConfig(mail, runtimeConfig, { primary }) {
+  const smtpPasswordFile = primary
+    ? exactPath(SECRET_FILES.smtpPassword, runtimeConfig)
+    : exactPath(secondaryMailSecretFile('smtpPassword', mail.id), runtimeConfig)
+  const imapPasswordFile = primary
+    ? exactPath(SECRET_FILES.imapPassword, runtimeConfig)
+    : exactPath(secondaryMailSecretFile('imapPassword', mail.id), runtimeConfig)
+  return {
+    ...runtimeConfig,
+    // OAuth credentials are currently managed only for the primary mailbox.
+    // Never let a secondary password-backed account inherit the primary
+    // refresh-token provider through the shared process configuration.
+    smtpOauthProvider: primary ? String(runtimeConfig.smtpOauthProvider || '') : '',
+    imapOauthProvider: primary ? String(runtimeConfig.imapOauthProvider || '') : '',
+    mailDeliveryEnabled: mail.deliveryEnabled,
+    registrationEmailEnabled: primary && mail.registrationEnabled,
+    emailIngestEnabled: mail.ingestEnabled,
+    emailSentAppendEnabled: mail.ingestEnabled && runtimeConfig.emailSentAppendEnabled === true,
+    emailDigestEnabled: primary && mail.digestEnabled,
+    smtpHost: mail.smtpHost,
+    smtpPort: mail.smtpPort,
+    smtpSecure: true,
+    smtpUsername: mail.smtpUsername,
+    smtpPasswordFile,
+    smtpFromAddress: mail.smtpFromAddress,
+    smtpFromName: mail.smtpFromName,
+    adminEmailRecipients: primary ? mail.adminRecipients : [],
+    emailOwnerUsername: mail.ownerUsername,
+    emailEncryptionKeyFile: exactPath(SECRET_FILES.emailEncryptionKey, runtimeConfig),
+    emailSourceKey: primary ? String(runtimeConfig.emailSourceKey || 'mxroute').trim().toLowerCase() : mail.sourceKey,
+    emailAccountLabel: primary ? '个人邮箱' : mail.label,
+    emailPrimaryAccount: primary,
+    emailManagedAccount: true,
+    emailManagedAccountId: primary ? null : mail.id,
+    imapHost: mail.imapHost,
+    imapPort: mail.imapPort,
+    imapSecure: true,
+    imapUsername: mail.imapUsername,
+    imapPasswordFile,
+    imapMailbox: mail.imapMailbox,
+    emailDigestHours: mail.digestHours,
+    emailDigestTimeZone: mail.digestTimeZone
+  }
+}
+
+export async function managedMailAccountTestConfig(accountId, runtimeConfig = config) {
+  const document = await readDocument(runtimeConfig)
+  const { account } = findSecondaryMailAccount(document, accountId)
+  return runtimeMailConfig(account, runtimeConfig, { primary: false })
 }
 
 function resticRepository(cloud) {
@@ -725,6 +1263,32 @@ export async function markManagedCloudVerified(runtimeConfig = config) {
 export async function managedMailRuntimeConfig(runtimeConfig = config) {
   const document = await readDocument(runtimeConfig)
   return document.mail || null
+}
+
+export async function managedMailRuntimeConfigs(
+  runtimeConfig = config,
+  { updateToken = null } = {}
+) {
+  await assertManagedMailUpdateAvailable(runtimeConfig, { updateToken })
+  const document = await readDocument(runtimeConfig)
+  await assertManagedMailUpdateAvailable(runtimeConfig, { updateToken })
+  if (!document.mail) {
+    return [{
+      ...runtimeConfig,
+      emailPrimaryAccount: true,
+      emailAccountLabel: '个人邮箱',
+      emailManagedAccount: false,
+      emailManagedAccountId: null
+    }]
+  }
+  return [
+    runtimeMailConfig(document.mail, runtimeConfig, { primary: true }),
+    ...(document.mailAccounts || []).map((mail) => runtimeMailConfig(
+      mail,
+      runtimeConfig,
+      { primary: false }
+    ))
+  ]
 }
 
 export const managedIntegrationSecretPaths = Object.freeze(

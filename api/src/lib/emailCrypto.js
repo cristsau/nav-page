@@ -5,6 +5,7 @@ import {
   constants as zlibConstants
 } from 'node:zlib'
 import { config } from '../config.js'
+import { assertManagedMailUpdateAvailable } from './managedIntegrations.js'
 import { readOwnerSecretFile } from './ownerSecretFile.js'
 
 const LEGACY_VERSION = 1
@@ -37,11 +38,17 @@ export async function loadEmailEncryptionKey(
   { readSecretImpl = readOwnerSecretFile, bypassCache = false } = {}
 ) {
   const filePath = String(runtimeConfig.emailEncryptionKeyFile || '').trim()
+  if (runtimeConfig?.emailManagedAccount === true) {
+    await assertManagedMailUpdateAvailable(runtimeConfig)
+  }
   if (!bypassCache && cachedKey && cachedPath === filePath) return cachedKey
   const raw = await readSecretImpl(filePath, {
     label: 'Email encryption key',
     maxBytes: 256
   })
+  if (runtimeConfig?.emailManagedAccount === true) {
+    await assertManagedMailUpdateAvailable(runtimeConfig)
+  }
   const key = decodeKey(raw)
   if (!bypassCache) {
     cachedPath = filePath

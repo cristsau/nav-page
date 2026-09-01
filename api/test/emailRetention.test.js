@@ -260,7 +260,7 @@ test('maintenance summary and runtime wiring expose only bounded cache counters'
   ])
   assert.match(runtime, /workerRuntimeEnabled[\s\S]+startEmailCacheRetention/)
   assert.match(runtime, /MAINTENANCE_JOB_NAMES\.EMAIL_CACHE_RETENTION/)
-  assert.match(config, /MINIMUM_MAIL_WORKER_DATABASE_POOL_SIZE = 5/)
+  assert.match(config, /MINIMUM_MAIL_WORKER_DATABASE_POOL_SIZE = 8/)
   assert.match(config, /databasePoolMax: normalizeDatabasePoolMax/)
   assert.match(config, /NAV_EMAIL_CACHE_RETENTION_MAX_DELETES_PER_RUN/)
   assert.match(database, /max: config\.databasePoolMax/)

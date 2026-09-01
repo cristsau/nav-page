@@ -19,6 +19,8 @@ const PARTIAL_DELIVERY_ERROR = 'PARTIAL_RECIPIENT_REJECTION'
 const props = defineProps({
   show: { type: Boolean, default: false },
   accountId: { type: String, default: '' },
+  deliveryReady: { type: Boolean, default: false },
+  deliveryDisabledReason: { type: String, default: '' },
   sourceMessageId: { type: String, default: '' },
   initial: { type: Object, default: () => ({}) }
 })
@@ -54,6 +56,11 @@ let statusPollGeneration = 0
 const isReviewing = computed(() => stage.value === 'review')
 const isUploading = computed(() => stage.value === 'upload')
 const isQueued = computed(() => stage.value === 'queued')
+const capabilityMessage = computed(() => (
+  props.deliveryReady
+    ? ''
+    : (String(props.deliveryDisabledReason || '').trim() || '当前邮箱尚未启用并验证 SMTP，暂不能保存或发送草稿。')
+))
 const attachmentTotalBytes = computed(() => selectedAttachments.value.reduce(
   (total, attachment) => total + Number(attachment.file?.size || attachment.serverAttachment?.size || 0),
   0
@@ -96,6 +103,8 @@ const sentSyncStatusLabel = computed(() => ({
   syncing: '正在同步到已发送文件夹'
 }[sentSyncStatus.value] || '等待同步到已发送文件夹'))
 const canSave = computed(() => (
+  props.deliveryReady
+  &&
   !busy.value
   && stage.value === 'edit'
   && Boolean(form.to.trim())
@@ -103,6 +112,8 @@ const canSave = computed(() => (
   && Boolean(form.text.trim())
 ))
 const canSend = computed(() => (
+  props.deliveryReady
+  &&
   isReviewing.value
   && !busy.value
   && confirmed.value
@@ -427,6 +438,10 @@ async function uploadPendingAttachments() {
 }
 
 async function saveAndReview() {
+  if (!props.deliveryReady) {
+    errorMessage.value = capabilityMessage.value
+    return
+  }
   if (!canSave.value) return
   busy.value = true
   errorMessage.value = ''
@@ -536,6 +551,10 @@ async function removeAttachment(entry) {
 }
 
 async function sendConfirmedDraft() {
+  if (!props.deliveryReady) {
+    errorMessage.value = capabilityMessage.value
+    return
+  }
   if (!canSend.value) return
   busy.value = true
   errorMessage.value = ''
@@ -585,6 +604,10 @@ onBeforeUnmount(stopQueuedStatusPolling)
     @close="close"
   >
     <form v-if="stage === 'edit'" class="mail-compose" @submit.prevent="saveAndReview">
+      <p v-if="capabilityMessage" class="mail-compose__capability" role="alert">
+        <Icon name="alert" :size="17" />
+        {{ capabilityMessage }}
+      </p>
       <p class="mail-compose__safety">
         <Icon name="shield" :size="17" />
         保存只会生成加密草稿；下一步预览并再次确认后才会外发。
@@ -763,6 +786,7 @@ onBeforeUnmount(stopQueuedStatusPolling)
 .mail-compose .input { min-height: 46px; border: 1px solid var(--border-light); }
 .mail-compose textarea.input { min-height: 210px; line-height: 1.65; }
 .mail-compose__safety { display: flex; margin: 0 0 5px; padding: 11px 12px; align-items: flex-start; gap: 8px; color: var(--text-secondary); font-size: .68rem; line-height: 1.55; background: var(--accent-bg); border: 1px solid color-mix(in srgb, var(--accent-color) 24%, transparent); border-radius: 12px; }
+.mail-compose__capability { display: flex; margin: 0; padding: 11px 12px; align-items: flex-start; gap: 8px; color: var(--error-color); font-size: .68rem; line-height: 1.55; background: color-mix(in srgb, var(--error-color) 8%, var(--bg-card)); border: 1px solid color-mix(in srgb, var(--error-color) 30%, transparent); border-radius: 12px; }
 .mail-compose__optional { margin: 4px 0; padding: 10px 12px; background: var(--bg-secondary); border: 1px solid var(--border-light); border-radius: 12px; }
 .mail-compose__optional summary { min-height: 24px; color: var(--text-secondary); font-size: .7rem; font-weight: 700; cursor: pointer; }
 .mail-compose__optional > div { display: grid; gap: 8px; }

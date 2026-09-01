@@ -36,6 +36,11 @@ let updatingRoute = false
 
 const errorMessage = computed(() => localError.value || state.errorMessage)
 const hasAccounts = computed(() => state.accounts.length > 0)
+const activeAccount = computed(() => (
+  state.accounts.find((item) => String(item.id) === state.activeAccountId) || null
+))
+const composeReady = computed(() => activeAccount.value?.deliveryReady === true)
+const remoteActionsReady = computed(() => activeAccount.value?.remoteActionsReady === true)
 const hasLegacyDetail = computed(() => Boolean(state.selectedMessage?.legacyEvent))
 const ingestConfigured = computed(() => Boolean(featureStatus.value?.ingest?.configured))
 const ingestEnabled = computed(() => Boolean(featureStatus.value?.ingest?.enabled))
@@ -55,8 +60,17 @@ const mailboxNotice = computed(() => {
   return ''
 })
 const activeAccountLabel = computed(() => {
-  const account = state.accounts.find((item) => String(item.id) === state.activeAccountId)
+  const account = activeAccount.value
   return account?.label || account?.displayName || account?.address || account?.email || '当前邮箱'
+})
+const accountCapabilityNotice = computed(() => {
+  if (!hasAccounts.value || !activeAccount.value) return ''
+  if (!composeReady.value && !remoteActionsReady.value) {
+    return `${activeAccountLabel.value} 当前仅可查看已同步内容；请在设置中启用并验证 SMTP / IMAP。`
+  }
+  if (!composeReady.value) return `${activeAccountLabel.value} 尚未启用并验证 SMTP，暂不能新建或回复邮件。`
+  if (!remoteActionsReady.value) return `${activeAccountLabel.value} 尚未启用 IMAP，暂不能收信或执行已读、重要、移动等远端操作。`
+  return ''
 })
 const selectedCommand = computed(() => (
   state.commandsByLocation?.[String(state.selectedMessageId || '')] || null
@@ -152,7 +166,7 @@ async function refreshWorkspace() {
   localError.value = ''
   state.errorMessage = ''
   let syncError = null
-  if (hasAccounts.value && state.activeAccountId) {
+  if (hasAccounts.value && state.activeAccountId && remoteActionsReady.value) {
     try {
       await mail.requestSync()
     } catch (error) {
@@ -267,7 +281,26 @@ async function applyMailQuery(query) {
   }
 }
 
+async function markFolderAllRead() {
+  localError.value = ''
+  state.commandError = ''
+  if (!remoteActionsReady.value) {
+    localError.value = `${activeAccountLabel.value} 尚未启用 IMAP，不能提交一键已读。`
+    return
+  }
+  try {
+    await mail.markAllRead()
+  } catch (error) {
+    localError.value = error?.message || '一键已读提交失败'
+  }
+}
+
 function openCompose(initial = {}) {
+  if (!composeReady.value) {
+    localError.value = `${activeAccountLabel.value} 尚未启用并验证 SMTP，不能新建或回复邮件。`
+    return
+  }
+  localError.value = ''
   composeInitial.value = { ...initial }
   composeSourceMessageId.value = String(initial?.sourceMessageId || '').trim()
   composeOpen.value = true
@@ -317,6 +350,10 @@ function onRulesManagerChanged() {
 }
 
 async function runMessageCommand(payload) {
+  if (!remoteActionsReady.value) {
+    localError.value = `${activeAccountLabel.value} 尚未启用 IMAP，不能执行远端邮件操作。`
+    return
+  }
   localError.value = ''
   state.commandError = ''
   try {
@@ -380,9 +417,15 @@ onBeforeUnmount(mail.deactivate)
         <p>在一个工作区里完成实时收发、检索、会话阅读、通知降噪和 AI 分析。远端已读、重要、归档、移动与删除操作进入安全队列，冲突时不会覆盖新状态；永久删除与外发必须再次确认。</p>
       </div>
       <div class="mail-hero__actions">
-        <button type="button" :disabled="!hasAccounts" @click="openCompose()">
+        <button
+          type="button"
+          :disabled="!hasAccounts || !composeReady"
+          :title="composeReady ? '新建邮件' : `${activeAccountLabel} 尚未启用并验证 SMTP`"
+          aria-haspopup="dialog"
+          @click="openCompose()"
+        >
           <Icon name="plus" :size="17" />
-          <span>写邮件</span>
+          <span>新建邮件</span>
         </button>
         <button type="button" :disabled="!hasAccounts" aria-haspopup="dialog" @click="aiSearchOpen = true">
           <Icon name="sparkles" :size="17" />
@@ -392,18 +435,21 @@ onBeforeUnmount(mail.deactivate)
           type="button"
           :disabled="initialLoading || state.loadingMessages || syncRequesting"
           :aria-busy="syncRequesting"
+          :title="remoteActionsReady ? '请求邮箱服务器立即收信' : '当前邮箱未启用 IMAP；只刷新已同步的本地邮件'"
           @click="refreshWorkspace"
         >
           <Icon name="refresh" :size="17" />
-          <span>{{ syncRequesting ? '请求中…' : initialLoading || state.loadingMessages ? '读取中…' : '立即收信' }}</span>
+          <span>{{ syncRequesting ? '请求中…' : initialLoading || state.loadingMessages ? '读取中…' : remoteActionsReady ? '立即收信' : '刷新本地' }}</span>
         </button>
       </div>
     </header>
 
     <p v-if="errorMessage" class="mail-notice is-error" role="alert">{{ errorMessage }}</p>
     <p v-if="mailboxNotice" class="mail-notice is-warning" role="status">{{ mailboxNotice }}</p>
+    <p v-if="accountCapabilityNotice" class="mail-notice is-warning" role="status">{{ accountCapabilityNotice }}</p>
     <p v-if="ruleNotice" class="mail-notice is-success" role="status">{{ ruleNotice }}</p>
     <p v-if="state.syncNotice" :class="['mail-notice', syncNoticeClass]" role="status" aria-live="polite">{{ state.syncNotice }}</p>
+    <p v-if="state.markAllReadNotice" class="mail-notice is-success" role="status" aria-live="polite">{{ state.markAllReadNotice }}</p>
 
     <section v-if="initialLoading" class="mail-loading" role="status" aria-label="正在加载邮箱工作区">
       <span></span><span></span><span></span>
@@ -441,11 +487,18 @@ onBeforeUnmount(mail.deactivate)
           :loading="state.loadingMessages"
           :loading-more="state.loadingMore"
           :has-more="currentPage.hasMore"
+          :unread-count="Number(activeFolder?.unreadCount || 0)"
+          :mark-all-read-busy="state.markAllReadBusy"
+          :compose-ready="composeReady"
+          :remote-actions-ready="remoteActionsReady"
+          :account-capability-notice="accountCapabilityNotice"
           :realtime-label="realtimeLabel"
           @select="openMessage"
           @load-more="loadMore"
           @refresh="refreshWorkspace"
           @open-folders="folderSheetOpen = true"
+          @compose="openCompose()"
+          @mark-all-read="markFolderAllRead"
           @notification="openNotificationRule"
           @query-change="applyMailQuery"
         />
@@ -463,6 +516,8 @@ onBeforeUnmount(mail.deactivate)
           :active-folder="activeFolder"
           :command="selectedCommand"
           :command-busy="state.commandBusy"
+          :delivery-ready="composeReady"
+          :remote-actions-ready="remoteActionsReady"
           :command-error="state.commandError"
           :loading="state.loadingDetail"
           @close="closeMessage"
@@ -490,6 +545,8 @@ onBeforeUnmount(mail.deactivate)
     <MailComposeDialog
       :show="composeOpen"
       :account-id="state.activeAccountId"
+      :delivery-ready="composeReady"
+      :delivery-disabled-reason="accountCapabilityNotice"
       :source-message-id="composeSourceMessageId"
       :initial="composeInitial"
       @close="closeCompose"

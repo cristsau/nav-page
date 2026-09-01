@@ -67,6 +67,12 @@ import {
   EMAIL_MAILBOX_CHANGE_CHANNEL
 } from '../lib/emailMailboxStore.js'
 import {
+  assertEmailAccountRemoteActionsReady,
+  resolveEmailAccountDeliveryReadiness,
+  resolveEmailAccountRemoteActionReadiness
+} from '../lib/emailAccountDeliveryReadiness.js'
+import {
+  enqueueEmailFolderMarkAllRead,
   enqueueEmailRemoteCommand,
   getEmailRemoteCommand,
   undoEmailRemoteCommand
@@ -85,6 +91,7 @@ import {
   SMTP_DELIVERY_ERROR_CODES,
   verifiedMailConfigurationStatus
 } from '../lib/mailOutbox.js'
+import { managedMailRuntimeConfigs } from '../lib/managedIntegrations.js'
 import { readOwnerSecretFile } from '../lib/ownerSecretFile.js'
 import { recordSecurityEventBestEffort } from '../lib/securityEvents.js'
 
@@ -660,22 +667,40 @@ export default async function emailRoutes(fastify) {
               account.sync_request_generation, account.sync_completed_generation,
               account.last_sync_requested_at, account.last_sync_started_at,
               account.last_sync_completed_at, account.last_idle_event_at,
+              owner.username AS owner_username,
               COUNT(DISTINCT location.message_id) FILTER (WHERE location.expunged_at IS NULL)::integer AS message_count,
               COUNT(DISTINCT location.message_id) FILTER (WHERE location.expunged_at IS NULL AND location.seen = FALSE)::integer AS unread_count
        FROM email_accounts AS account
+       JOIN users AS owner ON owner.id = account.user_id
        LEFT JOIN email_folder_messages AS location
          ON location.account_id = account.id AND location.user_id = account.user_id
        WHERE account.user_id = $1
-       GROUP BY account.id
+       GROUP BY account.id, owner.username
        ORDER BY account.enabled DESC, account.created_at ASC, account.id ASC`,
       [request.currentUser.id]
     )
-    return {
-      accounts: rows.map((row) => ({
+    const runtimeConfigs = await managedMailRuntimeConfigs().catch(() => [])
+    const accounts = await Promise.all(rows.map(async (row) => {
+      const delivery = await resolveEmailAccountDeliveryReadiness({
+        sourceKey: row.source_key,
+        ownerUsername: row.owner_username,
+        runtimeConfigs
+      })
+      const remoteActions = await resolveEmailAccountRemoteActionReadiness({
+        sourceKey: row.source_key,
+        ownerUsername: row.owner_username,
+        runtimeConfigs
+      })
+      return {
         id: row.id,
         sourceKey: row.source_key,
         label: row.label,
         enabled: row.enabled,
+        deliveryEnabled: delivery.enabled,
+        deliveryReady: delivery.ready,
+        deliveryState: delivery.reason,
+        remoteActionsReady: remoteActions.ready,
+        remoteActionsState: remoteActions.reason,
         capabilities: row.capabilities || {},
         syncState: row.last_error_at ? 'error' : row.last_connected_at ? 'connected' : 'pending',
         lastConnectedAt: row.last_connected_at,
@@ -693,7 +718,10 @@ export default async function emailRoutes(fastify) {
         messageCount: Number(row.message_count || 0),
         unreadCount: Number(row.unread_count || 0),
         revision: row.updated_at
-      })),
+      }
+    }))
+    return {
+      accounts,
       defaultAccountId: rows.find((row) => row.enabled)?.id || rows[0]?.id || null
     }
   })
@@ -986,6 +1014,11 @@ export default async function emailRoutes(fastify) {
       return { error: 'Invalid email message identity' }
     }
     try {
+      await assertEmailAccountRemoteActionsReady({
+        userId: request.currentUser.id,
+        accountId,
+        queryFn: query
+      })
       const result = await enqueueEmailRemoteCommand({
         poolInstance: pool,
         userId: request.currentUser.id,
@@ -1008,8 +1041,51 @@ export default async function emailRoutes(fastify) {
       reply.code(202)
       return { command: result.command, idempotentReplay: !result.inserted }
     } catch (error) {
-      if (!(error instanceof EmailRemoteCommandError)) throw error
-      reply.code(error.statusCode)
+      if (!(error instanceof EmailRemoteCommandError) && !Number.isSafeInteger(Number(error?.statusCode))) throw error
+      reply.code(Number(error.statusCode))
+      return { error: error.message, code: error.code }
+    }
+  })
+
+  fastify.post('/email/accounts/:accountId/folders/:folderId/mark-all-read', async (request, reply) => {
+    await fastify.requireAuth(request, reply)
+    reply.header('Cache-Control', 'private, no-store')
+    const accountId = String(request.params.accountId || '')
+    const folderId = String(request.params.folderId || '')
+    if (![accountId, folderId].every((value) => UUID_PATTERN.test(value))) {
+      reply.code(400)
+      return { error: 'Invalid email folder identity' }
+    }
+    try {
+      await assertEmailAccountRemoteActionsReady({
+        userId: request.currentUser.id,
+        accountId,
+        queryFn: query
+      })
+      const result = await enqueueEmailFolderMarkAllRead({
+        poolInstance: pool,
+        userId: request.currentUser.id,
+        accountId,
+        folderId,
+        idempotencyKey: request.body?.idempotencyKey
+      })
+      if (result.queued) {
+        await recordSecurityEventBestEffort({
+          request,
+          eventType: 'email.folder.mark_all_read.queued',
+          outcome: 'success',
+          actorUserId: request.currentUser.id,
+          subjectUserId: request.currentUser.id,
+          resourceType: 'email_folder',
+          resourceId: folderId,
+          affectedCount: result.queued
+        }, request.log)
+      }
+      reply.code(202)
+      return result
+    } catch (error) {
+      if (!(error instanceof EmailRemoteCommandError) && !Number.isSafeInteger(Number(error?.statusCode))) throw error
+      reply.code(Number(error.statusCode))
       return { error: error.message, code: error.code }
     }
   })
@@ -1883,11 +1959,6 @@ export default async function emailRoutes(fastify) {
       reply.code(400)
       return { error: 'Invalid email draft id' }
     }
-    const mailStatus = await verifiedMailConfigurationStatus()
-    if (!mailStatus.configured || !mailStatus.enabled) {
-      reply.code(503)
-      return { error: 'Mail delivery is not configured and enabled' }
-    }
     try {
       const draft = await queueEmailDraft({
         userId: request.currentUser.id,
@@ -1911,8 +1982,12 @@ export default async function emailRoutes(fastify) {
         draft: await attachDraftDeliveryState(draft, request.currentUser.id)
       }
     } catch (error) {
-      reply.code(error instanceof TypeError ? 400 : 409)
-      return { error: error.message || 'Email could not be queued' }
+      const statusCode = Number(error?.statusCode)
+      reply.code(Number.isSafeInteger(statusCode) ? statusCode : (error instanceof TypeError ? 400 : 409))
+      return {
+        error: error.message || 'Email could not be queued',
+        ...(error?.code ? { code: String(error.code) } : {})
+      }
     }
   })
 

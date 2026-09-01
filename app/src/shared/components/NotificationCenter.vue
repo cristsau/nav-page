@@ -2,6 +2,7 @@
 import { nextTick, onBeforeUnmount, onMounted, ref } from 'vue'
 import { useRouter } from 'vue-router'
 import Icon from '@/shared/components/Icon.vue'
+import { resolveNotificationDestination } from '@/shared/navigation/notificationNavigation'
 import {
   deleteNotification,
   fetchNotifications,
@@ -16,6 +17,7 @@ const loading = ref(false)
 const notifications = ref([])
 const unreadCount = ref(0)
 const errorMessage = ref('')
+const markingAll = ref(false)
 const trigger = ref(null)
 const panel = ref(null)
 let pollTimer = null
@@ -53,24 +55,43 @@ function close({ restoreFocus = true } = {}) {
 }
 
 async function openNotification(item) {
+  const destination = resolveNotificationDestination(item)
   if (!item.readAt) {
-    await markNotificationRead(item.id)
     item.readAt = new Date().toISOString()
     unreadCount.value = Math.max(0, unreadCount.value - 1)
+    // Navigation is the user's primary action. A stale/deleted notification or
+    // transient PATCH failure must never strand them in the notification tray.
+    void markNotificationRead(item.id).catch((error) => {
+      errorMessage.value = error?.message || '通知已打开，但已读状态暂未同步'
+    })
   }
-  if (item.actionUrl) {
+  if (destination) {
     close({ restoreFocus: false })
-    await router.push(item.actionUrl)
+    try {
+      await router.push(destination)
+    } catch (error) {
+      errorMessage.value = error?.message || '暂时无法打开这条通知'
+    }
   }
 }
 
 async function markAll() {
-  await markAllNotificationsRead()
-  notifications.value = notifications.value.map((item) => ({
-    ...item,
-    readAt: item.readAt || new Date().toISOString()
-  }))
-  unreadCount.value = 0
+  if (!unreadCount.value || markingAll.value) return
+  markingAll.value = true
+  errorMessage.value = ''
+  try {
+    await markAllNotificationsRead()
+    const readAt = new Date().toISOString()
+    notifications.value = notifications.value.map((item) => ({
+      ...item,
+      readAt: item.readAt || readAt
+    }))
+    unreadCount.value = 0
+  } catch (error) {
+    errorMessage.value = error?.message || '通知一键已读失败'
+  } finally {
+    markingAll.value = false
+  }
 }
 
 async function remove(item) {
@@ -140,7 +161,15 @@ onBeforeUnmount(() => {
           <span>{{ unreadCount ? `${unreadCount} 条未读` : '全部已读' }}</span>
         </div>
         <div class="notification-center__header-actions">
-          <button v-if="unreadCount" type="button" @click="markAll">全部已读</button>
+          <button
+            class="notification-center__mark-all"
+            type="button"
+            :disabled="!unreadCount || markingAll"
+            @click="markAll"
+          >
+            <Icon name="check" :size="16" />
+            {{ markingAll ? '处理中…' : '一键已读' }}
+          </button>
           <button type="button" aria-label="关闭通知中心" @click="close()">
             <Icon name="close" :size="18" />
           </button>
@@ -242,6 +271,17 @@ onBeforeUnmount(() => {
   border: 0;
   border-radius: 11px;
   cursor: pointer;
+}
+.notification-center__header-actions .notification-center__mark-all {
+  display: inline-flex;
+  padding: 0 11px;
+  align-items: center;
+  gap: 6px;
+  white-space: nowrap;
+}
+.notification-center__header-actions button:disabled {
+  cursor: default;
+  opacity: 0.46;
 }
 .notification-center__header-actions button:hover,
 .notification-center__header-actions button:focus-visible,

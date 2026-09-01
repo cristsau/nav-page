@@ -1,4 +1,4 @@
-import { config } from '../config.js'
+import { assertSafeMailWorkerDatabasePoolSize, config } from '../config.js'
 import { startEmailCacheRetention } from './emailRetention.js'
 import { startEmailDigestScheduler } from './emailDigestScheduler.js'
 import { startEmailIngestWorker } from './emailIngestWorker.js'
@@ -7,6 +7,9 @@ import { startEmailSentAppendScheduler } from './emailSentAppend.js'
 import { startEmailRemoteCommandScheduler } from './emailRemoteCommandWorker.js'
 import { MAINTENANCE_JOB_NAMES } from './maintenanceJobStatus.js'
 import { startMailDeliveryScheduler } from './mailOutbox.js'
+import { managedMailRuntimeConfigs } from './managedIntegrations.js'
+import { reconcileManagedMailRuntimeAccounts } from './managedMailAccountMaterialization.js'
+import { createSourceAwareMaintenanceObserverGroup } from './sourceAwareMaintenanceObserver.js'
 import {
   createRecoverableSerialQueue,
   startRuntimeFunctions,
@@ -15,7 +18,26 @@ import {
 
 let runtimeContext = null
 let stopFunctions = []
+let runtimeSuspended = false
+let runtimeSuspensionReason = null
 const reconfigureQueue = createRecoverableSerialQueue()
+
+export const MANAGED_MAIL_ACCOUNT_MATERIALIZATION_PENDING = 'MANAGED_MAIL_ACCOUNT_MATERIALIZATION_PENDING'
+export const EMAIL_RUNTIME_FAIL_CLOSED = 'EMAIL_RUNTIME_FAIL_CLOSED'
+export const EMAIL_RUNTIME_SUSPEND_FAILED = 'EMAIL_RUNTIME_SUSPEND_FAILED'
+
+function safeRuntimeErrorCode(error, fallback) {
+  const code = String(error?.code || '').trim().toUpperCase()
+  return /^[A-Z0-9_]{1,80}$/.test(code) ? code : fallback
+}
+
+export function assertEmailRuntimeAvailable() {
+  if (!runtimeSuspended) return true
+  const error = new Error('Email runtime is suspended after a failed configuration rollback')
+  error.code = EMAIL_RUNTIME_FAIL_CLOSED
+  error.suspensionReason = runtimeSuspensionReason
+  throw error
+}
 
 async function stopCurrent() {
   const current = stopFunctions
@@ -23,26 +45,85 @@ async function stopCurrent() {
   await stopRuntimeFunctions(current)
 }
 
-async function startCurrent() {
+export async function preflightEmailRuntime({
+  runtimeConfig = config,
+  loadRuntimes = managedMailRuntimeConfigs,
+  reconcileFn = reconcileManagedMailRuntimeAccounts,
+  updateToken = null
+} = {}) {
+  const mailRuntimes = await loadRuntimes(runtimeConfig, { updateToken })
+  const reconciliation = await reconcileFn(mailRuntimes)
+  if (reconciliation.pending > 0) {
+    const error = new Error('Managed mailbox database registration is pending')
+    error.code = MANAGED_MAIL_ACCOUNT_MATERIALIZATION_PENDING
+    error.materialization = reconciliation
+    throw error
+  }
+  const role = runtimeConfig.emailRuntimeRole
+  const workerRuntimeEnabled = role === 'combined' || role === 'worker'
+  if (workerRuntimeEnabled) {
+    try {
+      assertSafeMailWorkerDatabasePoolSize(
+        runtimeConfig.databasePoolMax,
+        mailRuntimes.filter((item) => item.emailIngestEnabled).length
+      )
+    } catch (error) {
+      error.materialization = reconciliation
+      throw error
+    }
+  }
+  return { mailRuntimes, reconciliation }
+}
+
+export async function replaceEmailRuntime({ preflight, stop, start }) {
+  const prepared = await preflight()
+  await stop()
+  await start(prepared)
+  return prepared
+}
+
+async function startCurrent(prepared) {
   if (!runtimeContext) return
   const { poolInstance, logger, observerFactory } = runtimeContext
   const role = config.emailRuntimeRole
   const apiRuntimeEnabled = role === 'combined' || role === 'api'
   const workerRuntimeEnabled = role === 'combined' || role === 'worker'
+  const mailRuntimes = prepared?.mailRuntimes || []
+  const primaryRuntime = mailRuntimes.find((item) => item.emailPrimaryAccount !== false) || mailRuntimes[0] || config
+  const ingestRuntimes = mailRuntimes.filter((item) => item.emailIngestEnabled)
+  const deliveryRuntimes = mailRuntimes.filter((item) => item.mailDeliveryEnabled)
+  const sentAppendRuntimes = mailRuntimes.filter((item) => item.emailSentAppendEnabled)
   const starters = []
-  if (apiRuntimeEnabled) starters.push(() => startMailDeliveryScheduler({
-    enabled: config.mailDeliveryEnabled,
+  const observerGroup = (jobName, jobLabel, runtimes) => {
+    const sourceKeys = runtimes.map((mailRuntime) => (
+      String(mailRuntime.emailSourceKey || config.emailSourceKey || 'mxroute')
+    ))
+    const group = createSourceAwareMaintenanceObserverGroup(
+      observerFactory(jobName, jobLabel),
+      { sourceKeys }
+    )
+    return (mailRuntime) => group.forSource(
+      String(mailRuntime.emailSourceKey || config.emailSourceKey || 'mxroute')
+    )
+  }
+  const deliveryObserver = observerGroup(MAINTENANCE_JOB_NAMES.MAIL_DELIVERY, '邮件发送队列', deliveryRuntimes)
+  const ingestObserver = observerGroup(MAINTENANCE_JOB_NAMES.EMAIL_INGEST, '邮件接收', ingestRuntimes)
+  const sentAppendObserver = observerGroup(MAINTENANCE_JOB_NAMES.EMAIL_SENT_APPEND, '已发送邮件同步', sentAppendRuntimes)
+  const remoteCommandObserver = observerGroup(MAINTENANCE_JOB_NAMES.EMAIL_REMOTE_COMMANDS, '邮箱远端操作队列', ingestRuntimes)
+  if (apiRuntimeEnabled) deliveryRuntimes.forEach((mailRuntime) => starters.push(() => startMailDeliveryScheduler({
+    enabled: mailRuntime.mailDeliveryEnabled,
     policy: {
       intervalSeconds: config.mailDeliveryIntervalSeconds,
       batchSize: config.mailDeliveryBatchSize,
       maxAttempts: config.mailDeliveryMaxAttempts
     },
     poolInstance,
+    runtimeConfig: mailRuntime,
     logger,
-    observer: observerFactory(MAINTENANCE_JOB_NAMES.MAIL_DELIVERY, '邮件发送队列')
-  }))
-  if (workerRuntimeEnabled) starters.push(() => startEmailIngestWorker({
-    enabled: config.emailIngestEnabled,
+    observer: deliveryObserver(mailRuntime)
+  })))
+  if (workerRuntimeEnabled) ingestRuntimes.forEach((mailRuntime) => starters.push(() => startEmailIngestWorker({
+    enabled: config.emailIngestEnabled || mailRuntime.emailIngestEnabled,
     policy: {
       pollIntervalSeconds: config.imapPollIntervalSeconds,
       initialLookback: config.imapInitialLookback,
@@ -59,11 +140,12 @@ async function startCurrent() {
       telemetrySampleSize: config.imapTelemetrySampleSize
     },
     poolInstance,
+    runtimeConfig: mailRuntime,
     logger,
-    observer: observerFactory(MAINTENANCE_JOB_NAMES.EMAIL_INGEST, '邮件接收')
-  }))
+    observer: ingestObserver(mailRuntime)
+  })))
   if (workerRuntimeEnabled) starters.push(() => startEmailClassificationScheduler({
-    enabled: config.emailIngestEnabled,
+    enabled: ingestRuntimes.length > 0,
     policy: {
       intervalSeconds: config.emailClassificationIntervalSeconds,
       batchSize: config.emailClassificationBatchSize,
@@ -71,40 +153,40 @@ async function startCurrent() {
       staleRunningSeconds: 300
     },
     poolInstance,
+    runtimeConfig: {
+      ...primaryRuntime,
+      emailSourceKeys: ingestRuntimes.map((item) => item.emailSourceKey)
+    },
     logger,
     observer: observerFactory(
       MAINTENANCE_JOB_NAMES.EMAIL_CLASSIFICATION,
       '邮件 AI 分类与通知'
     )
   }))
-  if (workerRuntimeEnabled) starters.push(() => startEmailSentAppendScheduler({
-    enabled: config.emailSentAppendEnabled,
+  if (workerRuntimeEnabled) sentAppendRuntimes.forEach((mailRuntime) => starters.push(() => startEmailSentAppendScheduler({
+    enabled: mailRuntime.emailSentAppendEnabled,
     policy: {
       intervalSeconds: config.emailSentAppendIntervalSeconds,
       batchSize: config.emailSentAppendBatchSize,
       retentionDays: config.emailSentAppendRetentionDays
     },
     poolInstance,
+    runtimeConfig: mailRuntime,
     logger,
-    observer: observerFactory(
-      MAINTENANCE_JOB_NAMES.EMAIL_SENT_APPEND,
-      '已发送邮件同步'
-    )
-  }))
-  if (workerRuntimeEnabled) starters.push(() => startEmailRemoteCommandScheduler({
-    enabled: config.emailIngestEnabled,
+    observer: sentAppendObserver(mailRuntime)
+  })))
+  if (workerRuntimeEnabled) ingestRuntimes.forEach((mailRuntime) => starters.push(() => startEmailRemoteCommandScheduler({
+    enabled: true,
     policy: {
       intervalSeconds: 3,
       batchSize: 10,
       staleRunningSeconds: 300
     },
     poolInstance,
+    runtimeConfig: mailRuntime,
     logger,
-    observer: observerFactory(
-      MAINTENANCE_JOB_NAMES.EMAIL_REMOTE_COMMANDS,
-      '邮箱远端操作队列'
-    )
-  }))
+    observer: remoteCommandObserver(mailRuntime)
+  })))
   if (workerRuntimeEnabled) starters.push(() => startEmailCacheRetention({
     enabled: config.emailCacheRetentionEnabled,
     policy: {
@@ -123,14 +205,15 @@ async function startCurrent() {
     )
   }))
   if (apiRuntimeEnabled) starters.push(() => startEmailDigestScheduler({
-    enabled: config.emailDigestEnabled,
+    enabled: primaryRuntime.emailDigestEnabled,
     policy: {
       intervalSeconds: config.emailDigestIntervalSeconds,
-      hours: config.emailDigestHours,
-      timeZone: config.emailDigestTimeZone,
+      hours: primaryRuntime.emailDigestHours,
+      timeZone: primaryRuntime.emailDigestTimeZone,
       batchSize: config.mailDeliveryBatchSize
     },
     poolInstance,
+    runtimeConfig: primaryRuntime,
     logger,
     observer: observerFactory(MAINTENANCE_JOB_NAMES.EMAIL_DIGEST, '邮件摘要生成')
   }))
@@ -139,13 +222,41 @@ async function startCurrent() {
 
 export function configureEmailRuntime(context) {
   runtimeContext = context
+  runtimeSuspended = false
+  runtimeSuspensionReason = null
   return refreshEmailRuntime()
 }
 
-export function refreshEmailRuntime() {
+export function refreshEmailRuntime({ updateToken = null } = {}) {
+  return reconfigureQueue.run(() => {
+    assertEmailRuntimeAvailable()
+    return replaceEmailRuntime({
+      preflight: () => preflightEmailRuntime({ updateToken }),
+      stop: stopCurrent,
+      start: startCurrent
+    })
+  })
+}
+
+export function suspendEmailRuntime({
+  reason = 'MAIL_CONFIGURATION_ROLLBACK_FAILED',
+  stopFn = stopCurrent
+} = {}) {
   return reconfigureQueue.run(async () => {
-    await stopCurrent()
-    await startCurrent()
+    runtimeSuspended = true
+    runtimeSuspensionReason = safeRuntimeErrorCode(
+      { code: reason },
+      'MAIL_CONFIGURATION_ROLLBACK_FAILED'
+    )
+    try {
+      await stopFn()
+    } catch (stopError) {
+      const error = new Error('Email runtime suspension could not be confirmed')
+      error.code = EMAIL_RUNTIME_SUSPEND_FAILED
+      error.stopErrorCode = safeRuntimeErrorCode(stopError, 'EMAIL_RUNTIME_STOP_FAILED')
+      throw error
+    }
+    return { suspended: true, reason: runtimeSuspensionReason }
   })
 }
 
@@ -153,4 +264,6 @@ export async function stopEmailRuntime() {
   await reconfigureQueue.wait()
   await stopCurrent()
   runtimeContext = null
+  runtimeSuspended = false
+  runtimeSuspensionReason = null
 }
