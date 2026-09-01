@@ -17,6 +17,7 @@
     "test:collaboration:integration": "node --test --test-concurrency=1 integration/collaborationOfflinePostgres.integration.js",
     "test:email-mailbox:integration": "node --test --test-concurrency=1 integration/emailMailboxPostgres.integration.js",
     "test:release-acceptance:integration": "node --test --test-concurrency=1 integration/releaseAcceptancePostgres.integration.js",
+    "test:release-backlog-guard:integration": "node --test --test-concurrency=1 integration/releaseMailBacklogGuardPostgres.integration.js",
     "test:backup-gate:integration": "node --test --test-concurrency=1 integration/backupGatePostgres.integration.js",
     "test:workspace-database:integration": "node --test --test-concurrency=1 integration/workspaceDatabasePostgres.integration.js",
     "test:assistant-advanced:integration": "node --test --test-concurrency=1 integration/assistantAdvancedPostgres.integration.js"

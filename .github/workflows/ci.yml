@@ -560,6 +560,7 @@ jobs:
       NODE_ENV: test
       DATABASE_URL: postgres://nav:nav_password@127.0.0.1:5432/nav_release_acceptance_test
       NAV_RELEASE_ACCEPTANCE_INTEGRATION_TEST: "true"
+      NAV_RELEASE_BACKLOG_GUARD_INTEGRATION_TEST: "true"
       NAV_BACKUP_GATE_INTEGRATION_TEST: "true"
       NAV_RATE_LIMIT_KEY_SECRET: nav-release-acceptance-ci-secret-20260823
       NAV_LOG_LEVEL: silent
@@ -598,6 +599,11 @@ jobs:
           npm run migrate --prefix api
           npm run migrate --prefix api
           npm run verify:migrations --prefix api
+
+      - name: Run release backlog guard against PostgreSQL 16
+        env:
+          NAV_RELEASE_BACKLOG_POSTGRES_CONTAINER: ${{ job.services.postgres.id }}
+        run: npm run test:release-backlog-guard:integration --prefix api
 
       - name: Run ephemeral administrator lifecycle exercise
         run: npm run test:release-acceptance:integration --prefix api

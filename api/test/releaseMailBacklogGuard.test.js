@@ -5,10 +5,28 @@ import path from 'node:path'
 import os from 'node:os'
 import { spawnSync } from 'node:child_process'
 
-const hasBash = spawnSync('bash', ['--version'], { encoding: 'utf8' }).status === 0
 const scriptPath = new URL('../../scripts/nav-release-mail-backlog-guard.sh', import.meta.url)
+const hasBash = spawnSync('bash', ['--version'], { encoding: 'utf8' }).status === 0
 const header = 'id,user_id,account_id,email_message_id,status,attempt_count,max_attempts,notification_eligible,next_attempt_at,started_at,completed_at,last_error_at,last_error_code,created_at,updated_at\n'
 const row = '"00000000-0000-0000-0000-000000000001","00000000-0000-0000-0000-000000000002","00000000-0000-0000-0000-000000000003","00000000-0000-0000-0000-000000000004","pending","0","5","true","2026-09-01T00:00:00.000000Z","","","","","2026-09-01T00:00:00.000000Z","2026-09-01T00:00:00.000000Z"\n'
+
+const snapshotColumns = [
+  'id',
+  'user_id',
+  'account_id',
+  'email_message_id',
+  'status',
+  'attempt_count',
+  'max_attempts',
+  'notification_eligible',
+  'next_attempt_at',
+  'started_at',
+  'completed_at',
+  'last_error_at',
+  'last_error_code',
+  'created_at',
+  'updated_at'
+]
 
 async function fixture() {
   const root = await fs.mkdtemp(path.join(os.tmpdir(), 'nav-mail-backlog-guard-'))
@@ -18,6 +36,19 @@ async function fixture() {
   await fs.writeFile(fakeDocker, '#!/usr/bin/env bash\nset -eu\ncat -- "$NAV_TEST_BACKLOG_PAYLOAD"\n', { mode: 0o700 })
   return { root, payload, fakeDocker }
 }
+
+test('release mail backlog guard gives every PostgreSQL snapshot column an explicit alias', async () => {
+  const source = await fs.readFile(scriptPath, 'utf8')
+  const match = source.match(/readonly SNAPSHOT_SQL="([\s\S]*?)"\r?\n\r?\nsnapshot_to\(\)/)
+  assert.ok(match, 'snapshot SQL must remain a single auditable constant')
+  for (const column of snapshotColumns) {
+    assert.match(match[1], new RegExp(`\\bAS ${column}\\b`))
+  }
+  assert.match(
+    source,
+    new RegExp(`\\[\\[ "\\$header" == '${snapshotColumns.join(',')}' \\]\\]`)
+  )
+})
 
 test('release mail backlog guard snapshots and verifies an exact row set', { skip: !hasBash }, async (t) => {
   const { root, payload, fakeDocker } = await fixture()
@@ -42,6 +73,7 @@ test('release mail backlog guard snapshots and verifies an exact row set', { ski
   assert.equal(verified.status, 0, verified.stderr)
   assert.match(verified.stdout, /BACKLOG_SNAPSHOT_STATUS=MATCH/)
 })
+
 test('release mail backlog guard fails closed when a new job appears', { skip: !hasBash }, async (t) => {
   const { root, payload, fakeDocker } = await fixture()
   t.after(() => fs.rm(root, { recursive: true, force: true }))
