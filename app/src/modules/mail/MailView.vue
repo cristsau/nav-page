@@ -380,9 +380,9 @@ onBeforeUnmount(mail.deactivate)
         <p>在一个工作区里完成实时收发、检索、会话阅读、通知降噪和 AI 分析。远端已读、重要、归档、移动与删除操作进入安全队列，冲突时不会覆盖新状态；永久删除与外发必须再次确认。</p>
       </div>
       <div class="mail-hero__actions">
-        <button type="button" :disabled="!hasAccounts" @click="openCompose()">
+        <button type="button" :disabled="!hasAccounts" aria-haspopup="dialog" @click="openCompose()">
           <Icon name="plus" :size="17" />
-          <span>写邮件</span>
+          <span>新建邮件</span>
         </button>
         <button type="button" :disabled="!hasAccounts" aria-haspopup="dialog" @click="aiSearchOpen = true">
           <Icon name="sparkles" :size="17" />
@@ -446,6 +446,7 @@ onBeforeUnmount(mail.deactivate)
           @load-more="loadMore"
           @refresh="refreshWorkspace"
           @open-folders="folderSheetOpen = true"
+          @compose="openCompose()"
           @notification="openNotificationRule"
           @query-change="applyMailQuery"
         />
