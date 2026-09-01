@@ -4,10 +4,14 @@ import { verifyImapConnection } from '../lib/emailIngestScheduler.js'
 import { clearEmailEncryptionKeyCache } from '../lib/emailCrypto.js'
 import { verifySmtpConnection } from '../lib/mailOutbox.js'
 import {
+  createManagedMailAccount,
   getManagedIntegrationsState,
   managedCloudTestConfig,
+  managedMailAccountTestConfig,
   markManagedCloudVerified,
+  markManagedMailAccountVerified,
   markManagedMailVerified,
+  saveManagedMailAccount,
   saveManagedCloudBackupConfig,
   saveManagedMailConfig,
   withManagedIntegrationMutation
@@ -31,7 +35,7 @@ async function audit(request, eventType, resourceType, outcome = 'success') {
 export function safeConnectionError(error, fallback) {
   const message = String(error?.message || '')
   if (
-    /格式无效|不能指向|无法解析|必须使用|尚未启用|请先保存|不完整|未配置/.test(message)
+    /格式无效|不能指向|无法解析|必须使用|尚未启用|请先保存|不完整|未配置|不存在|最多支持/.test(message)
     || message === '启用云备份前，请完整填写对象存储配置并通过只读连接测试'
   ) {
     return message.slice(0, 240)
@@ -94,6 +98,85 @@ export default async function integrationRoutes(fastify) {
       return { result, mail }
     } catch (error) {
       await audit(request, 'admin.integrations.mail.imap_tested', 'mail_integration', 'failure')
+      reply.code(502)
+      return { error: safeConnectionError(error, 'IMAP 连接测试失败，请核对主机名、邮箱账号、密码和 TLS 端口') }
+    }
+  })
+
+  fastify.post('/admin/integrations/mail/accounts', async (request, reply) => {
+    await fastify.requireAdmin(request, reply)
+    reply.header('Cache-Control', 'private, no-store')
+    try {
+      const account = await withManagedIntegrationMutation(async () => {
+        const saved = await createManagedMailAccount(request.body || {})
+        clearEmailEncryptionKeyCache()
+        await refreshEmailRuntime()
+        return saved
+      })
+      await audit(request, 'admin.integrations.mail_account.created', 'mail_integration')
+      reply.code(201)
+      return { account, applied: true }
+    } catch (error) {
+      await audit(request, 'admin.integrations.mail_account.created', 'mail_integration', 'denied')
+      reply.code(error instanceof TypeError ? 400 : 503)
+      return { error: safeConnectionError(error, '邮箱账号创建失败，请检查服务器的可管理集成目录') }
+    }
+  })
+
+  fastify.put('/admin/integrations/mail/accounts/:accountId', async (request, reply) => {
+    await fastify.requireAdmin(request, reply)
+    reply.header('Cache-Control', 'private, no-store')
+    try {
+      const account = await withManagedIntegrationMutation(async () => {
+        const saved = await saveManagedMailAccount(request.params?.accountId, request.body || {})
+        clearEmailEncryptionKeyCache()
+        await refreshEmailRuntime()
+        return saved
+      })
+      await audit(request, 'admin.integrations.mail_account.updated', 'mail_integration')
+      return { account, applied: true }
+    } catch (error) {
+      await audit(request, 'admin.integrations.mail_account.updated', 'mail_integration', 'denied')
+      reply.code(error instanceof TypeError ? 400 : 503)
+      return { error: safeConnectionError(error, '邮箱账号保存失败，请检查服务器的可管理集成目录') }
+    }
+  })
+
+  fastify.post('/admin/integrations/mail/accounts/:accountId/test-smtp', async (request, reply) => {
+    await fastify.requireAdmin(request, reply)
+    reply.header('Cache-Control', 'private, no-store')
+    try {
+      const { result, account } = await withManagedIntegrationMutation(async () => {
+        const testConfig = await managedMailAccountTestConfig(request.params?.accountId)
+        return {
+          result: await verifySmtpConnection(testConfig),
+          account: await markManagedMailAccountVerified('smtp', request.params?.accountId)
+        }
+      })
+      await audit(request, 'admin.integrations.mail_account.smtp_tested', 'mail_integration')
+      return { result, account }
+    } catch (error) {
+      await audit(request, 'admin.integrations.mail_account.smtp_tested', 'mail_integration', 'failure')
+      reply.code(502)
+      return { error: safeConnectionError(error, 'SMTP 连接测试失败，请核对主机名、邮箱账号、密码和 TLS 端口') }
+    }
+  })
+
+  fastify.post('/admin/integrations/mail/accounts/:accountId/test-imap', async (request, reply) => {
+    await fastify.requireAdmin(request, reply)
+    reply.header('Cache-Control', 'private, no-store')
+    try {
+      const { result, account } = await withManagedIntegrationMutation(async () => {
+        const testConfig = await managedMailAccountTestConfig(request.params?.accountId)
+        return {
+          result: await verifyImapConnection(testConfig),
+          account: await markManagedMailAccountVerified('imap', request.params?.accountId)
+        }
+      })
+      await audit(request, 'admin.integrations.mail_account.imap_tested', 'mail_integration')
+      return { result, account }
+    } catch (error) {
+      await audit(request, 'admin.integrations.mail_account.imap_tested', 'mail_integration', 'failure')
       reply.code(502)
       return { error: safeConnectionError(error, 'IMAP 连接测试失败，请核对主机名、邮箱账号、密码和 TLS 端口') }
     }

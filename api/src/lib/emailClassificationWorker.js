@@ -25,7 +25,17 @@ function retryDelaySeconds(attemptCount) {
   return Math.min(3600, 5 * (2 ** Math.min(Math.max(0, Number(attemptCount || 1) - 1), 9)))
 }
 
+function normalizedSourceKeys(value) {
+  const values = Array.isArray(value) ? value : [value]
+  const keys = [...new Set(values
+    .map((item) => String(item || '').trim().toLowerCase())
+    .filter((item) => /^[a-z0-9_.-]{1,80}$/.test(item)))]
+  if (!keys.length) throw new Error('Email source key is invalid')
+  return keys
+}
+
 export async function claimEmailClassificationJob(poolInstance, policy, sourceKey) {
+  const sourceKeys = normalizedSourceKeys(sourceKey)
   const client = await poolInstance.connect()
   try {
     await client.query('BEGIN')
@@ -51,9 +61,9 @@ export async function claimEmailClassificationJob(poolInstance, policy, sourceKe
            SELECT 1 FROM email_accounts AS account
            WHERE account.id = email_classification_jobs.account_id
              AND account.user_id = email_classification_jobs.user_id
-             AND account.source_key = $2
+              AND account.source_key = ANY($2::text[])
          )`,
-      [policy.staleRunningSeconds, sourceKey, policy.maxAttempts]
+      [policy.staleRunningSeconds, sourceKeys, policy.maxAttempts]
     )
     await client.query(
       `UPDATE email_classification_jobs
@@ -68,9 +78,9 @@ export async function claimEmailClassificationJob(poolInstance, policy, sourceKe
            SELECT 1 FROM email_accounts AS account
            WHERE account.id = email_classification_jobs.account_id
              AND account.user_id = email_classification_jobs.user_id
-             AND account.source_key = $1
+              AND account.source_key = ANY($1::text[])
          )`,
-      [sourceKey, policy.maxAttempts]
+      [sourceKeys, policy.maxAttempts]
     )
     const candidate = await client.query(
       `SELECT job.id
@@ -81,11 +91,11 @@ export async function claimEmailClassificationJob(poolInstance, policy, sourceKe
          AND job.next_attempt_at <= NOW()
          AND job.attempt_count < LEAST(job.max_attempts, $2::integer)
          AND account.enabled = TRUE
-         AND account.source_key = $1
+          AND account.source_key = ANY($1::text[])
        ORDER BY job.next_attempt_at ASC, job.created_at ASC, job.id ASC
        FOR UPDATE OF job SKIP LOCKED
        LIMIT 1`,
-      [sourceKey, policy.maxAttempts]
+      [sourceKeys, policy.maxAttempts]
     )
     if (!candidate.rows[0]) {
       await client.query('COMMIT')
@@ -196,7 +206,7 @@ export async function processEmailClassificationJobs({
   finishFn = finishClassificationJob
 }) {
   const validated = validateEmailClassificationPolicy(policy)
-  const sourceKey = String(runtimeConfig.emailSourceKey || '').trim().toLowerCase()
+  const sourceKeys = normalizedSourceKeys(runtimeConfig.emailSourceKeys || runtimeConfig.emailSourceKey)
   const summary = {
     processed: 0,
     succeeded: 0,
@@ -207,7 +217,7 @@ export async function processEmailClassificationJobs({
     oldestPendingSeconds: 0
   }
   for (let index = 0; index < validated.batchSize; index += 1) {
-    const job = await claimFn(poolInstance, validated, sourceKey)
+    const job = await claimFn(poolInstance, validated, sourceKeys)
     if (!job) break
     summary.processed += 1
     try {
@@ -252,9 +262,9 @@ export async function processEmailClassificationJobs({
        AND EXISTS (
          SELECT 1 FROM email_accounts AS account
          WHERE account.id = job.account_id AND account.user_id = job.user_id
-           AND account.enabled = TRUE AND account.source_key = $1
+            AND account.enabled = TRUE AND account.source_key = ANY($1::text[])
        )`,
-    [sourceKey]
+    [sourceKeys]
   )
   summary.remaining = Number(pending.rows[0]?.count || 0)
   summary.dueRemaining = Number(pending.rows[0]?.due_count || 0)
@@ -282,7 +292,7 @@ export function startEmailClassificationScheduler({
 }) {
   if (!enabled) return async () => {}
   const validated = validateEmailClassificationPolicy(policy)
-  const sourceKey = String(runtimeConfig.emailSourceKey || '').trim().toLowerCase()
+  const sourceKeys = normalizedSourceKeys(runtimeConfig.emailSourceKeys || runtimeConfig.emailSourceKey)
   let stopped = false
   let activeRun = null
   let timer = null
@@ -345,7 +355,7 @@ export function startEmailClassificationScheduler({
     logger,
     timerApi,
     onWake: (payload) => {
-      if (payload.sourceKey !== sourceKey) return
+      if (!sourceKeys.includes(payload.sourceKey)) return
       if (timer) timerApi.clearTimeout(timer)
       timer = null
       void run()

@@ -23,8 +23,20 @@ import {
 } from './emailUserMail.js'
 
 const MESSAGE_TYPE_PATTERN = /^[a-z0-9_.-]+$/
-const LOCK_SQL = `SELECT pg_try_advisory_lock(hashtext(current_database()), hashtext('nav_mail_delivery')) AS acquired`
-const UNLOCK_SQL = `SELECT pg_advisory_unlock(hashtext(current_database()), hashtext('nav_mail_delivery')) AS released`
+const LOCK_SQL = 'SELECT pg_try_advisory_lock(hashtext(current_database()), hashtext($1)) AS acquired'
+const UNLOCK_SQL = 'SELECT pg_advisory_unlock(hashtext(current_database()), hashtext($1)) AS released'
+const DELIVERY_SCOPE_SQL = `(
+  ($2::boolean AND mail_outbox.message_type <> 'user.mail')
+  OR (
+    mail_outbox.message_type = 'user.mail'
+    AND EXISTS (
+      SELECT 1 FROM email_accounts AS delivery_account
+      WHERE delivery_account.id = mail_outbox.account_id
+        AND delivery_account.user_id = mail_outbox.user_id
+        AND delivery_account.source_key = $1
+    )
+  )
+)`
 
 export { normalizeEmailAddress }
 
@@ -479,12 +491,16 @@ export async function deliverMailOutbox({
   transportFactory = createSmtpTransport
 }) {
   const validated = validateMailDeliveryPolicy(policy)
+  const sourceKey = String(runtimeConfig.emailSourceKey || config.emailSourceKey || 'mxroute').trim().toLowerCase()
+  if (!/^[a-z0-9_.-]{1,80}$/.test(sourceKey)) throw new Error('Email source key is invalid')
+  const primaryAccount = runtimeConfig.emailPrimaryAccount !== false
+  const lockName = `nav_mail_delivery:${sourceKey}`
   const client = await poolInstance.connect()
   let lockAcquired = false
   let primaryError = null
   let transport = null
   try {
-    const lock = await client.query(LOCK_SQL)
+    const lock = await client.query(LOCK_SQL, [lockName])
     lockAcquired = lock.rows[0]?.acquired === true
     if (!lockAcquired) return { processed: 0, sent: 0, failed: 0, remaining: 0, skipped: 'already-running' }
 
@@ -498,7 +514,9 @@ export async function deliverMailOutbox({
              scrubbed_at = COALESCE(scrubbed_at, NOW()), updated_at = NOW(),
              last_error_code = 'AMBIGUOUS_DELIVERY_STATE'
          WHERE status = 'sending' AND updated_at < NOW() - INTERVAL '15 minutes'
+           AND ${DELIVERY_SCOPE_SQL}
          RETURNING id, user_id`
+        , [sourceKey, primaryAccount]
       )
       await scrubExpiredOutboxArtifactsInTransaction(
         client,
@@ -517,9 +535,10 @@ export async function deliverMailOutbox({
              text_body = '', html_body = '', payload_encrypted = NULL,
              scrubbed_at = COALESCE(scrubbed_at, NOW()),
              last_error_code = 'MAX_ATTEMPTS_EXCEEDED', updated_at = NOW()
-         WHERE status IN ('pending', 'failed') AND attempt_count >= $1
+         WHERE status IN ('pending', 'failed') AND attempt_count >= $3
+           AND ${DELIVERY_SCOPE_SQL}
          RETURNING id, user_id`,
-        [validated.maxAttempts]
+        [sourceKey, primaryAccount, validated.maxAttempts]
       )
       await scrubExpiredOutboxArtifactsInTransaction(
         client,
@@ -533,12 +552,13 @@ export async function deliverMailOutbox({
       `
         SELECT * FROM mail_outbox
         WHERE status IN ('pending', 'failed')
-          AND attempt_count < $2
+          AND attempt_count < $4
           AND next_attempt_at <= NOW()
+          AND ${DELIVERY_SCOPE_SQL}
         ORDER BY next_attempt_at ASC, created_at ASC, id ASC
-        LIMIT $1
+        LIMIT $3
       `,
-      [validated.batchSize, validated.maxAttempts]
+      [sourceKey, primaryAccount, validated.batchSize, validated.maxAttempts]
     )
     const summary = {
       processed: 0,
@@ -740,8 +760,9 @@ export async function deliverMailOutbox({
 
     const remaining = await client.query(
       `SELECT COUNT(*)::integer AS count FROM mail_outbox
-       WHERE status IN ('pending', 'failed') AND attempt_count < $1`,
-      [validated.maxAttempts]
+       WHERE status IN ('pending', 'failed') AND attempt_count < $3
+         AND ${DELIVERY_SCOPE_SQL}`,
+      [sourceKey, primaryAccount, validated.maxAttempts]
     )
     summary.remaining = Number(remaining.rows[0]?.count || 0)
     return summary
@@ -752,7 +773,7 @@ export async function deliverMailOutbox({
     try { transport?.close?.() } catch {}
     let unlockError = null
     if (lockAcquired) {
-      try { await client.query(UNLOCK_SQL) } catch (error) { unlockError = error }
+      try { await client.query(UNLOCK_SQL, [lockName]) } catch (error) { unlockError = error }
     }
     client.release(unlockError || undefined)
     if (!primaryError && unlockError) throw unlockError
@@ -771,6 +792,7 @@ export function startMailDeliveryScheduler({
   poolInstance,
   logger,
   observer,
+  runtimeConfig = config,
   deliveryFn = deliverMailOutbox,
   timerApi = globalThis,
   clock = () => Date.now()
@@ -784,7 +806,7 @@ export function startMailDeliveryScheduler({
     if (stopped || activeRun) return activeRun
     const startedAtMs = clock()
     activeRun = Promise.resolve()
-      .then(() => deliveryFn({ poolInstance, policy: validated }))
+      .then(() => deliveryFn({ poolInstance, policy: validated, runtimeConfig }))
       .then(async (result) => {
         const finishedAtMs = clock()
         await notifyObserver(observer, 'succeeded', {

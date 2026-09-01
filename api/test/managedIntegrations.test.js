@@ -6,11 +6,15 @@ import path from 'node:path'
 import { config } from '../src/config.js'
 import {
   applyManagedIntegrationsToRuntime,
+  createManagedMailAccount,
   getManagedIntegrationsState,
   markManagedCloudVerified,
+  markManagedMailAccountVerified,
   markManagedMailVerified,
   saveManagedCloudBackupConfig,
+  saveManagedMailAccount,
   saveManagedMailConfig,
+  managedMailRuntimeConfigs,
   withManagedIntegrationMutation
 } from '../src/lib/managedIntegrations.js'
 
@@ -125,6 +129,87 @@ test('a rejected mail activation does not overwrite the working SMTP secret', as
     )
     const smtpSecret = await fs.readFile(path.join(directory, 'smtp-password'), 'utf8')
     assert.equal(smtpSecret.trim(), 'working-password')
+  })
+})
+
+test('one secondary mailbox keeps stable identity, isolated secrets and write-only public state', async () => {
+  await withManagedDirectory(async (directory) => {
+    await saveManagedMailConfig({
+      ...baseMail,
+      smtpPassword: 'primary-smtp-password',
+      imapPassword: 'primary-imap-password'
+    })
+    const created = await createManagedMailAccount({
+      ...baseMail,
+      label: '工作邮箱',
+      smtpUsername: 'work@example.com',
+      smtpFromAddress: 'work@example.com',
+      imapUsername: 'work@example.com',
+      smtpPassword: 'secondary-smtp-password',
+      imapPassword: 'secondary-imap-password'
+    })
+    assert.match(created.id, /^[a-f0-9]{24}$/)
+    assert.equal(created.sourceKey, `managed.${created.id}`)
+    assert.equal(created.label, '工作邮箱')
+    assert.equal(created.secrets.smtpPasswordConfigured, true)
+    assert.equal(created.secrets.imapPasswordConfigured, true)
+    assert.equal(JSON.stringify(created).includes('secondary-smtp-password'), false)
+    assert.equal(JSON.stringify(created).includes('secondary-imap-password'), false)
+
+    assert.equal(
+      (await fs.readFile(path.join(directory, `mail-account-${created.id}-smtp-password`), 'utf8')).trim(),
+      'secondary-smtp-password'
+    )
+    assert.equal(
+      (await fs.readFile(path.join(directory, `mail-account-${created.id}-imap-password`), 'utf8')).trim(),
+      'secondary-imap-password'
+    )
+    await markManagedMailAccountVerified('smtp', created.id)
+    await markManagedMailAccountVerified('imap', created.id)
+    const enabled = await saveManagedMailAccount(created.id, {
+      ...baseMail,
+      label: '工作邮箱',
+      smtpUsername: 'work@example.com',
+      smtpFromAddress: 'work@example.com',
+      imapUsername: 'work@example.com',
+      deliveryEnabled: true,
+      ingestEnabled: true,
+      registrationEnabled: true,
+      digestEnabled: true
+    })
+    assert.equal(enabled.id, created.id)
+    assert.equal(enabled.sourceKey, created.sourceKey)
+    assert.equal(enabled.config.deliveryEnabled, true)
+    assert.equal(enabled.config.ingestEnabled, true)
+    assert.equal(enabled.config.registrationEnabled, false)
+    assert.equal(enabled.config.digestEnabled, false)
+    assert.equal(enabled.verification.smtpVerified, true)
+    assert.equal(enabled.verification.imapVerified, true)
+
+    const state = await getManagedIntegrationsState()
+    assert.equal(state.mailPrimaryManaged, true)
+    assert.equal(state.mailAccountLimit, 2)
+    assert.equal(state.mailAccounts.length, 1)
+    assert.deepEqual(
+      Object.keys(state.mailAccounts[0]).sort(),
+      ['config', 'id', 'label', 'secrets', 'sourceKey', 'verification'].sort()
+    )
+    const runtimeConfigs = await managedMailRuntimeConfigs()
+    assert.equal(runtimeConfigs.length, 2)
+    assert.equal(runtimeConfigs[0].emailPrimaryAccount, true)
+    assert.equal(runtimeConfigs[1].emailPrimaryAccount, false)
+    assert.equal(runtimeConfigs[1].emailSourceKey, created.sourceKey)
+    assert.equal(runtimeConfigs[1].emailAccountLabel, '工作邮箱')
+    assert.equal(
+      runtimeConfigs[1].smtpPasswordFile,
+      path.join(directory, `mail-account-${created.id}-smtp-password`)
+    )
+    await assert.rejects(createManagedMailAccount({ label: '第三个邮箱' }), /最多支持两个邮箱账号/)
+
+    const persisted = JSON.parse(await fs.readFile(path.join(directory, 'integrations.json'), 'utf8'))
+    assert.equal(persisted.version, 1)
+    assert.equal(persisted.mailAccounts.length, 1)
+    assert.equal(JSON.stringify(persisted).includes('secondary-smtp-password'), false)
   })
 })
 

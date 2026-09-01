@@ -7,6 +7,7 @@ import { startEmailSentAppendScheduler } from './emailSentAppend.js'
 import { startEmailRemoteCommandScheduler } from './emailRemoteCommandWorker.js'
 import { MAINTENANCE_JOB_NAMES } from './maintenanceJobStatus.js'
 import { startMailDeliveryScheduler } from './mailOutbox.js'
+import { managedMailRuntimeConfigs } from './managedIntegrations.js'
 import {
   createRecoverableSerialQueue,
   startRuntimeFunctions,
@@ -29,20 +30,24 @@ async function startCurrent() {
   const role = config.emailRuntimeRole
   const apiRuntimeEnabled = role === 'combined' || role === 'api'
   const workerRuntimeEnabled = role === 'combined' || role === 'worker'
+  const mailRuntimes = await managedMailRuntimeConfigs(config)
+  const primaryRuntime = mailRuntimes.find((item) => item.emailPrimaryAccount !== false) || mailRuntimes[0] || config
+  const ingestRuntimes = mailRuntimes.filter((item) => item.emailIngestEnabled)
   const starters = []
-  if (apiRuntimeEnabled) starters.push(() => startMailDeliveryScheduler({
-    enabled: config.mailDeliveryEnabled,
+  if (apiRuntimeEnabled) mailRuntimes.forEach((mailRuntime) => starters.push(() => startMailDeliveryScheduler({
+    enabled: mailRuntime.mailDeliveryEnabled,
     policy: {
       intervalSeconds: config.mailDeliveryIntervalSeconds,
       batchSize: config.mailDeliveryBatchSize,
       maxAttempts: config.mailDeliveryMaxAttempts
     },
     poolInstance,
+    runtimeConfig: mailRuntime,
     logger,
     observer: observerFactory(MAINTENANCE_JOB_NAMES.MAIL_DELIVERY, '邮件发送队列')
-  }))
-  if (workerRuntimeEnabled) starters.push(() => startEmailIngestWorker({
-    enabled: config.emailIngestEnabled,
+  })))
+  if (workerRuntimeEnabled) ingestRuntimes.forEach((mailRuntime) => starters.push(() => startEmailIngestWorker({
+    enabled: config.emailIngestEnabled || mailRuntime.emailIngestEnabled,
     policy: {
       pollIntervalSeconds: config.imapPollIntervalSeconds,
       initialLookback: config.imapInitialLookback,
@@ -59,11 +64,12 @@ async function startCurrent() {
       telemetrySampleSize: config.imapTelemetrySampleSize
     },
     poolInstance,
+    runtimeConfig: mailRuntime,
     logger,
     observer: observerFactory(MAINTENANCE_JOB_NAMES.EMAIL_INGEST, '邮件接收')
-  }))
+  })))
   if (workerRuntimeEnabled) starters.push(() => startEmailClassificationScheduler({
-    enabled: config.emailIngestEnabled,
+    enabled: ingestRuntimes.length > 0,
     policy: {
       intervalSeconds: config.emailClassificationIntervalSeconds,
       batchSize: config.emailClassificationBatchSize,
@@ -71,40 +77,46 @@ async function startCurrent() {
       staleRunningSeconds: 300
     },
     poolInstance,
+    runtimeConfig: {
+      ...primaryRuntime,
+      emailSourceKeys: ingestRuntimes.map((item) => item.emailSourceKey)
+    },
     logger,
     observer: observerFactory(
       MAINTENANCE_JOB_NAMES.EMAIL_CLASSIFICATION,
       '邮件 AI 分类与通知'
     )
   }))
-  if (workerRuntimeEnabled) starters.push(() => startEmailSentAppendScheduler({
-    enabled: config.emailSentAppendEnabled,
+  if (workerRuntimeEnabled) mailRuntimes.forEach((mailRuntime) => starters.push(() => startEmailSentAppendScheduler({
+    enabled: mailRuntime.emailSentAppendEnabled,
     policy: {
       intervalSeconds: config.emailSentAppendIntervalSeconds,
       batchSize: config.emailSentAppendBatchSize,
       retentionDays: config.emailSentAppendRetentionDays
     },
     poolInstance,
+    runtimeConfig: mailRuntime,
     logger,
     observer: observerFactory(
       MAINTENANCE_JOB_NAMES.EMAIL_SENT_APPEND,
       '已发送邮件同步'
     )
-  }))
-  if (workerRuntimeEnabled) starters.push(() => startEmailRemoteCommandScheduler({
-    enabled: config.emailIngestEnabled,
+  })))
+  if (workerRuntimeEnabled) ingestRuntimes.forEach((mailRuntime) => starters.push(() => startEmailRemoteCommandScheduler({
+    enabled: true,
     policy: {
       intervalSeconds: 3,
       batchSize: 10,
       staleRunningSeconds: 300
     },
     poolInstance,
+    runtimeConfig: mailRuntime,
     logger,
     observer: observerFactory(
       MAINTENANCE_JOB_NAMES.EMAIL_REMOTE_COMMANDS,
       '邮箱远端操作队列'
     )
-  }))
+  })))
   if (workerRuntimeEnabled) starters.push(() => startEmailCacheRetention({
     enabled: config.emailCacheRetentionEnabled,
     policy: {
@@ -123,14 +135,15 @@ async function startCurrent() {
     )
   }))
   if (apiRuntimeEnabled) starters.push(() => startEmailDigestScheduler({
-    enabled: config.emailDigestEnabled,
+    enabled: primaryRuntime.emailDigestEnabled,
     policy: {
       intervalSeconds: config.emailDigestIntervalSeconds,
-      hours: config.emailDigestHours,
-      timeZone: config.emailDigestTimeZone,
+      hours: primaryRuntime.emailDigestHours,
+      timeZone: primaryRuntime.emailDigestTimeZone,
       batchSize: config.mailDeliveryBatchSize
     },
     poolInstance,
+    runtimeConfig: primaryRuntime,
     logger,
     observer: observerFactory(MAINTENANCE_JOB_NAMES.EMAIL_DIGEST, '邮件摘要生成')
   }))
