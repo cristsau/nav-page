@@ -44,14 +44,29 @@ function assertIsolatedDatabaseTarget() {
 
 assertIsolatedDatabaseTarget()
 
-let ephemeralSecretDirectory = null
+const ephemeralSecretDirectory = mkdtempSync(join(tmpdir(), 'nav-assistant-advanced-'))
 if (!String(process.env.NAV_EMAIL_ENCRYPTION_KEY_FILE || '').trim()) {
-  ephemeralSecretDirectory = mkdtempSync(join(tmpdir(), 'nav-assistant-advanced-'))
   const keyPath = join(ephemeralSecretDirectory, 'email.key')
   writeFileSync(keyPath, '0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef', { mode: 0o600 })
   chmodSync(keyPath, 0o600)
   process.env.NAV_EMAIL_ENCRYPTION_KEY_FILE = keyPath
 }
+
+const smtpPasswordPath = join(ephemeralSecretDirectory, 'smtp-password')
+writeFileSync(smtpPasswordPath, 'integration-only-password', { mode: 0o600 })
+chmodSync(smtpPasswordPath, 0o600)
+Object.assign(process.env, {
+  NAV_MANAGED_INTEGRATIONS_DIR: ephemeralSecretDirectory,
+  NAV_MAIL_DELIVERY_ENABLED: 'true',
+  NAV_EMAIL_SOURCE_KEY: 'mxroute',
+  NAV_EMAIL_OWNER_USERNAME: 'advanced-owner',
+  NAV_SMTP_HOST: 'smtp.example.test',
+  NAV_SMTP_PORT: '465',
+  NAV_SMTP_SECURE: 'true',
+  NAV_SMTP_USERNAME: 'sender@example.test',
+  NAV_SMTP_PASSWORD_FILE: smtpPasswordPath,
+  NAV_SMTP_FROM_ADDRESS: 'sender@example.test'
+})
 
 let pool
 let createEmailDraft
@@ -112,7 +127,7 @@ beforeEach(async () => {
 
 after(async () => {
   await pool?.end()
-  if (ephemeralSecretDirectory) rmSync(ephemeralSecretDirectory, { recursive: true, force: true })
+  rmSync(ephemeralSecretDirectory, { recursive: true, force: true })
 })
 
 function proposal({ operationId, toolName, args, candidateIds, userId = OWNER_ID }) {
