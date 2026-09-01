@@ -4,8 +4,18 @@ const CREATE_TARGET_PATTERNS = Object.freeze({
   create_diary: /(?:日记|日志|diary|journal)/iu,
   create_memo: /(?:备忘录|备忘|待办|memo|todo)/iu,
   create_bookmark: /(?:导航|书签|收藏|网页|网址|链接|网站|\b(?:bookmark|favorite|url|link|website|webpage)\b)/iu,
-  create_group: /(?:分组|分类|group|category)/iu
+  create_group: /(?:分组|分类|group|category)/iu,
+  advanced: /(?:笔记|分享|邮件草稿|草稿|数据库|数据表|记录|note|share|draft|database|row)/iu
 })
+
+const SENSITIVE_MAIL_COMPOSE_ACTION_PATTERN = /(?:撰写|起草|草拟|写(?:一封|封)?|\b(?:compose|draft|write)\b)/iu
+const SENSITIVE_MAIL_DELIVERY_ACTION_PATTERN = /(?:(?<!已)(?:发送|发给|(?<![开研触批])发(?:一封|封|个)?(?:电子邮件|电邮|邮件)|寄出|寄给|寄(?:一封|封|个)?(?:电子邮件|电邮|邮件)|回复|回信|回(?:一封|封)?(?:电子邮件|电邮|邮件)|转发)|\b(?:send|reply|respond|forward|email)\b)/iu
+const SENSITIVE_MAIL_TARGET_PATTERN = /(?:电子邮件|电邮|邮件|邮箱|草稿|\b(?:e-?mail|mail|message|draft)\b)/iu
+const SENSITIVE_MAIL_ADDRESS_PATTERN = /\b[^\s@,;，；<>]+@[^\s@,;，；<>]+\.[^\s@,;，；<>]+\b/iu
+const SENSITIVE_MAIL_RECIPIENT_FIELD_PATTERN = /(?:收件人|收信人|发给|发送给|寄给|回复给|\b(?:to|recipient)\s*[:：])/iu
+const SENSITIVE_MAIL_CONTENT_FIELD_PATTERN = /(?:主题|邮件标题|正文|邮件内容|\b(?:subject|body|message)\s*[:：])/iu
+const MAIL_RETRIEVAL_ACTION_PATTERN = /(?:搜索|查找|查询|检索|查看|读取|列出|找出|展示|总结|分析|\b(?:search|find|show|list|read|summari[sz]e|analy[sz]e)\b)/iu
+const MAIL_RETRIEVAL_THEN_WRITE_PATTERN = /(?:并|然后|再|接着|随后|[,，。；;]|\band(?:\s+then)?\b|\bthen\b).{0,24}(?:请(?:你)?(?:帮我)?|帮我|please\s+)?(?:发送|寄出|回复|回信|转发|\b(?:send|reply|respond|forward)\b)/iu
 
 const NEGATED_MUTATION_PATTERN = /(?:不要|别(?:再)?|无需|不需要|禁止|取消|do\s+not|don't|dont|never)\s*.{0,24}(?:创建|新建|添加|保存|收藏|记录|写|修改|更新|编辑|移动|删除|归档|置顶|标记|发送|回复|create|add|save|bookmark|write|update|edit|move|delete|archive|pin|send|reply)/iu
 
@@ -120,6 +130,25 @@ export function isExplicitAssistantMutationRequest(commandText) {
     || STARTS_WITH_MUTATION_ACTION_PATTERN.test(command)
 }
 
+// Message confidentiality is intentionally independent from mutation
+// authorization. A request can be ambiguous or rejected and still contain a
+// private recipient, subject, or body that must never enter plaintext history.
+export function isSensitiveAssistantMailWriteRequest(commandText) {
+  const command = normalizeCommand(commandText)
+  if (!command || command.length > 2_000) return false
+  const hasExplicitFields = SENSITIVE_MAIL_CONTENT_FIELD_PATTERN.test(command)
+    && (SENSITIVE_MAIL_RECIPIENT_FIELD_PATTERN.test(command)
+      || SENSITIVE_MAIL_ADDRESS_PATTERN.test(command))
+  if (hasExplicitFields) return true
+  const hasMailTarget = SENSITIVE_MAIL_TARGET_PATTERN.test(command)
+    || SENSITIVE_MAIL_ADDRESS_PATTERN.test(command)
+  if (!hasMailTarget) return false
+  if (SENSITIVE_MAIL_COMPOSE_ACTION_PATTERN.test(command)) return true
+  if (!SENSITIVE_MAIL_DELIVERY_ACTION_PATTERN.test(command)) return false
+  return !MAIL_RETRIEVAL_ACTION_PATTERN.test(command)
+    || MAIL_RETRIEVAL_THEN_WRITE_PATTERN.test(command)
+}
+
 export function isExplicitAssistantCreateCommand(commandText, toolName) {
   return selectExplicitAssistantCreateTool(commandText) === toolName
 }
@@ -139,6 +168,30 @@ export function selectExplicitAssistantCreateTool(commandText) {
   if (createsGroup) return 'create_group'
   if (CREATE_TARGET_PATTERNS.create_bookmark.test(command)) return 'create_bookmark'
   return ''
+}
+
+export function selectExplicitAssistantAdvancedTool(commandText) {
+  const command = normalizeCommand(commandText)
+  if (!isExplicitAssistantMutationRequest(command)) return ''
+  const matches = []
+  const add = (tool, action, target) => {
+    if (action.test(command) && target.test(command)) matches.push(tool)
+  }
+  add('send_email_draft', /(?:发送|寄出|send)/iu, /(?:邮件草稿|草稿邮件|邮件|email|draft)/iu)
+  add('create_email_draft', /(?:创建|新建|保存|起草|create|save|draft)/iu, /(?:邮件草稿|草稿邮件|email\s+draft|mail\s+draft)/iu)
+  add('revoke_note_share', /(?:撤销|关闭|取消|revoke|disable)/iu, /(?:笔记)?分享|share/iu)
+  add('create_note_share', /(?:创建|开启|公开|分享|create|enable|share)/iu, /(?:笔记.{0,12}分享|分享.{0,12}笔记|note\s+share)/iu)
+  add('archive_database_row', /(?:归档|archive)/iu, /(?:数据库|数据表).{0,16}(?:记录|行)|(?:记录|行).{0,16}(?:数据库|数据表)|database\s+row/iu)
+  add('create_database_row', /(?:创建|新建|添加|新增|create|add)/iu, /(?:数据库|数据表).{0,16}(?:记录|行)|(?:记录|行).{0,16}(?:数据库|数据表)|database\s+row/iu)
+  add('update_database_row', /(?:修改|更新|编辑|update|edit)/iu, /(?:数据库|数据表).{0,16}(?:记录|行)|(?:记录|行).{0,16}(?:数据库|数据表)|database\s+row/iu)
+  add('delete_note', /(?:删除|delete)/iu, /(?:笔记|note)/iu)
+  add('update_note', /(?:修改|更新|编辑|update|edit)/iu, /(?:笔记|note)/iu)
+  add('delete_bookmark', /(?:删除|delete)/iu, /(?:书签|bookmark)/iu)
+  add('update_bookmark', /(?:修改|更新|编辑|移动|update|edit|move)/iu, /(?:书签|bookmark)/iu)
+  add('delete_group', /(?:删除|delete)/iu, /(?:分组|分类|group|category)/iu)
+  add('update_group', /(?:修改|更新|编辑|update|edit)/iu, /(?:分组|分类|group|category)/iu)
+  const unique = [...new Set(matches)]
+  return unique.length === 1 ? unique[0] : ''
 }
 
 export function selectAssistantBookmarkGroup(groups, commandText) {

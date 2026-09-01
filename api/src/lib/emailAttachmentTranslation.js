@@ -1,3 +1,10 @@
+import {
+  EMAIL_DOCUMENT_EXTRACTION_LIMITS,
+  EmailDocumentExtractionError,
+  extractEmailDocumentText,
+  isExtractableEmailDocumentMetadata
+} from './emailDocumentTextExtractor.js'
+
 const TEXT_MIME_PATTERN = /^text\/[a-z0-9!#$&^_.+-]+$/
 const STRUCTURED_TEXT_MIME_PATTERN = /^application\/[a-z0-9!#$&^_.+-]+\+(?:json|xml)$/
 
@@ -44,7 +51,7 @@ function filenameExtension(value) {
   return match?.[1] || ''
 }
 
-export function isTranslatableEmailAttachmentMetadata(value = {}) {
+function isTranslatableTextAttachmentMetadata(value = {}) {
   const mime = normalizedMime(value.contentType ?? value.type)
   if (TEXT_MIME_PATTERN.test(mime)
     || STRUCTURED_TEXT_MIME_PATTERN.test(mime)
@@ -52,6 +59,11 @@ export function isTranslatableEmailAttachmentMetadata(value = {}) {
 
   return mime === 'application/octet-stream'
     && SAFE_TEXT_EXTENSIONS.has(filenameExtension(value.filename ?? value.name))
+}
+
+export function isTranslatableEmailAttachmentMetadata(value = {}) {
+  return isTranslatableTextAttachmentMetadata(value)
+    || isExtractableEmailDocumentMetadata(value)
 }
 
 function attachmentError(message, statusCode, code) {
@@ -87,9 +99,9 @@ export function extractEmailAttachmentTranslationInput(value = {}, {
       'EMAIL_ATTACHMENT_TRANSLATION_EMPTY'
     )
   }
-  if (!isTranslatableEmailAttachmentMetadata(value)) {
+  if (!isTranslatableTextAttachmentMetadata(value)) {
     throw attachmentError(
-      '仅支持纯文本、Markdown、CSV、JSON、XML 等文本附件；PDF 和 Office 文件暂不支持',
+      '仅支持纯文本、Markdown、CSV、JSON、XML，以及 PDF、DOCX、PPTX、XLSX 附件',
       415,
       'EMAIL_ATTACHMENT_TRANSLATION_UNSUPPORTED_TYPE'
     )
@@ -142,5 +154,32 @@ export function extractEmailAttachmentTranslationInput(value = {}, {
     contentType: normalizedMime(value.contentType ?? value.type) || 'text/plain',
     sourceBytes: content.length,
     sourceCharacters: text.length
+  }
+}
+
+export async function extractEmailAttachmentTranslationInputAsync(value = {}, options = {}) {
+  if (!isExtractableEmailDocumentMetadata(value)) {
+    return extractEmailAttachmentTranslationInput(value, options)
+  }
+  try {
+    const extracted = await extractEmailDocumentText(value, {
+      ...options,
+      maximumBytes: options.maximumDocumentBytes
+        ?? EMAIL_DOCUMENT_EXTRACTION_LIMITS.maximumBytes
+    })
+    return {
+      text: extracted.text,
+      filename: String(value.filename || value.name || 'attachment').trim().slice(0, 180) || 'attachment',
+      contentType: normalizedMime(value.contentType ?? value.type) || 'application/octet-stream',
+      sourceBytes: value.content.length,
+      sourceCharacters: extracted.extractedCharacters,
+      sourceFormat: extracted.format,
+      sourceUnits: extracted.sourceUnits
+    }
+  } catch (error) {
+    if (error instanceof EmailDocumentExtractionError) {
+      throw attachmentError(error.message, error.statusCode, error.code)
+    }
+    throw error
   }
 }

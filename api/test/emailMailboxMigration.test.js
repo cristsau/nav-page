@@ -31,6 +31,10 @@ const notificationRuleGateUrl = new URL(
   import.meta.url
 )
 const verifierUrl = new URL('../src/db/verifyMigrations.js', import.meta.url)
+const protocolReconciliationMigrationUrl = new URL(
+  '../src/db/migrations/044_email_protocol_reconciliation.sql',
+  import.meta.url
+)
 
 test('mailbox foundation models accounts, folders, messages and remote identities', async () => {
   const migration = await readFile(migrationUrl, 'utf8')
@@ -65,6 +69,15 @@ test('mailbox foundation models accounts, folders, messages and remote identitie
   assert.match(migration, /special_use IN \([\s\S]*'sent'[\s\S]*'drafts'[\s\S]*'trash'/)
   assert.match(migration, /WHERE expunged_at IS NULL AND seen = FALSE/)
   assert.match(migration, /WHERE expunged_at IS NULL AND flagged = TRUE/)
+})
+
+test('protocol reconciliation migration separates observed and committed MODSEQ cursors', async () => {
+  const migration = await readFile(protocolReconciliationMigrationUrl, 'utf8')
+  assert.match(migration, /ADD COLUMN IF NOT EXISTS reconciled_modseq NUMERIC\(20, 0\)/)
+  assert.match(migration, /ADD COLUMN IF NOT EXISTS last_reconciled_at TIMESTAMPTZ/)
+  assert.match(migration, /last_reconcile_mode IN \([\s\S]*'qresync'[\s\S]*'condstore'[\s\S]*'uid_flags_scan'[\s\S]*'uidvalidity_reset'/)
+  assert.match(migration, /idx_email_folders_reconcile_due/)
+  assert.match(migration, /WHERE selectable = TRUE AND subscribed = TRUE/)
 })
 
 test('mailbox foundation links classifications without storing mailbox credentials', async () => {

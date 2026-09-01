@@ -58,7 +58,7 @@ import {
 } from '../lib/emailIncomingAttachments.js'
 import {
   EmailAttachmentTranslationError,
-  extractEmailAttachmentTranslationInput
+  extractEmailAttachmentTranslationInputAsync
 } from '../lib/emailAttachmentTranslation.js'
 import { createEmailMailboxEventBroker } from '../lib/emailMailboxEventBroker.js'
 import { createEmailSseConnectionLimiter, writeEmailSse } from '../lib/emailSse.js'
@@ -1164,7 +1164,7 @@ export default async function emailRoutes(fastify) {
     try {
       provider = await resolveEmailAiProviderForUser(request.currentUser.id)
       attachment = await fetchIncomingAttachment(rows[0], attachmentId)
-      const input = extractEmailAttachmentTranslationInput(attachment)
+      const input = await extractEmailAttachmentTranslationInputAsync(attachment)
       const contentDigest = createHash('sha256').update(attachment.content).digest('hex')
       const resourceVersion = createHash('sha256').update(JSON.stringify({
         accountId,
@@ -1189,7 +1189,9 @@ export default async function emailRoutes(fastify) {
         filename: input.filename,
         contentType: input.contentType,
         sourceBytes: input.sourceBytes,
-        sourceCharacters: input.sourceCharacters
+        sourceCharacters: input.sourceCharacters,
+        sourceFormat: input.sourceFormat || 'text',
+        sourceUnits: input.sourceUnits || []
       }
       if (cached) {
         await recordSecurityEventBestEffort({

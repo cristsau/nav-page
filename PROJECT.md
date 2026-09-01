@@ -50,7 +50,7 @@ DOMO NAV 是面向个人与小团队的私有化导航工作台。产品主线�
 
 ### 邮件工作台
 
-- 桌面三栏与手机渐进式列表/详情布局，支持服务端搜索、筛选和只读查看
+- 桌面三栏与手机渐进式列表/详情布局，支持服务端搜索、筛选、详情阅读，以及受控远端命令和确认式发送候选
 - 账户、分类、域名、发件人和会话级通知规则；支持立即、摘要、仅站内和静默
 - 带来源邮件摘要、邮件正文翻译、跨邮件检索，以及只在预览确认后保存的加密 AI 草稿
 - 关键通知保护、托管 SMTP/IMAP 配置和 Secret 不回显
@@ -83,9 +83,10 @@ DOMO NAV 是面向个人与小团队的私有化导航工作台。产品主线�
 
 | 状态 | 能力 |
 | --- | --- |
-| 已验证生产 | 分享 UI、Responses API/动态模型/AI 助理、本地 BM25/向量语义、Web Push、导航拖拽/批量/链接检查、到期提醒、块编辑器/版本、协作与离线同步、图片库、流式恢复、邮件工作台/通知规则/邮件 AI、双域 CORS、共享限流、安全审计与有界后台维护 |
-| 本地源码完成、待 PostgreSQL 16 CI/发布 | 邮件 P0 低延迟收取流水线（先入库、持久 AI 队列、连续排空、API 唤醒 worker、延迟观测）与安全文本附件 AI 翻译 |
-| 本地源码完成、待 CI/发布 | 2026-08-28 有界维护 profile、原子 release 指针、本地 backup/retention/isolated-restore timer 门禁、受控磁盘清理 |
+| 历史已验证生产 | 分享 UI、Responses API/动态模型/AI 助理、本地 BM25/向量语义、Web Push、导航拖拽/批量/链接检查、到期提醒、块编辑器/版本、协作与离线同步、图片库、流式恢复、邮件工作台/通知规则/邮件 AI、双域 CORS、共享限流、安全审计与有界后台维护；当前生产仍需重新现场读取 |
+| 已进入 `origin/master`、生产需复核 | 邮件 P0 低延迟收取流水线、持久 AI 分类队列和历史通知回填修复；不能据此推断当前 OVH 已发布 |
+| 本地源码及 PostgreSQL 16 验证完成、待 GitHub CI/合并/发布 | 邮件 P1 协议及多目录对账；PDF/DOCX/PPTX/XLSX 安全文本提取与 AI 翻译；Worker 连接池观测和发布 backlog 精确门禁；Notion 风格关系数据库子集；AI 固定白名单的“预览后确认”、幂等执行，以及仅对可安全恢复操作提供的限时撤销 |
+| 本地源码完成、待 GitHub CI/发布 | 2026-08-28 有界维护 profile、原子 release 指针、本地 backup/retention/isolated-restore timer 门禁、受控磁盘清理 |
 | 外部配置或人工流程 | 异地存储凭据/首次 exact-ID 恢复/外部 dead-man；OAuth provider 凭据和同意屏幕；扩展商店开发者账号、签名、提交与审核 |
 
 精确生产 SHA、验收证据和剩余门槛以 [STATUS_REPORT.md](./STATUS_REPORT.md) 为准。
@@ -94,11 +95,11 @@ DOMO NAV 是面向个人与小团队的私有化导航工作台。产品主线�
 timer 启用前门禁与受控磁盘清理，但状态仍为 `LOCAL_DONE / READY_FOR_CI / NOT_DEPLOYED`。
 异地对象存储没有用户选定的 provider/Secret/恢复证据时，必须继续显示为未配置。
 
-## 当前生产
+## 历史留档生产基线（`NEEDS_LIVE_VERIFY`）
 
 - 主域名：[https://nav.skrskr.net](https://nav.skrskr.net)
 - 反代域名：[https://nav.cristsau.cn](https://nav.cristsau.cn)
-- 最新留档的已验证提交（2026-08-27）：`15fd83e3f197afb7a03fe119ce118feae26ab10f`
+- 最新留档的已验证提交（2026-08-27）：`15fd83e3f197afb7a03fe119ce118feae26ab10f`；本次未访问生产，不能把它表述为当前 SHA
 - 对应 release：`/opt/nav-stack/releases/20260827-231729-15fd83e`
 - 2026-08-28 运维收口批次尚未发布；实时状态必须在下一次发布前重新读取。
 
@@ -116,14 +117,14 @@ timer 启用前门禁与受控磁盘清理，但状态仍为 `LOCAL_DONE / READY
 
 ## 后续优先级
 
-1. 让邮件 P0 候选通过 GitHub PostgreSQL 16 迁移/回滚、邮件集成和全量 CI；随后按 canonical 备份、隔离恢复、精确 merge SHA 和双域验收门禁发布。
-2. 发布后用真实邮箱验收“立即收信”、邮件先可见/AI 后收口、通知不重复，以及桌面/手机安全文本附件 AI 翻译。
-3. 完成邮件 P1 对账与附件扩展：在服务器支持时使用 CONDSTORE/QRESYNC 对账 flags 与 expunge，并为 PDF/Office 增加受限、隔离、无网络的纯文本提取；不把 OCR、宏或富媒体执行混入本阶段。
-4. 让 2026-08-28 运维候选通过 GitHub Linux shellcheck、systemd 和全量应用/PostgreSQL 门禁。
-5. 现场创建/核验 `current` 与 `rollback` 指针，先只运行本地 timer 的只读 preflight。
-6. 发布后按最小批次启用书签健康检查和 AI 用量保留，并在管理员维护面板验收。
-7. 经单独授权后完成一次本地 canonical backup 与隔离恢复，才允许启用本地 timer。
-8. 用户选定免费存储后填写通用异地备份 Secret，再做首次快照、恢复演练与外部 dead-man。
+1. 让迁移 `044`–`046`、邮件/数据库/AI 集成和全量应用测试通过 GitHub CI；随后才进入单独授权的发布流程。
+2. 发布后用真实 MXroute 邮箱验收立即收信、协议对账、多目录、Sent APPEND、通知去重和桌面/手机附件翻译；两个邮件协议增强开关必须分阶段启用。
+3. 让 2026-08-28 运维收口批次通过 GitHub Linux shellcheck、systemd 和全量应用/PostgreSQL 门禁。
+4. 现场创建/核验 `current` 与 `rollback` 指针，先只运行本地 timer 的只读 preflight。
+5. 发布后按最小批次启用书签健康检查和 AI 用量保留，并在管理员维护面板验收。
+6. 经单独授权后完成一次本地 canonical backup 与隔离恢复，才允许启用本地 timer。
+7. 用户选定免费存储后填写通用异地备份 Secret，再做首次快照、恢复演练与外部 dead-man。
+8. Google/微信及邮箱 OAuth 由用户在 Provider 控制台创建应用、登记双域回调并提供 Secret 后做真实登录验收。
 9. 扩展商店开发者账号、签名、提交和审核继续作为外部人工流程。
 
 邮件实时收取与附件翻译的分期边界、迁移编号和验收标准见

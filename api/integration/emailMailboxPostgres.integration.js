@@ -56,6 +56,9 @@ let deleteExcessEmailMessagesSql
 let temporaryDirectory
 let minimumMailWorkerDatabasePoolSize
 let normalizeDatabasePoolMax
+let applyEmailFolderReconciliation
+let syncDueEmailFolders
+let upsertEmailFolder
 
 before(async () => {
   temporaryDirectory = await fs.mkdtemp(path.join(os.tmpdir(), 'nav-email-mailbox-'))
@@ -67,7 +70,11 @@ before(async () => {
     normalizeDatabasePoolMax
   } = await import('../src/config.js'))
   ;({ pool } = await import('../src/db/index.js'))
-  ;({ persistEmailMailboxMessage, decryptStoredMailboxMessage } = await import('../src/lib/emailMailboxStore.js'))
+  ;({
+    persistEmailMailboxMessage,
+    decryptStoredMailboxMessage,
+    upsertEmailFolder
+  } = await import('../src/lib/emailMailboxStore.js'))
   ;({ clearEmailEncryptionKeyCache, encryptEmailPayload } = await import('../src/lib/emailCrypto.js'))
   ;({
     createEmailDraft,
@@ -83,6 +90,10 @@ before(async () => {
   ;({ processEmailSentAppendJob } = await import('../src/lib/emailSentAppend.js'))
   ;({ decryptEmailSentMime } = await import('../src/lib/emailSentMimeCrypto.js'))
   ;({ UPDATE_MAILBOX_FAILURE_STATE_SQL: updateMailboxFailureStateSql } = await import('../src/lib/emailIngestScheduler.js'))
+  ;({
+    applyEmailFolderReconciliation,
+    syncDueEmailFolders
+  } = await import('../src/lib/emailMailboxReconciliation.js'))
   ;({ processInboundEmail } = await import('../src/lib/emailEvents.js'))
   ;({ processEmailClassificationJobs } = await import('../src/lib/emailClassificationWorker.js'))
   ;({ DELETE_EXCESS_EMAIL_MESSAGES_SQL: deleteExcessEmailMessagesSql } = await import('../src/lib/emailRetention.js'))
@@ -773,6 +784,14 @@ test('notification rules are owner-bound, encrypted at rest and protect critical
 
 test('UIDVALIDITY reset expires old remote locations without deleting canonical messages', async () => {
   const oldMessage = await persistEmailMailboxMessage(mailboxFixture())
+  await pool.query(
+    `UPDATE email_folders
+     SET reconciled_modseq = 20,
+         last_reconciled_at = NOW(),
+         last_reconcile_mode = 'qresync'
+     WHERE id = $1 AND user_id = $2`,
+    [oldMessage.folder.id, OWNER_ID]
+  )
   const replacement = mailboxFixture({
     folder: {
       ...mailboxFixture().folder,
@@ -801,10 +820,477 @@ test('UIDVALIDITY reset expires old remote locations without deleting canonical 
   assert.equal(locations.rows.length, 2)
   assert.ok(locations.rows.find((row) => row.message_id === oldMessage.message.id)?.expunged_at)
   assert.equal(locations.rows.find((row) => row.message_id === nextMessage.message.id)?.expunged_at, null)
+  const resetFolder = await pool.query(
+    `SELECT reconciled_modseq, last_reconciled_at, last_reconcile_mode
+     FROM email_folders WHERE id = $1 AND user_id = $2`,
+    [nextMessage.folder.id, OWNER_ID]
+  )
+  assert.equal(resetFolder.rows[0].reconciled_modseq, null)
+  assert.equal(resetFolder.rows[0].last_reconciled_at, null)
+  assert.equal(resetFolder.rows[0].last_reconcile_mode, 'uidvalidity_reset')
   assert.equal(
     Number((await pool.query('SELECT COUNT(*) FROM email_messages WHERE user_id = $1', [OWNER_ID])).rows[0].count),
     2
   )
+})
+
+test('protocol reconciliation applies monotonic flags and exact expunges without crossing owners', async () => {
+  const first = await persistEmailMailboxMessage(mailboxFixture())
+  const second = await persistEmailMailboxMessage(mailboxFixture({
+    message: {
+      ...mailboxFixture().message,
+      mailboxUid: 11,
+      messageId: '<mailbox-reconcile-second@example.test>',
+      rawHash: 'b'.repeat(64),
+      subject: 'Second reconcile message',
+      flags: [],
+      modseq: '21'
+    },
+    folder: {
+      ...mailboxFixture().folder,
+      uidNext: '12',
+      highestModseq: '21'
+    }
+  }))
+  await pool.query(
+    `UPDATE email_folders
+     SET reconciled_modseq = 21, last_reconciled_at = NOW()
+     WHERE id = $1 AND user_id = $2`,
+    [first.folder.id, OWNER_ID]
+  )
+
+  const applied = await applyEmailFolderReconciliation({
+    poolInstance: pool,
+    userId: OWNER_ID,
+    folderId: first.folder.id,
+    uidValidity: '100',
+    mode: 'qresync',
+    remoteHighestModseq: '25',
+    flagUpdates: [{
+      uid: 10,
+      modseq: '25',
+      flags: ['\\Flagged', 'remote-keyword']
+    }],
+    expungedUids: [11]
+  })
+  assert.deepEqual(applied, { flagsUpdated: 1, expunged: 1, mode: 'qresync' })
+
+  const state = await pool.query(
+    `SELECT reconciled_modseq, last_reconcile_mode, last_reconcile_error_code
+     FROM email_folders WHERE id = $1 AND user_id = $2`,
+    [first.folder.id, OWNER_ID]
+  )
+  assert.equal(String(state.rows[0].reconciled_modseq), '25')
+  assert.equal(state.rows[0].last_reconcile_mode, 'qresync')
+  assert.equal(state.rows[0].last_reconcile_error_code, null)
+
+  const locations = await pool.query(
+    `SELECT uid, modseq, seen, flagged, keywords, expunged_at
+     FROM email_folder_messages
+     WHERE folder_id = $1 AND user_id = $2
+     ORDER BY uid`,
+    [first.folder.id, OWNER_ID]
+  )
+  assert.equal(Number(locations.rows[0].uid), 10)
+  assert.equal(String(locations.rows[0].modseq), '25')
+  assert.equal(locations.rows[0].seen, false)
+  assert.equal(locations.rows[0].flagged, true)
+  assert.deepEqual(locations.rows[0].keywords, ['remote-keyword'])
+  assert.equal(locations.rows[0].expunged_at, null)
+  assert.equal(Number(locations.rows[1].uid), 11)
+  assert.ok(locations.rows[1].expunged_at)
+
+  const third = await persistEmailMailboxMessage(mailboxFixture({
+    message: {
+      ...mailboxFixture().message,
+      mailboxUid: 12,
+      messageId: '<mailbox-reconcile-third@example.test>',
+      rawHash: 'c'.repeat(64),
+      subject: 'Third reconcile message',
+      flags: [],
+      modseq: '24'
+    },
+    folder: {
+      ...mailboxFixture().folder,
+      uidNext: '13',
+      highestModseq: '25'
+    }
+  }))
+  const authoritative = await applyEmailFolderReconciliation({
+    poolInstance: pool,
+    userId: OWNER_ID,
+    folderId: first.folder.id,
+    uidValidity: '100',
+    mode: 'condstore',
+    remoteHighestModseq: '25',
+    flagUpdates: [{ uid: 10, modseq: '24', flags: ['\\Seen'] }],
+    authoritativeRemoteUids: [10]
+  })
+  assert.deepEqual(authoritative, { flagsUpdated: 0, expunged: 1, mode: 'condstore' })
+  const monotonic = await pool.query(
+    `SELECT uid, modseq, seen, flagged, expunged_at
+     FROM email_folder_messages
+     WHERE id = ANY($1::uuid[]) AND user_id = $2
+     ORDER BY uid`,
+    [[first.location.id, third.location.id], OWNER_ID]
+  )
+  assert.equal(String(monotonic.rows[0].modseq), '25')
+  assert.equal(monotonic.rows[0].seen, false)
+  assert.equal(monotonic.rows[0].flagged, true)
+  assert.ok(monotonic.rows[1].expunged_at)
+
+  const canonicalCount = await pool.query(
+    'SELECT COUNT(*)::integer AS count FROM email_messages WHERE user_id = $1',
+    [OWNER_ID]
+  )
+  assert.equal(canonicalCount.rows[0].count, 3)
+
+  await assert.rejects(
+    applyEmailFolderReconciliation({
+      poolInstance: pool,
+      userId: OTHER_USER_ID,
+      folderId: first.folder.id,
+      uidValidity: '100',
+      mode: 'qresync',
+      remoteHighestModseq: '26'
+    }),
+    (error) => error?.code === 'EMAIL_RECONCILE_FOLDER_MISSING'
+  )
+  await assert.rejects(
+    applyEmailFolderReconciliation({
+      poolInstance: pool,
+      userId: OWNER_ID,
+      folderId: first.folder.id,
+      uidValidity: '999',
+      mode: 'qresync',
+      remoteHighestModseq: '26'
+    }),
+    (error) => error?.code === 'EMAIL_RECONCILE_UIDVALIDITY_CHANGED'
+  )
+  await assert.rejects(
+    applyEmailFolderReconciliation({
+      poolInstance: pool,
+      userId: OWNER_ID,
+      folderId: first.folder.id,
+      uidValidity: '100',
+      mode: 'qresync',
+      remoteHighestModseq: '24'
+    }),
+    (error) => error?.code === 'EMAIL_RECONCILE_MODSEQ_REGRESSION'
+  )
+  await assert.rejects(
+    applyEmailFolderReconciliation({
+      poolInstance: pool,
+      userId: OWNER_ID,
+      folderId: first.folder.id,
+      uidValidity: '100',
+      mode: 'condstore',
+      remoteHighestModseq: null
+    }),
+    (error) => error?.code === 'EMAIL_RECONCILE_MODSEQ_MISSING'
+  )
+
+  const replay = await applyEmailFolderReconciliation({
+    poolInstance: pool,
+    userId: OWNER_ID,
+    folderId: first.folder.id,
+    uidValidity: '100',
+    mode: 'qresync',
+    remoteHighestModseq: '25',
+    expungedUids: [11]
+  })
+  assert.equal(replay.expunged, 0)
+  assert.equal(second.message.id.length, 36)
+})
+
+test('periodic folder sync ingests a subscribed secondary folder and honors error cooldown', async () => {
+  const primary = await persistEmailMailboxMessage(mailboxFixture())
+  await pool.query(
+    `UPDATE email_folders
+     SET initial_sync_complete = TRUE,
+         last_synced_at = NOW(),
+         last_reconciled_at = NOW(),
+         reconciled_modseq = highest_modseq
+     WHERE id = $1 AND user_id = $2`,
+    [primary.folder.id, OWNER_ID]
+  )
+  const archiveClient = await pool.connect()
+  let archive
+  try {
+    await archiveClient.query('BEGIN')
+    archive = await upsertEmailFolder(archiveClient, {
+      accountId: primary.account.id,
+      userId: OWNER_ID,
+      path: 'Archive',
+      delimiter: '/',
+      specialUse: 'archive',
+      selectable: true,
+      subscribed: true,
+      uidValidity: '300',
+      uidNext: '2',
+      highestModseq: '51',
+      lastUid: 0
+    })
+    await archiveClient.query('COMMIT')
+  } catch (error) {
+    await archiveClient.query('ROLLBACK')
+    throw error
+  } finally {
+    archiveClient.release()
+  }
+
+  const mailboxByPath = new Map([['Archive', {
+    path: 'Archive',
+    delimiter: '/',
+    uidValidity: 300n,
+    uidNext: 2,
+    highestModseq: 51n,
+    exists: 1,
+    noModseq: true
+  }]])
+  const fakeImap = {
+    capabilities: new Set(['IDLE']),
+    enabled: new Set(),
+    mailbox: null,
+    async getMailboxLock(folderPath) {
+      this.mailbox = mailboxByPath.get(folderPath)
+      assert.ok(this.mailbox, `unexpected IMAP folder ${folderPath}`)
+      return { release() {} }
+    },
+    on() {},
+    off() {},
+    async search() { return [1] },
+    async fetchAll(range, query) {
+      if (query?.envelope) {
+        assert.equal(range, '1:1')
+        return [{
+          uid: 1,
+          envelope: {
+            messageId: '<archive-one@example.test>',
+            subject: 'Archived message',
+            from: [{ name: 'Archive sender', address: 'archive@example.test' }],
+            to: [{ name: 'Owner', address: 'owner@example.test' }],
+            date: new Date('2026-08-30T12:00:00.000Z')
+          },
+          internalDate: new Date('2026-08-30T12:00:00.000Z'),
+          size: 128,
+          flags: new Set(['\\Seen']),
+          modseq: 51n
+        }]
+      }
+      assert.deepEqual(range, [1])
+      return [{ uid: 1, flags: new Set(['\\Seen']), modseq: 51n }]
+    },
+    async fetchOne(uid) {
+      assert.equal(uid, 1)
+      return { source: Buffer.from('Subject: Archived message\r\n\r\nArchived body') }
+    }
+  }
+  const parseMessage = async (message) => ({
+    mailboxUid: Number(message.uid),
+    messageId: `<archive-${message.uid}@example.test>`,
+    rawHash: createHash('sha256').update(`archive-${message.uid}`).digest('hex'),
+    sender: { name: 'Archive sender', address: 'archive@example.test' },
+    to: [{ name: 'Owner', address: 'owner@example.test' }],
+    subject: 'Archived message',
+    text: 'Archived body',
+    receivedAt: '2026-08-30T12:00:00.000Z',
+    internalDate: '2026-08-30T12:00:00.000Z',
+    size: 128,
+    flags: [...(message.flags || [])],
+    modseq: String(message.modseq || 51),
+    attachments: []
+  })
+  const firstRun = await syncDueEmailFolders({
+    client: fakeImap,
+    poolInstance: pool,
+    userId: OWNER_ID,
+    sourceKey: 'integration-mail',
+    primaryMailbox: 'INBOX',
+    policy: { folderSyncIntervalSeconds: 900, foldersPerRun: 2 },
+    parseMessage
+  })
+  assert.equal(firstRun.foldersProcessed, 1)
+  assert.equal(firstRun.uidScanFolders, 1)
+  assert.equal(firstRun.secondaryProcessed, 1)
+  assert.equal(firstRun.secondaryRemaining, 0)
+
+  const stored = await pool.query(
+    `SELECT folder.path, folder.last_uid, folder.initial_sync_complete,
+            folder.last_reconcile_mode, job.notification_eligible
+     FROM email_folders AS folder
+     JOIN email_folder_messages AS location
+       ON location.folder_id = folder.id AND location.user_id = folder.user_id
+     JOIN email_classification_jobs AS job
+       ON job.email_message_id = location.message_id AND job.user_id = location.user_id
+     WHERE folder.id = $1 AND folder.user_id = $2`,
+    [archive.id, OWNER_ID]
+  )
+  assert.equal(stored.rows[0].path, 'Archive')
+  assert.equal(Number(stored.rows[0].last_uid), 1)
+  assert.equal(stored.rows[0].initial_sync_complete, true)
+  assert.equal(stored.rows[0].last_reconcile_mode, 'uid_flags_scan')
+  assert.equal(stored.rows[0].notification_eligible, false)
+
+  const immediateReplay = await syncDueEmailFolders({
+    client: fakeImap,
+    poolInstance: pool,
+    userId: OWNER_ID,
+    sourceKey: 'integration-mail',
+    primaryMailbox: 'INBOX',
+    policy: { folderSyncIntervalSeconds: 900, foldersPerRun: 2 },
+    parseMessage
+  })
+  assert.equal(immediateReplay.foldersProcessed, 0)
+
+  await pool.query(
+    `UPDATE email_folders
+     SET initial_sync_complete = FALSE,
+         last_reconciled_at = NULL,
+         last_reconcile_error_at = NOW(),
+         last_reconcile_error_code = 'EMAIL_RECONCILE_UID_SCAN_FAILED'
+     WHERE id = $1 AND user_id = $2`,
+    [archive.id, OWNER_ID]
+  )
+  const cooledDown = await syncDueEmailFolders({
+    client: fakeImap,
+    poolInstance: pool,
+    userId: OWNER_ID,
+    sourceKey: 'integration-mail',
+    primaryMailbox: 'INBOX',
+    policy: { folderSyncIntervalSeconds: 900, foldersPerRun: 2 },
+    parseMessage
+  })
+  assert.equal(cooledDown.foldersProcessed, 0)
+})
+
+test('QRESYNC fetch applies changed flags and VANISHED UIDs from the selected folder', async () => {
+  const first = await persistEmailMailboxMessage(mailboxFixture())
+  const second = await persistEmailMailboxMessage(mailboxFixture({
+    message: {
+      ...mailboxFixture().message,
+      mailboxUid: 11,
+      messageId: '<qresync-vanished@example.test>',
+      rawHash: 'd'.repeat(64),
+      subject: 'QRESYNC vanished message',
+      flags: [],
+      modseq: '21'
+    },
+    folder: {
+      ...mailboxFixture().folder,
+      uidNext: '12',
+      highestModseq: '21'
+    }
+  }))
+  await pool.query(
+    `UPDATE email_folders
+     SET initial_sync_complete = TRUE,
+         reconciled_modseq = 21,
+         last_reconciled_at = NOW() - INTERVAL '1 hour'
+     WHERE id = $1 AND user_id = $2`,
+    [first.folder.id, OWNER_ID]
+  )
+  const listeners = new Map()
+  let remoteHighestModseq = 25n
+  let vanishedUid = 11
+  const fakeImap = {
+    capabilities: new Set(['CONDSTORE', 'QRESYNC']),
+    enabled: new Set(['CONDSTORE', 'QRESYNC']),
+    mailbox: null,
+    async getMailboxLock(folderPath) {
+      assert.equal(folderPath, 'INBOX')
+      this.mailbox = {
+        path: 'INBOX',
+        delimiter: '/',
+        uidValidity: 100n,
+        uidNext: 12,
+        highestModseq: remoteHighestModseq,
+        exists: 1,
+        noModseq: false
+      }
+      return { release() {} }
+    },
+    on(name, handler) { listeners.set(name, handler) },
+    off(name, handler) {
+      if (listeners.get(name) === handler) listeners.delete(name)
+    },
+    async fetchAll(range, query, options) {
+      assert.equal(range, '1:*')
+      assert.equal(options.uid, true)
+      assert.ok([21n, 25n].includes(options.changedSince))
+      assert.equal(query.modseq, true)
+      listeners.get('expunge')?.({ path: 'INBOX', uid: vanishedUid, vanished: true, earlier: true })
+      if (vanishedUid != null) this.mailbox.highestModseq = 99n
+      return vanishedUid == null
+        ? []
+        : [{ uid: 10, flags: new Set(['\\Flagged']), modseq: 25n }]
+    }
+  }
+  const summary = await syncDueEmailFolders({
+    client: fakeImap,
+    poolInstance: pool,
+    userId: OWNER_ID,
+    sourceKey: 'integration-mail',
+    primaryMailbox: 'INBOX',
+    policy: { folderSyncIntervalSeconds: 60, foldersPerRun: 1 },
+    parseMessage: async () => { throw new Error('primary reconciliation must not parse content') }
+  })
+  assert.equal(summary.foldersProcessed, 1)
+  assert.equal(summary.qresyncFolders, 1)
+  assert.equal(summary.flagUpdates, 1)
+  assert.equal(summary.expunged, 1)
+  assert.equal(listeners.size, 0)
+
+  const locations = await pool.query(
+    `SELECT id, modseq, flagged, expunged_at
+     FROM email_folder_messages
+     WHERE id = ANY($1::uuid[]) AND user_id = $2
+     ORDER BY uid`,
+    [[first.location.id, second.location.id], OWNER_ID]
+  )
+  assert.equal(String(locations.rows[0].modseq), '25')
+  assert.equal(locations.rows[0].flagged, true)
+  assert.equal(locations.rows[0].expunged_at, null)
+  assert.ok(locations.rows[1].expunged_at)
+
+  await pool.query(
+    `UPDATE email_folders
+     SET last_reconciled_at = NOW() - INTERVAL '1 hour'
+     WHERE id = $1 AND user_id = $2`,
+    [first.folder.id, OWNER_ID]
+  )
+  remoteHighestModseq = 26n
+  vanishedUid = null
+  const failedClosed = await syncDueEmailFolders({
+    client: fakeImap,
+    poolInstance: pool,
+    userId: OWNER_ID,
+    sourceKey: 'integration-mail',
+    primaryMailbox: 'INBOX',
+    policy: { folderSyncIntervalSeconds: 60, foldersPerRun: 1 },
+    parseMessage: async () => { throw new Error('primary reconciliation must not parse content') }
+  })
+  assert.equal(failedClosed.foldersProcessed, 0)
+  assert.equal(failedClosed.foldersFailed, 1)
+  const failedState = await pool.query(
+    `SELECT reconciled_modseq, last_reconcile_error_code
+     FROM email_folders WHERE id = $1 AND user_id = $2`,
+    [first.folder.id, OWNER_ID]
+  )
+  assert.equal(String(failedState.rows[0].reconciled_modseq), '25')
+  assert.equal(failedState.rows[0].last_reconcile_error_code, 'EMAIL_RECONCILE_EXPUNGE_UNKNOWN')
+
+  const cooldown = await syncDueEmailFolders({
+    client: fakeImap,
+    poolInstance: pool,
+    userId: OWNER_ID,
+    sourceKey: 'integration-mail',
+    primaryMailbox: 'INBOX',
+    policy: { folderSyncIntervalSeconds: 60, foldersPerRun: 1 },
+    parseMessage: async () => { throw new Error('primary reconciliation must not parse content') }
+  })
+  assert.equal(cooldown.foldersProcessed, 0)
+  assert.equal(cooldown.foldersFailed, 0)
 })
 
 test('mailbox failure state is isolated by owner when users share a source key', async () => {

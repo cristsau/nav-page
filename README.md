@@ -105,5 +105,6 @@ PostgreSQL 迁移校验、API 测试与 Vite 生产构建由
 15. [多人协作、离线同步、整套灾难恢复与流式恢复](./docs/NAV_COLLABORATION_OFFLINE_DR_STREAMING.md)
 16. [实时评论事件流](./docs/NAV_REALTIME_COMMENTS_20260824.md)
 17. [2026-08-28 运维收口候选与启用边界](./docs/NAV_OPERATIONS_COMPLETION_20260828.md)
+18. [PDF/Office 邮件附件安全提取与 AI 翻译候选](./docs/NAV_MAIL_DOCUMENT_EXTRACTION_20260901.md)
 
 继续开发或发布前，应重新核对 GitHub、当前工作区和实时生产状态；仓库文档不是生产写入授权。

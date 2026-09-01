@@ -270,6 +270,12 @@ export async function upsertEmailFolder(client, {
        uid_validity = COALESCE(EXCLUDED.uid_validity, email_folders.uid_validity),
        uid_next = COALESCE(EXCLUDED.uid_next, email_folders.uid_next),
        highest_modseq = COALESCE(EXCLUDED.highest_modseq, email_folders.highest_modseq),
+       reconciled_modseq = CASE
+         WHEN email_folders.uid_validity IS DISTINCT FROM EXCLUDED.uid_validity
+              AND email_folders.uid_validity IS NOT NULL
+              AND EXCLUDED.uid_validity IS NOT NULL THEN NULL
+         ELSE email_folders.reconciled_modseq
+       END,
        last_uid = CASE
          WHEN email_folders.uid_validity IS DISTINCT FROM EXCLUDED.uid_validity
               AND EXCLUDED.uid_validity IS NOT NULL THEN EXCLUDED.last_uid
@@ -290,6 +296,30 @@ export async function upsertEmailFolder(client, {
        END,
        last_listed_at = NOW(),
        last_synced_at = CASE WHEN $13 THEN NOW() ELSE email_folders.last_synced_at END,
+       last_reconciled_at = CASE
+         WHEN email_folders.uid_validity IS DISTINCT FROM EXCLUDED.uid_validity
+              AND email_folders.uid_validity IS NOT NULL
+              AND EXCLUDED.uid_validity IS NOT NULL THEN NULL
+         ELSE email_folders.last_reconciled_at
+       END,
+       last_reconcile_mode = CASE
+         WHEN email_folders.uid_validity IS DISTINCT FROM EXCLUDED.uid_validity
+              AND email_folders.uid_validity IS NOT NULL
+              AND EXCLUDED.uid_validity IS NOT NULL THEN 'uidvalidity_reset'
+         ELSE email_folders.last_reconcile_mode
+       END,
+       last_reconcile_error_at = CASE
+         WHEN email_folders.uid_validity IS DISTINCT FROM EXCLUDED.uid_validity
+              AND email_folders.uid_validity IS NOT NULL
+              AND EXCLUDED.uid_validity IS NOT NULL THEN NULL
+         ELSE email_folders.last_reconcile_error_at
+       END,
+       last_reconcile_error_code = CASE
+         WHEN email_folders.uid_validity IS DISTINCT FROM EXCLUDED.uid_validity
+              AND email_folders.uid_validity IS NOT NULL
+              AND EXCLUDED.uid_validity IS NOT NULL THEN NULL
+         ELSE email_folders.last_reconcile_error_code
+       END,
        last_error_at = NULL,
        last_error_code = NULL,
        updated_at = NOW()

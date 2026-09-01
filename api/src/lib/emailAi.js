@@ -48,7 +48,7 @@ export const EMAIL_AI_ACTIONS = Object.freeze({
   },
   translate: {
     label: '翻译',
-    instruction: '将邮件内容翻译为用户指定的目标语言，保留原意、语气、段落和关键数据，不增加解释或外部信息。',
+    instruction: '将邮件内容翻译为用户指定的目标语言，保留原意、语气、段落和关键数据，不增加解释或外部信息。输入中如有“[PDF 第 N 页]”“[幻灯片 N]”“[工作表 N：名称]”或其他方括号来源标题，必须原样保留且不得调换顺序。',
     maxOutputTokens: 3_000
   },
   search_answer: {

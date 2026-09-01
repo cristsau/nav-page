@@ -9,6 +9,13 @@ import {
 } from './assistantToolOperations.js'
 import { isUuid } from './offlineMutations.js'
 import { isExplicitAssistantCreateCommand } from './assistantAuthorization.js'
+import {
+  ASSISTANT_ADVANCED_TOOL_DEFINITIONS,
+  executeAssistantAdvancedReadTool,
+  isAssistantAdvancedTool,
+  normalizeAssistantAdvancedArguments,
+  proposeAssistantAdvancedOperation
+} from './assistantAdvancedOperations.js'
 
 export { isExplicitAssistantCreateCommand } from './assistantAuthorization.js'
 
@@ -43,7 +50,7 @@ const TAGS_SCHEMA = {
   maxItems: MAX_TAGS
 }
 
-export const ASSISTANT_TOOL_DEFINITIONS = Object.freeze([
+const CORE_ASSISTANT_TOOL_DEFINITIONS = [
   {
     type: 'function',
     name: 'get_current_datetime',
@@ -150,6 +157,11 @@ export const ASSISTANT_TOOL_DEFINITIONS = Object.freeze([
       color: { type: 'string', pattern: '^#[0-9a-fA-F]{6}$' }
     }, ['name'])
   }
+]
+
+export const ASSISTANT_TOOL_DEFINITIONS = Object.freeze([
+  ...CORE_ASSISTANT_TOOL_DEFINITIONS,
+  ...ASSISTANT_ADVANCED_TOOL_DEFINITIONS
 ])
 
 const TOOL_DEFINITION_BY_NAME = new Map(
@@ -284,6 +296,9 @@ function normalizeTypeFilters(value) {
 }
 
 function validateToolArguments(toolName, args) {
+  if (isAssistantAdvancedTool(toolName)) {
+    return normalizeAssistantAdvancedArguments(toolName, args)
+  }
   switch (toolName) {
     case 'get_current_datetime': {
       assertExactObject(args, ['timeZone'])
@@ -432,7 +447,9 @@ export function assertAssistantToolCallAllowed(toolName, allowedToolNames, selec
   if (!definition || !allowed.has(definition.name)) {
     fail('模型返回了本轮未授权的工具调用', 'assistant_tool_not_allowed', 403)
   }
-  if (definition.risk === 'write' && definition.name !== selectedWriteTool) {
+  if (definition.risk !== 'read'
+    && selectedWriteTool !== '*'
+    && definition.name !== selectedWriteTool) {
     fail('模型返回了本轮未授权的写入操作', 'assistant_write_tool_not_allowed', 403)
   }
   return definition
@@ -709,6 +726,7 @@ export async function executeAssistantTool({
   now,
   poolInstance = null,
   queryFn = null,
+  candidateIds = [],
   operationRunner = executeAssistantToolOperation
 }) {
   const definition = TOOL_DEFINITION_BY_NAME.get(String(toolName || '').trim())
@@ -740,8 +758,27 @@ export async function executeAssistantTool({
       result = await executeListGroups(normalizedArgs, userId, resolvedQuery)
     } else if (definition.name === 'search_bookmarks') {
       result = await executeSearchBookmarks(normalizedArgs, userId, resolvedQuery)
+    } else if (isAssistantAdvancedTool(definition.name)) {
+      result = await executeAssistantAdvancedReadTool({
+        userId,
+        toolName: definition.name,
+        args: normalizedArgs,
+        queryFn: resolvedQuery
+      })
     }
     return { result, receipt: null }
+  }
+
+  if (isAssistantAdvancedTool(definition.name)) {
+    return proposeAssistantAdvancedOperation({
+      userId,
+      operationId,
+      conversationId,
+      messageId,
+      toolName: definition.name,
+      args: normalizedArgs,
+      candidateIds
+    })
   }
 
   const explicit = isExplicitAssistantCreateCommand(commandText, definition.name)

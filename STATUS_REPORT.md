@@ -1,9 +1,10 @@
 # DOMO NAV Status Report
 
-最后更新：2026-08-28
+最后更新：2026-09-01
 
-本页区分 `VERIFIED_LIVE`、`LOCAL_DONE`、`READY_FOR_CI`、`PARTIAL`、`USER_CONFIG_LATER`
-和 `UNFINISHED`。仓库中存在脚本或代码，不等于生产
+本页区分 `VERIFIED_LIVE`、`NEEDS_LIVE_VERIFY`、`LOCAL_DONE`、`READY_FOR_CI`、
+`NOT_MERGED`、`NOT_DEPLOYED`、`PARTIAL`、`USER_CONFIG_LATER` 和 `UNFINISHED`。
+仓库中存在脚本或代码，不等于生产
 已经安装、启用或形成灾难恢复闭环；每次发布前仍须重新读取 GitHub、OVH 与双域状态。
 
 ## 2026-08-28 当前留档基线与运维收口候选
@@ -114,13 +115,13 @@
 - 完整边界、回滚与真机验收见
   [`docs/NAV_ADVANCED_SEARCH_PUSH_BLOCK_EDITOR.md`](./docs/NAV_ADVANCED_SEARCH_PUSH_BLOCK_EDITOR.md)。
 
-## 当前源码与生产基线
+## 历史源码与生产基线（最后核验于 2026-08-27）
 
 - GitHub：`cristsau/nav-page`（Private），默认分支 `master`。
 - 2026-08-27 最后一次独立留档的 GitHub/生产 merge SHA 为 PR #57：
   `15fd83e3f197afb7a03fe119ce118feae26ab10f`；后续状态仍须现场读取。
 - 最近一次留档的已验证生产 API 应用 SHA：`15fd83e3f197afb7a03fe119ce118feae26ab10f`。
-- 当前生产源码包含的连续 PR：
+- 当时生产源码包含的连续 PR：
   - [#28 发布文档校准](https://github.com/cristsau/nav-page/pull/28)
   - [#29 异地备份调度候选](https://github.com/cristsau/nav-page/pull/29)（源码已包含，运行环境仍为
     `NOT_CONFIGURED / NOT_ENABLED`）
@@ -150,14 +151,15 @@
 
 PR #30 的图片删除重试告警正确性、PR #31 的云端安全恢复、PR #32 的 Telegram 精确目标
 投递与独立 PostgreSQL 16 维护演练，以及 PR #33/#34 的一次性管理员发布验收生命周期与
-主机 CIDR 精确校验，均已进入上述生产 SHA 并完成验收。当前状态为 `VERIFIED_LIVE`。当前
-仓库分支可能在本文提交后继续前进，不能用本快照替代 Git 现场核验。
+主机 CIDR 精确校验，均已进入上述生产 SHA 并完成验收；在 2026-08-27 验收时状态为
+`VERIFIED_LIVE`，截至本文更新只能标记为 `NEEDS_LIVE_VERIFY`。仓库分支和生产 release 都
+可能在本文提交后继续前进，不能用本快照替代 Git 或 OVH 现场核验。
 
 一次性管理员工具已在首次生产发布中完成 `status=PASS / cleanup=PASS`。临时账号、marker 与
 `/run/nav-release-acceptance.*` 私有目录均清零；真实管理员长期密码没有进入 release，也未被
 该生命周期读取或修改。
 
-## 当前生产已完成
+## 历史生产已完成（2026-08-27 验收快照）
 
 ### UI、分享与移动端
 
@@ -285,20 +287,26 @@ PR #30 的图片删除重试告警正确性、PR #31 的云端安全恢复、PR 
 
 ## 仍未完成
 
-1. 邮件 P0 低延迟收取、持久 AI 队列、连续排空、API 唤醒 worker、延迟观测和安全文本附件
-   翻译已完成本地开发并进入 PR/CI；GitHub 全量 CI 通过前不得标记 `CI_VERIFIED`，发布验收前
-   不得标记 `VERIFIED_LIVE`。
-2. 邮件 P1 的 CONDSTORE/QRESYNC、flags/expunge 对账与 PDF/Office 安全文本提取尚未实现；
-   需要独立门禁，不能用正文翻译或普通附件下载冒充完成。
-3. 让 2026-08-28 运维收口批次通过 GitHub Linux CI；之后按发布前备份/隔离恢复/回滚/双域
+1. 邮件 P0、迁移 `042`/`043` 和历史通知修复已经进入 `origin/master`；本次没有读取 OVH，
+   所以其当前生产状态为 `NEEDS_LIVE_VERIFY`，不能再标为 `NOT_MERGED`，也不能猜测已发布。
+2. 邮件 P1、PDF/Office 安全文本提取、Worker 连接池观测及发布 backlog 精确门禁、Notion 风格
+   关系数据库子集（迁移 `045`）和 AI 固定白名单确认操作（迁移 `046`）已在统一分支完成；
+   状态为 `LOCAL_DONE / NOT_MERGED / NOT_DEPLOYED`。
+3. 功能代码基线 `77e193f` 已在 2026-09-01 本地通过：API 777 项通过、13 项跳过、0 失败；前端
+   Vite 生产构建通过；PostgreSQL 16 中全部迁移连续执行两次并通过验证器，邮件 17/17、
+   关系数据库 4/4、AI confirmed-action 9/9。该证据不等于 GitHub CI 或生产验收。
+4. 让 2026-08-28 运维收口批次通过 GitHub Linux CI；之后按发布前备份/隔离恢复/回滚/双域
    验收门禁发布，不能直接用本地测试替代。
-4. 现场建立并核验 `/opt/nav-stack/current` 与 `rollback`；先运行 local timer `--check`，
+5. 现场建立并核验 `/opt/nav-stack/current` 与 `rollback`；先运行 local timer `--check`，
    经单独授权、一次真实本地备份和隔离恢复后再启用三个 timer。
-5. 仅在 dry-run 审阅确认后，另行授权受控清理；本批没有删除任何 release、镜像或日志。
-6. 用户选定免费存储后填写通用异地备份 Secret，再验收首次加密快照、远端保留、exact-ID
+6. 仅在 dry-run 审阅确认后，另行授权受控清理；本批没有删除任何 release、镜像或日志。
+7. 用户选定免费存储后填写通用异地备份 Secret，再验收首次加密快照、远端保留、exact-ID
    恢复与外部 dead-man；未提供 Secret 时保持未配置。
-7. 外部 OAuth provider 的开发者应用、回调域名、凭据与同意屏幕仍需用户/平台流程；扩展商店
+8. 外部 OAuth provider 的开发者应用、回调域名、凭据与同意屏幕仍需用户/平台流程；扩展商店
    开发者账号、签名、提交与审核继续暂缓。
+
+2026-09-01 本地统一收口的精确能力、测试命令、外部依赖与产品边界见
+[`docs/NAV_REMAINING_FEATURES_INTEGRATION_20260901.md`](./docs/NAV_REMAINING_FEATURES_INTEGRATION_20260901.md)。
 
 ## 仍建议用户手工验收
 

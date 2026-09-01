@@ -248,6 +248,11 @@ export const config = {
     process.env.NAV_MAINTENANCE_ALERT_COOLDOWN_SECONDS,
     21_600
   ),
+  mailWorkerPoolWaitAlertSeconds: normalizeBoundedPositiveInteger(
+    process.env.NAV_MAIL_WORKER_POOL_WAIT_ALERT_SECONDS,
+    60,
+    { minimum: 30, maximum: 600 }
+  ),
   aiUsageRetentionEnabled:
     process.env.NAV_AI_USAGE_RETENTION_ENABLED === 'true',
   aiUsageRetentionDays: normalizePositiveInteger(
@@ -398,6 +403,33 @@ export const config = {
     process.env.NAV_IMAP_DRAIN_MAX_MILLISECONDS,
     15_000,
     { minimum: 1_000, maximum: 60_000 }
+  ),
+  imapFolderSyncIntervalSeconds: normalizeBoundedPositiveInteger(
+    process.env.NAV_IMAP_FOLDER_SYNC_INTERVAL_SECONDS,
+    900,
+    { minimum: 60, maximum: 86_400 }
+  ),
+  imapProtocolReconciliationEnabled: process.env.NAV_IMAP_PROTOCOL_RECONCILIATION_ENABLED === 'true',
+  imapSecondaryFolderSyncEnabled: process.env.NAV_IMAP_SECONDARY_FOLDER_SYNC_ENABLED === 'true',
+  imapFoldersPerRun: normalizeBoundedPositiveInteger(
+    process.env.NAV_IMAP_FOLDERS_PER_RUN,
+    2,
+    { maximum: 20 }
+  ),
+  imapReconcileMaxMessages: normalizeBoundedPositiveInteger(
+    process.env.NAV_IMAP_RECONCILE_MAX_MESSAGES,
+    20_000,
+    { minimum: 100, maximum: 100_000 }
+  ),
+  imapReconcileBatchSize: normalizeBoundedPositiveInteger(
+    process.env.NAV_IMAP_RECONCILE_BATCH_SIZE,
+    500,
+    { minimum: 10, maximum: 2_000 }
+  ),
+  imapTelemetrySampleSize: normalizeBoundedPositiveInteger(
+    process.env.NAV_IMAP_TELEMETRY_SAMPLE_SIZE,
+    64,
+    { minimum: 8, maximum: 512 }
   ),
   emailClassificationIntervalSeconds: normalizeBoundedPositiveInteger(
     process.env.NAV_EMAIL_CLASSIFICATION_INTERVAL_SECONDS,

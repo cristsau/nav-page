@@ -17,7 +17,9 @@
     "test:collaboration:integration": "node --test --test-concurrency=1 integration/collaborationOfflinePostgres.integration.js",
     "test:email-mailbox:integration": "node --test --test-concurrency=1 integration/emailMailboxPostgres.integration.js",
     "test:release-acceptance:integration": "node --test --test-concurrency=1 integration/releaseAcceptancePostgres.integration.js",
-    "test:backup-gate:integration": "node --test --test-concurrency=1 integration/backupGatePostgres.integration.js"
+    "test:backup-gate:integration": "node --test --test-concurrency=1 integration/backupGatePostgres.integration.js",
+    "test:workspace-database:integration": "node --test --test-concurrency=1 integration/workspaceDatabasePostgres.integration.js",
+    "test:assistant-advanced:integration": "node --test --test-concurrency=1 integration/assistantAdvancedPostgres.integration.js"
   },
   "dependencies": {
     "@tiptap/y-tiptap": "3.0.9",
@@ -31,9 +33,12 @@
     "imapflow": "1.7.6",
     "mailparser": "3.9.16",
     "nodemailer": "9.0.5",
+    "pdfjs-dist": "6.3.289",
     "pg": "^8.16.3",
+    "saxes": "6.0.0",
     "web-push": "3.6.7",
     "ws": "8.21.3",
+    "yauzl": "3.4.0",
     "yjs": "13.6.32"
   }
 }

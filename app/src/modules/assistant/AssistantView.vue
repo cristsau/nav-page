@@ -4,11 +4,14 @@ import { RouterLink, useRoute, useRouter } from 'vue-router'
 import Icon from '@/shared/components/Icon.vue'
 import AiUsagePanel from '@/modules/settings/components/AiUsagePanel.vue'
 import {
+  cancelAssistantAction,
+  confirmAssistantAction,
   deleteAssistantConversation,
   fetchAssistantConversation,
   fetchAssistantConversations,
   streamAssistantMessage,
-  updateAssistantConversationPreferences
+  updateAssistantConversationPreferences,
+  undoAssistantAction
 } from '@/shared/services/assistantApi'
 import { fetchBackendChatModels } from '@/shared/services/aiSearchApi'
 import {
@@ -31,6 +34,7 @@ const agentStatus = ref('')
 const preferenceSaving = ref(false)
 const errorMessage = ref('')
 const pendingSend = ref(null)
+const actionBusyId = ref('')
 const emailDetail = ref(null)
 const emailLoading = ref(false)
 const usageExpanded = ref(false)
@@ -59,7 +63,20 @@ const TOOL_LABELS = Object.freeze({
   create_diary: '创建日记',
   create_memo: '创建备忘录',
   create_bookmark: '保存导航书签',
-  create_group: '创建导航分组'
+  create_group: '创建导航分组',
+  update_note: '修改笔记',
+  delete_note: '删除笔记',
+  update_bookmark: '修改书签',
+  delete_bookmark: '删除书签',
+  update_group: '修改导航分组',
+  delete_group: '删除导航分组',
+  create_note_share: '创建公开分享',
+  revoke_note_share: '撤销公开分享',
+  create_email_draft: '保存邮件草稿',
+  send_email_draft: '发送邮件',
+  create_database_row: '创建数据库记录',
+  update_database_row: '修改数据库记录',
+  archive_database_row: '归档数据库记录'
 })
 
 function toolLabel(tool) {
@@ -75,10 +92,65 @@ function createAssistantOperationId() {
 }
 
 function actionOutcome(action) {
+  if (action?.status === 'awaiting_confirmation') return '等待你的确认'
+  if (action?.status === 'cancelled') return '已取消'
+  if (action?.status === 'undone') return '已撤销'
   if (action?.summary?.deduplicated) return '已存在，未重复创建'
   if (action?.summary?.created) return '创建成功'
   if (action?.status === 'failed') return '执行失败'
   return '操作完成'
+}
+
+function actionConfirmationLabel(action) {
+  if (action?.tool === 'send_email_draft') return '确认发送邮件'
+  if (String(action?.tool || '').startsWith('delete_')) return '确认永久删除'
+  if (action?.tool === 'revoke_note_share') return '确认撤销分享'
+  if (action?.tool === 'archive_database_row') return '确认归档'
+  return '确认执行'
+}
+
+function actionPreviewLines(action) {
+  const preview = action?.preview || {}
+  const lines = []
+  if (preview.target) lines.push(`对象：${preview.target}`)
+  if (preview.database) lines.push(`数据库：${preview.database}`)
+  if (preview.from) lines.push(`发件账户：${preview.from}`)
+  if (Array.isArray(preview.to) && preview.to.length) lines.push(`收件人：${preview.to.join('、')}`)
+  if (preview.changes?.subject) lines.push(`主题：${preview.changes.subject}`)
+  if (preview.changes?.bodyPreview) lines.push(`正文预览：${preview.changes.bodyPreview}`)
+  if (preview.irreversible) lines.push('此操作不可撤销。')
+  if (preview.external) lines.push('此操作会改变外部可见状态或进入发送队列。')
+  return lines
+}
+
+function replaceActionReceipt(receipt) {
+  if (!receipt?.operationId) return
+  for (const message of messages.value) {
+    const index = (message.actions || []).findIndex((item) => item.operationId === receipt.operationId)
+    if (index >= 0) message.actions.splice(index, 1, receipt)
+  }
+}
+
+async function mutateAssistantAction(action, kind) {
+  if (!action?.operationId || actionBusyId.value) return
+  if (kind === 'confirm') {
+    const details = actionPreviewLines(action).join('\n')
+    if (!window.confirm(`${actionConfirmationLabel(action)}？${details ? `\n\n${details}` : ''}`)) return
+  }
+  actionBusyId.value = action.operationId
+  errorMessage.value = ''
+  try {
+    const result = kind === 'confirm'
+      ? await confirmAssistantAction(action.operationId)
+      : kind === 'cancel'
+        ? await cancelAssistantAction(action.operationId)
+        : await undoAssistantAction(action.operationId)
+    replaceActionReceipt(result.receipt)
+  } catch (error) {
+    errorMessage.value = error.message || '助理操作未完成'
+  } finally {
+    actionBusyId.value = ''
+  }
 }
 
 const canSend = computed(() => Boolean(question.value.trim()) && !sending.value)
@@ -546,20 +618,34 @@ onBeforeUnmount(() => streamController?.abort())
             </div>
             <div class="assistant-message__content">{{ message.content }}<span v-if="message.streaming" class="assistant-caret" aria-label="正在生成"></span></div>
             <div v-if="message.actions?.length" class="assistant-actions" aria-label="助理操作回执">
-              <component
-                :is="action.href ? RouterLink : 'span'"
+              <article
                 v-for="action in message.actions"
                 :key="action.operationId"
-                :to="action.href || undefined"
-                class="assistant-action"
+                :class="['assistant-action', `is-${action.status}`]"
               >
-                <span class="assistant-action__icon"><Icon name="circle-check" :size="17" /></span>
-                <span>
-                  <strong>{{ toolLabel(action.tool) }}</strong>
-                  <small>{{ actionOutcome(action) }} · ID {{ action.operationId }}</small>
-                </span>
-                <Icon v-if="action.href" name="external-link" :size="15" />
-              </component>
+                <div class="assistant-action__summary">
+                  <span class="assistant-action__icon"><Icon :name="action.status === 'awaiting_confirmation' ? 'shield' : 'circle-check'" :size="17" /></span>
+                  <span>
+                    <strong>{{ toolLabel(action.tool) }}</strong>
+                    <small>{{ actionOutcome(action) }} · ID {{ action.operationId }}</small>
+                  </span>
+                  <RouterLink v-if="action.href && action.status !== 'awaiting_confirmation'" :to="action.href" aria-label="打开操作对象">
+                    <Icon name="external-link" :size="15" />
+                  </RouterLink>
+                </div>
+                <ul v-if="action.status === 'awaiting_confirmation' && actionPreviewLines(action).length" class="assistant-action__preview">
+                  <li v-for="line in actionPreviewLines(action)" :key="line">{{ line }}</li>
+                </ul>
+                <div v-if="action.status === 'awaiting_confirmation'" class="assistant-action__buttons">
+                  <button type="button" :disabled="actionBusyId === action.operationId" @click="mutateAssistantAction(action, 'cancel')">取消</button>
+                  <button type="button" class="is-primary" :disabled="actionBusyId === action.operationId" @click="mutateAssistantAction(action, 'confirm')">
+                    {{ actionBusyId === action.operationId ? '处理中…' : actionConfirmationLabel(action) }}
+                  </button>
+                </div>
+                <div v-else-if="action.undoSupported && action.status === 'succeeded'" class="assistant-action__buttons">
+                  <button type="button" :disabled="actionBusyId === action.operationId" @click="mutateAssistantAction(action, 'undo')">撤销操作</button>
+                </div>
+              </article>
             </div>
             <div v-if="message.sources?.length" class="assistant-sources" aria-label="回答来源">
               <component
@@ -726,13 +812,21 @@ onBeforeUnmount(() => streamController?.abort())
 .assistant-message.is-user .assistant-message__content { background: var(--accent-bg); border-color: color-mix(in srgb, var(--accent-color) 30%, var(--border-light)); }
 .assistant-caret { display: inline-block; width: 7px; height: 1.1em; margin-left: 3px; vertical-align: -2px; background: var(--accent-color); animation: assistant-blink 0.8s steps(2, start) infinite; }
 .assistant-actions { display: grid; margin-top: 9px; gap: 7px; }
-.assistant-action { display: grid; min-height: 58px; padding: 10px 12px; align-items: center; grid-template-columns: 34px minmax(0, 1fr) auto; gap: 9px; color: var(--text-primary); text-decoration: none; background: color-mix(in srgb, var(--success-color, #4f8a5b) 8%, var(--bg-card)); border: 1px solid color-mix(in srgb, var(--success-color, #4f8a5b) 28%, var(--border-light)); border-radius: 14px; }
-.assistant-action[href]:hover,
-.assistant-action[href]:focus-visible { border-color: var(--success-color, #4f8a5b); }
+.assistant-action { display: grid; min-height: 58px; padding: 10px 12px; gap: 9px; color: var(--text-primary); background: color-mix(in srgb, var(--success-color, #4f8a5b) 8%, var(--bg-card)); border: 1px solid color-mix(in srgb, var(--success-color, #4f8a5b) 28%, var(--border-light)); border-radius: 14px; }
+.assistant-action.is-awaiting_confirmation { background: color-mix(in srgb, var(--warning-color, #b7791f) 8%, var(--bg-card)); border-color: color-mix(in srgb, var(--warning-color, #b7791f) 34%, var(--border-light)); }
+.assistant-action__summary { display: grid; align-items: center; grid-template-columns: 34px minmax(0, 1fr) auto; gap: 9px; }
+.assistant-action__summary > a { display: grid; width: 44px; height: 44px; place-items: center; color: var(--text-secondary); border-radius: 12px; }
+.assistant-action__summary > a:hover,
+.assistant-action__summary > a:focus-visible { color: var(--accent-color); background: var(--bg-hover); }
 .assistant-action__icon { display: grid; width: 32px; height: 32px; place-items: center; color: var(--success-color, #4f8a5b); background: color-mix(in srgb, var(--success-color, #4f8a5b) 12%, transparent); border-radius: 10px; }
-.assistant-action > span:nth-child(2) { display: grid; min-width: 0; gap: 2px; }
+.assistant-action__summary > span:nth-child(2) { display: grid; min-width: 0; gap: 2px; }
 .assistant-action strong { font-size: 0.75rem; }
 .assistant-action small { overflow: hidden; color: var(--text-muted); font-size: 0.65rem; text-overflow: ellipsis; }
+.assistant-action__preview { display: grid; margin: 0; padding: 9px 12px 9px 28px; gap: 4px; color: var(--text-secondary); background: var(--bg-secondary); border-radius: 10px; font-size: 0.69rem; line-height: 1.5; }
+.assistant-action__buttons { display: flex; flex-wrap: wrap; justify-content: flex-end; gap: 8px; }
+.assistant-action__buttons button { min-height: 44px; padding: 0 13px; color: var(--text-primary); background: var(--bg-card); border: 1px solid var(--border-color); border-radius: 11px; cursor: pointer; font: inherit; font-size: 0.72rem; font-weight: 720; }
+.assistant-action__buttons button.is-primary { color: var(--bg-primary); background: var(--accent-color); border-color: var(--accent-color); }
+.assistant-action__buttons button:disabled { opacity: 0.5; cursor: not-allowed; }
 .assistant-sources { display: grid; margin-top: 9px; grid-template-columns: repeat(auto-fit, minmax(190px, 1fr)); gap: 7px; }
 .assistant-sources a { display: grid; min-width: 0; padding: 11px 12px; gap: 4px; color: var(--text-primary); text-decoration: none; background: var(--bg-secondary); border: 1px solid var(--border-light); border-radius: 13px; }
 .assistant-sources a:hover,

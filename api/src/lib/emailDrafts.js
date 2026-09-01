@@ -228,16 +228,18 @@ export async function queueEmailDraft({
   confirmed
 }, {
   poolInstance = pool,
-  enqueueFn = enqueueUserMail
+  enqueueFn = enqueueUserMail,
+  client: transactionClient = null
 } = {}) {
   if (confirmed !== true) throw new TypeError('Explicit email send confirmation is required')
   const ownerId = assertUuid(userId, 'User id')
   const id = assertUuid(draftId, 'Draft id')
   const expectedHash = String(contentHash || '').trim().toLowerCase()
   if (!HASH_PATTERN.test(expectedHash)) throw new TypeError('Email draft hash is invalid')
-  const client = await poolInstance.connect()
+  const ownsTransaction = !transactionClient
+  const client = transactionClient || await poolInstance.connect()
   try {
-    await client.query('BEGIN')
+    if (ownsTransaction) await client.query('BEGIN')
     const selected = await client.query(
       `SELECT * FROM email_drafts
        WHERE id = $1 AND user_id = $2 AND expires_at > NOW()
@@ -258,7 +260,7 @@ export async function queueEmailDraft({
       throw new Error('Email draft changed; preview it again before sending')
     }
     if (row.status === 'queued' || row.status === 'sent') {
-      await client.query('COMMIT')
+      if (ownsTransaction) await client.query('COMMIT')
       return {
         ...(await decryptDraftRow(row, { attachmentManifest, attachments })),
         alreadyQueued: true
@@ -287,12 +289,14 @@ export async function queueEmailDraft({
        RETURNING *`,
       [id, ownerId, queued.id]
     )
-    await client.query('COMMIT')
+    if (ownsTransaction) await client.query('COMMIT')
     return decryptDraftRow(updated.rows[0], { attachmentManifest, attachments })
   } catch (error) {
-    try { await client.query('ROLLBACK') } catch {}
+    if (ownsTransaction) {
+      try { await client.query('ROLLBACK') } catch {}
+    }
     throw error
   } finally {
-    client.release()
+    if (ownsTransaction) client.release()
   }
 }

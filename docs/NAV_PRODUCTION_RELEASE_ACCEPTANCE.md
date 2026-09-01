@@ -169,3 +169,24 @@ Secret、禁止 `eval` 和证据脱敏。所有 Shell 脚本在发布包生成�
 - API/Web/数据库及受保护服务健康，容器重启计数符合发布门禁。
 
 证据不得包含用户名、密码、密码哈希、Cookie、Token、登录 JSON、真实 `.env` 或响应正文。
+# Mail classification backlog identity gate
+
+When a release can consume or transform retained `email_classification_jobs`,
+capture the complete production row set during preflight and bind it to the
+switch. Counts alone are not sufficient. Use the root-owned release evidence
+directory and keep the mail worker paused between capture and verification:
+
+```bash
+sudo scripts/nav-release-mail-backlog-guard.sh snapshot \
+  --container nav-postgres \
+  --output /opt/nav-stack/releases/<candidate>/evidence/retained-jobs-before.csv
+
+sudo scripts/nav-release-mail-backlog-guard.sh verify \
+  --container nav-postgres \
+  --expected /opt/nav-stack/releases/<candidate>/evidence/retained-jobs-before.csv
+```
+
+The switch must stop before processing any job when verification reports a
+different identity, state, timestamp, eligibility value or row count. Repeat
+the canonical backup and isolated preflight; never widen the release scope to
+the newly observed rows in place.

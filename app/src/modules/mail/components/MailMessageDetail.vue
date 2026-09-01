@@ -81,11 +81,16 @@ const aiActions = aiActionGroups.flatMap((group) => group.actions)
 
 const attachmentTranslationMimeTypes = new Set([
   'application/csv', 'application/json', 'application/ld+json', 'application/toml',
-  'application/x-ndjson', 'application/x-yaml', 'application/xml', 'application/yaml'
+  'application/x-ndjson', 'application/x-yaml', 'application/xml', 'application/yaml',
+  'application/pdf',
+  'application/vnd.openxmlformats-officedocument.wordprocessingml.document',
+  'application/vnd.openxmlformats-officedocument.presentationml.presentation',
+  'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet'
 ])
 const attachmentTranslationExtensions = new Set([
   'csv', 'htm', 'html', 'json', 'jsonl', 'log', 'md', 'markdown',
-  'ndjson', 'sql', 'toml', 'tsv', 'txt', 'xml', 'yaml', 'yml'
+  'ndjson', 'pdf', 'docx', 'pptx', 'sql', 'toml', 'tsv', 'txt',
+  'xlsx', 'xml', 'yaml', 'yml'
 ])
 
 const aiToneOptions = [
@@ -337,14 +342,12 @@ function attachmentTranslationSupport(attachment) {
   const supported = contentType.startsWith('text/')
     || attachmentTranslationMimeTypes.has(contentType)
     || /\+(?:json|xml)$/.test(contentType)
-    || (contentType === 'application/octet-stream' && attachmentTranslationExtensions.has(extension))
+    || ((!contentType || contentType === 'application/octet-stream') && attachmentTranslationExtensions.has(extension))
   if (supported) return { supported: true, reason: '' }
-  if (contentType.includes('pdf')
-    || contentType.includes('officedocument')
-    || ['pdf', 'doc', 'docx', 'xls', 'xlsx', 'ppt', 'pptx'].includes(extension)) {
-    return { supported: false, reason: 'PDF 和 Office 文件暂不支持 AI 翻译' }
+  if (['doc', 'xls', 'ppt'].includes(extension)) {
+    return { supported: false, reason: '旧版 Office 二进制文件不执行解析，请转换为 DOCX、XLSX 或 PPTX' }
   }
-  return { supported: false, reason: '目前仅支持 UTF-8 文本附件' }
+  return { supported: false, reason: '支持 UTF-8 文本、PDF 文本层和 DOCX/PPTX/XLSX' }
 }
 
 function safeDownloadName(value) {
@@ -919,7 +922,7 @@ watch(() => safeMessageId.value, () => {
             </section>
           </li>
         </ul>
-        <p>附件只会在你点击下载或 AI 翻译后读取；页面不会自动预览或执行附件。翻译仅支持不超过 512 KiB、12,000 字符的 UTF-8 文本，PDF 和 Office 文件暂不支持。</p>
+        <p>附件只会在你点击下载或 AI 翻译后读取；页面不会自动预览或执行附件。UTF-8 文本限 512 KiB，PDF/DOCX/PPTX/XLSX 限 8 MiB，提取正文统一限 12,000 字符。安全模式不执行 OCR、宏、外部关系或嵌入对象。</p>
       </section>
 
       <section class="mail-message-detail__body" aria-labelledby="mail-body-title">

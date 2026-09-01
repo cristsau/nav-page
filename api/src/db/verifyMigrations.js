@@ -2001,10 +2001,12 @@ async function verifyEmailMailboxSchema() {
     ]],
     ['email_folders', [
       'id', 'account_id', 'user_id', 'path', 'path_hash', 'delimiter',
-      'special_use', 'selectable', 'subscribed', 'uid_validity', 'uid_next',
-      'highest_modseq', 'last_uid', 'sync_generation',
-      'initial_sync_complete', 'last_listed_at', 'last_synced_at',
-      'last_error_at', 'last_error_code', 'created_at', 'updated_at'
+       'special_use', 'selectable', 'subscribed', 'uid_validity', 'uid_next',
+       'highest_modseq', 'reconciled_modseq', 'last_uid', 'sync_generation',
+       'initial_sync_complete', 'last_listed_at', 'last_synced_at',
+       'last_reconciled_at', 'last_reconcile_mode',
+       'last_reconcile_error_at', 'last_reconcile_error_code',
+       'last_error_at', 'last_error_code', 'created_at', 'updated_at'
     ]],
     ['email_messages', [
       'id', 'account_id', 'user_id', 'canonical_hash', 'message_id_hash',
@@ -2042,6 +2044,7 @@ async function verifyEmailMailboxSchema() {
     ['email_accounts', 'sync_completed_generation', 'int8', 'NO', '0'],
     ['email_folders', 'uid_validity', 'int8', 'YES', null],
     ['email_folders', 'highest_modseq', 'numeric', 'YES', null],
+    ['email_folders', 'reconciled_modseq', 'numeric', 'YES', null],
     ['email_folders', 'last_uid', 'int8', 'NO', '0'],
     ['email_messages', 'envelope_encrypted', 'bytea', 'NO', null],
     ['email_messages', 'content_encrypted', 'bytea', 'NO', null],
@@ -2104,6 +2107,11 @@ async function verifyEmailMailboxSchema() {
     ]],
     ['email_folders_uid_validity_check', ['uid_validity', '4294967295']],
     ['email_folders_highest_modseq_check', ['highest_modseq', '18446744073709551615']],
+    ['email_folders_reconciled_modseq_check', ['reconciled_modseq', '18446744073709551615']],
+    ['email_folders_reconcile_mode_check', [
+      'last_reconcile_mode', "'qresync'", "'condstore'", "'uid_flags_scan'", "'uidvalidity_reset'"
+    ]],
+    ['email_folders_reconcile_error_check', ['last_reconcile_error_code', "'^[a-z0-9_.-]+$'"]],
     ['email_folders_account_path_unique', ['unique (account_id, path_hash)']],
     ['email_folders_identity_account_user_unique', ['unique (id, account_id, user_id)']],
     ['email_messages_account_user_fkey', [
@@ -2166,6 +2174,9 @@ async function verifyEmailMailboxSchema() {
     ]],
     ['idx_email_folders_sync_due', [
       'last_synced_at', 'nulls first', 'where (selectable = true)'
+    ]],
+    ['idx_email_folders_reconcile_due', [
+      'last_reconciled_at', 'nulls first', 'where ((selectable = true) and (subscribed = true))'
     ]],
     ['idx_email_messages_user_received', [
       'user_id', 'received_at desc', 'id'
@@ -3026,6 +3037,234 @@ async function verifyOauthIdentitySchema() {
   assertExactSet('oauth identity indexes', indexes.rows.map((row) => row.indexname), expectedIndexes)
 }
 
+async function verifyWorkspaceDatabaseSchema() {
+  const expectedColumns = new Map([
+    ['workspace_databases', [
+      'id', 'user_id', 'name', 'description', 'icon', 'created_at', 'updated_at'
+    ]],
+    ['workspace_database_properties', [
+      'id', 'database_id', 'user_id', 'name', 'type', 'config',
+      'display_order', 'created_at', 'updated_at'
+    ]],
+    ['workspace_database_views', [
+      'id', 'database_id', 'user_id', 'name', 'type', 'config',
+      'display_order', 'created_at', 'updated_at'
+    ]],
+    ['workspace_database_rows', [
+      'id', 'database_id', 'user_id', 'title', 'values', 'position',
+      'archived', 'created_at', 'updated_at'
+    ]],
+    ['workspace_database_relations', [
+      'source_row_id', 'source_database_id', 'source_property_id',
+      'target_row_id', 'target_database_id', 'user_id', 'created_at'
+    ]]
+  ])
+  for (const [tableName, columns] of expectedColumns) {
+    const result = await query(
+      `
+        SELECT column_name
+        FROM information_schema.columns
+        WHERE table_schema = current_schema() AND table_name = $1
+      `,
+      [tableName]
+    )
+    assertExactSet(
+      `${tableName} columns`,
+      result.rows.map((row) => row.column_name),
+      columns
+    )
+  }
+
+  const expectedConstraints = [
+    'workspace_databases_pkey',
+    'workspace_databases_user_id_fkey',
+    'workspace_databases_user_identity_unique',
+    'workspace_databases_name_check',
+    'workspace_databases_description_check',
+    'workspace_databases_icon_check',
+    'workspace_database_properties_pkey',
+    'workspace_database_properties_database_user_fkey',
+    'workspace_database_properties_identity_unique',
+    'workspace_database_properties_name_unique',
+    'workspace_database_properties_name_check',
+    'workspace_database_properties_type_check',
+    'workspace_database_properties_config_check',
+    'workspace_database_properties_order_check',
+    'workspace_database_views_pkey',
+    'workspace_database_views_database_user_fkey',
+    'workspace_database_views_identity_unique',
+    'workspace_database_views_name_unique',
+    'workspace_database_views_name_check',
+    'workspace_database_views_type_check',
+    'workspace_database_views_config_check',
+    'workspace_database_views_order_check',
+    'workspace_database_rows_pkey',
+    'workspace_database_rows_database_user_fkey',
+    'workspace_database_rows_identity_unique',
+    'workspace_database_rows_database_identity_unique',
+    'workspace_database_rows_title_check',
+    'workspace_database_rows_values_check',
+    'workspace_database_relations_pkey',
+    'workspace_database_relations_source_row_fkey',
+    'workspace_database_relations_target_row_fkey',
+    'workspace_database_relations_source_property_fkey',
+    'workspace_database_relations_distinct_rows_check'
+  ]
+  const constraints = await query(
+    `
+      SELECT conname, convalidated, pg_get_constraintdef(oid, FALSE) AS definition
+      FROM pg_constraint
+      WHERE connamespace = current_schema()::regnamespace
+        AND conname = ANY($1::text[])
+    `,
+    [expectedConstraints]
+  )
+  assertExactSet(
+    'workspace database constraints',
+    constraints.rows.map((row) => row.conname),
+    expectedConstraints
+  )
+  if (constraints.rows.some((row) => row.convalidated !== true)) {
+    throw new Error('workspace database constraints must be validated')
+  }
+  const expectedRelationDefinitions = new Map([
+    ['workspace_database_relations_source_row_fkey', [
+      'foreign key (source_row_id, source_database_id, user_id)',
+      'references workspace_database_rows(id, database_id, user_id)',
+      'on delete cascade'
+    ]],
+    ['workspace_database_relations_target_row_fkey', [
+      'foreign key (target_row_id, target_database_id, user_id)',
+      'references workspace_database_rows(id, database_id, user_id)',
+      'on delete cascade'
+    ]],
+    ['workspace_database_relations_source_property_fkey', [
+      'foreign key (source_property_id, source_database_id, user_id)',
+      'references workspace_database_properties(id, database_id, user_id)',
+      'on delete cascade'
+    ]]
+  ])
+  for (const [constraintName, fragments] of expectedRelationDefinitions) {
+    const constraint = constraints.rows.find((row) => row.conname === constraintName)
+    assertDefinitionIncludes(
+      `workspace database constraint ${constraintName}`,
+      constraint?.definition,
+      fragments
+    )
+  }
+
+  const expectedIndexes = [
+    'idx_workspace_database_properties_one_title',
+    'idx_workspace_database_properties_order',
+    'idx_workspace_database_views_order',
+    'idx_workspace_database_rows_active',
+    'idx_workspace_database_rows_archived',
+    'idx_workspace_database_rows_values_gin',
+    'idx_workspace_database_relations_target',
+    'idx_workspace_databases_user_updated'
+  ]
+  const indexes = await query(
+    `
+      SELECT indexname, indexdef
+      FROM pg_indexes
+      WHERE schemaname = current_schema()
+        AND indexname = ANY($1::text[])
+    `,
+    [expectedIndexes]
+  )
+  assertExactSet(
+    'workspace database indexes',
+    indexes.rows.map((row) => row.indexname),
+    expectedIndexes
+  )
+  const relationTargetIndex = indexes.rows.find(
+    (row) => row.indexname === 'idx_workspace_database_relations_target'
+  )
+  assertDefinitionIncludes(
+    'workspace database relation target index',
+    relationTargetIndex?.indexdef,
+    [
+      '(target_row_id, target_database_id, user_id, source_property_id, source_row_id)'
+    ]
+  )
+}
+
+async function verifyAssistantConfirmedOperationSchema() {
+  const columns = await query(`
+    SELECT column_name
+    FROM information_schema.columns
+    WHERE table_schema = current_schema()
+      AND table_name = 'assistant_agent_operation_payloads'
+  `)
+  assertExactSet(
+    'assistant confirmed operation payload columns',
+    columns.rows.map((row) => row.column_name),
+    [
+      'user_id', 'operation_id', 'arguments', 'preview', 'sensitive_payload', 'before_snapshot', 'confirmation_fingerprint', 'after_fingerprint',
+      'expires_at', 'created_at', 'updated_at'
+    ]
+  )
+  const confirmationFingerprint = await query(`
+    SELECT is_nullable
+    FROM information_schema.columns
+    WHERE table_schema = current_schema()
+      AND table_name = 'assistant_agent_operation_payloads'
+      AND column_name = 'confirmation_fingerprint'
+  `)
+  if (confirmationFingerprint.rows[0]?.is_nullable !== 'NO') {
+    throw new Error('assistant confirmation fingerprint must be required')
+  }
+  const expectedConstraints = [
+    'assistant_agent_operation_payloads_pkey',
+    'assistant_agent_operation_payloads_operation_fkey',
+    'assistant_agent_operation_payloads_arguments_check',
+    'assistant_agent_operation_payloads_preview_check',
+    'assistant_agent_operation_payloads_snapshot_check',
+    'assistant_agent_operation_payloads_sensitive_size_check',
+    'assistant_agent_operation_payloads_fingerprint_check',
+    'assistant_agent_operation_payloads_expiry_check'
+  ]
+  const constraints = await query(`
+    SELECT conname, convalidated
+    FROM pg_constraint
+    WHERE connamespace = current_schema()::regnamespace
+      AND conname = ANY($1::text[])
+  `, [expectedConstraints])
+  assertExactSet(
+    'assistant confirmed operation payload constraints',
+    constraints.rows.map((row) => row.conname),
+    expectedConstraints
+  )
+  if (constraints.rows.some((row) => row.convalidated !== true)) {
+    throw new Error('assistant confirmed operation payload constraints must be validated')
+  }
+  const snapshotConstraint = await query(`
+    SELECT pg_get_constraintdef(oid, FALSE) AS definition
+    FROM pg_constraint
+    WHERE connamespace = current_schema()::regnamespace
+      AND conname = 'assistant_agent_operation_payloads_snapshot_check'
+  `)
+  const snapshotDefinition = String(snapshotConstraint.rows[0]?.definition || '').toLowerCase()
+  if (!/octet_length\(\(?before_snapshot\)?::text\)\s*<=\s*1048576/.test(snapshotDefinition)) {
+    throw new Error('assistant confirmed operation snapshots must allow up to 1 MiB')
+  }
+  const expectedIndexes = [
+    'idx_assistant_agent_operation_payloads_expiry',
+    'idx_assistant_agent_operation_payloads_user_expiry'
+  ]
+  const indexes = await query(`
+    SELECT indexname
+    FROM pg_indexes
+    WHERE schemaname = current_schema()
+      AND indexname = ANY($1::text[])
+  `, [expectedIndexes])
+  assertExactSet(
+    'assistant confirmed operation payload indexes',
+    indexes.rows.map((row) => row.indexname),
+    expectedIndexes
+  )
+}
+
 async function main() {
   await verifyMigrationLedger()
   await verifyNavigationMaintenanceSchema()
@@ -3052,6 +3291,8 @@ async function main() {
   await verifyOauthIdentitySchema()
   await verifyEmailRemoteCommandSchema()
   await verifyAssistantAgentOperationsSchema()
+  await verifyWorkspaceDatabaseSchema()
+  await verifyAssistantConfirmedOperationSchema()
   console.log('migration schema verification complete')
 }
 
