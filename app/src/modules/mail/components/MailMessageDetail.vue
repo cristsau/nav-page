@@ -21,6 +21,8 @@ const props = defineProps({
   activeFolder: { type: Object, default: null },
   command: { type: Object, default: null },
   commandBusy: { type: Boolean, default: false },
+  deliveryReady: { type: Boolean, default: false },
+  remoteActionsReady: { type: Boolean, default: false },
   commandError: { type: String, default: '' },
   loading: { type: Boolean, default: false }
 })
@@ -32,6 +34,7 @@ const mobileBackButton = ref(null)
 const aiBusyAction = ref('')
 const aiResult = ref(null)
 const aiResultRef = ref(null)
+const revealAiResultAfterClose = ref(false)
 const aiError = ref('')
 const aiPanelOpen = ref(false)
 const aiInstruction = ref('')
@@ -224,13 +227,20 @@ const commandCanUndo = computed(() => {
   const deadline = new Date(props.command?.undoUntil || 0).getTime()
   return Number.isFinite(deadline) && deadline > Date.now()
 })
+const deliveryDisabledReason = computed(() => (
+  props.deliveryReady ? '' : '当前邮箱尚未启用并验证 SMTP，暂不能新建、回复或转发邮件。'
+))
+const remoteActionsDisabledReason = computed(() => (
+  props.remoteActionsReady ? '' : '当前邮箱尚未启用 IMAP，暂不能执行已读、重要、归档、移动或删除等远端操作。'
+))
 
 function requestCommand(action, options = {}) {
-  if (props.commandBusy || !props.message || props.message.legacyEvent) return
+  if (props.commandBusy || !props.remoteActionsReady || !props.message || props.message.legacyEvent) return
   emit('command', { action, ...options })
 }
 
 function openActionDialog(mode, event) {
+  if (!props.remoteActionsReady) return
   actionRestoreTarget.value = event?.currentTarget || document.activeElement
   actionDialogMode.value = mode
 }
@@ -524,18 +534,35 @@ async function runAi(action, instruction = '', overrides = {}) {
       sources: normalizeAiSources(payload?.sources),
       model: String(payload?.result?.model || '').trim()
     }
+    const waitForModalClose = aiPanelOpen.value
+    revealAiResultAfterClose.value = waitForModalClose
     aiPanelOpen.value = false
     aiInstruction.value = ''
-    await nextTick()
-    const reduceMotion = Boolean(window.matchMedia?.('(prefers-reduced-motion: reduce)').matches)
-    aiResultRef.value?.scrollIntoView?.({ block: 'start', behavior: reduceMotion ? 'auto' : 'smooth' })
-    aiResultRef.value?.focus?.({ preventScroll: true })
+    if (!waitForModalClose) await revealAiResult()
   } catch (error) {
     if (requestSequence !== aiRequestSequence || requestMessageId !== safeMessageId.value) return
     aiError.value = error?.message || 'AI 邮件处理失败'
   } finally {
     if (aiBusyAction.value === action) aiBusyAction.value = ''
   }
+}
+
+function openAiPanel() {
+  revealAiResultAfterClose.value = false
+  aiPanelOpen.value = true
+}
+
+async function revealAiResult() {
+  await nextTick()
+  const reduceMotion = Boolean(window.matchMedia?.('(prefers-reduced-motion: reduce)').matches)
+  aiResultRef.value?.scrollIntoView?.({ block: 'start', behavior: reduceMotion ? 'auto' : 'smooth' })
+  aiResultRef.value?.focus?.({ preventScroll: true })
+}
+
+async function onAiPanelAfterClose() {
+  if (!revealAiResultAfterClose.value) return
+  revealAiResultAfterClose.value = false
+  await revealAiResult()
 }
 
 async function buildAiProposal(kind) {
@@ -631,6 +658,7 @@ function replyPayload(text = '', mode = 'reply') {
 }
 
 function openReply(text = '', mode = 'reply') {
+  if (!props.deliveryReady) return
   emit('reply', replyPayload(text, mode))
 }
 
@@ -651,6 +679,7 @@ watch(() => safeMessageId.value, () => {
   aiResult.value = null
   aiError.value = ''
   aiPanelOpen.value = false
+  revealAiResultAfterClose.value = false
   aiInstruction.value = ''
   aiAskScope.value = 'message'
   aiReplyTone.value = 'professional'
@@ -694,31 +723,31 @@ watch(() => safeMessageId.value, () => {
       </header>
 
       <section v-if="!message.legacyEvent" class="mail-message-detail__actions" aria-label="邮件操作">
-        <button type="button" @click="openReply()"><Icon name="reply" :size="17" />回复</button>
-        <button type="button" @click="openReply('', 'reply-all')"><Icon name="reply-all" :size="17" />全部回复</button>
-        <button type="button" @click="openReply('', 'forward')"><Icon name="forward" :size="17" />转发</button>
-        <button type="button" :disabled="commandBusy" @click="requestCommand(messageSeen ? 'mark_unread' : 'mark_read')">
+        <button type="button" :disabled="!deliveryReady" :title="deliveryDisabledReason" @click="openReply()"><Icon name="reply" :size="17" />回复</button>
+        <button type="button" :disabled="!deliveryReady" :title="deliveryDisabledReason" @click="openReply('', 'reply-all')"><Icon name="reply-all" :size="17" />全部回复</button>
+        <button type="button" :disabled="!deliveryReady" :title="deliveryDisabledReason" @click="openReply('', 'forward')"><Icon name="forward" :size="17" />转发</button>
+        <button type="button" :disabled="commandBusy || !remoteActionsReady" :title="remoteActionsDisabledReason" @click="requestCommand(messageSeen ? 'mark_unread' : 'mark_read')">
           <Icon name="mail" :size="17" />{{ messageSeen ? '标为未读' : '标为已读' }}
         </button>
-        <button type="button" :disabled="commandBusy" @click="requestCommand(messageFlagged ? 'unstar' : 'star')">
+        <button type="button" :disabled="commandBusy || !remoteActionsReady" :title="remoteActionsDisabledReason" @click="requestCommand(messageFlagged ? 'unstar' : 'star')">
           <Icon name="star" :size="17" />{{ messageFlagged ? '取消重要' : '设为重要' }}
         </button>
-        <button v-if="activeSpecialUse !== 'archive'" type="button" :disabled="commandBusy" @click="requestCommand('archive')">
+        <button v-if="activeSpecialUse !== 'archive'" type="button" :disabled="commandBusy || !remoteActionsReady" :title="remoteActionsDisabledReason" @click="requestCommand('archive')">
           <Icon name="archive" :size="17" />归档
         </button>
-        <button type="button" :disabled="commandBusy" @click="openActionDialog('move', $event)">
+        <button type="button" :disabled="commandBusy || !remoteActionsReady" :title="remoteActionsDisabledReason" @click="openActionDialog('move', $event)">
           <Icon name="folder" :size="17" />移动
         </button>
-        <button v-if="!['trash', 'junk', 'spam'].includes(activeSpecialUse)" type="button" :disabled="commandBusy" @click="requestCommand('trash')">
+        <button v-if="!['trash', 'junk', 'spam'].includes(activeSpecialUse)" type="button" :disabled="commandBusy || !remoteActionsReady" :title="remoteActionsDisabledReason" @click="requestCommand('trash')">
           <Icon name="trash" :size="17" />移到垃圾箱
         </button>
-        <button v-if="canPermanentlyDelete" type="button" class="is-danger" :disabled="commandBusy" @click="openActionDialog('delete', $event)">
+        <button v-if="canPermanentlyDelete" type="button" class="is-danger" :disabled="commandBusy || !remoteActionsReady" :title="remoteActionsDisabledReason" @click="openActionDialog('delete', $event)">
           <Icon name="trash" :size="17" />永久删除
         </button>
         <button type="button" @click="emit('notification', message, $event.currentTarget)">
           <Icon :name="message.notificationAction === 'silent' ? 'bell-off' : 'bell'" :size="17" />提醒
         </button>
-        <button type="button" class="is-ai" aria-haspopup="dialog" :aria-expanded="aiPanelOpen" aria-controls="mail-ai-panel" @click="aiPanelOpen = true">
+        <button type="button" class="is-ai" aria-haspopup="dialog" :aria-expanded="aiPanelOpen" aria-controls="mail-ai-panel" @click="openAiPanel">
           <Icon name="sparkles" :size="17" />AI 助理
         </button>
       </section>
@@ -739,6 +768,7 @@ watch(() => safeMessageId.value, () => {
         width="860px"
         initial-focus-selector="#mail-ai-instruction"
         @close="aiPanelOpen = false"
+        @after-close="onAiPanelAfterClose"
       >
       <section id="mail-ai-panel" class="mail-message-detail__ai-panel" role="region" aria-label="邮件 AI 助理工作区">
         <header>
@@ -896,7 +926,7 @@ watch(() => safeMessageId.value, () => {
             </li>
           </ol>
         </section>
-        <button v-if="aiResult.action === 'draft_reply'" type="button" class="mail-message-detail__use-draft" @click="openReply(aiResult.text)"><Icon name="edit" :size="17" />检查并回复</button>
+        <button v-if="aiResult.action === 'draft_reply'" type="button" class="mail-message-detail__use-draft" :disabled="!deliveryReady" :title="deliveryDisabledReason" @click="openReply(aiResult.text)"><Icon name="edit" :size="17" />检查并回复</button>
         <p>AI 结果可能有误。发送前仍需由你预览并明确确认。</p>
       </section>
 
@@ -954,19 +984,19 @@ watch(() => safeMessageId.value, () => {
       </section>
 
       <nav v-if="!message.legacyEvent" class="mail-message-detail__mobile-actions" aria-label="移动端邮件操作">
-        <button type="button" @click="openReply()"><Icon name="reply" :size="19" /><span>回复</span></button>
-        <button type="button" :disabled="commandBusy" @click="requestCommand(messageSeen ? 'mark_unread' : 'mark_read')"><Icon name="mail" :size="19" /><span>{{ messageSeen ? '未读' : '已读' }}</span></button>
-        <button type="button" :disabled="commandBusy" @click="requestCommand(messageFlagged ? 'unstar' : 'star')"><Icon name="star" :size="19" /><span>{{ messageFlagged ? '取消重要' : '重要' }}</span></button>
-        <button type="button" :aria-expanded="aiPanelOpen" @click="aiPanelOpen = !aiPanelOpen"><Icon name="sparkles" :size="19" /><span>AI 助理</span></button>
+        <button type="button" :disabled="!deliveryReady" :title="deliveryDisabledReason" @click="openReply()"><Icon name="reply" :size="19" /><span>回复</span></button>
+        <button type="button" :disabled="commandBusy || !remoteActionsReady" :title="remoteActionsDisabledReason" @click="requestCommand(messageSeen ? 'mark_unread' : 'mark_read')"><Icon name="mail" :size="19" /><span>{{ messageSeen ? '未读' : '已读' }}</span></button>
+        <button type="button" :disabled="commandBusy || !remoteActionsReady" :title="remoteActionsDisabledReason" @click="requestCommand(messageFlagged ? 'unstar' : 'star')"><Icon name="star" :size="19" /><span>{{ messageFlagged ? '取消重要' : '重要' }}</span></button>
+        <button type="button" aria-haspopup="dialog" :aria-expanded="aiPanelOpen" @click="openAiPanel"><Icon name="sparkles" :size="19" /><span>AI 助理</span></button>
         <details class="mail-message-detail__mobile-more">
           <summary><Icon name="more-horizontal" :size="19" /><span>更多</span></summary>
           <div>
-            <button type="button" @click="openReply('', 'forward')"><Icon name="forward" :size="18" />转发</button>
-            <button v-if="activeSpecialUse !== 'archive'" type="button" :disabled="commandBusy" @click="requestCommand('archive')"><Icon name="archive" :size="18" />归档</button>
-            <button type="button" :disabled="commandBusy" @click="openActionDialog('move', $event)"><Icon name="folder" :size="18" />移动</button>
-            <button v-if="!['trash', 'junk', 'spam'].includes(activeSpecialUse)" type="button" :disabled="commandBusy" @click="requestCommand('trash')"><Icon name="trash" :size="18" />移到垃圾箱</button>
+            <button type="button" :disabled="!deliveryReady" :title="deliveryDisabledReason" @click="openReply('', 'forward')"><Icon name="forward" :size="18" />转发</button>
+            <button v-if="activeSpecialUse !== 'archive'" type="button" :disabled="commandBusy || !remoteActionsReady" :title="remoteActionsDisabledReason" @click="requestCommand('archive')"><Icon name="archive" :size="18" />归档</button>
+            <button type="button" :disabled="commandBusy || !remoteActionsReady" :title="remoteActionsDisabledReason" @click="openActionDialog('move', $event)"><Icon name="folder" :size="18" />移动</button>
+            <button v-if="!['trash', 'junk', 'spam'].includes(activeSpecialUse)" type="button" :disabled="commandBusy || !remoteActionsReady" :title="remoteActionsDisabledReason" @click="requestCommand('trash')"><Icon name="trash" :size="18" />移到垃圾箱</button>
             <button type="button" @click="emit('notification', message, $event.currentTarget)"><Icon name="bell" :size="18" />提醒规则</button>
-            <button v-if="canPermanentlyDelete" type="button" class="is-danger" :disabled="commandBusy" @click="openActionDialog('delete', $event)"><Icon name="trash" :size="18" />永久删除</button>
+            <button v-if="canPermanentlyDelete" type="button" class="is-danger" :disabled="commandBusy || !remoteActionsReady" :title="remoteActionsDisabledReason" @click="openActionDialog('delete', $event)"><Icon name="trash" :size="18" />永久删除</button>
           </div>
         </details>
       </nav>

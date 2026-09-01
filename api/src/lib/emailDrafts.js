@@ -6,6 +6,7 @@ import {
   getDraftEmailAttachmentManifest,
   listDraftEmailAttachments
 } from './emailAttachmentStore.js'
+import { assertEmailAccountDeliveryReady } from './emailAccountDeliveryReadiness.js'
 import { enqueueUserMail } from './mailOutbox.js'
 import { hashUserMailPayload, normalizeUserMailPayload } from './emailUserMail.js'
 
@@ -229,6 +230,7 @@ export async function queueEmailDraft({
 }, {
   poolInstance = pool,
   enqueueFn = enqueueUserMail,
+  assertDeliveryReadyFn = assertEmailAccountDeliveryReady,
   client: transactionClient = null
 } = {}) {
   if (confirmed !== true) throw new TypeError('Explicit email send confirmation is required')
@@ -267,6 +269,11 @@ export async function queueEmailDraft({
       }
     }
     if (row.status !== 'draft') throw new Error('Email draft can no longer be sent')
+    await assertDeliveryReadyFn({
+      userId: ownerId,
+      accountId: row.account_id,
+      queryFn: client.query.bind(client)
+    })
     const draft = await decryptDraftRow(row, { attachmentManifest, attachments })
     const queued = await enqueueFn({
       userId: ownerId,

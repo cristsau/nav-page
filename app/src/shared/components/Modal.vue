@@ -27,7 +27,7 @@ const props = defineProps({
   }
 })
 
-const emit = defineEmits(['close'])
+const emit = defineEmits(['close', 'after-close'])
 const dialog = ref(null)
 const closeButton = ref(null)
 const titleId = `modal-title-${++modalSequence}`
@@ -128,6 +128,7 @@ watch(() => props.show, async (val, previousValue) => {
     document.removeEventListener('keydown', onKeyDown)
     await nextTick()
     restoreFocus()
+    emit('after-close')
   }
 }, { immediate: true })
 

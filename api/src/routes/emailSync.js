@@ -1,5 +1,5 @@
-import { config } from '../config.js'
 import { query } from '../db/index.js'
+import { resolveEmailAccountRemoteActionReadiness } from '../lib/emailAccountDeliveryReadiness.js'
 import {
   EMAIL_INGEST_WAKE_CHANNEL,
   notifyEmailWake
@@ -28,17 +28,11 @@ async function ownedRuntimeAccount(accountId, userId, queryFn) {
   return rows[0] || null
 }
 
-function runtimeCanSync(account) {
-  return account?.enabled === true
-    && String(account.source_key || '').trim().toLowerCase()
-      === String(config.emailSourceKey || '').trim().toLowerCase()
-    && String(account.username || '').trim().toLowerCase()
-      === String(config.emailOwnerUsername || '').trim().toLowerCase()
-    && config.emailIngestEnabled === true
-}
-
 export default async function emailSyncRoutes(fastify, options = {}) {
   const queryFn = typeof options.queryFn === 'function' ? options.queryFn : query
+  const resolveRemoteReadinessFn = typeof options.resolveRemoteReadinessFn === 'function'
+    ? options.resolveRemoteReadinessFn
+    : resolveEmailAccountRemoteActionReadiness
 
   fastify.post('/email/accounts/:accountId/sync', async (request, reply) => {
     await fastify.requireAuth(request, reply)
@@ -53,9 +47,18 @@ export default async function emailSyncRoutes(fastify, options = {}) {
       reply.code(404)
       return { error: 'Email account not found' }
     }
-    if (!runtimeCanSync(account)) {
+    const remoteReadiness = account.enabled === true
+      ? await resolveRemoteReadinessFn({
+          sourceKey: account.source_key,
+          ownerUsername: account.username
+        })
+      : { ready: false, reason: 'account_disabled' }
+    if (!remoteReadiness.ready) {
       reply.code(409)
-      return { error: 'This email account is not attached to the active IMAP worker' }
+      return {
+        error: 'This email account is not attached to an active IMAP worker',
+        code: 'EMAIL_ACCOUNT_REMOTE_ACTIONS_UNAVAILABLE'
+      }
     }
     const updated = await queryFn(
       `UPDATE email_accounts

@@ -57,7 +57,14 @@ test('manual sync increments a durable generation and coalesces repeated wakeups
   app.decorate('requireAuth', async (request) => {
     request.currentUser = { id: USER_ID }
   })
-  await app.register(emailSyncRoutes, { queryFn })
+  await app.register(emailSyncRoutes, {
+    queryFn,
+    resolveRemoteReadinessFn: async ({ sourceKey, ownerUsername }) => {
+      assert.equal(sourceKey, 'mxroute')
+      assert.equal(ownerUsername, 'mail-owner')
+      return { ready: true, reason: 'ready' }
+    }
+  })
   try {
     const first = await app.inject({
       method: 'POST',
@@ -146,4 +153,91 @@ test('sync status exposes only sanitized failure diagnostics for the owned accou
   } finally {
     await app.close()
   }
+})
+
+test('manual sync uses per-account runtime readiness for secondary, cross-owner and disabled accounts', async () => {
+  const { default: emailSyncRoutes } = await import('../src/routes/emailSync.js')
+
+  async function run({ account, readiness }) {
+    const readinessCalls = []
+    const queryFn = async (sql) => {
+      if (/SELECT account\.id/.test(sql)) return { rows: [account], rowCount: 1 }
+      if (/UPDATE email_accounts/.test(sql)) {
+        return {
+          rows: [{
+            sync_request_generation: 2,
+            sync_completed_generation: 1,
+            last_sync_requested_at: '2026-09-01T00:00:00.000Z'
+          }],
+          rowCount: 1
+        }
+      }
+      if (/SELECT pg_notify/.test(sql)) return { rows: [], rowCount: 1 }
+      throw new Error(`Unexpected SQL: ${sql}`)
+    }
+    const app = Fastify()
+    app.decorate('requireAuth', async (request) => {
+      request.currentUser = { id: USER_ID }
+    })
+    await app.register(emailSyncRoutes, {
+      queryFn,
+      resolveRemoteReadinessFn: async (identity) => {
+        readinessCalls.push(identity)
+        return readiness
+      }
+    })
+    try {
+      return {
+        response: await app.inject({ method: 'POST', url: `/email/accounts/${ACCOUNT_ID}/sync` }),
+        readinessCalls
+      }
+    } finally {
+      await app.close()
+    }
+  }
+
+  const secondary = await run({
+    account: {
+      id: ACCOUNT_ID,
+      source_key: 'secondary-mail',
+      enabled: true,
+      username: 'mail-owner',
+      sync_request_generation: 1,
+      sync_completed_generation: 1,
+      last_sync_requested_at: null
+    },
+    readiness: { ready: true, reason: 'ready' }
+  })
+  assert.equal(secondary.response.statusCode, 202)
+  assert.deepEqual(secondary.readinessCalls, [{ sourceKey: 'secondary-mail', ownerUsername: 'mail-owner' }])
+
+  const crossOwner = await run({
+    account: {
+      id: ACCOUNT_ID,
+      source_key: 'secondary-mail',
+      enabled: true,
+      username: 'another-owner',
+      sync_request_generation: 1,
+      sync_completed_generation: 1,
+      last_sync_requested_at: null
+    },
+    readiness: { ready: false, reason: 'account_not_configured' }
+  })
+  assert.equal(crossOwner.response.statusCode, 409)
+  assert.equal(crossOwner.response.json().code, 'EMAIL_ACCOUNT_REMOTE_ACTIONS_UNAVAILABLE')
+
+  const disabled = await run({
+    account: {
+      id: ACCOUNT_ID,
+      source_key: 'secondary-mail',
+      enabled: false,
+      username: 'mail-owner',
+      sync_request_generation: 1,
+      sync_completed_generation: 1,
+      last_sync_requested_at: null
+    },
+    readiness: { ready: true, reason: 'ready' }
+  })
+  assert.equal(disabled.response.statusCode, 409)
+  assert.deepEqual(disabled.readinessCalls, [])
 })

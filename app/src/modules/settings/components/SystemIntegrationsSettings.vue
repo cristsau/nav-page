@@ -25,6 +25,7 @@ const { currentUser } = useAuth()
 const loading = ref(true)
 const busyAction = ref('')
 const message = ref('')
+const warning = ref('')
 const error = ref('')
 const writable = ref(false)
 const managedState = ref(null)
@@ -85,6 +86,10 @@ const mail = reactive({
 const secondaryMailAccounts = computed(() => managedState.value?.mailAccounts || [])
 const isNewMailAccount = computed(() => activeMailAccountId.value === 'new')
 const isSecondaryMailAccount = computed(() => activeMailAccountId.value !== 'primary')
+const mailOwnerLocked = computed(() => Boolean(
+  !isNewMailAccount.value
+  && (isSecondaryMailAccount.value || mailPrimaryManaged.value)
+))
 const canAddMailAccount = computed(() => Boolean(
   writable.value
   && mailPrimaryManaged.value
@@ -325,11 +330,13 @@ function startAddMailAccount() {
     }
   }, { secondary: true })
   message.value = '请填写第二邮箱配置并保存；保存后再分别测试 SMTP 和 IMAP。'
+  warning.value = ''
   error.value = ''
 }
 
 async function refresh() {
   loading.value = true
+  warning.value = ''
   error.value = ''
   try {
     applyState(await fetchManagedIntegrations())
@@ -371,12 +378,15 @@ function mailPayload() {
 async function run(action, successText, callback) {
   busyAction.value = action
   message.value = ''
+  warning.value = ''
   error.value = ''
   try {
     const result = await callback()
-    message.value = successText
+    if (result?.warning) warning.value = String(result.warning)
+    else message.value = successText
     return result
   } catch (caught) {
+    warning.value = ''
     error.value = caught.message || '操作失败，请稍后重试。'
     await nextTick()
     errorNotice.value?.focus({ preventScroll: true })
@@ -395,6 +405,7 @@ async function saveMail() {
       : null
   if (invalidHost) {
     message.value = ''
+    warning.value = ''
     error.value = invalidHost.message
     await nextTick()
     invalidHost.input?.focus({ preventScroll: true })
@@ -479,6 +490,7 @@ onMounted(refresh)
       服务器尚未挂载可管理集成目录。当前页面为只读；发布时配置 NAV_MANAGED_INTEGRATIONS_DIR 后即可自助保存。
     </div>
     <p v-if="message" class="notice notice--success" role="status">{{ message }}</p>
+    <p v-if="warning" class="notice notice--warning" role="status" aria-live="polite">{{ warning }}</p>
     <p v-if="error" ref="errorNotice" class="notice notice--error" role="alert" tabindex="-1">{{ error }}</p>
 
     <OauthIntegrationSettings />
@@ -488,7 +500,7 @@ onMounted(refresh)
         <div class="card-icon"><Icon name="mail" :size="20" /></div>
         <div>
           <h4>{{ activeMailAccountName }}（SMTP / IMAP）</h4>
-          <p>最多连接两个真实邮箱；各账号使用独立 Secret，切换账号不会回显任何密码。</p>
+          <p>邮件服务（SMTP / IMAP）最多连接两个真实邮箱；支持邮箱密码或应用专用密码，各账号使用独立 Secret 且不会回显。</p>
         </div>
       </header>
 
@@ -572,7 +584,17 @@ onMounted(refresh)
       <fieldset>
         <legend>智能收件</legend>
         <div class="field-grid">
-          <label><span>归属 NAV 用户名</span><input v-model.trim="mail.ownerUsername" type="text" autocomplete="off" placeholder="必须填写，例如当前 NAV 用户名"></label>
+          <label>
+            <span>归属 NAV 用户名</span>
+            <input
+              v-model.trim="mail.ownerUsername"
+              type="text"
+              autocomplete="off"
+              :readonly="mailOwnerLocked"
+              :aria-describedby="mailOwnerLocked ? 'mail-owner-lock-tip' : undefined"
+              placeholder="必须填写，例如当前 NAV 用户名"
+            >
+          </label>
           <label>
             <span>IMAP 主机</span>
             <input
@@ -593,6 +615,7 @@ onMounted(refresh)
           <label v-if="!isSecondaryMailAccount"><span>摘要时间（小时，逗号分隔）</span><input v-model="mail.digestHoursText" type="text" inputmode="numeric" autocomplete="off"></label>
           <label v-if="!isSecondaryMailAccount"><span>摘要时区</span><input v-model.trim="mail.digestTimeZone" type="text" autocomplete="off"></label>
         </div>
+        <p v-if="mailOwnerLocked" id="mail-owner-lock-tip" class="field-tip">账号保存后归属用户会锁定，避免后台任务与其他邮箱串号。</p>
         <label class="check-row"><input v-model="mail.reuseSmtpPasswordForImap" type="checkbox">保存时将 SMTP 密码复制给 IMAP</label>
         <div class="action-row">
           <span>{{ imapTestDisabledReason || `配置已保存，可测试。最近验证：${formatDate(mail.imapVerifiedAt)}` }}</span>
@@ -684,13 +707,14 @@ onMounted(refresh)
     </form>
 
     <div
-      v-if="busyAction || message || error"
+      v-if="busyAction || message || warning || error"
       class="integration-toast"
-      :class="{ 'is-error': Boolean(error), 'is-busy': Boolean(busyAction) }"
-      aria-hidden="true"
+      :class="{ 'is-error': Boolean(error), 'is-warning': Boolean(warning), 'is-busy': Boolean(busyAction) }"
+      :role="error ? 'alert' : 'status'"
+      aria-live="polite"
     >
-      <Icon :name="error ? 'alert' : busyAction ? 'refresh' : 'check'" :size="17" />
-      <span>{{ busyAction ? busyActionLabel : error || message }}</span>
+      <Icon :name="error || warning ? 'alert' : busyAction ? 'refresh' : 'check'" :size="17" />
+      <span>{{ busyAction ? busyActionLabel : error || warning || message }}</span>
     </div>
   </section>
 </template>
@@ -743,6 +767,7 @@ input:disabled { opacity: .62; }
 .notice--error { color: var(--danger-color, #b45151); }
 .integration-toast { position: fixed; right: 18px; bottom: 18px; z-index: 720; display: flex; width: min(440px, calc(100vw - 36px)); min-height: 48px; padding: 11px 14px; align-items: center; gap: 9px; color: var(--success-color, #4f8a5b); background: color-mix(in srgb, var(--bg-card) 96%, transparent); border: 1px solid var(--border-color); border-radius: 14px; box-shadow: var(--shadow-lg); -webkit-backdrop-filter: blur(18px); backdrop-filter: blur(18px); box-sizing: border-box; }
 .integration-toast.is-error { color: var(--danger-color, #b45151); }
+.integration-toast.is-warning { color: var(--warning-color, #9a6b28); }
 .integration-toast.is-busy { color: var(--info-color, var(--accent-color)); }
 .integration-toast.is-busy svg { animation: integration-spin .85s linear infinite; }
 @keyframes integration-spin { to { transform: rotate(360deg); } }

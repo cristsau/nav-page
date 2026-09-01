@@ -75,7 +75,7 @@ export async function generateEmailDigests({ poolInstance, policy, now = new Dat
           summary: `有 ${ids.length} 封邮件建议今天核对；完整内容仅在登录后显示。`,
           sourceType: 'email_digest',
           sourceId: digestKey,
-          actionUrl: '/assistant?view=email',
+          actionUrl: '/mail',
           // A busy mailbox may need more than one bounded batch during the
           // same hour. Including the first event keeps every batch idempotent
           // without silently marking later events as digested by an old row.

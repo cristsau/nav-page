@@ -13,13 +13,18 @@ test('mail AI assistant opens as a viewport modal and reveals its result without
 
   assert.match(detail, /import Modal from '@\/shared\/components\/Modal\.vue'/)
   assert.match(detail, /aria-haspopup="dialog"/)
-  assert.match(detail, /@click="aiPanelOpen = true"/)
+  assert.match(detail, /@click="openAiPanel"/)
   assert.match(detail, /<Modal[\s\S]*?:show="aiPanelOpen"[\s\S]*?initial-focus-selector="#mail-ai-instruction"/)
   assert.match(detail, /@close="aiPanelOpen = false"/)
+  assert.match(detail, /@after-close="onAiPanelAfterClose"/)
   assert.match(detail, /ref="aiResultRef"[\s\S]*?tabindex="-1"/)
-  assert.match(detail, /aiResultRef\.value\?\.scrollIntoView\?\.\(/)
+  assert.match(detail, /function revealAiResult\(\)[\s\S]*aiResultRef\.value\?\.scrollIntoView\?\.\(/)
   assert.match(detail, /prefers-reduced-motion: reduce/)
-  assert.match(detail, /aiResultRef\.value\?\.focus\?\.\(\{ preventScroll: true \}\)/)
+  assert.match(detail, /function revealAiResult\(\)[\s\S]*aiResultRef\.value\?\.focus\?\.\(\{ preventScroll: true \}\)/)
+  assert.match(detail, /const waitForModalClose = aiPanelOpen\.value[\s\S]*if \(!waitForModalClose\) await revealAiResult\(\)/)
+  assert.match(detail, /function onAiPanelAfterClose\(\)[\s\S]*await revealAiResult\(\)/)
+  const modal = await source('app/src/shared/components/Modal.vue')
+  assert.match(modal, /restoreFocus\(\)[\s\S]*emit\('after-close'\)/)
 })
 
 test('mail list keeps a visible compose entry wired to the existing safe compose dialog', async () => {

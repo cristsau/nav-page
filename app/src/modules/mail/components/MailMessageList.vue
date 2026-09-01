@@ -9,12 +9,17 @@ const props = defineProps({
   loading: { type: Boolean, default: false },
   loadingMore: { type: Boolean, default: false },
   hasMore: { type: Boolean, default: false },
+  unreadCount: { type: Number, default: 0 },
+  markAllReadBusy: { type: Boolean, default: false },
+  composeReady: { type: Boolean, default: false },
+  remoteActionsReady: { type: Boolean, default: false },
+  accountCapabilityNotice: { type: String, default: '' },
   realtimeLabel: { type: String, default: '' }
 })
 
 // The server searches the full mailbox; local filtering keeps the current rows
 // responsive while the debounced request is in flight.
-const emit = defineEmits(['select', 'load-more', 'refresh', 'open-folders', 'compose', 'notification', 'query-change'])
+const emit = defineEmits(['select', 'load-more', 'refresh', 'open-folders', 'compose', 'mark-all-read', 'notification', 'query-change'])
 const search = ref('')
 const activeFilter = ref('all')
 let queryTimer = null
@@ -165,7 +170,26 @@ onBeforeUnmount(() => {
         <h2 id="mail-message-list-title">{{ folderName }}</h2>
         <p v-if="realtimeLabel" role="status">{{ realtimeLabel }}</p>
       </div>
-      <button class="mail-message-list__compose" type="button" aria-label="新建邮件" title="新建邮件" aria-haspopup="dialog" @click="emit('compose')">
+      <button
+        class="mail-message-list__mark-read"
+        type="button"
+        :disabled="markAllReadBusy || unreadCount < 1 || !remoteActionsReady"
+        :aria-label="!remoteActionsReady ? '当前邮箱未启用 IMAP，不能一键已读' : unreadCount ? `将当前文件夹 ${unreadCount} 封未读邮件全部标为已读` : '当前文件夹没有未读邮件'"
+        :title="!remoteActionsReady ? accountCapabilityNotice : unreadCount ? `一键已读（${unreadCount}）` : '没有未读邮件'"
+        @click="emit('mark-all-read')"
+      >
+        <Icon name="circle-check" :size="17" />
+        <span>{{ markAllReadBusy ? '提交中…' : '一键已读' }}</span>
+      </button>
+      <button
+        class="mail-message-list__compose"
+        type="button"
+        :disabled="!composeReady"
+        aria-label="新建邮件"
+        :title="composeReady ? '新建邮件' : accountCapabilityNotice"
+        aria-haspopup="dialog"
+        @click="emit('compose')"
+      >
         <Icon name="plus" :size="17" />
         <span>新建邮件</span>
       </button>
@@ -258,10 +282,11 @@ onBeforeUnmount(() => {
 
 <style scoped>
 .mail-message-list { display: flex; min-width: 0; height: 100%; flex-direction: column; color: var(--text-primary); background: var(--bg-card); border-right: 1px solid var(--border-light); }
-.mail-message-list__header { display: grid; min-height: 68px; padding: 10px 12px; align-items: center; grid-template-columns: minmax(0, 1fr) auto auto; gap: 9px; border-bottom: 1px solid var(--border-light); }
+.mail-message-list__header { display: grid; min-height: 68px; padding: 10px 12px; align-items: center; grid-template-columns: minmax(0, 1fr) auto auto auto; gap: 7px; border-bottom: 1px solid var(--border-light); }
 .mail-message-list__header > button { display: grid; width: 44px; height: 44px; place-items: center; color: var(--text-secondary); background: transparent; border: 1px solid var(--border-light); border-radius: 12px; cursor: pointer; }
 .mail-message-list__header > button:disabled { opacity: .5; cursor: wait; }
 .mail-message-list__header > .mail-message-list__compose { display: inline-flex; width: auto; min-width: 102px; padding: 0 11px; align-items: center; justify-content: center; gap: 6px; color: var(--accent-contrast, #fff); font: inherit; font-size: .63rem; font-weight: 720; background: var(--accent-color); border-color: transparent; }
+.mail-message-list__header > .mail-message-list__mark-read { display: inline-flex; width: auto; min-width: 86px; padding: 0 9px; align-items: center; justify-content: center; gap: 5px; color: var(--text-secondary); font: inherit; font-size: .6rem; font-weight: 700; }
 .mail-message-list__header h2 { margin: 0; overflow: hidden; font-size: .88rem; white-space: nowrap; text-overflow: ellipsis; }
 .mail-message-list__header p { margin: 3px 0 0; overflow: hidden; color: var(--text-muted); font-size: .61rem; white-space: nowrap; text-overflow: ellipsis; }
 .mail-message-list__folders { display: none !important; }
@@ -310,13 +335,15 @@ onBeforeUnmount(() => {
 .sr-only { position: absolute; width: 1px; height: 1px; padding: 0; overflow: hidden; clip: rect(0, 0, 0, 0); white-space: nowrap; border: 0; }
 @media (max-width: 820px), (pointer: coarse) and (max-width: 1024px) {
   .mail-message-list { border-right: 0; }
-  .mail-message-list__header { grid-template-columns: auto minmax(0, 1fr) auto auto; }
+  .mail-message-list__header { grid-template-columns: auto minmax(0, 1fr) auto auto auto; }
   .mail-message-list__folders { display: grid !important; }
   .mail-message-list > ul { overflow: visible; }
   .mail-message-row__open { min-height: 126px; }
 }
 @media (max-width: 440px) {
   .mail-message-list__header > .mail-message-list__compose { width: 44px; min-width: 44px; padding: 0; }
-  .mail-message-list__compose span { display: none; }
+  .mail-message-list__header > .mail-message-list__mark-read { width: 44px; min-width: 44px; padding: 0; }
+  .mail-message-list__compose span,
+  .mail-message-list__mark-read span { display: none; }
 }
 </style>

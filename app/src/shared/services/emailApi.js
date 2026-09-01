@@ -55,6 +55,16 @@ export function fetchEmailFolders(accountId) {
   })
 }
 
+export function markEmailFolderAllRead({ accountId, folderId, idempotencyKey } = {}) {
+  return request(
+    `/email/accounts/${requiredId(accountId, 'Email account id')}/folders/${requiredId(folderId, 'Email folder id')}/mark-all-read`,
+    {
+      method: 'POST',
+      body: JSON.stringify({ idempotencyKey: String(idempotencyKey || '').trim() })
+    }
+  )
+}
+
 export function fetchEmailMessages({
   accountId,
   folderId,

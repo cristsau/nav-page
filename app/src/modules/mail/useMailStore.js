@@ -9,6 +9,7 @@ import {
   fetchEmailMessage,
   fetchEmailMessageCommand,
   fetchEmailMessages,
+  markEmailFolderAllRead,
   openEmailEventStream,
   requestEmailAccountSync,
   undoEmailMessageCommand
@@ -73,7 +74,9 @@ function initialMailState() {
     syncCompletedAt: '',
     commandsByLocation: {},
     commandBusy: false,
-    commandError: ''
+    commandError: '',
+    markAllReadBusy: false,
+    markAllReadNotice: ''
   }
 }
 
@@ -571,6 +574,55 @@ export async function executeMailMessageCommand({
   }
 }
 
+export async function markActiveMailFolderAllRead() {
+  const ownerUserId = bindMailStoreToCurrentUser()
+  const accountId = normalizedId(state.activeAccountId)
+  const folderId = normalizedId(state.activeFolderId)
+  if (!ownerUserId || !accountId || !folderId) throw new Error('当前没有可操作的邮件文件夹')
+  if (state.markAllReadBusy) return null
+  state.markAllReadBusy = true
+  state.markAllReadNotice = ''
+  state.commandError = ''
+  try {
+    const result = await markEmailFolderAllRead({
+      accountId,
+      folderId,
+      idempotencyKey: newIdempotencyKey()
+    })
+    if (ownerUserId !== boundAuthUserId || accountId !== state.activeAccountId || folderId !== state.activeFolderId) {
+      return result
+    }
+    const page = ensurePage(accountId, folderId)
+    page.items = (Array.isArray(page.items) ? page.items : []).map((message) => ({
+      ...message,
+      unread: false,
+      seen: true,
+      flags: { ...(message.flags || {}), seen: true }
+    }))
+    const folder = activeFolders.value.find((item) => normalizedId(item.id) === folderId)
+    if (folder) folder.unreadCount = 0
+    const account = state.accounts.find((item) => normalizedId(item.id) === accountId)
+    if (account) account.unreadCount = Math.max(0, Number(account.unreadCount || 0) - Number(result?.matched || 0))
+    if (state.selectedMessage) {
+      state.selectedMessage = {
+        ...state.selectedMessage,
+        unread: false,
+        seen: true,
+        flags: { ...(state.selectedMessage.flags || {}), seen: true }
+      }
+    }
+    state.markAllReadNotice = Number(result?.matched || 0)
+      ? `已提交 ${Number(result.matched)} 封邮件的已读同步。`
+      : '当前文件夹没有未读邮件。'
+    return result
+  } catch (error) {
+    state.commandError = error?.message || '一键已读提交失败'
+    throw error
+  } finally {
+    if (ownerUserId === boundAuthUserId) state.markAllReadBusy = false
+  }
+}
+
 export async function undoMailMessageCommand(locationId = state.selectedMessageId) {
   const targetLocationId = normalizedId(locationId)
   const current = commandForLocation(targetLocationId)
@@ -917,6 +969,7 @@ export function useMailStore() {
     loadMessage: loadMailMessage,
     loadLegacyEvent: loadLegacyMailEvent,
     executeCommand: executeMailMessageCommand,
+    markAllRead: markActiveMailFolderAllRead,
     undoCommand: undoMailMessageCommand,
     commandForLocation,
     commandCanUndo,
