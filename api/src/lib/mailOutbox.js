@@ -30,10 +30,15 @@ const DELIVERY_SCOPE_SQL = `(
   OR (
     mail_outbox.message_type = 'user.mail'
     AND EXISTS (
-      SELECT 1 FROM email_accounts AS delivery_account
+      SELECT 1
+      FROM email_accounts AS delivery_account
+      JOIN users AS delivery_owner ON delivery_owner.id = delivery_account.user_id
       WHERE delivery_account.id = mail_outbox.account_id
         AND delivery_account.user_id = mail_outbox.user_id
+        AND delivery_account.enabled = TRUE
         AND delivery_account.source_key = $1
+        AND delivery_owner.username = $3
+        AND delivery_owner.status = 'approved'
     )
   )
 )`
@@ -494,6 +499,7 @@ export async function deliverMailOutbox({
   const sourceKey = String(runtimeConfig.emailSourceKey || config.emailSourceKey || 'mxroute').trim().toLowerCase()
   if (!/^[a-z0-9_.-]{1,80}$/.test(sourceKey)) throw new Error('Email source key is invalid')
   const primaryAccount = runtimeConfig.emailPrimaryAccount !== false
+  const ownerUsername = String(runtimeConfig.emailOwnerUsername || '').trim()
   const lockName = `nav_mail_delivery:${sourceKey}`
   const client = await poolInstance.connect()
   let lockAcquired = false
@@ -516,7 +522,7 @@ export async function deliverMailOutbox({
          WHERE status = 'sending' AND updated_at < NOW() - INTERVAL '15 minutes'
            AND ${DELIVERY_SCOPE_SQL}
          RETURNING id, user_id`
-        , [sourceKey, primaryAccount]
+        , [sourceKey, primaryAccount, ownerUsername]
       )
       await scrubExpiredOutboxArtifactsInTransaction(
         client,
@@ -535,10 +541,10 @@ export async function deliverMailOutbox({
              text_body = '', html_body = '', payload_encrypted = NULL,
              scrubbed_at = COALESCE(scrubbed_at, NOW()),
              last_error_code = 'MAX_ATTEMPTS_EXCEEDED', updated_at = NOW()
-         WHERE status IN ('pending', 'failed') AND attempt_count >= $3
+         WHERE status IN ('pending', 'failed') AND attempt_count >= $4
            AND ${DELIVERY_SCOPE_SQL}
          RETURNING id, user_id`,
-        [sourceKey, primaryAccount, validated.maxAttempts]
+        [sourceKey, primaryAccount, ownerUsername, validated.maxAttempts]
       )
       await scrubExpiredOutboxArtifactsInTransaction(
         client,
@@ -556,9 +562,9 @@ export async function deliverMailOutbox({
           AND next_attempt_at <= NOW()
           AND ${DELIVERY_SCOPE_SQL}
         ORDER BY next_attempt_at ASC, created_at ASC, id ASC
-        LIMIT $3
+        LIMIT $5
       `,
-      [sourceKey, primaryAccount, validated.batchSize, validated.maxAttempts]
+      [sourceKey, primaryAccount, ownerUsername, validated.maxAttempts, validated.batchSize]
     )
     const summary = {
       processed: 0,
@@ -760,9 +766,9 @@ export async function deliverMailOutbox({
 
     const remaining = await client.query(
       `SELECT COUNT(*)::integer AS count FROM mail_outbox
-       WHERE status IN ('pending', 'failed') AND attempt_count < $3
+       WHERE status IN ('pending', 'failed') AND attempt_count < $4
          AND ${DELIVERY_SCOPE_SQL}`,
-      [sourceKey, primaryAccount, validated.maxAttempts]
+      [sourceKey, primaryAccount, ownerUsername, validated.maxAttempts]
     )
     summary.remaining = Number(remaining.rows[0]?.count || 0)
     return summary

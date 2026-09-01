@@ -44,16 +44,21 @@ function normalizeEmailRuntimeRole(value) {
 const nodeEnv = process.env.NODE_ENV || 'development'
 const emailRuntimeRole = normalizeEmailRuntimeRole(process.env.NAV_EMAIL_RUNTIME_ROLE)
 
-// The dedicated mail worker permanently reserves one pooled connection for
-// the IMAP advisory lease plus one LISTEN connection for each ingest and
-// classification wake channel. Keep two additional slots available so normal
-// work and maintenance observation cannot be starved by those three long-lived
-// connections.
-export const MINIMUM_MAIL_WORKER_DATABASE_POOL_SIZE = 5
+// Each enabled mailbox ingest permanently reserves one advisory-lease session
+// plus one LISTEN session. Classification owns one more LISTEN session. Keep
+// four transient slots for delivery, Sent append, remote commands and status
+// writes; the current two-account product therefore has a hard minimum of 8.
+export const MINIMUM_MAIL_WORKER_DATABASE_POOL_SIZE = 8
+
+export function requiredMailWorkerDatabasePoolSize(activeMailboxCount = 1) {
+  const parsed = Number(activeMailboxCount)
+  const count = Number.isSafeInteger(parsed) && parsed >= 0 ? parsed : 1
+  return Math.max(MINIMUM_MAIL_WORKER_DATABASE_POOL_SIZE, (2 * count) + 4)
+}
 
 export function normalizeDatabasePoolMax(value, role = emailRuntimeRole) {
   const normalizedRole = normalizeEmailRuntimeRole(role)
-  const fallback = normalizedRole === 'worker' ? 8 : 6
+  const fallback = normalizedRole === 'worker' || normalizedRole === 'combined' ? 12 : 6
   const normalized = normalizeBoundedPositiveInteger(value, fallback, {
     minimum: 1,
     maximum: 32
@@ -65,10 +70,12 @@ export function normalizeDatabasePoolMax(value, role = emailRuntimeRole) {
   return normalized
 }
 
-export function assertSafeMailWorkerDatabasePoolSize(value) {
-  if (value < MINIMUM_MAIL_WORKER_DATABASE_POOL_SIZE) {
+export function assertSafeMailWorkerDatabasePoolSize(value, activeMailboxCount = 1) {
+  const required = requiredMailWorkerDatabasePoolSize(activeMailboxCount)
+  if (value < required) {
     const error = new Error('nav-mail-worker database pool is below the safe runtime minimum')
     error.code = 'MAIL_WORKER_DATABASE_POOL_TOO_SMALL'
+    error.required = required
     throw error
   }
   return value

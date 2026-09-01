@@ -9,8 +9,8 @@ import { readOwnerSecretFile } from './ownerSecretFile.js'
 import { resolveImapAuth } from './emailOauth2.js'
 import { assertSafeOutboundHost } from './outboundEndpoints.js'
 
-const LOCK_SQL = `SELECT pg_try_advisory_lock(hashtext(current_database()), hashtext('nav_email_sent_append')) AS acquired`
-const UNLOCK_SQL = `SELECT pg_advisory_unlock(hashtext(current_database()), hashtext('nav_email_sent_append')) AS released`
+const LOCK_SQL = 'SELECT pg_try_advisory_lock(hashtext(current_database()), hashtext($1)) AS acquired'
+const UNLOCK_SQL = 'SELECT pg_advisory_unlock(hashtext(current_database()), hashtext($1)) AS released'
 const UINT32_MAX = 4_294_967_295
 
 function boundedInteger(value, fallback, minimum, maximum) {
@@ -399,13 +399,18 @@ export async function processEmailSentAppendJobs({
   logger
 }) {
   const validated = validateEmailSentAppendPolicy(policy)
+  const sourceKey = String(runtimeConfig.emailSourceKey || '').trim().toLowerCase()
+  const ownerUsername = String(runtimeConfig.emailOwnerUsername || '').trim()
+  if (!/^[a-z0-9_.-]{1,80}$/.test(sourceKey)) throw new Error('Email source key is invalid')
+  if (!ownerUsername) throw new Error('Email owner username is not configured')
+  const lockName = `nav_email_sent_append:${sourceKey}`
   const dbClient = await poolInstance.connect()
   let lockAcquired = false
   let imap = null
   let mailboxLock = null
   let primaryError = null
   try {
-    const lock = await dbClient.query(LOCK_SQL)
+    const lock = await dbClient.query(LOCK_SQL, [lockName])
     lockAcquired = lock.rows[0]?.acquired === true
     if (!lockAcquired) return { processed: 0, appended: 0, reconciled: 0, blocked: 0, remaining: 0, skipped: 'already-running' }
 
@@ -415,7 +420,18 @@ export async function processEmailSentAppendJobs({
            next_attempt_at = NOW(),
            last_error_code = 'SENT_APPEND_LEASE_EXPIRED', updated_at = NOW()
        WHERE status = 'appending'
-         AND updated_at < NOW() - INTERVAL '15 minutes'`
+         AND updated_at < NOW() - INTERVAL '15 minutes'
+         AND EXISTS (
+           SELECT 1
+           FROM email_accounts AS account
+           JOIN users AS owner ON owner.id = account.user_id
+           WHERE account.id = email_sent_append_jobs.account_id
+             AND account.user_id = email_sent_append_jobs.user_id
+             AND account.source_key = $1
+             AND owner.username = $2
+             AND owner.status = 'approved'
+         )`,
+      [sourceKey, ownerUsername]
     )
     await dbClient.query(
       `UPDATE email_sent_append_jobs
@@ -423,8 +439,18 @@ export async function processEmailSentAppendJobs({
            last_error_code = 'SENT_APPEND_RETENTION_EXPIRED',
            scrubbed_at = NOW(), updated_at = NOW()
        WHERE status IN ('pending', 'appending', 'reconcile', 'blocked')
-         AND smtp_accepted_at < NOW() - ($1::integer * INTERVAL '1 day')`,
-      [validated.retentionDays]
+         AND smtp_accepted_at < NOW() - ($3::integer * INTERVAL '1 day')
+         AND EXISTS (
+           SELECT 1
+           FROM email_accounts AS account
+           JOIN users AS owner ON owner.id = account.user_id
+           WHERE account.id = email_sent_append_jobs.account_id
+             AND account.user_id = email_sent_append_jobs.user_id
+             AND account.source_key = $1
+             AND owner.username = $2
+             AND owner.status = 'approved'
+         )`,
+      [sourceKey, ownerUsername, validated.retentionDays]
     )
 
     const candidates = await dbClient.query(
@@ -433,12 +459,16 @@ export async function processEmailSentAppendJobs({
        FROM email_sent_append_jobs AS job
        JOIN email_accounts AS account
          ON account.id = job.account_id AND account.user_id = job.user_id
+       JOIN users AS owner ON owner.id = account.user_id
        WHERE job.status IN ('pending', 'reconcile', 'blocked')
          AND job.next_attempt_at <= NOW()
+         AND account.enabled = TRUE
          AND account.source_key = $2
+         AND owner.username = $3
+         AND owner.status = 'approved'
        ORDER BY job.next_attempt_at ASC, job.created_at ASC, job.id ASC
        LIMIT $1`,
-      [validated.batchSize, String(runtimeConfig.emailSourceKey || '').trim().toLowerCase()]
+      [validated.batchSize, sourceKey, ownerUsername]
     )
     const summary = { processed: 0, appended: 0, reconciled: 0, blocked: 0, remaining: 0, skipped: null }
     if (!candidates.rowCount) return summary
@@ -457,8 +487,19 @@ export async function processEmailSentAppendJobs({
       summary.blocked = candidates.rowCount
       summary.processed = candidates.rowCount
       const remaining = await dbClient.query(
-        `SELECT COUNT(*)::integer AS count FROM email_sent_append_jobs
-         WHERE status IN ('pending', 'appending', 'reconcile', 'blocked')`
+        `SELECT COUNT(*)::integer AS count FROM email_sent_append_jobs AS job
+         WHERE job.status IN ('pending', 'appending', 'reconcile', 'blocked')
+           AND EXISTS (
+             SELECT 1
+             FROM email_accounts AS account
+             JOIN users AS owner ON owner.id = account.user_id
+             WHERE account.id = job.account_id
+               AND account.user_id = job.user_id
+               AND account.source_key = $1
+               AND owner.username = $2
+               AND owner.status = 'approved'
+           )`,
+        [sourceKey, ownerUsername]
       )
       summary.remaining = Number(remaining.rows[0]?.count || 0)
       return summary
@@ -512,8 +553,19 @@ export async function processEmailSentAppendJobs({
       }
     }
     const remaining = await dbClient.query(
-      `SELECT COUNT(*)::integer AS count FROM email_sent_append_jobs
-       WHERE status IN ('pending', 'appending', 'reconcile', 'blocked')`
+      `SELECT COUNT(*)::integer AS count FROM email_sent_append_jobs AS job
+       WHERE job.status IN ('pending', 'appending', 'reconcile', 'blocked')
+         AND EXISTS (
+           SELECT 1
+           FROM email_accounts AS account
+           JOIN users AS owner ON owner.id = account.user_id
+           WHERE account.id = job.account_id
+             AND account.user_id = job.user_id
+             AND account.source_key = $1
+             AND owner.username = $2
+             AND owner.status = 'approved'
+         )`,
+      [sourceKey, ownerUsername]
     )
     summary.remaining = Number(remaining.rows[0]?.count || 0)
     return summary
@@ -532,7 +584,7 @@ export async function processEmailSentAppendJobs({
     }
     let unlockError = null
     if (lockAcquired) {
-      try { await dbClient.query(UNLOCK_SQL) } catch (error) { unlockError = error }
+      try { await dbClient.query(UNLOCK_SQL, [lockName]) } catch (error) { unlockError = error }
     }
     dbClient.release(unlockError || undefined)
     if (!primaryError && unlockError) throw unlockError

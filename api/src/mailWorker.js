@@ -8,7 +8,10 @@ import {
 import { pool } from './db/index.js'
 import { clearEmailEncryptionKeyCache } from './lib/emailCrypto.js'
 import { configureEmailRuntime, refreshEmailRuntime, stopEmailRuntime } from './lib/emailRuntimeController.js'
-import { applyManagedIntegrationsToRuntime } from './lib/managedIntegrations.js'
+import {
+  applyManagedIntegrationsToRuntime,
+  managedMailRuntimeConfigs
+} from './lib/managedIntegrations.js'
 import { applyManagedOauthToRuntime } from './lib/managedOauthIntegrations.js'
 import {
   createMaintenanceJobObserver,
@@ -82,6 +85,11 @@ async function main() {
   const logger = createWorkerLogger()
   const initialIntegration = await applyManagedIntegrationsToRuntime()
   const initialOauthIntegration = await applyManagedOauthToRuntime()
+  const initialMailRuntimes = await managedMailRuntimeConfigs(config)
+  assertSafeMailWorkerDatabasePoolSize(
+    config.databasePoolMax,
+    initialMailRuntimes.filter((runtime) => runtime.emailIngestEnabled).length
+  )
   let currentRevision = `${integrationRevision(initialIntegration)}:${integrationRevision(initialOauthIntegration)}`
   // The API container owns migrations. Its healthy dependency guarantees the
   // migration runner finished; resolve every mailbox table here as a final
@@ -161,6 +169,11 @@ async function main() {
       .then(async ([applied, oauthApplied]) => {
         const nextRevision = `${integrationRevision(applied)}:${integrationRevision(oauthApplied)}`
         if (nextRevision === currentRevision) return
+        const nextMailRuntimes = await managedMailRuntimeConfigs(config)
+        assertSafeMailWorkerDatabasePoolSize(
+          config.databasePoolMax,
+          nextMailRuntimes.filter((runtime) => runtime.emailIngestEnabled).length
+        )
         clearEmailEncryptionKeyCache()
         await refreshEmailRuntime()
         currentRevision = nextRevision

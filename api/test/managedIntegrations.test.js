@@ -17,6 +17,7 @@ import {
   managedMailRuntimeConfigs,
   withManagedIntegrationMutation
 } from '../src/lib/managedIntegrations.js'
+import { resolveImapAuth, resolveSmtpAuth } from '../src/lib/emailOauth2.js'
 
 async function withManagedDirectory(callback) {
   const directory = await fs.mkdtemp(path.join(os.tmpdir(), 'nav-integrations-'))
@@ -197,7 +198,11 @@ test('one secondary mailbox keeps stable identity, isolated secrets and write-on
     const runtimeConfigs = await managedMailRuntimeConfigs()
     assert.equal(runtimeConfigs.length, 2)
     assert.equal(runtimeConfigs[0].emailPrimaryAccount, true)
+    assert.equal(runtimeConfigs[0].emailManagedAccount, true)
+    assert.equal(runtimeConfigs[0].emailManagedAccountId, null)
     assert.equal(runtimeConfigs[1].emailPrimaryAccount, false)
+    assert.equal(runtimeConfigs[1].emailManagedAccount, true)
+    assert.equal(runtimeConfigs[1].emailManagedAccountId, created.id)
     assert.equal(runtimeConfigs[1].emailSourceKey, created.sourceKey)
     assert.equal(runtimeConfigs[1].emailAccountLabel, '工作邮箱')
     assert.equal(
@@ -210,6 +215,83 @@ test('one secondary mailbox keeps stable identity, isolated secrets and write-on
     assert.equal(persisted.version, 1)
     assert.equal(persisted.mailAccounts.length, 1)
     assert.equal(JSON.stringify(persisted).includes('secondary-smtp-password'), false)
+  })
+})
+
+test('managed mailbox owner binding cannot be silently reassigned', async () => {
+  await withManagedDirectory(async () => {
+    await saveManagedMailConfig({
+      ...baseMail,
+      smtpPassword: 'primary-smtp-password',
+      imapPassword: 'primary-imap-password'
+    })
+    await assert.rejects(
+      saveManagedMailConfig({ ...baseMail, ownerUsername: 'different-owner' }),
+      /归属用户创建后不可修改/
+    )
+
+    const secondary = await createManagedMailAccount({
+      ...baseMail,
+      label: '工作邮箱',
+      smtpUsername: 'work@example.com',
+      smtpFromAddress: 'work@example.com',
+      imapUsername: 'work@example.com',
+      smtpPassword: 'secondary-smtp-password',
+      imapPassword: 'secondary-imap-password'
+    })
+    await assert.rejects(
+      saveManagedMailAccount(secondary.id, { ownerUsername: 'different-owner' }),
+      /归属用户创建后不可修改/
+    )
+  })
+})
+
+test('primary OAuth never leaks into a secondary password-backed mailbox runtime', async () => {
+  await withManagedDirectory(async (directory) => {
+    config.smtpOauthProvider = 'google'
+    config.imapOauthProvider = 'google'
+    await saveManagedMailConfig({
+      ...baseMail,
+      smtpPassword: 'primary-smtp-password',
+      imapPassword: 'primary-imap-password'
+    })
+    const secondary = await createManagedMailAccount({
+      ...baseMail,
+      label: '工作邮箱',
+      smtpUsername: 'work@example.com',
+      smtpFromAddress: 'work@example.com',
+      imapUsername: 'work@example.com',
+      smtpPassword: 'secondary-smtp-password',
+      imapPassword: 'secondary-imap-password'
+    })
+
+    const runtimes = await managedMailRuntimeConfigs()
+    const primaryRuntime = runtimes.find((item) => item.emailPrimaryAccount === true)
+    const secondaryRuntime = runtimes.find((item) => item.emailSourceKey === secondary.sourceKey)
+    assert.equal(primaryRuntime.smtpOauthProvider, 'google')
+    assert.equal(primaryRuntime.imapOauthProvider, 'google')
+    assert.equal(secondaryRuntime.smtpOauthProvider, '')
+    assert.equal(secondaryRuntime.imapOauthProvider, '')
+
+    let tokenCalls = 0
+    const readSecretImpl = async (file) => {
+      assert.match(file, new RegExp(`mail-account-${secondary.id}-(?:smtp|imap)-password$`))
+      return (await fs.readFile(file, 'utf8')).trim()
+    }
+    const tokenProvider = async () => {
+      tokenCalls += 1
+      return { accessToken: 'must-not-be-used' }
+    }
+    assert.deepEqual(
+      await resolveSmtpAuth(secondaryRuntime, { readSecretImpl, tokenProvider }),
+      { user: 'work@example.com', pass: 'secondary-smtp-password' }
+    )
+    assert.deepEqual(
+      await resolveImapAuth(secondaryRuntime, { readSecretImpl, tokenProvider }),
+      { user: 'work@example.com', pass: 'secondary-imap-password' }
+    )
+    assert.equal(tokenCalls, 0)
+    assert.equal(directory, config.managedIntegrationsDir)
   })
 })
 

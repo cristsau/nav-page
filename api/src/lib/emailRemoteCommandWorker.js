@@ -109,7 +109,7 @@ function expectedSnapshot(job) {
   }
 }
 
-async function markStaleCommands(client, staleRunningSeconds) {
+async function markStaleCommands(client, staleRunningSeconds, sourceKey, ownerUsername) {
   await client.query(
     `UPDATE email_remote_commands
      SET status = CASE
@@ -127,8 +127,17 @@ async function markStaleCommands(client, staleRunningSeconds) {
          last_error_code = 'REMOTE_COMMAND_RESULT_UNKNOWN', updated_at = NOW()
      WHERE status = 'running'
        AND remote_mutation_started_at IS NOT NULL
-       AND updated_at < NOW() - ($1::integer * INTERVAL '1 second')`,
-    [staleRunningSeconds]
+       AND updated_at < NOW() - ($1::integer * INTERVAL '1 second')
+       AND EXISTS (
+         SELECT 1 FROM email_accounts AS account
+         JOIN users AS owner ON owner.id = account.user_id
+         WHERE account.id = email_remote_commands.account_id
+           AND account.user_id = email_remote_commands.user_id
+           AND account.source_key = $2
+           AND owner.username = $3
+           AND owner.status = 'approved'
+       )`,
+    [staleRunningSeconds, sourceKey, ownerUsername]
   )
   await client.query(
     `UPDATE email_remote_commands
@@ -136,23 +145,42 @@ async function markStaleCommands(client, staleRunningSeconds) {
          last_error_code = 'REMOTE_WORKER_INTERRUPTED', updated_at = NOW()
      WHERE status = 'running'
        AND remote_mutation_started_at IS NULL
-       AND updated_at < NOW() - ($1::integer * INTERVAL '1 second')`,
-    [staleRunningSeconds]
+       AND updated_at < NOW() - ($1::integer * INTERVAL '1 second')
+       AND EXISTS (
+         SELECT 1 FROM email_accounts AS account
+         JOIN users AS owner ON owner.id = account.user_id
+         WHERE account.id = email_remote_commands.account_id
+           AND account.user_id = email_remote_commands.user_id
+           AND account.source_key = $2
+           AND owner.username = $3
+           AND owner.status = 'approved'
+       )`,
+    [staleRunningSeconds, sourceKey, ownerUsername]
   )
   await client.query(
     `UPDATE email_remote_commands
      SET status = 'failed', completed_at = NOW(),
          last_error_code = COALESCE(last_error_code, 'REMOTE_RETRY_EXHAUSTED'), updated_at = NOW()
      WHERE status IN ('scheduled', 'retry_wait')
-       AND attempt_count >= max_attempts`
+       AND attempt_count >= max_attempts
+       AND EXISTS (
+         SELECT 1 FROM email_accounts AS account
+         JOIN users AS owner ON owner.id = account.user_id
+         WHERE account.id = email_remote_commands.account_id
+           AND account.user_id = email_remote_commands.user_id
+           AND account.source_key = $1
+           AND owner.username = $2
+           AND owner.status = 'approved'
+       )`,
+    [sourceKey, ownerUsername]
   )
 }
 
-async function claimEmailRemoteCommand(poolInstance, policy, sourceKey) {
+async function claimEmailRemoteCommand(poolInstance, policy, sourceKey, ownerUsername) {
   const client = await poolInstance.connect()
   try {
     await client.query('BEGIN')
-    await markStaleCommands(client, policy.staleRunningSeconds)
+    await markStaleCommands(client, policy.staleRunningSeconds, sourceKey, ownerUsername)
     const candidate = await client.query(
       `SELECT id
        FROM email_remote_commands
@@ -161,16 +189,19 @@ async function claimEmailRemoteCommand(poolInstance, policy, sourceKey) {
          AND undo_until <= NOW()
          AND attempt_count < max_attempts
          AND EXISTS (
-           SELECT 1 FROM email_accounts AS account
+            SELECT 1 FROM email_accounts AS account
+            JOIN users AS owner ON owner.id = account.user_id
            WHERE account.id = email_remote_commands.account_id
              AND account.user_id = email_remote_commands.user_id
-             AND account.enabled = TRUE
-             AND account.source_key = $1
+              AND account.enabled = TRUE
+              AND account.source_key = $1
+              AND owner.username = $2
+              AND owner.status = 'approved'
          )
        ORDER BY next_attempt_at ASC, created_at ASC, id ASC
        FOR UPDATE SKIP LOCKED
        LIMIT 1`,
-      [sourceKey]
+      [sourceKey, ownerUsername]
     )
     if (!candidate.rows[0]) {
       await client.query('COMMIT')
@@ -199,7 +230,7 @@ async function claimEmailRemoteCommand(poolInstance, policy, sourceKey) {
 
 async function loadCommandContext(poolInstance, job) {
   const { rows } = await poolInstance.query(
-    `SELECT command.*, account.source_key,
+    `SELECT command.*, account.source_key, owner.username AS owner_username,
             source.path AS source_folder_path,
             source.special_use AS source_special_use,
             location.message_id, location.internal_date, location.size_bytes,
@@ -211,6 +242,7 @@ async function loadCommandContext(poolInstance, job) {
      FROM email_remote_commands AS command
      JOIN email_accounts AS account
        ON account.id = command.account_id AND account.user_id = command.user_id
+     JOIN users AS owner ON owner.id = account.user_id AND owner.status = 'approved'
      JOIN email_folder_messages AS location
        ON location.id = command.source_location_id
       AND location.account_id = command.account_id
@@ -520,6 +552,9 @@ export async function executeEmailRemoteCommand({ poolInstance, imap, claimedJob
   if (job.source_key !== normalizedRuntimeSourceKey(runtimeConfig)) {
     throw errorWithCode('Remote source account does not match runtime', 'REMOTE_SOURCE_ACCOUNT_MISMATCH')
   }
+  if (String(job.owner_username || '') !== String(runtimeConfig.emailOwnerUsername || '').trim()) {
+    throw errorWithCode('Remote source owner does not match runtime', 'REMOTE_SOURCE_OWNER_MISMATCH')
+  }
   let mailboxLock = null
   let mutationStarted = false
   try {
@@ -591,11 +626,13 @@ export async function processEmailRemoteCommands({
 }) {
   const validated = validateEmailRemoteCommandPolicy(policy)
   const sourceKey = normalizedRuntimeSourceKey(runtimeConfig)
+  const ownerUsername = String(runtimeConfig.emailOwnerUsername || '').trim()
+  if (!ownerUsername) throw new Error('Email owner username is not configured')
   const summary = { processed: 0, succeeded: 0, retried: 0, conflicted: 0, failed: 0 }
   let imap = null
   try {
     for (let index = 0; index < validated.batchSize; index += 1) {
-      const claimed = await claimEmailRemoteCommand(poolInstance, validated, sourceKey)
+      const claimed = await claimEmailRemoteCommand(poolInstance, validated, sourceKey, ownerUsername)
       if (!claimed) break
       summary.processed += 1
       if (!imap) {

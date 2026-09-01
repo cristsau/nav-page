@@ -223,6 +223,12 @@ export function normalizeManagedMailConfig(value = {}, fallback = mailDefaults()
   }
 }
 
+function assertMailOwnerBindingUnchanged(previous, next) {
+  if (String(previous?.ownerUsername || '') !== String(next?.ownerUsername || '')) {
+    throw new TypeError('邮箱归属用户创建后不可修改；如需更换归属，请使用后续专用迁移流程')
+  }
+}
+
 function normalizeMailAccountIdentity(value = {}, fallback = {}) {
   const id = String(value.id ?? fallback.id ?? '').trim().toLowerCase()
   const sourceKey = String(value.sourceKey ?? fallback.sourceKey ?? '').trim().toLowerCase()
@@ -680,6 +686,7 @@ export async function saveManagedMailConfig(input = {}, runtimeConfig = config) 
   const document = await readDocument(runtimeConfig)
   const previous = document.mail || normalizeManagedMailConfig({}, mailDefaults(runtimeConfig))
   const next = normalizeManagedMailConfig(input, previous)
+  if (document.mail) assertMailOwnerBindingUnchanged(previous, next)
   const currentSmtpPassword = await readSecret('smtpPassword', runtimeConfig).catch(() => '')
   const currentImapPassword = await readSecret('imapPassword', runtimeConfig).catch(() => '')
   const nextSmtpPassword = input.clearSmtpPassword === true
@@ -836,6 +843,7 @@ export async function saveManagedMailAccount(accountId, input = {}, runtimeConfi
     id: previous.id,
     sourceKey: previous.sourceKey
   }, previous)
+  assertMailOwnerBindingUnchanged(previous, next)
   await saveSecondaryMailSecrets(previous.id, input, next, runtimeConfig)
   await ensureEmailEncryptionKey(runtimeConfig)
   document.mailAccounts[index] = next
@@ -868,6 +876,11 @@ function runtimeMailConfig(mail, runtimeConfig, { primary }) {
     : exactPath(secondaryMailSecretFile('imapPassword', mail.id), runtimeConfig)
   return {
     ...runtimeConfig,
+    // OAuth credentials are currently managed only for the primary mailbox.
+    // Never let a secondary password-backed account inherit the primary
+    // refresh-token provider through the shared process configuration.
+    smtpOauthProvider: primary ? String(runtimeConfig.smtpOauthProvider || '') : '',
+    imapOauthProvider: primary ? String(runtimeConfig.imapOauthProvider || '') : '',
     mailDeliveryEnabled: mail.deliveryEnabled,
     registrationEmailEnabled: primary && mail.registrationEnabled,
     emailIngestEnabled: mail.ingestEnabled,
@@ -885,6 +898,8 @@ function runtimeMailConfig(mail, runtimeConfig, { primary }) {
     emailSourceKey: primary ? String(runtimeConfig.emailSourceKey || 'mxroute').trim().toLowerCase() : mail.sourceKey,
     emailAccountLabel: primary ? '个人邮箱' : mail.label,
     emailPrimaryAccount: primary,
+    emailManagedAccount: true,
+    emailManagedAccountId: primary ? null : mail.id,
     imapHost: mail.imapHost,
     imapPort: mail.imapPort,
     imapSecure: true,
@@ -1021,7 +1036,13 @@ export async function managedMailRuntimeConfig(runtimeConfig = config) {
 export async function managedMailRuntimeConfigs(runtimeConfig = config) {
   const document = await readDocument(runtimeConfig)
   if (!document.mail) {
-    return [{ ...runtimeConfig, emailPrimaryAccount: true, emailAccountLabel: '个人邮箱' }]
+    return [{
+      ...runtimeConfig,
+      emailPrimaryAccount: true,
+      emailAccountLabel: '个人邮箱',
+      emailManagedAccount: false,
+      emailManagedAccountId: null
+    }]
   }
   return [
     runtimeMailConfig(document.mail, runtimeConfig, { primary: true }),

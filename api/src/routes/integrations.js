@@ -1,5 +1,8 @@
 import { config } from '../config.js'
-import { refreshEmailRuntime } from '../lib/emailRuntimeController.js'
+import {
+  MANAGED_MAIL_ACCOUNT_MATERIALIZATION_PENDING,
+  refreshEmailRuntime
+} from '../lib/emailRuntimeController.js'
 import { verifyImapConnection } from '../lib/emailIngestScheduler.js'
 import { clearEmailEncryptionKeyCache } from '../lib/emailCrypto.js'
 import { verifySmtpConnection } from '../lib/mailOutbox.js'
@@ -18,6 +21,34 @@ import {
 } from '../lib/managedIntegrations.js'
 import { recordSecurityEventBestEffort } from '../lib/securityEvents.js'
 import { verifyS3Connection } from '../lib/s3ConnectionTest.js'
+import {
+  assertManagedMailOwnerExists,
+  MANAGED_MAIL_MATERIALIZATION_WARNING
+} from '../lib/managedMailAccountMaterialization.js'
+
+const MANAGED_MAIL_RUNTIME_APPLY_WARNING = '邮箱配置已保存，但运行时应用仍待处理；请稍后重新保存重试。'
+
+export async function applySavedMailRuntime(request, { refreshFn = refreshEmailRuntime } = {}) {
+  try {
+    const prepared = await refreshFn()
+    return {
+      saved: true,
+      materialized: prepared?.reconciliation?.pending === 0,
+      applied: true
+    }
+  } catch (error) {
+    const materialization = error?.materialization
+    const materialized = materialization ? materialization.pending === 0 : false
+    const warning = error?.code === MANAGED_MAIL_ACCOUNT_MATERIALIZATION_PENDING
+      ? MANAGED_MAIL_MATERIALIZATION_WARNING
+      : MANAGED_MAIL_RUNTIME_APPLY_WARNING
+    request.log?.warn?.({
+      errorCode: String(error?.code || 'EMAIL_RUNTIME_APPLY_FAILED'),
+      materialized
+    }, 'Managed mailbox configuration was saved but runtime apply is pending')
+    return { saved: true, materialized, applied: false, warning }
+  }
+}
 
 async function audit(request, eventType, resourceType, outcome = 'success') {
   await recordSecurityEventBestEffort({
@@ -54,14 +85,16 @@ export default async function integrationRoutes(fastify) {
     await fastify.requireAdmin(request, reply)
     reply.header('Cache-Control', 'private, no-store')
     try {
-      const mail = await withManagedIntegrationMutation(async () => {
+      const { mail, runtimeStatus } = await withManagedIntegrationMutation(async () => {
+        await assertManagedMailOwnerExists(
+          request.body?.ownerUsername ?? config.emailOwnerUsername
+        )
         const saved = await saveManagedMailConfig(request.body || {})
         clearEmailEncryptionKeyCache()
-        await refreshEmailRuntime()
-        return saved
+        return { mail: saved, runtimeStatus: await applySavedMailRuntime(request) }
       })
       await audit(request, 'admin.integrations.mail.updated', 'mail_integration')
-      return { mail, applied: true }
+      return { mail, ...runtimeStatus }
     } catch (error) {
       await audit(request, 'admin.integrations.mail.updated', 'mail_integration', 'denied')
       reply.code(error instanceof TypeError ? 400 : 503)
@@ -107,15 +140,17 @@ export default async function integrationRoutes(fastify) {
     await fastify.requireAdmin(request, reply)
     reply.header('Cache-Control', 'private, no-store')
     try {
-      const account = await withManagedIntegrationMutation(async () => {
+      const { account, runtimeStatus } = await withManagedIntegrationMutation(async () => {
+        await assertManagedMailOwnerExists(
+          request.body?.ownerUsername ?? config.emailOwnerUsername
+        )
         const saved = await createManagedMailAccount(request.body || {})
         clearEmailEncryptionKeyCache()
-        await refreshEmailRuntime()
-        return saved
+        return { account: saved, runtimeStatus: await applySavedMailRuntime(request) }
       })
       await audit(request, 'admin.integrations.mail_account.created', 'mail_integration')
       reply.code(201)
-      return { account, applied: true }
+      return { account, ...runtimeStatus }
     } catch (error) {
       await audit(request, 'admin.integrations.mail_account.created', 'mail_integration', 'denied')
       reply.code(error instanceof TypeError ? 400 : 503)
@@ -127,14 +162,13 @@ export default async function integrationRoutes(fastify) {
     await fastify.requireAdmin(request, reply)
     reply.header('Cache-Control', 'private, no-store')
     try {
-      const account = await withManagedIntegrationMutation(async () => {
+      const { account, runtimeStatus } = await withManagedIntegrationMutation(async () => {
         const saved = await saveManagedMailAccount(request.params?.accountId, request.body || {})
         clearEmailEncryptionKeyCache()
-        await refreshEmailRuntime()
-        return saved
+        return { account: saved, runtimeStatus: await applySavedMailRuntime(request) }
       })
       await audit(request, 'admin.integrations.mail_account.updated', 'mail_integration')
-      return { account, applied: true }
+      return { account, ...runtimeStatus }
     } catch (error) {
       await audit(request, 'admin.integrations.mail_account.updated', 'mail_integration', 'denied')
       reply.code(error instanceof TypeError ? 400 : 503)

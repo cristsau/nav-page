@@ -21,6 +21,7 @@ function job(overrides = {}) {
     source_message_id: IDS.message,
     message_id: IDS.message,
     source_key: 'mxroute',
+    owner_username: 'owner-a',
     source_folder_path: 'INBOX',
     source_special_use: 'inbox',
     action: 'mark_read',
@@ -104,7 +105,7 @@ test('flag command mutates only after concurrency checks and succeeds only after
     poolInstance: pool,
     imap,
     claimedJob: { id: IDS.command },
-    runtimeConfig: { emailSourceKey: 'mxroute' }
+    runtimeConfig: { emailSourceKey: 'mxroute', emailOwnerUsername: 'owner-a' }
   })
   assert.equal(status, 'succeeded')
   assert.equal(changed, 1)
@@ -128,7 +129,7 @@ test('stale MODSEQ becomes a conflict and never calls a remote mutation', async 
     poolInstance: pool,
     imap,
     claimedJob: { id: IDS.command },
-    runtimeConfig: { emailSourceKey: 'mxroute' }
+    runtimeConfig: { emailSourceKey: 'mxroute', emailOwnerUsername: 'owner-a' }
   })
   assert.equal(status, 'conflict')
   assert.equal(changed, 0)
