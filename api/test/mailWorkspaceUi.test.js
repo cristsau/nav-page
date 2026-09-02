@@ -242,3 +242,18 @@ test('mail detail focus, modal layering and mobile action bar stay accessible', 
   assert.match(detail, /z-index: 620/)
   assert.match(shell, /z-index: 640/)
 })
+
+test('mail detail keeps reading position during background refresh and avoids desktop horizontal actions', async () => {
+  const [store, detail] = await Promise.all([
+    source('app/src/modules/mail/useMailStore.js'),
+    source('app/src/modules/mail/components/MailMessageDetail.vue')
+  ])
+
+  assert.match(store, /const keepsVisibleDetail = state\.selectedMessageId === targetLocationId && Boolean\(state\.selectedMessage\)/)
+  assert.match(store, /if \(!keepsVisibleDetail\) state\.selectedMessage = null/)
+  assert.match(store, /state\.loadingDetail = !keepsVisibleDetail/)
+  assert.match(detail, /\.mail-message-detail__actions \{[^}]*flex-wrap: wrap;[^}]*align-content: center;/)
+  assert.doesNotMatch(detail, /\.mail-message-detail__actions \{[^}]*overflow-x: auto;/)
+  assert.match(detail, /button\.is-ai\[aria-expanded='true'\]/)
+  assert.doesNotMatch(detail, /button\.is-ai \{/)
+})

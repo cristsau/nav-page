@@ -1027,10 +1027,10 @@ watch(() => safeMessageId.value, () => {
 .mail-message-detail__header > button:first-child { display: none; }
 .mail-message-detail__header p { margin: 2px 0 4px; color: var(--accent-color); font-size: .61rem; font-weight: 750; }
 .mail-message-detail__header h2 { margin: 0; overflow-wrap: anywhere; font-size: clamp(.93rem, 1.6vw, 1.18rem); }
-.mail-message-detail__actions { position: sticky; top: 82px; z-index: 3; display: flex; min-height: 61px; padding: 8px clamp(16px, 2.4vw, 28px); overflow-x: auto; gap: 6px; background: color-mix(in srgb, var(--bg-card) 94%, transparent); border-bottom: 1px solid var(--border-light); backdrop-filter: blur(16px); scrollbar-width: thin; }
+.mail-message-detail__actions { position: sticky; top: 82px; z-index: 3; display: flex; min-height: 61px; padding: 8px clamp(16px, 2.4vw, 28px); flex-wrap: wrap; align-content: center; gap: 6px; background: color-mix(in srgb, var(--bg-card) 94%, transparent); border-bottom: 1px solid var(--border-light); backdrop-filter: blur(16px); }
 .mail-message-detail__actions button { display: inline-flex; min-height: 44px; padding: 0 11px; flex: 0 0 auto; align-items: center; justify-content: center; gap: 6px; color: var(--text-secondary); font: inherit; font-size: .65rem; font-weight: 700; background: transparent; border: 1px solid transparent; border-radius: 11px; cursor: pointer; }
 .mail-message-detail__actions button:hover, .mail-message-detail__actions button:focus-visible { color: var(--text-primary); background: var(--bg-secondary); border-color: var(--border-light); }
-.mail-message-detail__actions button.is-ai { color: var(--accent-color); background: var(--accent-bg); border-color: color-mix(in srgb, var(--accent-color) 20%, var(--border-light)); }
+.mail-message-detail__actions button.is-ai[aria-expanded='true'] { color: var(--accent-color); background: var(--accent-bg); border-color: color-mix(in srgb, var(--accent-color) 20%, var(--border-light)); }
 .mail-message-detail__actions button.is-danger { color: var(--error-color); }
 .mail-message-detail__actions button:disabled { opacity: .48; cursor: wait; }
 .mail-message-detail__command-status { display: flex; min-height: 48px; margin: 12px clamp(16px, 2.4vw, 28px) 0; padding: 9px 11px; align-items: center; gap: 8px; color: var(--success-color, #4c8a64); font-size: .63rem; line-height: 1.5; background: color-mix(in srgb, var(--success-color, #4c8a64) 8%, var(--bg-card)); border: 1px solid color-mix(in srgb, var(--success-color, #4c8a64) 23%, var(--border-light)); border-radius: 12px; }

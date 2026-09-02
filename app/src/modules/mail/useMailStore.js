@@ -464,8 +464,10 @@ export async function loadMailMessage(locationId) {
   if (!ownerUserId || !targetLocationId || !state.activeAccountId || !state.activeFolderId) return null
   const accountId = state.activeAccountId
   const folderId = state.activeFolderId
+  const keepsVisibleDetail = state.selectedMessageId === targetLocationId && Boolean(state.selectedMessage)
+  if (!keepsVisibleDetail) state.selectedMessage = null
   state.selectedMessageId = targetLocationId
-  state.loadingDetail = true
+  state.loadingDetail = !keepsVisibleDetail
   const ticket = requestGate.begin('detail')
   try {
     const payload = await fetchEmailMessage({

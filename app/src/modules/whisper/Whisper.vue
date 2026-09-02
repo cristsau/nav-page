@@ -11,6 +11,7 @@ import {
   installOfflineSyncLifecycle,
   offlineSyncSummary,
   onOfflineSyncState,
+  removeCachedWorkspaceNote,
   saveCollaborativeNoteMetadataOffline,
   saveNoteOffline,
   synchronizeOfflineWorkspace
@@ -110,7 +111,9 @@ async function setSetting(key, value) {
 }
 
 async function getNotes() {
-  if (!shouldUseBackendNotes()) return getLocalNotes()
+  if (!shouldUseBackendNotes()) {
+    return (await getLocalNotes()).map((note) => ({ ...note, accessRole: 'owner' }))
+  }
   const cached = await getCachedWorkspaceNotes()
   if (cached.length) return cached
   return fetchBackendNotes()
@@ -144,20 +147,38 @@ async function updateNote(id, updates) {
   return { note: null, mediaCleanup: [] }
 }
 
+async function evictDeletedNoteCache(id) {
+  try {
+    await removeCachedWorkspaceNote(id)
+    return true
+  } catch (error) {
+    console.error('Failed to evict deleted note cache:', error)
+    return false
+  }
+}
+
 async function deleteNote(id) {
   if (shouldUseBackendNotes()) {
     const existing = notes.value.find((note) => note.id === id)
+    const ownedExisting = existing?.accessRole === 'owner'
     if (!navigator.onLine) {
-      await deleteNoteOffline(existing)
-      return { mediaCleanup: [] }
+      const offlineResult = await deleteNoteOffline(existing)
+      return { mediaCleanup: [], offline: true, cacheEvicted: offlineResult?.cacheEvicted !== false }
     }
+    let result
     try {
-      return await deleteBackendNote(id, { includeCleanup: true })
+      result = await deleteBackendNote(id, { includeCleanup: true })
     } catch (error) {
+      if (Number(error?.status) === 404 && ownedExisting) {
+        const cacheEvicted = await evictDeletedNoteCache(id)
+        return { mediaCleanup: [], alreadyDeleted: true, cacheEvicted }
+      }
       if (error?.status) throw error
-      await deleteNoteOffline(existing)
-      return { mediaCleanup: [] }
+      const offlineResult = await deleteNoteOffline(existing)
+      return { mediaCleanup: [], offline: true, cacheEvicted: offlineResult?.cacheEvicted !== false }
     }
+    const cacheEvicted = await evictDeletedNoteCache(id)
+    return { ...result, cacheEvicted }
   }
   await deleteLocalNote(id)
   return { mediaCleanup: [] }
@@ -533,14 +554,37 @@ async function handleDeleteNote(note) {
   if (!confirm(`确定删除「${note.title}」？`)) return
   try {
     const mutationResult = await deleteNote(note.id)
-    await loadNotes()
+    notes.value = notes.value.filter((item) => item.id !== note.id)
+    if (shouldUseBackendNotes()) {
+      try {
+        const refreshed = await synchronizeOfflineWorkspace({ forceBootstrap: true })
+        notes.value = refreshed.filter((item) => item.id !== note.id)
+      } catch (error) {
+        offlineSync.value = { ...offlineSync.value, state: 'offline' }
+        console.error('Failed to reconcile deleted note cache:', error)
+      } finally {
+        mutationResult.cacheEvicted = await evictDeletedNoteCache(note.id) || mutationResult.cacheEvicted
+      }
+    } else {
+      await loadNotes()
+    }
     await refreshReminders()
     const mediaCleanup = mutationResult?.mediaCleanup
     const cleanupMessage = mediaCleanupMessage(mediaCleanup)
+    const cacheMessage = mutationResult?.cacheEvicted === false
+      ? '；本机缓存将在下次同步时校正'
+      : ''
+    const deletionMessage = mutationResult?.offline
+      ? `「${note.title}」已从本机移除，联网后自动同步删除${cacheMessage}`
+      : mutationResult?.alreadyDeleted
+        ? mutationResult?.cacheEvicted === false
+          ? `「${note.title}」已在服务器删除${cacheMessage}`
+          : `「${note.title}」已在服务器删除，本机旧缓存已清理`
+        : cleanupMessage
+          ? `「${note.title}」已删除；${cleanupMessage}${cacheMessage}`
+          : `「${note.title}」已删除${cacheMessage}`
     setStatus(
-      cleanupMessage
-        ? `「${note.title}」已删除；${cleanupMessage}`
-        : `「${note.title}」已删除`,
+      deletionMessage,
       mediaCleanupHasFailures(mediaCleanup) ? 'error' : 'success'
     )
   } catch (error) {
@@ -693,8 +737,7 @@ onMounted(async () => {
       ...(await offlineSyncSummary())
     }
     if (detail?.state === 'synced' && shouldUseBackendNotes()) {
-      const cached = await getCachedWorkspaceNotes()
-      if (cached.length) notes.value = cached
+      notes.value = await getCachedWorkspaceNotes()
     }
   })
 

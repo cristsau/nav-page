@@ -414,3 +414,50 @@ test('offline mutation receipts replay once and reject operation-id payload conf
   assert.equal(conflict.json().results[0].status, 409)
   assert.equal(conflict.json().results[0].code, 'offline_operation_conflict')
 })
+
+test('offline note deletion is owner-only and remains idempotent after deletion', async () => {
+  await pool.query(
+    `INSERT INTO note_collaborators (note_id, user_id, role, invited_by)
+     VALUES ($1, $2, 'editor', $3)`,
+    [NOTE_ID, EDITOR_ID, OWNER_ID]
+  )
+  const [ownerSession, editorSession] = await Promise.all([
+    seedSession(OWNER_ID),
+    seedSession(EDITOR_ID)
+  ])
+  const mutation = (operationId = randomUUID()) => ({
+    operationId,
+    kind: 'note.delete',
+    payload: { id: NOTE_ID }
+  })
+
+  const deniedDelete = await apiRequest(
+    'POST',
+    '/collaboration/sync/mutations',
+    editorSession,
+    { mutations: [mutation()] }
+  )
+  assert.equal(deniedDelete.statusCode, 200)
+  assert.equal(deniedDelete.json().results[0].status, 403)
+  assert.equal((await pool.query('SELECT COUNT(*)::integer AS count FROM notes WHERE id = $1', [NOTE_ID])).rows[0].count, 1)
+
+  const ownerDelete = await apiRequest(
+    'POST',
+    '/collaboration/sync/mutations',
+    ownerSession,
+    { mutations: [mutation()] }
+  )
+  assert.equal(ownerDelete.statusCode, 200)
+  assert.equal(ownerDelete.json().results[0].status, 200)
+  assert.equal(ownerDelete.json().results[0].alreadyDeleted, false)
+
+  const replayAfterDeletion = await apiRequest(
+    'POST',
+    '/collaboration/sync/mutations',
+    ownerSession,
+    { mutations: [mutation()] }
+  )
+  assert.equal(replayAfterDeletion.statusCode, 200)
+  assert.equal(replayAfterDeletion.json().results[0].status, 200)
+  assert.equal(replayAfterDeletion.json().results[0].alreadyDeleted, true)
+})

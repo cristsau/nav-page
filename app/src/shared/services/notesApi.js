@@ -10,7 +10,7 @@ export function shouldUseBackendNotes() {
 export async function fetchBackendNotes(type = '') {
   const search = type ? `?type=${encodeURIComponent(type)}` : ''
   const payload = await request(`/notes${search}`, { method: 'GET' })
-  return payload.notes || []
+  return (payload.notes || []).map((note) => ({ ...note, accessRole: 'owner' }))
 }
 
 export async function createBackendNote(note) {
