@@ -377,11 +377,35 @@ async function mutateNoteMetadata(client, user, payload) {
 
 async function mutateNoteDelete(client, user, payload) {
   if (!isUuid(payload.id)) return invalid('Note id is invalid')
+  const existing = await client.query(
+    `SELECT note.user_id,
+            EXISTS (
+              SELECT 1
+              FROM note_collaborators collaborator
+              WHERE collaborator.note_id = note.id
+                AND collaborator.user_id = $2
+            ) AS is_collaborator
+       FROM notes note
+      WHERE note.id = $1
+      FOR UPDATE OF note`,
+    [payload.id, user.id]
+  )
+  if (!existing.rows.length) {
+    return { status: 200, payload: { ok: true, alreadyDeleted: true } }
+  }
+  if (String(existing.rows[0].user_id) !== String(user.id)) {
+    return existing.rows[0].is_collaborator
+      ? denied('Only the note owner can delete it')
+      : { status: 200, payload: { ok: true, alreadyDeleted: true } }
+  }
   const deleted = await client.query(
     'DELETE FROM notes WHERE id = $1 AND user_id = $2 RETURNING id',
     [payload.id, user.id]
   )
-  return deleted.rows.length ? { status: 200, payload: { ok: true } } : missing()
+  return {
+    status: 200,
+    payload: { ok: true, alreadyDeleted: deleted.rows.length === 0 }
+  }
 }
 
 async function getComment(client, noteId, commentId) {

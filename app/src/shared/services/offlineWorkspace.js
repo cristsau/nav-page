@@ -17,6 +17,8 @@ db.version(1).stores({
 
 const syncListeners = new Set()
 let activeSyncPromise = null
+let activeSyncForceBootstrap = false
+let queuedForceBootstrapPromise = null
 let lifecycleInstalled = false
 let pollTimer = null
 
@@ -38,9 +40,17 @@ function timestamp(value = Date.now()) {
   return Number.isNaN(date.getTime()) ? new Date().toISOString() : date.toISOString()
 }
 
+function cachedNoteAccessRole(note, userId) {
+  const explicitRole = String(note?.accessRole || '').trim()
+  if (['owner', 'editor', 'commenter', 'viewer'].includes(explicitRole)) return explicitRole
+  const ownerId = String(note?.owner?.id || '').trim()
+  return ownerId && ownerId === userId ? 'owner' : 'viewer'
+}
+
 function normalizeCachedNote(note, userId, syncState = 'synced') {
   return {
     ...note,
+    accessRole: cachedNoteAccessRole(note, userId),
     workspaceUserId: userId,
     syncState: note.syncState || syncState,
     cachedAt: timestamp()
@@ -93,10 +103,32 @@ export async function getCachedWorkspaceNotes() {
   const userId = currentUserId()
   if (!userId) return []
   const notes = await db.notes.where('workspaceUserId').equals(userId).toArray()
-  return notes.sort((left, right) => {
+  return notes.map((note) => ({
+    ...note,
+    accessRole: cachedNoteAccessRole(note, userId)
+  })).sort((left, right) => {
     if (Boolean(left.pinned) !== Boolean(right.pinned)) return left.pinned ? -1 : 1
     return String(right.updatedAt || '').localeCompare(String(left.updatedAt || ''))
   })
+}
+
+export async function removeCachedWorkspaceNote(noteId) {
+  const userId = currentUserId()
+  const id = String(noteId || '').trim()
+  if (!userId || !id) return false
+  await db.transaction('rw', db.notes, db.members, db.comments, db.blobs, async () => {
+    await db.notes.delete([userId, id])
+    await db.members.where('noteId').equals(id)
+      .filter((member) => member.workspaceUserId === userId)
+      .delete()
+    await db.comments.where('noteId').equals(id)
+      .filter((comment) => comment.workspaceUserId === userId)
+      .delete()
+    await db.blobs.where('noteId').equals(id)
+      .filter((blob) => blob.userId === userId)
+      .delete()
+  })
+  return true
 }
 
 export async function getCachedWorkspaceComments(noteId) {
@@ -264,7 +296,12 @@ export async function flushOfflineMutations() {
       if (!record) continue
       if (result.status >= 200 && result.status < 300) {
         await db.mutations.delete(result.operationId)
-        if (result.note) await db.notes.put(normalizeCachedNote(result.note, userId))
+        if (result.note) {
+          await db.notes.put(normalizeCachedNote({
+            ...result.note,
+            accessRole: result.note.accessRole || (record.kind === 'note.create' ? 'owner' : '')
+          }, userId))
+        }
         if (result.comment) {
           await db.comments.put({
             ...result.comment,
@@ -294,14 +331,28 @@ export async function flushOfflineMutations() {
 }
 
 export async function synchronizeOfflineWorkspace({ forceBootstrap = false } = {}) {
-  if (activeSyncPromise) return activeSyncPromise
+  if (activeSyncPromise) {
+    if (!forceBootstrap || activeSyncForceBootstrap) return activeSyncPromise
+    if (!queuedForceBootstrapPromise) {
+      const currentSync = activeSyncPromise
+      queuedForceBootstrapPromise = currentSync
+        .catch(() => {})
+        .then(() => synchronizeOfflineWorkspace({ forceBootstrap: true }))
+        .finally(() => { queuedForceBootstrapPromise = null })
+    }
+    return queuedForceBootstrapPromise
+  }
   const userId = currentUserId()
   if (!userId) return []
+  activeSyncForceBootstrap = forceBootstrap
   activeSyncPromise = (async () => {
     try {
       await flushOfflineMutations()
       const cursor = await getCursor(userId)
-      const changed = cursor > 0 && !forceBootstrap
+      const needsAccessRoleRepair = await db.notes.where('workspaceUserId').equals(userId)
+        .filter((note) => !['owner', 'editor', 'commenter', 'viewer'].includes(String(note.accessRole || '').trim()))
+        .count() > 0
+      const changed = cursor > 0 && !forceBootstrap && !needsAccessRoleRepair
         ? await pullWorkspaceChanges(userId)
         : true
       const notes = changed
@@ -311,6 +362,7 @@ export async function synchronizeOfflineWorkspace({ forceBootstrap = false } = {
       return notes
     } finally {
       activeSyncPromise = null
+      activeSyncForceBootstrap = false
     }
   })()
   return activeSyncPromise
@@ -363,14 +415,21 @@ export async function saveCollaborativeNoteMetadataOffline(note, existing) {
 
 export async function deleteNoteOffline(note) {
   const userId = currentUserId()
-  if (!userId || !note?.id) return
+  if (!userId || !note?.id) return { cacheEvicted: false }
   await queueOfflineMutation('note.delete', { id: note.id })
-  await db.notes.delete([userId, note.id])
+  let cacheEvicted = true
+  try {
+    await removeCachedWorkspaceNote(note.id)
+  } catch (error) {
+    cacheEvicted = false
+    console.error('Failed to evict queued note deletion from cache:', error)
+  }
   try {
     await flushOfflineMutations()
   } catch {
     // Deletion remains queued.
   }
+  return { cacheEvicted }
 }
 
 export async function createCommentOffline(noteId, data) {

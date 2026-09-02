@@ -41,6 +41,7 @@ const unlocked = ref(Boolean(props.note._unlocked))
 
 const isEncrypted = computed(() => props.note.encrypted)
 const isPinned = computed(() => props.note.pinned)
+const canDelete = computed(() => props.note.accessRole === 'owner')
 const isOverdue = computed(() => {
   if (props.note.type !== 'memo' || !props.note.dueAt || props.note.completed) return false
   return new Date(props.note.dueAt).getTime() < Date.now()
@@ -315,6 +316,7 @@ async function handleDecrypt() {
         <Icon name="edit" :size="15" />
       </button>
       <button
+        v-if="canDelete"
         type="button"
         class="action-btn action-btn--danger"
         title="删除"

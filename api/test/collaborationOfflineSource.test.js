@@ -63,11 +63,46 @@ test('offline workspace is restart-safe and keeps private API responses out of t
   assert.match(offline, /offline_mutation_receipts|collaboration\/sync\/mutations/)
   assert.match(offline, /requestBackgroundSync/)
   assert.match(offline, /visibilitychange/)
+  assert.match(offline, /export async function removeCachedWorkspaceNote/)
+  assert.match(offline, /if \(!forceBootstrap \|\| activeSyncForceBootstrap\) return activeSyncPromise/)
+  assert.match(offline, /then\(\(\) => synchronizeOfflineWorkspace\(\{ forceBootstrap: true \}\)\)/)
+  assert.match(offline, /await removeCachedWorkspaceNote\(note\.id\)/)
   assert.match(auth, /localStorage/)
   assert.match(auth, /validatedAt/)
   assert.match(auth, /clearCurrentAuthState/)
   assert.match(auth, /Number\(error\?\.status\) === 401/)
   assert.match(vite, /manifest: true/)
+})
+
+test('note deletion evicts stale offline state and remains idempotent after the server record is gone', async () => {
+  const [whisper, card, offline, notesApi, offlineRoute] = await Promise.all([
+    read('app/src/modules/whisper/Whisper.vue'),
+    read('app/src/modules/whisper/components/NoteCard.vue'),
+    read('app/src/shared/services/offlineWorkspace.js'),
+    read('app/src/shared/services/notesApi.js'),
+    read('api/src/routes/offlineSync.js')
+  ])
+
+  assert.match(whisper, /Number\(error\?\.status\) === 404 && ownedExisting/)
+  assert.match(whisper, /async function evictDeletedNoteCache/)
+  assert.match(whisper, /return \{ \.\.\.result, cacheEvicted \}/)
+  assert.match(whisper, /const ownedExisting = existing\?\.accessRole === 'owner'/)
+  assert.match(whisper, /getLocalNotes\(\)\)\.map\(\(note\) => \(\{ \.\.\.note, accessRole: 'owner' \}\)\)/)
+  assert.match(whisper, /notes\.value = notes\.value\.filter\(\(item\) => item\.id !== note\.id\)/)
+  assert.match(whisper, /synchronizeOfflineWorkspace\(\{ forceBootstrap: true \}\)/)
+  assert.match(whisper, /本机旧缓存已清理/)
+  assert.match(whisper, /detail\?\.state === 'synced'[\s\S]{0,140}notes\.value = await getCachedWorkspaceNotes\(\)/)
+  assert.match(card, /const canDelete = computed\(\(\) => props\.note\.accessRole === 'owner'\)/)
+  assert.match(card, /v-if="canDelete"[\s\S]{0,180}aria-label="`删除 \$\{note\.title\}`"/)
+  assert.match(offline, /function cachedNoteAccessRole/)
+  assert.match(offline, /return ownerId && ownerId === userId \? 'owner' : 'viewer'/)
+  assert.match(offline, /const needsAccessRoleRepair = await db\.notes/)
+  assert.match(offline, /record\.kind === 'note\.create' \? 'owner' : ''/)
+  assert.match(notesApi, /map\(\(note\) => \(\{ \.\.\.note, accessRole: 'owner' \}\)\)/)
+  assert.match(offlineRoute, /FOR UPDATE OF note/)
+  assert.match(offlineRoute, /alreadyDeleted: deleted\.rows\.length === 0/)
+  assert.match(offlineRoute, /Only the note owner can delete it/)
+  assert.match(offline, /return \{ cacheEvicted \}/)
 })
 
 test('large restore upload is line-streamed into PostgreSQL staging before apply', async () => {
