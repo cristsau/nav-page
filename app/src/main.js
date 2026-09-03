@@ -9,8 +9,21 @@ import './styles/reset.css'
 import './styles/variables.css'
 import './styles/animations.css'
 
+const STATIC_PUBLIC_ENTRY_PATHS = new Set([
+  '/about',
+  '/about/',
+  '/privacy',
+  '/privacy/'
+])
+
+function shouldBootstrapLocalSystem(pathname = window.location.pathname) {
+  return !STATIC_PUBLIC_ENTRY_PATHS.has(pathname)
+}
+
 async function bootstrapApp() {
-  await bootstrapSystem()
+  if (shouldBootstrapLocalSystem()) {
+    await bootstrapSystem()
+  }
   const {
     startAuthSessionLifecycle,
     stopAuthSessionLifecycle

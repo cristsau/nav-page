@@ -183,8 +183,8 @@ export default async function webPushRoutes(fastify) {
         body: '后台通知已连接；关闭网页后也能收到到期提醒。',
         tag: 'domo-nav-test',
         url: '/settings?category=integrations',
-        icon: '/icons/pwa-192-v1.png',
-        badge: '/icons/pwa-192-v1.png'
+        icon: '/icons/cristsau-mark-192-v2.png',
+        badge: '/icons/cristsau-badge-96-v2.png'
       })
       await query(
         `

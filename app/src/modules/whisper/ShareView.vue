@@ -135,7 +135,7 @@ function applyPublicHead({
   const pageTitle = `${title} · DOMO NAV`
   const canonicalUrl = resolveCanonicalUrl()
   const resolvedImageUrl = String(imageUrl || '').trim()
-    || (canonicalUrl ? new URL('/domo-logo.png', canonicalUrl).href : '')
+    || (canonicalUrl ? new URL('/brand/cristsau-lockup-v2.png', canonicalUrl).href : '')
 
   document.title = pageTitle
   setMeta('description', description)
@@ -317,7 +317,7 @@ onBeforeUnmount(() => {
 <template>
   <main class="share-page">
     <div class="site-mark" aria-label="DOMO NAV">
-      <img src="/domo-logo.png" alt="" width="28" height="28">
+      <img src="/icons/cristsau-mark-512-v2.png" alt="" width="28" height="28">
       <span>DOMO NAV</span>
     </div>
 

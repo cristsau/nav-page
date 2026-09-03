@@ -4,17 +4,18 @@ import Icon from '@/shared/components/Icon.vue'
 import { useConfig } from '@/shared/composables/useConfig'
 
 const { config, updateConfig } = useConfig()
-const DEFAULT_LOGO = '/domo-logo.png'
+const DEFAULT_LOGO = '/icons/cristsau-mark-512-v2.png'
+const DEFAULT_FAVICON = '/icons/cristsau-mark-64-v2.png'
 
 const siteName = ref('')
-const favicon = ref(DEFAULT_LOGO)
+const favicon = ref(DEFAULT_FAVICON)
 
 watch(
   () => config.value.site,
   (site) => {
     if (!site) return
     siteName.value = site.name || 'DOMO NAV'
-    favicon.value = site.favicon || DEFAULT_LOGO
+    favicon.value = site.favicon || DEFAULT_FAVICON
   },
   { immediate: true, deep: true }
 )
@@ -23,7 +24,7 @@ function saveSettings() {
   updateConfig('site', {
     name: siteName.value.trim() || 'DOMO NAV',
     icon: DEFAULT_LOGO,
-    favicon: favicon.value || DEFAULT_LOGO
+    favicon: favicon.value || DEFAULT_FAVICON
   })
 }
 
@@ -40,7 +41,7 @@ function handleFaviconUpload(event) {
 }
 
 function resetFavicon() {
-  favicon.value = DEFAULT_LOGO
+  favicon.value = DEFAULT_FAVICON
   saveSettings()
 }
 </script>
@@ -62,7 +63,7 @@ function resetFavicon() {
     <div class="settings-item">
       <div class="settings-item__info">
         <div class="settings-item__label">品牌 Logo</div>
-        <div class="settings-item__desc">使用你提供的头像，统一显示在导航、登录页、关于页和浏览器扩展中。</div>
+        <div class="settings-item__desc">使用 CrisTsau 专属标志，统一显示在导航、登录页、关于页和浏览器扩展中。</div>
       </div>
       <div class="settings-item__control">
         <div class="brand-preview">
@@ -87,7 +88,7 @@ function resetFavicon() {
             <input type="file" accept="image/*" hidden @change="handleFaviconUpload">
           </label>
           <button
-            v-if="favicon !== DEFAULT_LOGO"
+            v-if="favicon !== DEFAULT_FAVICON"
             class="favicon-reset"
             type="button"
             @click="resetFavicon"

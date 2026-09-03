@@ -13,6 +13,28 @@ const routes = [
     meta: { title: '登录', public: true }
   },
   {
+    path: '/about',
+    name: 'About',
+    component: () => import('@/modules/public/AboutView.vue'),
+    meta: {
+      title: '关于',
+      public: true,
+      publicShell: true,
+      skipSession: true
+    }
+  },
+  {
+    path: '/privacy',
+    name: 'Privacy',
+    component: () => import('@/modules/public/PrivacyView.vue'),
+    meta: {
+      title: '隐私政策',
+      public: true,
+      publicShell: true,
+      skipSession: true
+    }
+  },
+  {
     path: '/',
     name: 'Navigation',
     component: () => import('@/modules/navigation/Navigation.vue'),

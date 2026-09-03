@@ -40,7 +40,7 @@ body {
   height: 58px;
   object-fit: contain;
   border: 1px solid rgba(95, 138, 111, 0.14);
-  border-radius: 50%;
+  border-radius: 16px;
   box-shadow: 0 10px 24px rgba(44, 54, 47, 0.12);
   background: #fff;
 }
@@ -103,7 +103,7 @@ body {
   height: 56px;
   object-fit: contain;
   background: #fff;
-  border-radius: 50%;
+  border-radius: 15px;
 }
 
 .hero__title {

@@ -395,7 +395,7 @@ async function handleResendVerification() {
     <div class="auth-card">
       <div class="auth-card__header">
         <div class="auth-card__brand">
-          <img class="auth-card__logo" src="/domo-logo.png" alt="">
+          <img class="auth-card__logo" src="/icons/cristsau-mark-512-v2.png" alt="">
           <span>DOMO NAV</span>
         </div>
         <h1 class="auth-card__title">账号登录与注册</h1>
@@ -611,6 +611,11 @@ async function handleResendVerification() {
 
       <p v-if="errorMessage" class="auth-message auth-message--error">{{ errorMessage }}</p>
       <p v-if="successMessage" class="auth-message auth-message--success">{{ successMessage }}</p>
+      <nav class="auth-public-links" aria-label="DOMO NAV 公开信息">
+        <RouterLink to="/about">关于 DOMO NAV</RouterLink>
+        <span aria-hidden="true">·</span>
+        <RouterLink to="/privacy">隐私政策</RouterLink>
+      </nav>
       <p class="auth-signature">Design by CrisTsau</p>
     </div>
   </div>
@@ -660,7 +665,7 @@ async function handleResendVerification() {
   overflow: hidden;
   background: #fff;
   border: 1px solid var(--border-light);
-  border-radius: 50%;
+  border-radius: 14px;
 }
 
 .auth-card__title {
@@ -869,8 +874,33 @@ async function handleResendVerification() {
   color: #5a8a6a;
 }
 
+.auth-public-links {
+  display: flex;
+  min-height: 44px;
+  margin-top: 16px;
+  align-items: center;
+  justify-content: center;
+  flex-wrap: wrap;
+  gap: 4px 10px;
+  color: var(--text-muted);
+  font-size: 12px;
+}
+
+.auth-public-links a {
+  min-height: 44px;
+  display: inline-flex;
+  align-items: center;
+  color: var(--text-secondary);
+}
+
+.auth-public-links a:hover {
+  color: var(--accent-color);
+  text-decoration: underline;
+  text-underline-offset: 4px;
+}
+
 .auth-signature {
-  margin: 18px 0 0;
+  margin: 2px 0 0;
   text-align: center;
   font-size: 12px;
   color: var(--text-muted);

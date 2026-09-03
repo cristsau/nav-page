@@ -25,7 +25,7 @@ const navigationItems = computed(() => (
   <header class="primary-header">
     <router-link class="primary-header__brand" to="/" aria-label="返回导航首页">
       <span class="primary-header__logo" aria-hidden="true">
-        <img src="/domo-logo.png" alt="">
+        <img src="/icons/cristsau-mark-512-v2.png" alt="">
       </span>
       <span>{{ getSiteName() }}</span>
     </router-link>
@@ -108,13 +108,13 @@ const navigationItems = computed(() => (
   overflow: hidden;
   background: #fff;
   border: 1px solid var(--border-light);
-  border-radius: 50%;
+  border-radius: 10px;
 }
 
 .primary-header__logo img {
   width: 100%;
   height: 100%;
-  object-fit: cover;
+  object-fit: contain;
 }
 
 .primary-header__nav {
