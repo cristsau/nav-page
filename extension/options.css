@@ -45,7 +45,7 @@ body {
   object-fit: contain;
   background: #fff;
   border: 1px solid rgba(95, 138, 111, 0.14);
-  border-radius: 50%;
+  border-radius: 19px;
   box-shadow: 0 12px 26px rgba(26, 41, 31, 0.12);
 }
 

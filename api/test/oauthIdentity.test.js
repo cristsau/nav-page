@@ -10,6 +10,7 @@ import {
   saveIdentityOauthConfig
 } from '../src/lib/managedOauthIntegrations.js'
 import {
+  buildAuthorizationUrl,
   pkceChallenge,
   safeReturnPath,
   signOauthCookie,
@@ -29,6 +30,33 @@ test('oauth transaction signing, PKCE and subject digests are deterministic and 
     subjectDigest('wechat', 'nickname:stable', 'subject-key')
   )
   assert.equal(safeReturnPath('//evil.example'), '/')
+})
+
+test('Google identity login requests only openid email and profile scopes', async () => {
+  const fetchImpl = async () => ({
+    ok: true,
+    json: async () => ({
+      issuer: 'https://accounts.google.com',
+      authorization_endpoint: 'https://accounts.google.com/o/oauth2/v2/auth',
+      token_endpoint: 'https://oauth2.googleapis.com/token',
+      jwks_uri: 'https://www.googleapis.com/oauth2/v3/certs'
+    })
+  })
+  const authorizationUrl = await buildAuthorizationUrl(
+    'google',
+    { clientId: 'domo-nav-client' },
+    {
+      redirectUri: 'https://nav.cristsau.cn/api/auth/oauth/google/callback',
+      state: 'state-value',
+      nonce: 'nonce-value',
+      verifier: 'pkce-verifier'
+    },
+    { fetchImpl, now: 1_788_402_000_000 }
+  )
+  const scopes = new URL(authorizationUrl).searchParams.get('scope').split(' ')
+
+  assert.deepEqual(scopes, ['openid', 'email', 'profile'])
+  assert.equal(scopes.some((scope) => /gmail|drive|contacts|calendar/i.test(scope)), false)
 })
 
 test('managed identity configuration is default-off and never echoes secrets', async (t) => {

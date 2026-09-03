@@ -158,6 +158,10 @@ function redirectToLoginOnce(reason = 'session-expired') {
   if (typeof window === 'undefined' || unauthorizedRedirectPending) return
   if (
     window.location.pathname === '/auth'
+    || window.location.pathname === '/about'
+    || window.location.pathname === '/about/'
+    || window.location.pathname === '/privacy'
+    || window.location.pathname === '/privacy/'
     || window.location.pathname.startsWith('/share/')
   ) return
 

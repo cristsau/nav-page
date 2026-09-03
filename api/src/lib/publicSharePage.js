@@ -157,7 +157,7 @@ export function createPublicShareMetadata(record, {
       })
     : []
   const imageUrl = attachments[0]?.url
-    || new URL('/domo-logo.png', appOrigin).href
+    || new URL('/brand/cristsau-lockup-v2.png', appOrigin).href
 
   return {
     title,
@@ -189,7 +189,7 @@ export function createUnavailableShareMetadata(code, {
       ? '分享服务暂时不可用，请稍后重试。'
       : '链接可能不存在、已经过期，或已被分享者撤销。',
     canonicalUrl,
-    imageUrl: new URL('/domo-logo.png', appOrigin).href,
+    imageUrl: new URL('/brand/cristsau-lockup-v2.png', appOrigin).href,
     siteName: 'DOMO NAV'
   }
 }

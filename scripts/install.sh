@@ -179,7 +179,7 @@ create_desktop_shortcut() {
 Name=NAV 导航页
 Comment=Notion风格个人导航页
 Exec=sh -c "cd $target_dir && pnpm dev"
-Icon=$target_dir/app/public/icon.png
+Icon=$target_dir/app/public/icons/cristsau-mark-512-v2.png
 Terminal=true
 Type=Application
 Categories=Utility;

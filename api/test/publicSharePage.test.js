@@ -44,7 +44,7 @@ test('dynamic share head replaces static metadata without duplicating managed ta
     title: '部署摘要 · DOMO NAV',
     description: '服务名称：nav-api',
     canonicalUrl: 'https://nav.skrskr.net/share/AbCd2345',
-    imageUrl: 'https://nav.skrskr.net/domo-logo.png',
+    imageUrl: 'https://nav.skrskr.net/brand/cristsau-lockup-v2.png',
     siteName: 'DOMO NAV'
   }
   const html = injectPublicShareMetadata(INDEX_HTML, metadata)
@@ -98,7 +98,7 @@ test('public share image accepts only the configured image-bed origin', () => {
     imgBedBaseUrl: 'https://pic.skrskr.net'
   })
 
-  assert.equal(metadata.imageUrl, 'https://nav.skrskr.net/domo-logo.png')
+  assert.equal(metadata.imageUrl, 'https://nav.skrskr.net/brand/cristsau-lockup-v2.png')
 })
 
 test('invalid share codes are never reflected into canonical URLs', () => {

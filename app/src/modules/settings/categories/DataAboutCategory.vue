@@ -8,7 +8,7 @@ import DataSettings from '../components/DataSettings.vue'
 
     <section class="about-section" aria-labelledby="settings-about-title">
       <div class="about-section__brand">
-        <img class="about-section__logo" src="/domo-logo.png" alt="">
+        <img class="about-section__logo" src="/icons/cristsau-mark-512-v2.png" alt="">
         <h3 id="settings-about-title">DOMO NAV</h3>
       </div>
       <div class="about-section__info">
@@ -49,7 +49,7 @@ import DataSettings from '../components/DataSettings.vue'
   overflow: hidden;
   background: #fff;
   border: 1px solid var(--border-light);
-  border-radius: 50%;
+  border-radius: 15px;
   box-shadow: 0 8px 24px color-mix(in srgb, var(--text-primary) 10%, transparent);
 }
 .about-section__version { margin: 0 0 8px; color: var(--text-muted); font-size: .82rem; }

@@ -19,6 +19,10 @@ import {
 
 export { colorSchemes } from '@/shared/config/colorSchemes'
 
+const DEFAULT_BRAND_ICON = '/icons/cristsau-mark-512-v2.png'
+const DEFAULT_BRAND_FAVICON = '/icons/cristsau-mark-64-v2.png'
+const LEGACY_DEFAULT_BRAND_ASSETS = new Set(['/domo-logo.png', '/icon.png'])
+
 const defaultCustomTheme = {
   primary: '#6b8c7a',
   bg: '#f4f7f5',
@@ -36,8 +40,8 @@ const defaultCustomTheme = {
 const defaultConfig = {
   site: {
     name: 'DOMO NAV',
-    icon: '/domo-logo.png',
-    favicon: '/domo-logo.png'
+    icon: DEFAULT_BRAND_ICON,
+    favicon: DEFAULT_BRAND_FAVICON
   },
   searchEngine: 'baidu',
   search: {
@@ -241,6 +245,13 @@ function ensureConfigShape() {
     mergeDeep(clone(defaultConfig), config.value)
   )
 
+  if (LEGACY_DEFAULT_BRAND_ASSETS.has(config.value.site?.icon)) {
+    config.value.site.icon = DEFAULT_BRAND_ICON
+  }
+  if (LEGACY_DEFAULT_BRAND_ASSETS.has(config.value.site?.favicon)) {
+    config.value.site.favicon = DEFAULT_BRAND_FAVICON
+  }
+
   if (!Array.isArray(config.value.search.quickAccessEngineIds) || !config.value.search.quickAccessEngineIds.length) {
     config.value.search.quickAccessEngineIds = [...defaultConfig.search.quickAccessEngineIds]
   }
@@ -349,7 +360,7 @@ export function applyStyleConfig() {
     document.title = config.value.site.name
   }
 
-  updateFavicon(config.value.site?.favicon || '/domo-logo.png')
+  updateFavicon(config.value.site?.favicon || DEFAULT_BRAND_FAVICON)
 }
 
 function getAllSearchEngineList() {
@@ -573,7 +584,7 @@ export function useConfig(options = {}) {
   }
 
   function getSiteIcon() {
-    return config.value.site?.icon || '/domo-logo.png'
+    return config.value.site?.icon || DEFAULT_BRAND_ICON
   }
 
   function getColorScheme() {

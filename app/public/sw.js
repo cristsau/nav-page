@@ -1,4 +1,4 @@
-const CACHE_VERSION = 'domonav-shell-v5'
+const CACHE_VERSION = 'domonav-shell-v6'
 const OFFLINE_SYNC_DB = 'NavPageOfflineSyncDB'
 const OFFLINE_SYNC_STORE = 'mutations'
 const OFFLINE_SYNC_TAG = 'domo-nav-offline-sync'
@@ -7,10 +7,13 @@ const SHELL_ASSETS = [
   '/',
   '/offline.html',
   '/manifest.webmanifest',
-  '/domo-logo.png',
-  '/icons/pwa-192-v1.png',
-  '/icons/pwa-512-v1.png',
-  '/icons/apple-touch-icon-180-v1.png'
+  '/brand/cristsau-lockup-v2.png',
+  '/icons/cristsau-mark-64-v2.png',
+  '/icons/cristsau-mark-180-v2.png',
+  '/icons/cristsau-mark-192-v2.png',
+  '/icons/cristsau-mark-512-v2.png',
+  '/icons/cristsau-mark-maskable-512-v2.png',
+  '/icons/cristsau-badge-96-v2.png'
 ]
 
 async function cacheShellAsset(cache, asset, timeoutMs = SHELL_FETCH_TIMEOUT_MS) {
@@ -89,8 +92,8 @@ self.addEventListener('push', (event) => {
   const title = String(payload.title || 'DOMO NAV').slice(0, 120)
   const options = {
     body: String(payload.body || '你有一条新的到期提醒').slice(0, 240),
-    icon: '/icons/pwa-192-v1.png',
-    badge: '/icons/pwa-192-v1.png',
+    icon: '/icons/cristsau-mark-192-v2.png',
+    badge: '/icons/cristsau-badge-96-v2.png',
     tag: String(payload.tag || 'domo-nav-reminder').slice(0, 128),
     renotify: false,
     timestamp: Number(payload.timestamp) || Date.now(),

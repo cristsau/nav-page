@@ -140,7 +140,7 @@ export function useNoteReminders({
       body: reminder.encrypted
         ? '一条加密备忘录已到提醒时间。'
         : `截止时间：${new Date(reminder.dueAt).toLocaleString('zh-CN')}`,
-      icon: '/icons/pwa-192-v1.png',
+      icon: '/icons/cristsau-mark-192-v2.png',
       tag: `domonav-note-${reminder.id}`,
       renotify: false,
       data: { url: '/whisper?reminders=1' }
