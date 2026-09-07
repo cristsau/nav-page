@@ -4,6 +4,7 @@ import fs from 'node:fs/promises'
 import os from 'node:os'
 import path from 'node:path'
 import {randomBytes,randomUUID} from 'node:crypto'
+import {spawn} from 'node:child_process'
 
 assert.equal(process.env.NODE_ENV,'test')
 assert.equal(process.env.NAV_AUTH_EMAIL_INTEGRATION_TEST,'true')
@@ -358,4 +359,101 @@ test('P-02: disaster restore SQL invalidates restored proof material before star
   assert.equal(await count('auth_action_grants'),0)
   assert.equal(await count('auth_email_challenges','revoked_at IS NULL AND consumed_at IS NULL'),0)
   assert.equal(await count('auth_email_delivery_jobs','encrypted_payload IS NOT NULL'),0)
+})
+
+test('A-06: 299 seconds remains valid under application clock skew; 300 seconds expires',async()=>{
+  const b=browser(),p=await requestCode(b)
+  await pool.query("UPDATE auth_email_challenges SET created_at=NOW()-INTERVAL '299 seconds',expires_at=NOW()+INTERVAL '1 second' WHERE id=$1",[p.challengeId])
+  const actualNow=Date.now
+  try {
+    Date.now=()=>actualNow()+86400000
+    assert.equal((await b.call('/auth/email-login/verify',{challengeId:p.challengeId,code:p.code})).statusCode,200)
+  } finally {Date.now=actualNow}
+  const other=browser(B),q=await requestCode(other)
+  await pool.query("UPDATE auth_email_challenges SET created_at=NOW()-INTERVAL '300 seconds',expires_at=NOW() WHERE id=$1",[q.challengeId])
+  assert.equal((await other.call('/auth/email-login/verify',{challengeId:q.challengeId,code:q.code})).statusCode,400)
+})
+
+test('A-19/20: occupied email and expired password grant cannot change identity',async()=>{
+  const b=browser();await passwordLogin(b)
+  await pool.query('UPDATE users SET email=NULL,email_verified_at=NULL WHERE id=$1',[userId])
+  await pool.query("INSERT INTO users(username,password_hash,role,status,email,email_verified_at) VALUES('synthetic-other',$1,'user','approved','occupied@example.test',NOW())",[baselineHash])
+  assert.equal((await b.call('/auth/account/reauth/password',{currentPassword:oldPassword})).statusCode,200)
+  const p=await requestCode(b,'/auth/account/email-bind/request',{email:'occupied@example.test'})
+  assert.equal((await b.call('/auth/account/email-bind/confirm',{challengeId:p.challengeId,code:p.code})).json().code,'AUTH_EMAIL_BIND_REJECTED')
+  assert.equal((await pool.query('SELECT email FROM users WHERE id=$1',[userId])).rows[0].email,null)
+  await pool.query("UPDATE auth_reauth_grants SET created_at=NOW()-INTERVAL '301 seconds',expires_at=NOW()")
+  assert.equal((await b.call('/auth/account/email-bind/confirm',{challengeId:p.challengeId,code:p.code})).json().code,'AUTH_EMAIL_REAUTH_REQUIRED')
+  assert.equal(await count('auth_email_challenges','consumed_at IS NOT NULL'),0)
+})
+
+test('A-21: concurrent binding of a free address has one winner and no account merge',async()=>{
+  await pool.query('UPDATE users SET email=NULL,email_verified_at=NULL WHERE id=$1',[userId])
+  await pool.query("INSERT INTO users(username,password_hash,role,status) VALUES('synthetic-second',$1,'user','approved')",[baselineHash])
+  const a=browser(),b=browser(B)
+  await passwordLogin(a)
+  assert.equal((await b.call('/auth/login',{username:'synthetic-second',password:oldPassword})).statusCode,200)
+  for(const client of [a,b])assert.equal((await client.call('/auth/account/reauth/password',{currentPassword:oldPassword})).statusCode,200)
+  const p=await requestCode(a,'/auth/account/email-bind/request',{email:'shared-target@example.test'})
+  const q=await requestCode(b,'/auth/account/email-bind/request',{email:'shared-target@example.test'})
+  const results=await Promise.all([[a,p],[b,q]].map(([client,proof])=>client.call('/auth/account/email-bind/confirm',{challengeId:proof.challengeId,code:proof.code})))
+  assert.equal(results.filter(r=>r.statusCode===200).length,1)
+  assert.equal(results.filter(r=>r.statusCode===400).length,1)
+  assert.equal(await count('users'),2)
+  assert.equal(await count('users',"email='shared-target@example.test' AND email_verified_at IS NOT NULL"),1)
+  assert.equal(await count('security_events',"event_type='auth.account.email.bind'"),1)
+})
+
+test('A-25: audit insertion failure rolls back session creation and challenge consumption',async()=>{
+  const b=browser(),p=await requestCode(b)
+  await pool.query(`CREATE FUNCTION test_auth_audit_failure() RETURNS trigger LANGUAGE plpgsql AS $$ BEGIN
+    IF NEW.event_type='auth.email.login' THEN RAISE EXCEPTION 'synthetic audit failure'; END IF; RETURN NEW; END; $$;
+    CREATE TRIGGER test_auth_audit_failure BEFORE INSERT ON security_events FOR EACH ROW EXECUTE FUNCTION test_auth_audit_failure()`)
+  try {
+    assert.equal((await b.call('/auth/email-login/verify',{challengeId:p.challengeId,code:p.code})).statusCode,503)
+    assert.equal(await count('sessions'),0)
+    assert.equal(await count('auth_email_challenges','consumed_at IS NOT NULL'),0)
+  } finally {await pool.query('DROP TRIGGER test_auth_audit_failure ON security_events; DROP FUNCTION test_auth_audit_failure()')}
+  assert.equal((await b.call('/auth/email-login/verify',{challengeId:p.challengeId,code:p.code})).statusCode,200)
+})
+
+test('P-02: a failing additive migration leaves neither partial schema nor ledger row',async()=>{
+  const name='999_synthetic_auth_failure.sql'
+  await assert.rejects(runMigrations({fileSystem:{
+    readdir:async()=>[{name,isFile:()=>true}],
+    readFile:async()=>"CREATE TABLE synthetic_auth_partial(id integer); SELECT 1/0;"
+  }}))
+  assert.equal((await pool.query("SELECT to_regclass('synthetic_auth_partial') AS value")).rows[0].value,null)
+  assert.equal(Number((await pool.query('SELECT COUNT(*) FROM schema_migrations WHERE name=$1',[name])).rows[0].count),0)
+  assert.equal(await count('users'),1)
+})
+
+test('A-11: fresh Node processes retain the same PostgreSQL identity quota',async()=>{
+  for(let i=0;i<5;i++)await requestCode(browser(i%2?A:B,`198.51.100.${100+i}`),i%2?'/auth/email-login/request':'/auth/password-reset/request')
+  const program=`const {consumePersistentRateLimit}=await import('./src/lib/persistentRateLimit.js');
+    const {pool}=await import('./src/db/index.js');
+    try {const r=await consumePersistentRateLimit('owner@example.test',{scope:'email_identity_hour',limit:5,windowMs:3600000,queryFn:pool.query.bind(pool)});process.stdout.write(JSON.stringify({allowed:r.allowed}))}finally{await pool.end()}`
+  async function runFreshProcess() {
+    return new Promise((resolve,reject)=>{
+      const child=spawn(process.execPath,['--input-type=module','-e',program],{
+        env:{...process.env,NAV_RATE_LIMIT_KEY_SECRET:config.rateLimitKeySecret},stdio:['ignore','pipe','pipe']
+      })
+      let output=''
+      child.stdout.on('data',chunk=>{output+=chunk.toString()})
+      child.stderr.resume() // Synthetic failures are summarized, never dump connection details.
+      child.on('error',reject)
+      child.on('close',code=>code===0?resolve(JSON.parse(output)):reject(new Error('isolated quota child failed')))
+    })
+  }
+  assert.deepEqual(await runFreshProcess(),{allowed:false})
+  assert.deepEqual(await runFreshProcess(),{allowed:false})
+})
+
+test('A-11/24: untrusted forwarded IP cannot reset public request quota',async()=>{
+  for(let i=0;i<11;i++) {
+    const response=await app.inject({method:'POST',url:'/api/auth/email-login/request',remoteAddress:'198.51.100.199',
+      headers:{origin:A,'x-forwarded-for':`198.51.100.${10+i}`},payload:{email:'unknown@example.test'}})
+    assert.equal(response.statusCode,i<10?202:429)
+  }
+  assert.equal(await count('auth_email_delivery_jobs'),0)
 })

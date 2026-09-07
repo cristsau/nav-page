@@ -14,8 +14,8 @@ const output=await mkdtemp(path.join(tmpdir(),'nav-auth-ui-'))
 const browser=await chromium.launch({executablePath:process.env.NAV_BROWSER_PATH,headless:true})
 const results=[],errors=[],loadedJs=new Set()
 try {
- for(const width of [320,375,390,768,1024,1440])for(const theme of ['light','dark']) {
-  const context=await browser.newContext({viewport:{width,height:900},colorScheme:theme,reducedMotion:'reduce',serviceWorkers:'block'})
+ for(const width of [320,375,390,768,1024,1440])for(const theme of ['light','dark','custom']) {
+  const context=await browser.newContext({viewport:{width,height:900},colorScheme:theme==='dark'?'dark':'light',reducedMotion:'reduce',serviceWorkers:'block'})
   const page=await context.newPage()
   page.on('pageerror',error=>errors.push(error.message))
   page.on('response',r=>{if(new URL(r.url()).pathname.endsWith('.js'))loadedJs.add(new URL(r.url()).pathname)})
@@ -36,12 +36,30 @@ try {
   })
   await page.goto(`${origin}/auth`,{waitUntil:'networkidle'})
   await page.getByRole('button',{name:'获取验证码',exact:true}).waitFor()
+  if(theme==='custom')await page.evaluate(()=>{
+    for(const [key,value] of Object.entries({'--bg-primary':'#eef5fa','--bg-secondary':'#e1ecf4','--bg-card':'#f8fcff','--text-primary':'#172f45','--text-secondary':'#3b5267','--text-muted':'#405870','--accent-color':'#24567b','--accent-bg':'#dceaf3'}))document.documentElement.style.setProperty(key,value)
+  })
   assert.equal(await page.getByText('使用 Google 登录',{exact:true}).count(),1,'Google must remain available in OTP mode')
   assert.equal(await page.getByText(/Passkey|通行密钥/i).count(),0)
   async function layout(stage) {
-   const measured=await page.evaluate(()=>({overflow:document.documentElement.scrollWidth>innerWidth+1,small:[...document.querySelectorAll('button,input,a')].filter(e=>e.getClientRects().length && !e.disabled && e.getBoundingClientRect().height<43.5).map(e=>e.tagName),dark:document.documentElement.classList.contains('dark')}))
+   const measured=await page.evaluate(()=>{
+    const canvas=document.createElement('canvas');canvas.width=canvas.height=1;const ctx=canvas.getContext('2d',{willReadFrequently:true})
+    const rgb=value=>{ctx.clearRect(0,0,1,1);ctx.fillStyle=value;ctx.fillRect(0,0,1,1);return [...ctx.getImageData(0,0,1,1).data]}
+    const lum=c=>c.slice(0,3).map(x=>x/255).map(x=>x<=.04045?x/12.92:((x+.055)/1.055)**2.4).reduce((n,x,i)=>n+x*[.2126,.7152,.0722][i],0)
+    const contrastFailures=[]
+    for(const e of document.querySelectorAll('button:not(:disabled),.auth-card__desc,.auth-link,.auth-field span,.auth-public-links a,.email-auth p,.email-auth label,.email-auth h3')) {
+      if(!e.getClientRects().length)continue
+      const style=getComputedStyle(e),fg=rgb(style.color);let bg=[255,255,255,255]
+      for(let p=e;p;p=p.parentElement){const color=rgb(getComputedStyle(p).backgroundColor);if(color[3]===255){bg=color;break}}
+      const a=lum(fg),b=lum(bg),ratio=(Math.max(a,b)+.05)/(Math.min(a,b)+.05)
+      const large=parseFloat(style.fontSize)>=24 || (parseFloat(style.fontSize)>=18.66 && Number(style.fontWeight)>=700)
+      if(ratio<(large?3:4.5))contrastFailures.push({tag:e.tagName,class:e.className,ratio:Math.round(ratio*100)/100})
+    }
+    return {overflow:document.documentElement.scrollWidth>innerWidth+1,small:[...document.querySelectorAll('button,input,a')].filter(e=>e.getClientRects().length && !e.disabled && e.getBoundingClientRect().height<43.5).map(e=>e.tagName),dark:document.documentElement.classList.contains('dark'),contrastFailures}
+   })
    assert.equal(measured.overflow,false,`${width}/${theme}/${stage} overflow`)
    assert.deepEqual(measured.small,[],`${width}/${theme}/${stage} touch size`)
+   assert.deepEqual(measured.contrastFailures,[],`${width}/${theme}/${stage} text contrast`)
    results.push({width,theme,stage,...measured})
   }
   await layout('email-request')

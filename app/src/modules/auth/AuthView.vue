@@ -654,7 +654,7 @@ async function handleResendVerification() {
   border-radius: 14px;
   padding: 12px 16px;
   background: transparent;
-  color: var(--text-secondary);
+  color: var(--text-primary);
   cursor: pointer;
   transition: all 0.2s ease;
 }
