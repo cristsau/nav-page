@@ -15,6 +15,8 @@ jobs:
   api-production-image:
     runs-on: ubuntu-latest
     timeout-minutes: 15
+    env:
+      NAV_RELEASE_SHA: ${{ github.sha }}
 
     steps:
       - name: Checkout
@@ -24,19 +26,41 @@ jobs:
         run: >-
           docker build
           --pull
-          --build-arg NAV_RELEASE_SHA=ci
+          --build-arg NAV_RELEASE_SHA="$NAV_RELEASE_SHA"
           --tag nav-api:ci
           api
 
       - name: Verify Debian and the native semantic runtime
         run: |
-          test "$(docker image inspect nav-api:ci --format '{{ index .Config.Labels "org.opencontainers.image.revision" }}')" = "ci"
+          test "$(docker image inspect nav-api:ci --format '{{ index .Config.Labels "org.opencontainers.image.revision" }}')" = "$NAV_RELEASE_SHA"
           docker run --rm nav-api:ci sh -eu -c '
             . /etc/os-release
             test "$ID" = "debian"
             getconf GNU_LIBC_VERSION
             node -e "import(\"onnxruntime-node\").then(() => console.log(\"semantic native runtime verified\")).catch((error) => { console.error(error); process.exit(1) })"
           '
+
+      - name: Package exact master image for capacity-constrained releases
+        if: github.event_name == 'push' && github.ref == 'refs/heads/master'
+        run: |
+          set -euo pipefail
+          mkdir -p release-artifacts
+          docker tag nav-api:ci "nav-ovh-api:$NAV_RELEASE_SHA"
+          docker image inspect "nav-ovh-api:$NAV_RELEASE_SHA" > release-artifacts/api-image.json
+          docker save "nav-ovh-api:$NAV_RELEASE_SHA" | gzip -1 > release-artifacts/nav-api.tar.gz
+          printf '%s\n' "$NAV_RELEASE_SHA" > release-artifacts/revision.txt
+          cd release-artifacts
+          sha256sum nav-api.tar.gz api-image.json revision.txt > SHA256SUMS
+
+      - name: Upload exact master API image
+        if: github.event_name == 'push' && github.ref == 'refs/heads/master'
+        uses: actions/upload-artifact@v4
+        with:
+          name: nav-api-${{ github.sha }}
+          path: release-artifacts/
+          retention-days: 7
+          compression-level: 0
+          if-no-files-found: error
 
   test-and-build:
     runs-on: ubuntu-latest
@@ -262,6 +286,28 @@ jobs:
 
       - name: Build frontend
         run: npm run build --prefix app
+
+      - name: Package exact master frontend
+        if: github.event_name == 'push' && github.ref == 'refs/heads/master'
+        env:
+          NAV_RELEASE_SHA: ${{ github.sha }}
+        run: |
+          set -euo pipefail
+          mkdir -p release-artifacts
+          tar -czf release-artifacts/frontend-dist.tar.gz -C app/dist .
+          printf '%s\n' "$NAV_RELEASE_SHA" > release-artifacts/revision.txt
+          cd release-artifacts
+          sha256sum frontend-dist.tar.gz revision.txt > SHA256SUMS
+
+      - name: Upload exact master frontend
+        if: github.event_name == 'push' && github.ref == 'refs/heads/master'
+        uses: actions/upload-artifact@v4
+        with:
+          name: nav-web-${{ github.sha }}
+          path: release-artifacts/
+          retention-days: 7
+          compression-level: 0
+          if-no-files-found: error
 
   email-mailbox-postgres-integration:
     runs-on: ubuntu-latest

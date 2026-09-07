@@ -10,7 +10,7 @@ ENV NAV_RELEASE_SHA=$NAV_RELEASE_SHA
 WORKDIR /app
 
 COPY package*.json ./
-RUN npm ci --omit=dev
+RUN npm ci --omit=dev && npm cache clean --force
 
 # The local embedding runtime ships a glibc-linked native library.  Refuse to
 # build if a stale or incorrectly tagged musl/Alpine base image is supplied,
