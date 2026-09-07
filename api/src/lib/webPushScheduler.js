@@ -216,7 +216,7 @@ export async function deliverDueWebPushNotifications({
          AND subscription.disabled_at IS NULL
         WHERE notification.push_enabled = TRUE
           AND notification.read_at IS NULL
-              AND notification.source_type NOT IN ('email', 'email_digest')
+          AND (notification.source_type IS NULL OR notification.source_type NOT IN ('email', 'email_digest'))
           AND notification.created_at >= NOW() - INTERVAL '7 days'
           AND (notification.expires_at IS NULL OR notification.expires_at > NOW())
         ON CONFLICT (notification_id, subscription_id) DO NOTHING
@@ -236,7 +236,7 @@ export async function deliverDueWebPushNotifications({
             WHERE notification.id = delivery.notification_id
               AND notification.push_enabled = TRUE
               AND notification.read_at IS NULL
-              AND notification.source_type NOT IN ('email', 'email_digest')
+              AND (notification.source_type IS NULL OR notification.source_type NOT IN ('email', 'email_digest'))
               AND (notification.expires_at IS NULL OR notification.expires_at > NOW())
           )
       `
@@ -259,7 +259,7 @@ export async function deliverDueWebPushNotifications({
                 POWER(2, LEAST(delivery.attempt_count, 8)) * INTERVAL '1 minute'
               ))
               AND notification.read_at IS NULL
-              AND notification.source_type NOT IN ('email', 'email_digest')
+              AND (notification.source_type IS NULL OR notification.source_type NOT IN ('email', 'email_digest'))
               AND subscription.disabled_at IS NULL
             ORDER BY delivery.updated_at ASC, delivery.notification_id, delivery.subscription_id
             LIMIT $1

@@ -426,6 +426,7 @@ async function prepareProposal(client, userId, toolName, args, candidateIds = []
 }
 
 export async function proposeAssistantAdvancedOperation({ userId, operationId, conversationId, messageId, toolName, args, candidateIds = [], withTransactionFn = withTransaction }) {
+  assertActiveAssistantTool(toolName)
   uuid(userId, '用户 ID'); uuid(operationId, '操作 ID')
   if (conversationId) uuid(conversationId, '对话 ID')
   if (messageId) uuid(messageId, '消息 ID')

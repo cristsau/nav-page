@@ -6,7 +6,7 @@ import { enforceMailboxRetirement, RETIRED_MAIL_TOOLS, SYSTEM_MAIL_SQL, SYSTEM_M
 import { normalizeSystemMailInput } from '../src/routes/systemIntegrations.js'
 import { ASSISTANT_TOOL_DEFINITIONS } from '../src/lib/assistantTools.js'
 import { buildAssistantPrompts } from '../src/lib/assistantContext.js'
-import { normalizeAssistantAdvancedArguments, confirmAssistantAdvancedOperation, executeAssistantAdvancedReadTool } from '../src/lib/assistantAdvancedOperations.js'
+import { normalizeAssistantAdvancedArguments, proposeAssistantAdvancedOperation, confirmAssistantAdvancedOperation, executeAssistantAdvancedReadTool } from '../src/lib/assistantAdvancedOperations.js'
 import { deliverMailOutbox, startMailDeliveryScheduler } from '../src/lib/mailOutbox.js'
 
 test('personal mail and mailbox OAuth endpoints are gone, not unauthenticated fallbacks', async () => {
@@ -50,6 +50,7 @@ test('mailbox AI tools are absent and legacy read/proposal calls fail before I/O
     assert.equal(ASSISTANT_TOOL_DEFINITIONS.some((tool) => tool.name === name), false)
     assert.throws(() => normalizeAssistantAdvancedArguments(name, {}), (error) => error.code === 'MAILBOX_RETIRED')
     await assert.rejects(executeAssistantAdvancedReadTool({ userId: 'test', toolName: name, queryFn: () => assert.fail('must not query') }), (error) => error.code === 'MAILBOX_RETIRED')
+    await assert.rejects(proposeAssistantAdvancedOperation({ userId: 'test', toolName: name, withTransactionFn: () => assert.fail('must not start a transaction') }), (error) => error.code === 'MAILBOX_RETIRED')
   }
   assert.ok(ASSISTANT_TOOL_DEFINITIONS.some((tool) => tool.name === 'create_diary'))
   assert.ok(ASSISTANT_TOOL_DEFINITIONS.some((tool) => tool.name === 'create_bookmark'))
