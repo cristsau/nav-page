@@ -1,5 +1,6 @@
 import assert from 'node:assert/strict'
 import test, { after, before, beforeEach } from 'node:test'
+import { ACTIVE_NOTIFICATION_SQL } from '../src/lib/mailboxRetirement.js'
 
 const EXPECTED_DATABASE_NAME = 'nav_advanced_test'
 const ALLOWED_DATABASE_HOSTS = new Set(['127.0.0.1', 'localhost'])
@@ -251,6 +252,7 @@ test('sensitive notification Web Push is generic and does not expose its source 
   })
 
   assert.equal(result.notificationDelivered, 1)
+  assert.equal((await pool.query(`SELECT id FROM notifications WHERE user_id = $1 AND ${ACTIVE_NOTIFICATION_SQL}`, [USER_ID])).rowCount, 1)
   assert.equal(payloads.length, 1)
   assert.equal(payloads[0].title, 'DOMO NAV')
   assert.equal(payloads[0].url, '/?notifications=1')
@@ -280,6 +282,7 @@ test('retired mailbox notifications never enqueue or deliver existing pending pu
     async sendFn() { assert.fail('retired mailbox must never send a push') }
   })
   assert.equal(result.notificationDelivered, 0)
+  assert.equal((await pool.query(`SELECT id FROM notifications WHERE user_id = $1 AND ${ACTIVE_NOTIFICATION_SQL}`, [USER_ID])).rowCount, 0)
   assert.equal(result.remaining, 0)
   const deliveries = await pool.query('SELECT status FROM notification_push_deliveries')
   assert.deepEqual(deliveries.rows, [{ status: 'expired' }])

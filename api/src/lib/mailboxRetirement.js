@@ -7,7 +7,7 @@ export const SYSTEM_MAIL_TYPES = Object.freeze([
   'registration.rejected', 'maintenance.failed', 'maintenance.recovered', 'system.test'
 ])
 export const SYSTEM_MAIL_SQL = `mail_outbox.message_type IN (${SYSTEM_MAIL_TYPES.map((type) => `'${type}'`).join(', ')})`
-export const ACTIVE_NOTIFICATION_SQL = "source_type NOT IN ('email', 'email_digest')"
+export const ACTIVE_NOTIFICATION_SQL = "(source_type IS NULL OR source_type NOT IN ('email', 'email_digest'))"
 
 export function assertActiveAssistantTool(toolName) {
   if (!RETIRED_MAIL_TOOLS.has(String(toolName || ''))) return
