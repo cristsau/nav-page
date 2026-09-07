@@ -10,6 +10,7 @@ import {
 import CommandPalette from '@/shared/components/CommandPalette.vue'
 import AppShell from '@/shared/components/AppShell.vue'
 import Icon from '@/shared/components/Icon.vue'
+import PasswordReauthDialog from '@/shared/components/PasswordReauthDialog.vue'
 
 const route = useRoute()
 const router = useRouter()
@@ -214,6 +215,7 @@ const bgStyle = computed(() => {
 </script>
 
 <template>
+  <PasswordReauthDialog />
   <div
     class="app"
     :class="{

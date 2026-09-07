@@ -242,7 +242,26 @@ restore_database_dump() {
   docker exec -i "$NAV_DB_CONTAINER" pg_restore \
     -U "$NAV_DB_USER" -d "$NAV_DB_NAME" \
     --clean --if-exists --single-transaction --exit-on-error \
-    --no-owner --no-acl < "$dump_file"
+    --no-owner --no-acl < "$dump_file" || return $?
+  # A restored snapshot must never revive sessions or pending authentication mail.
+  # This runs before any application container is restarted, including rollback restore.
+  docker exec -i "$NAV_DB_CONTAINER" psql -X -q -v ON_ERROR_STOP=1 \
+    -U "$NAV_DB_USER" -d "$NAV_DB_NAME" <<'AUTH_RESTORE_SQL'
+BEGIN;
+DO $auth_restore$
+BEGIN
+  IF to_regclass('public.auth_email_challenges') IS NOT NULL THEN
+    UPDATE public.auth_email_challenges SET revoked_at=COALESCE(revoked_at,NOW()) WHERE consumed_at IS NULL;
+    UPDATE public.auth_email_delivery_jobs SET state='cancelled',encrypted_payload=NULL,
+      error_code='DATABASE_RESTORED',updated_at=NOW() WHERE state IN('pending','sending');
+    DELETE FROM public.auth_reauth_grants;
+    DELETE FROM public.auth_action_grants;
+  END IF;
+  IF to_regclass('public.sessions') IS NOT NULL THEN DELETE FROM public.sessions; END IF;
+END;
+$auth_restore$;
+COMMIT;
+AUTH_RESTORE_SQL
 }
 
 rollback_changes() {

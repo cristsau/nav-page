@@ -2,6 +2,8 @@
 import { computed, onBeforeUnmount, onMounted, ref } from 'vue'
 import { useRoute } from 'vue-router'
 import Icon from '@/shared/components/Icon.vue'
+import EmailAuthForm from './EmailAuthForm.vue'
+import { fetchAuthCapabilities } from '@/shared/services/authEmailApi'
 import { useAuth } from '@/shared/composables/useAuth'
 import {
   fetchBackendRegistrationConfig,
@@ -15,9 +17,6 @@ const {
   backendAuthEnabled,
   initAuth,
   login,
-  loginWithPasskey,
-  browserSupportsPasskeys,
-  getPasskeyConfig,
   recoverAccount,
   register
 } = useAuth()
@@ -27,13 +26,14 @@ const recoveryMode = ref(false)
 const loading = ref(false)
 const errorMessage = ref('')
 const successMessage = ref('')
-const passkeyConfig = ref({
-  enabled: false,
-  allowedOrigins: [],
-  rpId: '',
-  unsupportedOriginMessage: ''
-})
-const passkeyBrowserSupported = ref(false)
+const emailMode = ref(false)
+const emailReset = ref(false)
+const capabilities = ref({ emailLogin:false, emailPasswordReset:false })
+async function loadEmailCapabilities() {
+  if(!backendAuthEnabled.value)return
+  try { capabilities.value=await fetchAuthCapabilities();emailMode.value=Boolean(capabilities.value.emailLogin) }
+  catch { capabilities.value={emailLogin:false,emailPasswordReset:false} }
+}
 const registrationConfig = ref({ emailVerificationEnabled: false, emailRequired: false })
 const showVerificationResend = ref(false)
 const resendEmail = ref('')
@@ -62,7 +62,7 @@ const recoveryForm = ref({
 
 const redirectTarget = computed(() => {
   const value = String(route.query.redirect || '/').trim()
-  if (!value.startsWith('/') || value.startsWith('//')) return '/'
+  if (!value.startsWith('/') || value.startsWith('//') || value.includes('\\')) return '/'
 
   try {
     const resolved = new URL(value, window.location.origin)
@@ -73,36 +73,6 @@ const redirectTarget = computed(() => {
     return '/'
   }
 })
-
-const currentOrigin = computed(() => (
-  typeof window === 'undefined' ? '' : window.location.origin
-))
-const onSupportedPasskeyOrigin = computed(() => (
-  passkeyConfig.value.allowedOrigins?.some((item) => (
-    item.origin === currentOrigin.value
-  ))
-))
-const passkeyAvailable = computed(() => (
-  backendAuthEnabled.value
-  && passkeyConfig.value.enabled
-  && onSupportedPasskeyOrigin.value
-  && passkeyBrowserSupported.value
-))
-const passkeyAliasNotice = computed(() => (
-  backendAuthEnabled.value
-  && passkeyConfig.value.enabled
-  && !onSupportedPasskeyOrigin.value
-))
-
-async function loadPasskeyAvailability() {
-  if (!backendAuthEnabled.value) return
-  passkeyBrowserSupported.value = browserSupportsPasskeys()
-  try {
-    passkeyConfig.value = await getPasskeyConfig()
-  } catch {
-    passkeyConfig.value.enabled = false
-  }
-}
 
 async function loadRegistrationConfig() {
   if (!backendAuthEnabled.value) return
@@ -150,7 +120,7 @@ onMounted(async () => {
   }
   await Promise.all([
     initAuth(),
-    loadPasskeyAvailability(),
+    loadEmailCapabilities(),
     loadRegistrationConfig(),
     loadOauthConfig()
   ])
@@ -163,7 +133,13 @@ onMounted(async () => {
   await verifyRegistrationFromLink()
 })
 
-onBeforeUnmount(clearRecoverySecrets)
+onBeforeUnmount(clearFormSecrets)
+function clearFormSecrets() {
+  clearRecoverySecrets()
+  loginForm.value.password=''
+  registerForm.value.password=''
+  registerForm.value.confirmPassword=''
+}
 
 async function handleLogin() {
   loading.value = true
@@ -175,28 +151,6 @@ async function handleLogin() {
     window.location.assign(String(redirectTarget.value))
   } catch (error) {
     errorMessage.value = error.message || '登录失败，请稍后再试。'
-  } finally {
-    loading.value = false
-  }
-}
-
-async function handlePasskeyLogin() {
-  const username = loginForm.value.username.trim()
-  if (!username) {
-    errorMessage.value = '请先输入用户名，再使用 Passkey 登录。'
-    return
-  }
-
-  loading.value = true
-  errorMessage.value = ''
-  successMessage.value = ''
-  try {
-    await loginWithPasskey(username)
-    window.location.assign(String(redirectTarget.value))
-  } catch (error) {
-    errorMessage.value = error?.name === 'NotAllowedError'
-      ? 'Passkey 验证已取消或超时，请重新尝试。'
-      : '无法使用这个 Passkey 登录，请确认用户名和 Passkey 后重试。'
   } finally {
     loading.value = false
   }
@@ -239,7 +193,9 @@ function closeRecoveryMode({ preserveUsername = true } = {}) {
 }
 
 function selectTab(tab) {
+  clearFormSecrets()
   closeRecoveryMode({ preserveUsername: tab === 'login' })
+  emailReset.value = false
   activeTab.value = tab
   if (tab === 'register') showVerificationResend.value = false
   successMessage.value = ''
@@ -254,7 +210,7 @@ function getRecoveryErrorMessage(error) {
     return '用户名或恢复码无效，恢复码也可能已经使用。'
   }
   if (/password must be at least/i.test(value)) {
-    return '新密码至少需要 12 个字符。'
+    return '新密码至少需要 15 个字符。'
   }
   return value || '账号恢复失败，请稍后再试。'
 }
@@ -270,8 +226,8 @@ async function handleRecovery() {
     return
   }
 
-  if (recoveryForm.value.newPassword.length < 12) {
-    errorMessage.value = '新密码至少需要 12 个字符。'
+  if (Array.from(recoveryForm.value.newPassword).length < 15) {
+    errorMessage.value = '新密码至少需要 15 个字符。'
     return
   }
 
@@ -300,7 +256,7 @@ async function handleRecovery() {
     }
     recoveryMode.value = false
     activeTab.value = 'login'
-    successMessage.value = '密码已重设，所有设备均已退出，已有 Passkey 也已移除。请使用新密码重新登录。'
+    successMessage.value = '密码已重设，所有设备均已退出。请使用新密码重新登录。'
   } catch (error) {
     errorMessage.value = getRecoveryErrorMessage(error)
   } finally {
@@ -324,9 +280,9 @@ async function handleRegister() {
 
   if (
     backendAuthEnabled.value
-    && registerForm.value.password.length < 12
+    && Array.from(registerForm.value.password).length < 15
   ) {
-    errorMessage.value = '密码至少需要 12 个字符。'
+    errorMessage.value = '密码至少需要 15 个字符。'
     return
   }
 
@@ -392,14 +348,26 @@ async function handleResendVerification() {
 
 <template>
   <div class="auth-page">
+   <div class="auth-shell">
+    <aside class="auth-story" aria-label="DOMO NAV 工作台">
+      <p class="auth-story__eyebrow">YOUR PRIVATE WORKSPACE</p>
+      <h2>给灵感一个归处，<br>让日常从容展开。</h2>
+      <p class="auth-story__lead">常用网站、随手记录与重要时刻，<br>安放在属于你自己的空间。</p>
+      <div class="auth-story__scene" aria-hidden="true">
+        <div class="auth-story__tile"><Icon name="compass" :size="24" /><span>从收藏，抵达常用</span><i>NAVIGATION / 01</i></div>
+        <div class="auth-story__tile"><Icon name="book" :size="24" /><span>把一闪而过，留在纸上</span><i>NOTES / 02</i></div>
+        <div class="auth-story__tile"><Icon name="shield" :size="24" /><span>你的内容，由你掌握</span><i>PRIVATE / 03</i></div>
+      </div>
+      <p class="auth-story__foot">少一点寻找，多一点专注。</p>
+    </aside>
     <div class="auth-card">
       <div class="auth-card__header">
         <div class="auth-card__brand">
           <img class="auth-card__logo" src="/icons/cristsau-mark-512-v2.png" alt="">
           <span>DOMO NAV</span>
         </div>
-        <h1 class="auth-card__title">账号登录与注册</h1>
-        <p class="auth-card__desc">适合个人和小团队使用的私有化导航工作台。新用户注册后需要管理员审批。</p>
+        <h1 class="auth-card__title">欢迎回到你的空间</h1>
+        <p class="auth-card__desc">安全登录，继续你的日常。新用户需经管理员审批。</p>
       </div>
 
       <div class="auth-tabs">
@@ -421,14 +389,22 @@ async function handleResendVerification() {
         </button>
       </div>
 
+      <div v-if="activeTab === 'login' && !recoveryMode && !emailReset && backendAuthEnabled" class="auth-tabs" aria-label="登录方式">
+        <button type="button" class="auth-tab" :class="{'is-active':emailMode}" :disabled="!capabilities.emailLogin" @click="emailMode=true">邮箱验证码</button>
+        <button type="button" class="auth-tab" :class="{'is-active':!emailMode}" @click="emailMode=false">账号密码</button>
+      </div>
+      <p v-if="backendAuthEnabled && !capabilities.emailLogin && activeTab === 'login'" class="auth-card__desc">邮箱验证码暂不可用，请使用账号密码。</p>
+      <EmailAuthForm v-if="activeTab === 'login' && !recoveryMode && (emailMode || emailReset)"
+        :key="emailReset ? 'reset' : 'login'" :mode="emailReset ? 'reset' : 'login'" :redirect-target="redirectTarget" :reset-available="capabilities.emailPasswordReset"
+        @back="emailReset=false;emailMode=false" @reset="emailReset=true" />
       <form
-        v-if="activeTab === 'login' && !recoveryMode"
+        v-else-if="activeTab === 'login' && !recoveryMode"
         class="auth-form"
         @submit.prevent="handleLogin"
       >
         <label class="auth-field">
           <span>用户名</span>
-          <input v-model="loginForm.username" type="text" autocomplete="username webauthn">
+          <input v-model="loginForm.username" type="text" autocomplete="username">
         </label>
         <label class="auth-field">
           <span>密码</span>
@@ -436,64 +412,6 @@ async function handleResendVerification() {
         </label>
         <button class="auth-submit" type="submit" :disabled="loading">
           {{ loading ? '登录中...' : '登录' }}
-        </button>
-        <div v-if="passkeyAvailable" class="auth-divider" aria-hidden="true">
-          <span>或</span>
-        </div>
-        <button
-          v-if="passkeyAvailable"
-          class="auth-passkey"
-          type="button"
-          :disabled="loading"
-          @click="handlePasskeyLogin"
-        >
-          <Icon name="key" :size="18" />
-          {{ loading ? '验证中...' : '使用 Passkey 登录' }}
-        </button>
-        <p v-else-if="passkeyAliasNotice" class="auth-passkey-notice">
-          {{ passkeyConfig.unsupportedOriginMessage || '当前域名未启用 Passkey，请使用密码登录。' }}
-        </p>
-        <p
-          v-else-if="passkeyConfig.enabled && onSupportedPasskeyOrigin && !passkeyBrowserSupported"
-          class="auth-passkey-notice"
-        >
-          当前浏览器不支持 Passkey，请使用密码登录或更换浏览器。
-        </p>
-        <div
-          v-if="oauthConfig.providers.google.enabled || oauthConfig.providers.wechat.enabled"
-          class="auth-divider"
-          aria-hidden="true"
-        >
-          <span>外部账号</span>
-        </div>
-        <button
-          v-if="oauthConfig.providers.google.enabled"
-          class="auth-passkey"
-          type="button"
-          :disabled="Boolean(oauthLoading) || loading"
-          @click="handleOauthLogin('google')"
-        >
-          <Icon name="link" :size="18" />
-          {{ oauthLoading === 'google' ? '正在前往 Google…' : '使用 Google 登录' }}
-        </button>
-        <button
-          v-if="oauthConfig.providers.wechat.enabled"
-          class="auth-passkey"
-          type="button"
-          :disabled="Boolean(oauthLoading) || loading"
-          @click="handleOauthLogin('wechat')"
-        >
-          <Icon name="link" :size="18" />
-          {{ oauthLoading === 'wechat' ? '正在前往微信…' : '使用微信登录' }}
-        </button>
-        <button
-          v-if="backendAuthEnabled"
-          class="auth-link"
-          type="button"
-          :disabled="loading"
-          @click="openRecoveryMode"
-        >
-          使用恢复码重设密码
         </button>
       </form>
 
@@ -527,7 +445,7 @@ async function handleResendVerification() {
             v-model="recoveryForm.newPassword"
             type="password"
             autocomplete="new-password"
-            minlength="12"
+            minlength="15"
           >
         </label>
         <label class="auth-field">
@@ -536,7 +454,7 @@ async function handleResendVerification() {
             v-model="recoveryForm.confirmPassword"
             type="password"
             autocomplete="new-password"
-            minlength="12"
+            minlength="15"
           >
         </label>
         <button class="auth-submit" type="submit" :disabled="loading">
@@ -573,7 +491,7 @@ async function handleResendVerification() {
             v-model="registerForm.password"
             type="password"
             autocomplete="new-password"
-            :minlength="backendAuthEnabled ? 12 : undefined"
+            :minlength="backendAuthEnabled ? 15 : undefined"
           >
         </label>
         <label class="auth-field">
@@ -582,13 +500,53 @@ async function handleResendVerification() {
             v-model="registerForm.confirmPassword"
             type="password"
             autocomplete="new-password"
-            :minlength="backendAuthEnabled ? 12 : undefined"
+            :minlength="backendAuthEnabled ? 15 : undefined"
           >
         </label>
         <button class="auth-submit" type="submit" :disabled="loading">
           {{ loading ? '提交中...' : '提交注册申请' }}
         </button>
       </form>
+
+      <section v-if="activeTab === 'login' && !recoveryMode && !emailReset" class="auth-alternatives" aria-label="其他登录和恢复方式">
+        <div
+          v-if="oauthConfig.providers.google.enabled || oauthConfig.providers.wechat.enabled"
+          class="auth-divider"
+          aria-hidden="true"
+        >
+          <span>外部账号</span>
+        </div>
+        <button
+          v-if="oauthConfig.providers.google.enabled"
+          class="auth-provider"
+          type="button"
+          :disabled="Boolean(oauthLoading) || loading"
+          @click="handleOauthLogin('google')"
+        >
+          <Icon name="link" :size="18" />
+          {{ oauthLoading === 'google' ? '正在前往 Google…' : '使用 Google 登录' }}
+        </button>
+        <button
+          v-if="oauthConfig.providers.wechat.enabled"
+          class="auth-provider"
+          type="button"
+          :disabled="Boolean(oauthLoading) || loading"
+          @click="handleOauthLogin('wechat')"
+        >
+          <Icon name="link" :size="18" />
+          {{ oauthLoading === 'wechat' ? '正在前往微信…' : '使用微信登录' }}
+        </button>
+        <button v-if="capabilities.emailPasswordReset && !emailMode" class="auth-link" type="button" @click="emailReset=true">忘记密码？通过邮箱重设</button>
+        <button
+          v-if="backendAuthEnabled"
+          class="auth-link"
+          type="button"
+          :disabled="loading"
+          @click="openRecoveryMode"
+        >
+          使用恢复码重设密码
+        </button>
+      </section>
 
       <div v-if="showVerificationResend" class="verification-resend">
         <div>
@@ -600,7 +558,7 @@ async function handleResendVerification() {
           <input v-model="resendEmail" type="email" autocomplete="email">
         </label>
         <button
-          class="auth-passkey"
+          class="auth-provider"
           type="button"
           :disabled="resendLoading || loading"
           @click="handleResendVerification"
@@ -609,8 +567,8 @@ async function handleResendVerification() {
         </button>
       </div>
 
-      <p v-if="errorMessage" class="auth-message auth-message--error">{{ errorMessage }}</p>
-      <p v-if="successMessage" class="auth-message auth-message--success">{{ successMessage }}</p>
+      <p v-if="errorMessage" role="alert" class="auth-message auth-message--error">{{ errorMessage }}</p>
+      <p v-if="successMessage" role="status" class="auth-message auth-message--success">{{ successMessage }}</p>
       <nav class="auth-public-links" aria-label="DOMO NAV 公开信息">
         <RouterLink to="/about">关于 DOMO NAV</RouterLink>
         <span aria-hidden="true">·</span>
@@ -618,6 +576,7 @@ async function handleResendVerification() {
       </nav>
       <p class="auth-signature">Design by CrisTsau</p>
     </div>
+   </div>
   </div>
 </template>
 
@@ -633,7 +592,8 @@ async function handleResendVerification() {
 }
 
 .auth-card {
-  width: min(460px, 100%);
+  width: 100%;
+  min-width: 0;
   padding: 32px;
   background: var(--bg-card);
   border: 1px solid var(--border-light);
@@ -796,7 +756,7 @@ async function handleResendVerification() {
   background: var(--border-light);
 }
 
-.auth-passkey {
+.auth-provider {
   min-height: 48px;
   display: inline-flex;
   align-items: center;
@@ -811,17 +771,17 @@ async function handleResendVerification() {
   cursor: pointer;
 }
 
-.auth-passkey:hover:not(:disabled) {
+.auth-provider:hover:not(:disabled) {
   border-color: var(--accent-color);
   background: var(--accent-bg);
 }
 
-.auth-passkey:disabled {
+.auth-provider:disabled {
   opacity: 0.65;
   cursor: wait;
 }
 
-.auth-passkey-notice {
+.auth-provider-notice {
   margin: 0;
   padding: 11px 13px;
   border: 1px solid var(--border-light);
@@ -832,7 +792,7 @@ async function handleResendVerification() {
   line-height: 1.6;
 }
 
-.auth-passkey-notice a {
+.auth-provider-notice a {
   color: var(--accent-color);
 }
 
@@ -906,4 +866,40 @@ async function handleResendVerification() {
   color: var(--text-muted);
   letter-spacing: 0.08em;
 }
+
+.auth-shell {width:min(1100px,100%);display:grid;grid-template-columns:1.08fr 1fr;gap:clamp(32px,6vw,84px);align-items:center}
+.auth-story {min-width:0;color:var(--text-primary);padding:32px 0}
+.auth-story__eyebrow {font-size:11px;letter-spacing:.22em;color:var(--text-secondary)}
+.auth-story h2 {font-size:clamp(30px,3.2vw,44px);font-weight:550;line-height:1.4;letter-spacing:-.045em;margin:26px 0 20px}
+.auth-story__lead {font-size:15px;color:var(--text-secondary);line-height:1.9}
+.auth-story__scene {display:grid;gap:12px;margin:40px 0 28px}
+.auth-story__tile {display:grid;grid-template-columns:28px 1fr;gap:6px 14px;align-items:center;padding:19px 22px;border:1px solid var(--border-color);border-radius:18px;background:color-mix(in srgb,var(--bg-card) 85%,transparent)}
+.auth-story__tile:nth-child(2) {margin-left:22px}
+.auth-story__tile:nth-child(3) {margin-right:22px}
+.auth-story__tile :deep(svg) {grid-row:span 2;color:var(--text-secondary)}
+.auth-story__tile span {font-size:14px}
+.auth-story__tile i {font-style:normal;letter-spacing:.12em;font-size:9px;color:var(--text-secondary)}
+.auth-story__foot {font-size:12px;color:var(--text-secondary);letter-spacing:.15em}
+.auth-alternatives {display:grid;gap:10px;margin-top:18px}
+.auth-page button,.auth-page input {min-height:44px}
+.auth-page button:focus-visible,.auth-page a:focus-visible {outline:3px solid #98734e;outline-offset:3px}
+.auth-field input {border-color:#928477;font-size:16px}
+.auth-tab.is-active,.auth-submit {background:#74543a;color:#fff}
+.auth-link {color:var(--text-primary)}
+.auth-tab:disabled {opacity:.5;cursor:not-allowed}
+.auth-message--error {color:var(--text-primary);border:1px solid #a34949}
+.auth-message--success {color:var(--text-primary);border:1px solid #4f795e}
+@media(max-width:850px) {
+ .auth-page {padding:28px 18px}
+ .auth-shell {max-width:500px;grid-template-columns:1fr;gap:0}
+ .auth-story {display:none}
+ .auth-card {padding:28px 24px}
+}
+@media(max-width:360px) {
+ .auth-page {padding:16px 10px}
+ .auth-card {padding:22px 16px;border-radius:22px}
+ .auth-card__title {font-size:23px}
+ .auth-tab {padding:12px 7px}
+}
+@media(prefers-reduced-motion:reduce) {.auth-page * {transition:none!important;animation:none!important}}
 </style>

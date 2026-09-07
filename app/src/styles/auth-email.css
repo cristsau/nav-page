@@ -1,0 +1,22 @@
+.email-auth { color:var(--text-primary); min-width:0; }
+.email-auth__form { display:grid; gap:16px; min-width:0; }
+.email-auth h3 { margin:0 0 8px; font-size:20px; line-height:1.5; letter-spacing:-.025em; }
+.email-auth p { margin:0; line-height:1.7; font-size:14px; overflow-wrap:anywhere; }
+.email-auth label { display:grid; gap:8px; font-size:14px; font-weight:600; min-width:0; }
+.email-auth input { box-sizing:border-box; width:100%; min-width:0; min-height:48px; padding:12px 14px; border:1px solid #928477; border-radius:12px; background:var(--bg-card); color:var(--text-primary); font:inherit; font-size:16px; }
+.email-auth input[readonly] { background:var(--bg-secondary); }
+.email-auth input:focus-visible,.email-auth button:focus-visible { outline:3px solid var(--text-primary); outline-offset:3px; }
+.email-auth button { box-sizing:border-box; min-height:44px; padding:10px 14px; border:1px solid #928477; border-radius:12px; background:var(--bg-card); color:var(--text-primary); font:inherit; font-size:14px; cursor:pointer; }
+.email-auth .email-auth__primary { background:#74543a; color:#fff; border-color:#74543a; font-weight:600; width:100%; }
+.email-auth button:disabled { cursor:not-allowed; opacity:.6; }
+.email-auth__code { font-variant-numeric:tabular-nums; letter-spacing:.3em; }
+.email-auth__actions { display:flex; gap:8px; flex-wrap:wrap; }
+.email-auth__actions button { flex:1; }
+.email-auth__notice { padding:12px 14px; background:var(--bg-secondary); border-left:3px solid var(--text-primary); border-radius:4px 12px 12px 4px; }
+.email-auth__error { padding:10px 12px; border:1px solid currentColor; border-radius:8px; font-weight:600; }
+.email-auth__section { padding:24px 0; border-bottom:1px solid var(--border-color); }
+.email-auth__section>header { display:flex; justify-content:space-between; align-items:start; gap:16px; margin-bottom:20px; }
+.email-auth__section .email-auth__form { max-width:520px; margin-top:20px; }
+.email-auth__status { display:inline-flex; padding:6px 10px; border-radius:999px; background:var(--bg-secondary); color:var(--text-primary); font-size:13px; white-space:nowrap; }
+@media(max-width:480px) { .email-auth__section>header { flex-direction:column; } }
+@media(prefers-reduced-motion:reduce) { .email-auth * { animation:none!important; transition:none!important; scroll-behavior:auto!important; } }

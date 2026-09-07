@@ -9,6 +9,7 @@ import {
   isAuthenticatedWriteRequest
 } from '../lib/requestRateLimit.js'
 import { sanitizeUser } from '../lib/users.js'
+import { actionRequestPath, passwordProtectedAction, consumeActionProof } from '../lib/authActionProof.js'
 import {
   inspectReleaseAcceptanceLoginEligibility,
   isReleaseAcceptanceUsername
@@ -119,6 +120,7 @@ async function authPlugin(fastify) {
         JOIN users u ON u.id = s.user_id
         WHERE s.token_hash = $1
           AND s.expires_at > NOW()
+          AND u.status = 'approved'
         LIMIT 1
       `,
       [tokenHash]
@@ -190,6 +192,15 @@ async function authPlugin(fastify) {
         error: 'Too many authenticated write requests, please try again later'
       })
     }
+  })
+
+  fastify.addHook('preHandler',async(request,reply)=>{
+    if(!request.currentUser)return
+    const path=actionRequestPath(request)
+    if(!passwordProtectedAction(request.method,path))return
+    if(!await consumeActionProof(request))return reply.code(403).header('Cache-Control','no-store').send({
+      code:'PASSWORD_REAUTH_REQUIRED',error:'此敏感操作需要验证当前密码，验证仅对本次操作有效。'
+    })
   })
 }
 

@@ -4,7 +4,8 @@ export const RETIRED_MAIL_TOOLS = new Set([
 ])
 export const SYSTEM_MAIL_TYPES = Object.freeze([
   'registration.requested', 'registration.verify', 'registration.approved',
-  'registration.rejected', 'maintenance.failed', 'maintenance.recovered', 'system.test'
+  'registration.rejected', 'maintenance.failed', 'maintenance.recovered', 'system.test',
+  'auth.password.changed', 'auth.email.changed'
 ])
 export const SYSTEM_MAIL_SQL = `mail_outbox.message_type IN (${SYSTEM_MAIL_TYPES.map((type) => `'${type}'`).join(', ')})`
 export const ACTIVE_NOTIFICATION_SQL = "(source_type IS NULL OR source_type NOT IN ('email', 'email_digest'))"

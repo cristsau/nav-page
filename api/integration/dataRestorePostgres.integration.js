@@ -544,7 +544,14 @@ async function previewRestore(session, backup, { restoreShares = true } = {}) {
 }
 
 async function downloadSafetyBackup(session) {
-  const response = await apiRequest('GET', '/migration/restore/safety-backup', session)
+  const proof = await apiRequest('POST', '/auth/action/reauth', session, {
+    currentPassword: CORRECT_PASSWORD, method: 'GET', path: '/migration/restore/safety-backup'
+  })
+  assert.equal(proof.statusCode, 200, 'safety export password proof must succeed')
+  const proofCookie = proof.cookies.find(cookie => cookie.name === 'nav_action_reauth')
+  assert.ok(proofCookie)
+  const sessionWithProof = { ...session, cookie: `${session.cookie}; nav_action_reauth=${proofCookie.value}` }
+  const response = await apiRequest('GET', '/migration/restore/safety-backup', sessionWithProof)
   assert.equal(response.statusCode, 200, response.body)
   const body = json(response)
   assert.equal(body.ok, true)

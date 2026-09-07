@@ -1,5 +1,9 @@
 const EVENT_TYPE_LABELS = Object.freeze({
   'auth.login': '账号登录',
+  'auth.email.login': '邮箱验证码登录',
+  'auth.password.reset': '邮箱找回密码',
+  'auth.account.email.bind': '验证绑定邮箱',
+  'auth.account.email.change': '变更恢复邮箱',
   'auth.logout': '退出登录',
   'auth.recovery': '账号恢复',
   'auth.recovery_codes.rotate': '轮换恢复码',

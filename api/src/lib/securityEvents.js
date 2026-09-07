@@ -3,6 +3,10 @@ import { digestSensitiveValue } from './persistentRateLimit.js'
 
 export const SECURITY_EVENT_TYPES = Object.freeze([
   'auth.login',
+  'auth.email.login',
+  'auth.password.reset',
+  'auth.account.email.bind',
+  'auth.account.email.change',
   'auth.logout',
   'auth.recovery',
   'auth.recovery_codes.rotate',

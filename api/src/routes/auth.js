@@ -1,4 +1,5 @@
 import { createHash, randomBytes } from 'node:crypto'
+import { invalidatePasswordProofs } from '../lib/accountPasswordEffects.js'
 import { config } from '../config.js'
 import { query, withTransaction } from '../db/index.js'
 import {
@@ -652,6 +653,7 @@ export default async function authRoutes(fastify) {
         'DELETE FROM sessions WHERE user_id = $1',
         [request.currentUser.id]
       )
+      await invalidatePasswordProofs(client, request.currentUser.id)
 
       await recordSecurityEvent({
         client,
@@ -1059,6 +1061,7 @@ export default async function authRoutes(fastify) {
         'DELETE FROM sessions WHERE user_id = $1',
         [match.user_id]
       )
+      await invalidatePasswordProofs(client, match.user_id)
       const removedPasskeys = await client.query(
         'DELETE FROM webauthn_credentials WHERE user_id = $1',
         [match.user_id]
