@@ -27,7 +27,7 @@ test('assistant registry exposes bounded read/write tools without strict provide
       ['create_bookmark', 'write'],
       ['create_group', 'write']
   ])
-  assert.equal(registry.some(([name, risk]) => name === 'send_email_draft' && risk === 'risky'), true)
+  assert.equal(registry.some(([name, risk]) => name === 'send_email_draft' && risk === 'risky'), false)
   assert.equal(registry.some(([name, risk]) => name === 'archive_database_row' && risk === 'risky'), true)
 
   const providerTools = listAssistantToolDefinitions()

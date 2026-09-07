@@ -108,6 +108,24 @@ test('login page and public layout expose stable about, privacy and contact link
   assert.match(await appSource('src/modules/public/PrivacyView.vue'), /\.privacy-toc a \{\s*min-height: 44px;/)
 })
 
+test('public legal pages publish canonical metadata and remain crawlable', async () => {
+  const [router, robots, sitemap] = await Promise.all([
+    appSource('src/router/index.js'),
+    appSource('public/robots.txt'),
+    appSource('public/sitemap.xml')
+  ])
+
+  assert.match(router, /PUBLIC_CANONICAL_ORIGIN = 'https:\/\/nav\.cristsau\.cn'/)
+  assert.match(router, /canonicalPath: '\/about'/)
+  assert.match(router, /canonicalPath: '\/privacy'/)
+  assert.match(router, /data-domo-public-canonical/)
+  assert.match(robots, /Allow: \/about/)
+  assert.match(robots, /Allow: \/privacy/)
+  assert.match(robots, /Sitemap: https:\/\/nav\.cristsau\.cn\/sitemap\.xml/)
+  assert.match(sitemap, /<loc>https:\/\/nav\.cristsau\.cn\/about<\/loc>/)
+  assert.match(sitemap, /<loc>https:\/\/nav\.cristsau\.cn\/privacy<\/loc>/)
+})
+
 test('production web server keeps public page navigation inside the SPA fallback', async () => {
   const nginx = await readFile(new URL('../../ovh/nginx.conf', import.meta.url), 'utf8')
 

@@ -64,37 +64,23 @@ test('integration audit records a typed resource without an invalid UUID resourc
   assert.equal(loggedFailure, false)
 })
 
-test('settings include a dedicated responsive system integration category', async () => {
-  const [settings, category, component, service, documentation] = await Promise.all([
+test('settings separate identity, transactional notifications and cloud backups', async () => {
+  const [settings, component, mail, service, documentation] = await Promise.all([
     source('../../app/src/modules/settings/Settings.vue'),
-    source('../../app/src/modules/settings/categories/SystemIntegrationsCategory.vue'),
     source('../../app/src/modules/settings/components/SystemIntegrationsSettings.vue'),
+    source('../../app/src/modules/settings/components/SystemNotificationSettings.vue'),
     source('../../app/src/shared/services/integrationApi.js'),
     source('../../docs/NAV_SELF_SERVICE_INTEGRATIONS.md')
   ])
-  assert.match(settings, /邮件与云备份/)
-  assert.match(settings, /SystemIntegrationsCategory/)
-  assert.match(category, /SystemIntegrationsSettings/)
-  assert.match(component, /Secret 只写入服务器/)
-  assert.match(component, /测试 SMTP/)
-  assert.match(component, /测试 IMAP/)
+  assert.match(settings, /登录与系统集成/)
+  assert.match(component, /OauthIntegrationSettings/)
+  assert.match(component, /SystemNotificationSettings/)
   assert.match(component, /只读测试存储/)
-  assert.match(component, /smtpHasUnsavedChanges/)
-  assert.match(component, /smtpTestDisabledReason/)
-  assert.match(component, /配置已保存，可测试/)
-  assert.match(component, /cloud\.accessKeyConfigured && cloud\.secretKeyConfigured/)
-  assert.match(component, /watch\(smtpFingerprint/)
-  assert.match(component, /mail\.deliveryEnabled = false/)
   assert.match(component, /cloud\.enabled = false/)
-  assert.match(component, /不是邮箱地址/)
-  assert.match(component, /smtpHostError/)
-  assert.match(component, /aria-invalid/)
   assert.match(component, /scrollIntoView/)
-  assert.match(component, /novalidate @submit\.prevent\.stop="saveMail"/)
-  assert.match(component, /class="button button--primary"\s+type="submit"/)
-  assert.match(component, /integration-toast/)
-  assert.match(component, /@media \(max-width: 680px\)/)
+  assert.match(mail, /watch\(fingerprint/)
+  assert.match(mail, /form\.deliveryEnabled = false/)
+  assert.match(mail, /type="password"/)
   assert.match(service, /\/admin\/integrations\/cloud-backup/)
   assert.match(documentation, /Web\/API 进程不会执行 root 备份或恢复/)
-  assert.match(documentation, /只写字段/)
 })

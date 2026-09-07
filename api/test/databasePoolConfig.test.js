@@ -46,9 +46,8 @@ test('mail worker fails closed if its runtime or active-account pool invariant i
   assert.equal(assertSafeMailWorkerDatabasePoolSize(10, 3), 10)
 
   const source = await fs.readFile(new URL('../src/mailWorker.js', import.meta.url), 'utf8')
-  assert.match(source, /assertSafeMailWorkerDatabasePoolSize\(config\.databasePoolMax\)/)
-  assert.match(source, /initialMailRuntimes\.filter\(\(runtime\) => runtime\.emailIngestEnabled\)\.length/)
-  assert.match(source, /databasePoolMax: config\.databasePoolMax/)
+  assert.match(source, /mailbox retired/)
+  assert.doesNotMatch(source, /^import |setInterval|pool\.connect/m)
 })
 
 test('combined runtime controller enforces the same active-mailbox pool budget', async () => {

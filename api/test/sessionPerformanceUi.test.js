@@ -26,7 +26,7 @@ test('route progress is delayed and always completed by router outcomes', async 
 
   assert.match(progress, /ROUTE_PROGRESS_DELAY_MS = 100/)
   assert.match(router, /router\.beforeEach[\s\S]*startRouteProgress\(\)/)
-  assert.match(router, /router\.afterEach[\s\S]*document\.title[\s\S]*finishRouteProgress\(\)/)
+  assert.match(router, /router\.afterEach[\s\S]*updateDocumentMetadata[\s\S]*finishRouteProgress\(\)/)
   assert.match(router, /router\.onError[\s\S]*finishRouteProgress\(\)/)
 })
 

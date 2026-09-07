@@ -372,6 +372,7 @@ test('expired acceptance administrator cannot log in and is recovered by exact m
   const activeLogin = await app.inject({
     method: 'POST',
     url: '/api/auth/login',
+    headers: { 'sec-fetch-site': 'same-origin' },
     payload: {
       username: account.username,
       password: account.password
@@ -385,7 +386,7 @@ test('expired acceptance administrator cannot log in and is recovered by exact m
   const rename = await app.inject({
     method: 'PUT',
     url: '/api/auth/account/username',
-    headers: { cookie: sessionCookie },
+    headers: { cookie: sessionCookie, 'sec-fetch-site': 'same-origin' },
     payload: {
       currentPassword: account.password,
       username: 'escaped-release-admin'
@@ -429,6 +430,7 @@ test('expired acceptance administrator cannot log in and is recovered by exact m
   const expiredLogin = await app.inject({
     method: 'POST',
     url: '/api/auth/login',
+    headers: { 'sec-fetch-site': 'same-origin' },
     payload: {
       username: account.username,
       password: account.password

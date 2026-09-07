@@ -19,6 +19,7 @@ import { WebsocketProvider } from 'y-websocket'
 import * as Y from 'yjs'
 import Icon from '@/shared/components/Icon.vue'
 import { useAuth } from '@/shared/composables/useAuth'
+import { sanitizeHttpUrl } from '@/shared/utils/safeUrl'
 import {
   EMPTY_TIPTAP_DOCUMENT,
   isTiptapDocument,
@@ -69,15 +70,6 @@ function initialContent() {
   if (isTiptapDocument(props.modelValue)) return props.modelValue
   if (props.plainText) return plainTextToTiptapDocument(props.plainText)
   return EMPTY_TIPTAP_DOCUMENT
-}
-
-function safeWebUrl(value) {
-  try {
-    const url = new URL(String(value || ''))
-    return ['http:', 'https:'].includes(url.protocol) ? url.toString() : ''
-  } catch {
-    return ''
-  }
 }
 
 const editor = useEditor({
@@ -189,7 +181,7 @@ function setLink() {
     editor.value?.chain().focus().extendMarkRange('link').unsetLink().run()
     return
   }
-  const href = safeWebUrl(requested.trim().includes('://') ? requested.trim() : `https://${requested.trim()}`)
+  const href = sanitizeHttpUrl(requested.trim().includes('://') ? requested.trim() : `https://${requested.trim()}`)
   if (!href) return window.alert('请输入有效的 HTTP 或 HTTPS 地址')
   editor.value?.chain().focus().extendMarkRange('link').setLink({ href }).run()
 }
@@ -227,7 +219,7 @@ function slashKeydown(event) {
 }
 
 function insertImage(url, alt = '', title = '') {
-  const src = safeWebUrl(url)
+  const src = sanitizeHttpUrl(url)
   if (src) editor.value?.chain().focus().setImage({ src, alt, title }).run()
 }
 

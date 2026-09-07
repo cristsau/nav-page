@@ -356,17 +356,11 @@ test('an installing Service Worker is asked to activate when it transitions to w
   assert.equal(await pending, registration)
 })
 
-test('Mail configuration uses native form submission for reliable iPhone touch handling', async () => {
-  const source = await fs.readFile(
-    new URL('../../app/src/modules/settings/components/SystemIntegrationsSettings.vue', import.meta.url),
-    'utf8'
-  )
-
-  assert.match(source, /@submit\.prevent\.stop="saveMail"/)
-  assert.match(source, /class="button button--primary"\s+type="submit"/)
-  assert.match(source, /配置 \{\{ writable \? '可保存' : '只读' \}\}/)
-  assert.match(source, /配置已保存，可测试/)
-  assert.match(source, /必须填写，例如当前 NAV 用户名/)
-  assert.match(source, /保存时将 SMTP 密码复制给 IMAP/)
-  assert.match(source, /touch-action: manipulation/)
+test('system notification configuration retains native touch-friendly form submission', async () => {
+  const source = await fs.readFile(new URL('../../app/src/modules/settings/components/SystemNotificationSettings.vue', import.meta.url), 'utf8')
+  assert.match(source, /@submit\.prevent="save"/)
+  assert.match(source, /type="submit"/)
+  assert.match(source, /min-height: 44px/)
+  assert.match(source, /role="alert"/)
+  assert.doesNotMatch(source, /IMAP/)
 })

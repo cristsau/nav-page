@@ -14,13 +14,15 @@ const allowedPackages = new Map([
 ])
 
 const audit = spawnSync(
-  process.platform === 'win32' ? 'npm.cmd' : 'npm',
-  ['audit', '--prefix', 'api', '--json', '--audit-level=moderate'],
+  process.platform === 'win32' ? 'cmd.exe' : 'npm',
+  process.platform === 'win32'
+    ? ['/d', '/s', '/c', 'npm audit --prefix api --json --audit-level=moderate']
+    : ['audit', '--prefix', 'api', '--json', '--audit-level=moderate'],
   { encoding: 'utf8' }
 )
 
 if (!audit.stdout) {
-  process.stderr.write(audit.stderr || 'npm audit did not return JSON\n')
+  process.stderr.write(audit.error?.message || audit.stderr || 'npm audit did not return JSON\n')
   process.exit(1)
 }
 

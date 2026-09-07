@@ -1,6 +1,23 @@
 # DOMO NAV Status Report
 
-最后更新：2026-09-01
+最后更新：2026-09-07
+
+## 2026-09-07 安全加固与邮箱下线候选
+
+- 状态：`LOCAL_CANDIDATE / NOT_PUSHED / NOT_DEPLOYED`。个人邮箱退出主线；导航、时光、媒体、AI、
+  Google 身份登录、备忘录 Web Push、注册/审批/运维 SMTP 通知保留。
+- 已完成前端安全链接、精确扩展 Origin、无头写请求信任门槛、Cookie 策略和生产数据库配置加固。
+- 已移除个人邮箱 UI、API 接线、邮件 AI 工具和 worker 部署服务；阻止旧配置开启收件、旧 AI 确认单发送邮件、
+  旧邮件通知继续送入站内列表/Web Push。保留历史表/迁移/密钥；未执行迁移或数据清理。
+- 全量本地测试和构建的最终记录见 [邮箱下线计划](./docs/NAV_MAIL_RETIREMENT_20260907.md)。
+  Linux 生产镜像构建、隔离 PostgreSQL 集成矩阵、GitHub CI、双域真实用户验收仍为发布门槛。
+- 2026-09-07 OVH 只读实测：current=`/opt/nav-stack/releases/20260903-160400-94543f6`；API/Web 健康；
+  mail worker 仍运行 `888a31c` 镜像。根盘 20G，已用 18G / 92%，剩余约 1.7G；数据库仅约 23 MB，
+  `/var/lib/docker` 约 14G。不能把删除邮件数据当作主要磁盘解法。
+- Google 品牌已由用户截图证明通过；Client ID/Secret 和双域真实登录尚未在本次受控流程中验收。
+  [配置手册](./docs/NAV_GOOGLE_LOGIN_SETUP.md)已更新到身份登录入口；不得索取或记录 Secret。
+
+下方均为较早批次留档，不能用来代表当前生产版本或最新产品决策。
 
 本页区分 `VERIFIED_LIVE`、`NEEDS_LIVE_VERIFY`、`LOCAL_DONE`、`READY_FOR_CI`、
 `NOT_MERGED`、`NOT_DEPLOYED`、`PARTIAL`、`USER_CONFIG_LATER` 和 `UNFINISHED`。

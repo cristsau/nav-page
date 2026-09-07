@@ -14,18 +14,37 @@ function normalizeOrigin(value) {
 }
 
 export function parseAllowedOrigins(value) {
-  return String(value || '')
+  return [...new Set(String(value || '')
     .split(',')
     .map((origin) => normalizeOrigin(origin.trim()))
-    .filter(Boolean)
+    .filter((origin) => origin && !isExtensionOrigin(origin)))]
 }
 
 export function isExtensionOrigin(value) {
   return /^chrome-extension:\/\/[a-p]{32}$/i.test(String(value || ''))
 }
 
-export function createCorsOriginValidator(allowedOriginValue) {
+export function parseAllowedExtensionOrigins(value) {
+  return [...new Set(String(value || '')
+    .split(',')
+    .map((origin) => String(origin || '').trim().toLowerCase())
+    .filter((origin) => isExtensionOrigin(origin)))]
+}
+
+export function isAllowedExtensionOrigin(value, allowedExtensionOriginValue) {
+  const normalized = String(value || '').trim().toLowerCase()
+  return isExtensionOrigin(normalized)
+    && new Set(parseAllowedExtensionOrigins(allowedExtensionOriginValue)).has(normalized)
+}
+
+export function createCorsOriginValidator(
+  allowedOriginValue,
+  allowedExtensionOriginValue = ''
+) {
   const allowedOrigins = new Set(parseAllowedOrigins(allowedOriginValue))
+  const allowedExtensionOrigins = new Set(
+    parseAllowedExtensionOrigins(allowedExtensionOriginValue)
+  )
 
   return (origin, callback) => {
     if (!origin) {
@@ -34,11 +53,18 @@ export function createCorsOriginValidator(allowedOriginValue) {
     }
 
     const normalized = normalizeOrigin(origin)
-    callback(null, allowedOrigins.has(normalized) || isExtensionOrigin(normalized))
+    callback(
+      null,
+      allowedOrigins.has(normalized) || allowedExtensionOrigins.has(normalized)
+    )
   }
 }
 
-export function isUnsafeRequestOriginTrusted(request, allowedOriginValue) {
+export function isUnsafeRequestOriginTrusted(
+  request,
+  allowedOriginValue,
+  allowedExtensionOriginValue = ''
+) {
   if (SAFE_METHODS.has(String(request.method || '').toUpperCase())) {
     return true
   }
@@ -47,7 +73,7 @@ export function isUnsafeRequestOriginTrusted(request, allowedOriginValue) {
   const fetchSite = String(request.headers?.['sec-fetch-site'] || '').toLowerCase()
 
   if (!originHeader) {
-    return fetchSite !== 'cross-site'
+    return new Set(['same-origin', 'same-site', 'none']).has(fetchSite)
   }
 
   const origin = normalizeOrigin(originHeader)
@@ -56,7 +82,7 @@ export function isUnsafeRequestOriginTrusted(request, allowedOriginValue) {
   }
 
   if (isExtensionOrigin(origin)) {
-    return true
+    return isAllowedExtensionOrigin(origin, allowedExtensionOriginValue)
   }
 
   const allowedOrigins = new Set(parseAllowedOrigins(allowedOriginValue))

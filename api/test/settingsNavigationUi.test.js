@@ -42,7 +42,7 @@ test('settings are split into seven lazy categories with desktop and mobile navi
   assert.match(settings, /搜索与 AI/)
   assert.match(settings, /浏览器与手机/)
   assert.match(settings, /用户管理/)
-  assert.match(settings, /邮件与云备份/)
+  assert.match(settings, /登录与系统集成/)
   assert.match(settings, /账号安全与审计/)
   assert.match(settings, /数据与关于/)
   assert.match(settings, /class="category-sidebar"/)

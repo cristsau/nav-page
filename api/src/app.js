@@ -2,6 +2,7 @@ import Fastify from 'fastify'
 import cookie from '@fastify/cookie'
 import cors from '@fastify/cors'
 import { config } from './config.js'
+import { mailboxRetiredResponse } from './lib/mailboxRetirement.js'
 import {
   createCorsOriginValidator,
   isUnsafeRequestOriginTrusted
@@ -20,9 +21,7 @@ import maintenanceRoutes from './routes/maintenance.js'
 import mediaRoutes from './routes/media.js'
 import navigationRoutes from './routes/navigation.js'
 import notificationsRoutes from './routes/notifications.js'
-import emailRoutes from './routes/email.js'
-import emailSyncRoutes from './routes/emailSync.js'
-import integrationRoutes from './routes/integrations.js'
+import integrationRoutes from './routes/systemIntegrations.js'
 import noteAiRoutes from './routes/noteAi.js'
 import noteImagesRoutes from './routes/noteImages.js'
 import noteReminderRoutes from './routes/noteReminders.js'
@@ -124,7 +123,7 @@ export function createApp() {
 
   app.register(cookie)
   app.register(cors, {
-    origin: createCorsOriginValidator(config.corsOrigin),
+    origin: createCorsOriginValidator(config.corsOrigin, config.extensionOrigins),
     credentials: true,
     methods: ['GET', 'HEAD', 'POST', 'PUT', 'PATCH', 'DELETE', 'OPTIONS'],
     allowedHeaders: ['Accept', 'Authorization', 'Content-Type', 'X-File-Name']
@@ -135,7 +134,11 @@ export function createApp() {
   app.addHook('onRequest', async (request, reply) => {
     stripBodylessDeleteJsonContentType(request)
 
-    if (!isUnsafeRequestOriginTrusted(request, config.corsOrigin)) {
+    if (!isUnsafeRequestOriginTrusted(
+      request,
+      config.corsOrigin,
+      config.extensionOrigins
+    )) {
       reply.code(403)
       return reply.send({
         error: 'Cross-site request blocked'
@@ -167,8 +170,10 @@ export function createApp() {
   app.register(mediaRoutes, { prefix: '/api' })
   app.register(navigationRoutes, { prefix: '/api' })
   app.register(notificationsRoutes, { prefix: '/api' })
-  app.register(emailRoutes, { prefix: '/api' })
-  app.register(emailSyncRoutes, { prefix: '/api' })
+  for (const prefix of ['/api/email', '/api/admin/email', '/api/admin/integrations/mail', '/api/admin/oauth-integrations/email']) {
+    app.all(prefix, mailboxRetiredResponse)
+    app.all(`${prefix}/*`, mailboxRetiredResponse)
+  }
   app.register(integrationRoutes, { prefix: '/api' })
   app.register(noteAiRoutes, { prefix: '/api' })
   app.register(noteImagesRoutes, { prefix: '/api' })

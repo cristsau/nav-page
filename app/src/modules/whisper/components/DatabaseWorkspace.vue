@@ -1,6 +1,7 @@
 <script setup>
 import { computed, onMounted, ref } from 'vue'
 import Icon from '@/shared/components/Icon.vue'
+import { sanitizeHttpUrl } from '@/shared/utils/safeUrl'
 import Modal from '@/shared/components/Modal.vue'
 import {
   archiveWorkspaceDatabaseRow,
@@ -143,6 +144,11 @@ function displayValue(row, property) {
   if (property.type === 'multi_select') return value.map((id) => optionFor(property, id)?.name || '未知选项').join('、') || '—'
   if (property.type === 'relation') return value.map(relationTitle).join('、') || '—'
   return String(value)
+}
+
+function safeRowUrl(row, property) {
+  if (property?.type !== 'url') return ''
+  return sanitizeHttpUrl(row?.values?.[property.id])
 }
 
 async function loadDatabases({ selectFirst = true } = {}) {
@@ -517,6 +523,11 @@ function normalizeFormValues(values) {
     if (value === '' || value === null || value === undefined) continue
     if (property.type === 'number') result[property.id] = Number(value)
     else if (property.type === 'date') result[property.id] = new Date(value).toISOString()
+    else if (property.type === 'url') {
+      const url = sanitizeHttpUrl(value)
+      if (!url) throw new Error(`${property.name}必须是无账号密码的 HTTP 或 HTTPS 地址`)
+      result[property.id] = url
+    }
     else result[property.id] = value
   }
   return result
@@ -687,7 +698,7 @@ onMounted(() => loadDatabases())
               <tr v-for="row in rows" :key="row.id" :class="{ 'is-archived': row.archived }">
                 <td v-for="property in visibleProperties" :key="property.id">
                   <button v-if="property.type === 'title'" type="button" class="database-title-cell" @click="openRow(row)">{{ row.title }}</button>
-                  <a v-else-if="property.type === 'url' && row.values?.[property.id]" :href="row.values[property.id]" target="_blank" rel="noopener noreferrer">{{ displayValue(row, property) }}</a>
+                  <a v-else-if="safeRowUrl(row, property)" :href="safeRowUrl(row, property)" target="_blank" rel="noopener noreferrer">{{ displayValue(row, property) }}</a>
                   <span v-else>{{ displayValue(row, property) }}</span>
                 </td>
                 <td>{{ backlinksByRow[row.id]?.length || 0 }}</td>

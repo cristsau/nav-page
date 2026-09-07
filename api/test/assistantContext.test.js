@@ -94,7 +94,7 @@ test('retrieval fallback remains useful without an AI provider', () => {
 test('assistant route preserves one-shot compatibility and adds owned conversation streaming', async () => {
   const source = await readFile(new URL('../src/routes/assistant.js', import.meta.url), 'utf8')
   assert.match(source, /searchWorkspaceHybridForUser/)
-  assert.match(source, /searchEmailSources/)
+  assert.doesNotMatch(source, /searchEmailSources/)
   assert.match(source, /buildAssistantSources/)
   assert.match(source, /recordRuntimeAiUsageSafely/)
   assert.match(source, /mode: 'retrieval'/)

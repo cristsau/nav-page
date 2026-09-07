@@ -1,6 +1,7 @@
 import test from 'node:test'
 import assert from 'node:assert/strict'
 import { createApp } from '../src/app.js'
+import { config } from '../src/config.js'
 
 test('API health endpoint is available behind the public /api prefix', async () => {
   const app = createApp()
@@ -29,6 +30,7 @@ test('non-empty malformed DELETE requests still use the JSON parser', async () =
       method: 'DELETE',
       url: '/api/bookmarks/read-only-probe',
       headers: {
+        origin: 'http://localhost:5174',
         'content-type': 'application/json'
       },
       payload: '{'
@@ -49,6 +51,7 @@ test('bodyless JSON DELETE reaches authentication instead of the JSON parser', a
       method: 'DELETE',
       url: '/api/bookmarks/read-only-probe',
       headers: {
+        origin: 'http://localhost:5174',
         'content-type': 'application/json'
       }
     })
@@ -88,32 +91,76 @@ test('unsafe cross-site requests are blocked before authentication or route hand
   }
 })
 
-test('configured app and browser extension origins remain eligible for unsafe requests', async () => {
+test('unsafe requests without Origin or Fetch Metadata are blocked', async () => {
   const app = createApp()
 
   try {
-    for (const origin of [
-      'http://localhost:5174',
-      'chrome-extension://aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa'
-    ]) {
-      const response = await app.inject({
-        method: 'POST',
-        url: '/api/notes/ai',
-        headers: {
-          origin,
-          'content-type': 'application/json'
-        },
-        payload: {
-          action: 'summarize',
-          content: 'test'
-        }
-      })
+    const response = await app.inject({
+      method: 'POST',
+      url: '/api/notes/ai',
+      headers: { 'content-type': 'application/json' },
+      payload: { action: 'summarize', content: 'test' }
+    })
 
-      assert.equal(response.statusCode, 401)
-      assert.equal(response.json().error, 'Authentication required')
-      assert.equal(response.headers['access-control-allow-origin'], origin)
-    }
+    assert.equal(response.statusCode, 403)
+    assert.equal(response.json().error, 'Cross-site request blocked')
   } finally {
     await app.close()
+  }
+})
+
+test('configured app origin remains eligible while unconfigured extensions are blocked', async () => {
+  const app = createApp()
+
+  try {
+    const appOrigin = await app.inject({
+      method: 'POST',
+      url: '/api/notes/ai',
+      headers: {
+        origin: 'http://localhost:5174',
+        'content-type': 'application/json'
+      },
+      payload: { action: 'summarize', content: 'test' }
+    })
+    assert.equal(appOrigin.statusCode, 401)
+    assert.equal(appOrigin.json().error, 'Authentication required')
+    assert.equal(appOrigin.headers['access-control-allow-origin'], 'http://localhost:5174')
+
+    const extension = await app.inject({
+      method: 'POST',
+      url: '/api/notes/ai',
+      headers: {
+        origin: 'chrome-extension://aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa',
+        'content-type': 'application/json'
+      },
+      payload: { action: 'summarize', content: 'test' }
+    })
+    assert.equal(extension.statusCode, 403)
+    assert.equal(extension.json().error, 'Cross-site request blocked')
+    assert.equal(extension.headers['access-control-allow-origin'], undefined)
+  } finally {
+    await app.close()
+  }
+})
+
+test('an exact configured browser extension origin remains eligible', async () => {
+  const previous = config.extensionOrigins
+  const origin = 'chrome-extension://aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa'
+  config.extensionOrigins = origin
+  const app = createApp()
+
+  try {
+    const response = await app.inject({
+      method: 'POST',
+      url: '/api/notes/ai',
+      headers: { origin, 'content-type': 'application/json' },
+      payload: { action: 'summarize', content: 'test' }
+    })
+    assert.equal(response.statusCode, 401)
+    assert.equal(response.json().error, 'Authentication required')
+    assert.equal(response.headers['access-control-allow-origin'], origin)
+  } finally {
+    await app.close()
+    config.extensionOrigins = previous
   }
 })

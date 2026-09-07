@@ -1,15 +1,11 @@
 import { config } from '../config.js'
 import { query, withTransaction } from '../db/index.js'
 import { createSessionToken, hashSessionToken, verifyPassword } from '../lib/auth.js'
-import { refreshEmailRuntime } from '../lib/emailRuntimeController.js'
-import { EMAIL_OAUTH_TOKEN_ENDPOINTS } from '../lib/emailOauth2.js'
 import {
-  applyManagedOauthToRuntime,
   getIdentityProviderRuntime,
   getManagedOauthState,
   getOauthInternalKeys,
   identityOauthCallbacks,
-  saveEmailOauthConfig,
   saveIdentityOauthConfig,
   withOauthIntegrationMutation
 } from '../lib/managedOauthIntegrations.js'
@@ -455,7 +451,8 @@ export default async function oauthRoutes(fastify) {
   fastify.get('/admin/oauth-integrations', async (request, reply) => {
     await fastify.requireAdmin(request, reply)
     reply.header('Cache-Control', 'private, no-store')
-    return getManagedOauthState()
+    const { identity, callbacks, writable, updatedAt } = await getManagedOauthState()
+    return { identity, callbacks, writable, updatedAt }
   })
 
   fastify.put('/admin/oauth-integrations/identity', async (request, reply) => {
@@ -490,40 +487,4 @@ export default async function oauthRoutes(fastify) {
     }
   })
 
-  fastify.put('/admin/oauth-integrations/email', async (request, reply) => {
-    await fastify.requireAdmin(request, reply)
-    reply.header('Cache-Control', 'private, no-store')
-    try {
-      const emailOAuth = await withOauthIntegrationMutation(async () => {
-        const saved = await saveEmailOauthConfig(request.body || {})
-        await applyManagedOauthToRuntime()
-        await refreshEmailRuntime()
-        return saved
-      })
-      await audit(request, 'admin.integrations.email_oauth.updated', 'success', {
-        resourceType: 'email_oauth_integration', affectedCount: 1
-      })
-      return { emailOAuth, applied: true }
-    } catch (error) {
-      await audit(request, 'admin.integrations.email_oauth.updated', 'denied', { resourceType: 'email_oauth_integration' })
-      reply.code(error instanceof TypeError ? 400 : 503)
-      return { error: String(error.message || '邮箱 OAuth 配置保存失败').slice(0, 240) }
-    }
-  })
-
-  fastify.post('/admin/oauth-integrations/email/:provider/test', async (request, reply) => {
-    await fastify.requireAdmin(request, reply)
-    const provider = String(request.params.provider || '').trim().toLowerCase()
-    if (!Object.hasOwn(EMAIL_OAUTH_TOKEN_ENDPOINTS, provider)) {
-      reply.code(400)
-      return { error: '邮箱 OAuth Provider 无效' }
-    }
-    await audit(request, 'admin.integrations.email_oauth.tested', 'success', { resourceType: 'email_oauth_integration' })
-    return {
-      provider,
-      structureValid: true,
-      tokenEndpoint: EMAIL_OAUTH_TOKEN_ENDPOINTS[provider],
-      note: '这里只验证结构和固定端点；没有 Secret 时不会伪造外部授权成功。'
-    }
-  })
 }

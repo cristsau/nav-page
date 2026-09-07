@@ -3,9 +3,7 @@ import { onMounted, reactive, ref } from 'vue'
 import Icon from '@/shared/components/Icon.vue'
 import {
   fetchOauthIntegrationState,
-  saveEmailOauthIntegration,
   saveIdentityOauthIntegration,
-  testEmailOauthIntegration,
   testIdentityOauthIntegration
 } from '@/shared/services/oauthApi'
 
@@ -20,25 +18,12 @@ const identity = reactive({
   google: { enabled: false, clientId: '', clientSecret: '', secretConfigured: false },
   wechat: { enabled: false, clientId: '', clientSecret: '', secretConfigured: false }
 })
-const emailOauth = reactive({
-  selectedProvider: '',
-  google: { enabled: false, clientId: '', clientSecret: '', refreshToken: '', scope: 'https://mail.google.com/', clientSecretConfigured: false, refreshTokenConfigured: false },
-  microsoft: { enabled: false, clientId: '', clientSecret: '', refreshToken: '', tenant: 'common', scope: 'https://outlook.office.com/IMAP.AccessAsUser.All https://outlook.office.com/SMTP.Send offline_access', clientSecretConfigured: false, refreshTokenConfigured: false }
-})
-
 function applyState(state) {
   writable.value = state.writable === true
   callbacks.value = state.callbacks || { google: [], wechat: [] }
   Object.assign(identity, state.identity || {})
   Object.assign(identity.google, state.identity?.google || {}, { clientSecret: '' })
   Object.assign(identity.wechat, state.identity?.wechat || {}, { clientSecret: '' })
-  Object.assign(emailOauth, { selectedProvider: state.emailOAuth?.selectedProvider || '' })
-  for (const provider of ['google', 'microsoft']) {
-    Object.assign(emailOauth[provider], state.emailOAuth?.[provider] || {}, {
-      clientSecret: '',
-      refreshToken: ''
-    })
-  }
 }
 
 async function refresh() {
@@ -74,28 +59,6 @@ async function saveIdentity() {
   }
 }
 
-async function saveEmailOauth() {
-  busy.value = 'save-email-oauth'
-  message.value = ''
-  error.value = ''
-  try {
-    const result = await saveEmailOauthIntegration({
-      selectedProvider: emailOauth.selectedProvider,
-      google: emailOauth.google,
-      microsoft: emailOauth.microsoft
-    })
-    Object.assign(emailOauth, result.emailOAuth)
-    for (const provider of ['google', 'microsoft']) {
-      Object.assign(emailOauth[provider], result.emailOAuth[provider], { clientSecret: '', refreshToken: '' })
-    }
-    message.value = '邮箱 OAuth 配置已保存；Secret 与 Refresh Token 不会回显。'
-  } catch (caught) {
-    error.value = caught.message || '邮箱 OAuth 配置保存失败。'
-  } finally {
-    busy.value = ''
-  }
-}
-
 async function testIdentity(provider) {
   busy.value = `test-${provider}`
   message.value = ''
@@ -108,18 +71,6 @@ async function testIdentity(provider) {
   } finally { busy.value = '' }
 }
 
-async function testEmail(provider) {
-  busy.value = `test-email-${provider}`
-  message.value = ''
-  error.value = ''
-  try {
-    await testEmailOauthIntegration(provider)
-    message.value = `${provider === 'google' ? 'Google' : 'Microsoft'} Refresh Token 流结构检查通过；这不会伪造邮箱授权成功。`
-  } catch (caught) {
-    error.value = caught.message || '邮箱 OAuth 结构检查失败。'
-  } finally { busy.value = '' }
-}
-
 onMounted(refresh)
 </script>
 
@@ -128,7 +79,7 @@ onMounted(refresh)
     <header class="oauth-heading">
       <div class="oauth-heading__icon"><Icon name="link" :size="22" /></div>
       <div>
-        <h4 id="oauth-integration-title">身份登录与邮箱 OAuth</h4>
+        <h4 id="oauth-integration-title">外部账号登录</h4>
         <p>默认关闭。Secret 只写入服务器 0600 文件，不会返回浏览器；没有真实凭据时只能保存与检查结构。</p>
       </div>
     </header>
@@ -137,7 +88,7 @@ onMounted(refresh)
 
     <fieldset class="oauth-section" :disabled="loading || Boolean(busy) || !writable">
       <legend>Google OIDC / 微信开放平台</legend>
-      <p class="oauth-help">双域回调必须在 Provider 控制台逐条精确登记。微信只使用 unionid/openid，不按昵称合并账号。</p>
+      <p class="oauth-help">Google 身份登录只申请 openid、email、profile，不读取 Gmail、Drive、联系人或日历。双域回调必须在 Provider 控制台逐条精确登记；微信只使用 unionid/openid，不按昵称合并账号。</p>
       <div v-for="provider in ['google', 'wechat']" :key="provider" class="oauth-provider">
         <label class="oauth-toggle"><input v-model="identity[provider].enabled" type="checkbox"> 启用 {{ provider === 'google' ? 'Google' : '微信' }} 登录</label>
         <label><span>{{ provider === 'google' ? 'Client ID' : 'AppID' }}</span><input v-model="identity[provider].clientId" type="text" autocomplete="off"></label>
@@ -145,25 +96,11 @@ onMounted(refresh)
         <button class="oauth-button" type="button" @click="testIdentity(provider)">检查结构 / 发现端点</button>
         <ul class="oauth-callbacks"><li v-for="uri in callbacks[provider]" :key="uri"><code>{{ uri }}</code></li></ul>
       </div>
-      <label class="oauth-toggle oauth-toggle--wide"><input v-model="identity.allowVerifiedEmailAutoLink" type="checkbox"> 允许 Google 已验证邮箱自动匹配已审批且邮箱已验证的现有账号</label>
+      <label class="oauth-toggle oauth-toggle--wide"><input v-model="identity.allowVerifiedEmailAutoLink" type="checkbox"> 允许 Google 已验证邮箱自动匹配已审批且邮箱已验证的现有账号（首次配置建议保持关闭）</label>
       <button class="oauth-button oauth-button--primary" type="button" @click="saveIdentity">保存身份登录配置</button>
     </fieldset>
 
-    <fieldset class="oauth-section" :disabled="loading || Boolean(busy) || !writable">
-      <legend>OAuth-only 邮箱（Google / Microsoft）</legend>
-      <p class="oauth-help">通用 Refresh Token Provider 可适配 IMAP XOAUTH2 与 SMTP OAuth2。无 Secret / Refresh Token 时不会启用。</p>
-      <label><span>当前使用</span><select v-model="emailOauth.selectedProvider"><option value="">关闭，继续使用邮箱密码</option><option value="google">Google</option><option value="microsoft">Microsoft</option></select></label>
-      <div v-for="provider in ['google', 'microsoft']" :key="provider" class="oauth-provider">
-        <label class="oauth-toggle"><input v-model="emailOauth[provider].enabled" type="checkbox"> 启用 {{ provider === 'google' ? 'Google' : 'Microsoft' }} 邮箱 OAuth</label>
-        <label><span>Client ID</span><input v-model="emailOauth[provider].clientId" type="text" autocomplete="off"></label>
-        <label><span>Client Secret</span><input v-model="emailOauth[provider].clientSecret" type="password" autocomplete="new-password" :placeholder="emailOauth[provider].clientSecretConfigured ? '已安全保存，留空保持不变' : '未配置'"></label>
-        <label><span>Refresh Token</span><input v-model="emailOauth[provider].refreshToken" type="password" autocomplete="new-password" :placeholder="emailOauth[provider].refreshTokenConfigured ? '已安全保存，留空保持不变' : '未配置'"></label>
-        <label v-if="provider === 'microsoft'"><span>Tenant</span><input v-model="emailOauth.microsoft.tenant" type="text"></label>
-        <label><span>Scope</span><input v-model="emailOauth[provider].scope" type="text"></label>
-        <button class="oauth-button" type="button" @click="testEmail(provider)">检查 Refresh Token 流结构</button>
-      </div>
-      <button class="oauth-button oauth-button--primary" type="button" @click="saveEmailOauth">保存邮箱 OAuth 配置</button>
-    </fieldset>
+
   </section>
 </template>
 

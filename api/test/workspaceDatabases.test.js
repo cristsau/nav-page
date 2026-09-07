@@ -79,6 +79,31 @@ test('row values are type checked and relations retain owned UUID identities', (
   }, properties), (error) => error.code === 'workspace_database_property_not_found')
 })
 
+test('URL row values accept HTTP(S) and reject active or credential-bearing schemes', () => {
+  const urlPropertyId = uuid(2)
+  const properties = normalizeWorkspaceDatabaseProperties([
+    { id: uuid(1), name: '名称', type: 'title', config: {} },
+    { id: urlPropertyId, name: '网址', type: 'url', config: {} }
+  ])
+
+  assert.deepEqual(normalizeWorkspaceDatabaseRowValues({
+    [urlPropertyId]: 'example.com/path'
+  }, properties), {
+    [urlPropertyId]: 'https://example.com/path'
+  })
+
+  for (const value of [
+    'javascript:alert(1)',
+    'data:text/html,hello',
+    'https://user:secret@example.com/private'
+  ]) {
+    assert.throws(
+      () => normalizeWorkspaceDatabaseRowValues({ [urlPropertyId]: value }, properties),
+      (error) => error.code === 'workspace_database_property_value_invalid'
+    )
+  }
+})
+
 test('table and board view config validates properties and applies filters and stable sorts', () => {
   const properties = normalizeWorkspaceDatabaseProperties([
     { id: uuid(1), name: '名称', type: 'title', config: {} },

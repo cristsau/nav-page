@@ -1,7 +1,7 @@
 <script setup>
 import { computed, onMounted, ref } from 'vue'
 import { useAuth } from '@/shared/composables/useAuth'
-import { fetchAdminMailStatus, queueAdminMailTest } from '@/shared/services/emailApi'
+import { fetchAdminMailStatus, queueAdminMailTest } from '@/shared/services/systemNotificationApi'
 
 const {
   currentUser,
@@ -15,9 +15,7 @@ const {
 } = useAuth()
 
 const mailStatus = ref({
-  mail: { configured: false, enabled: false },
-  ingest: { configured: false, enabled: false },
-  digest: { enabled: false, hours: [], timeZone: '' }
+  mail: { configured: false, enabled: false }
 })
 const mailStatusLoading = ref(false)
 const mailTestRecipient = ref('')
@@ -110,11 +108,9 @@ onMounted(async () => {
       <div class="user-block__title">邮件通知通道</div>
       <div class="mail-status-grid">
         <div><span>注册与审批邮件</span><strong>{{ mailStatus.mail?.configured && mailStatus.mail?.enabled ? '已就绪' : '待配置' }}</strong></div>
-        <div><span>IMAP 智能收件</span><strong>{{ mailStatus.ingest?.configured && mailStatus.ingest?.enabled ? '已启用' : '未启用' }}</strong></div>
-        <div><span>每日摘要</span><strong>{{ mailStatus.digest?.enabled ? `${mailStatus.digest.hours?.join(' / ')} 时` : '未启用' }}</strong></div>
       </div>
-      <p class="mail-tip">Cloudflare 继续负责 DNS；收发由你填写的 SMTP / IMAP 主机处理。管理员可在“邮件与云备份”中配置，密码只写入服务器 Secret 文件且不会回显。</p>
-      <a class="mail-config-link" href="/settings?category=system">配置邮件与云备份</a>
+      <p class="mail-tip">Cloudflare 继续负责 DNS；SMTP 仅用于注册验证、审批结果和系统告警。管理员可在“登录与系统集成”中配置，密码只写入服务器 Secret 文件且不会回显。</p>
+      <a class="mail-config-link" href="/settings?category=system">配置系统通知</a>
       <div class="mail-test">
         <label>
           <span>测试收件地址</span>

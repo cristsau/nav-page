@@ -17,7 +17,6 @@ import {
 import { assertSafeOutboundEndpoint } from '../lib/outboundEndpoints.js'
 import { getUserSettingValue } from '../lib/userSettings.js'
 import { searchWorkspaceHybridForUser } from '../lib/hybridWorkspaceSearch.js'
-import { searchEmailSources } from '../lib/emailEvents.js'
 import { decryptEmailPayload, encryptEmailPayload } from '../lib/emailCrypto.js'
 import {
   buildAssistantPrompts,
@@ -327,10 +326,9 @@ async function reminderSourcesForUser(userId, question) {
 
 async function collectAssistantSources(userId, question, logger, {
   includeWorkspace = true,
-  includeEmail = true,
   includeReminders = true
 } = {}) {
-  const [workspace, emails, reminders] = await Promise.all([
+  const [workspace, reminders] = await Promise.all([
     includeWorkspace
       ? searchWorkspaceHybridForUser({
           userId,
@@ -341,16 +339,13 @@ async function collectAssistantSources(userId, question, logger, {
           logger
         })
       : Promise.resolve({ results: [] }),
-    includeEmail ? searchEmailSources(userId, question, { limit: 5 }) : Promise.resolve([]),
     includeReminders ? reminderSourcesForUser(userId, question) : Promise.resolve([])
   ])
   const workspaceResults = workspace.results || []
   return buildAssistantSources([
     ...workspaceResults.slice(0, 4),
-    ...emails.slice(0, 3),
     ...reminders.slice(0, 3),
     ...workspaceResults.slice(4),
-    ...emails.slice(3),
     ...reminders.slice(3)
   ])
 }
@@ -1356,7 +1351,6 @@ export default async function assistantRoutes(fastify) {
           && !intent.emailSearch
           && !intent.reminderSearch
         ),
-        includeEmail: intent.emailSearch,
         includeReminders: intent.reminderSearch && (!intent.action || intent.localContextRequested)
       }
     )
@@ -1674,7 +1668,6 @@ export default async function assistantRoutes(fastify) {
           && !intent.emailSearch
           && !intent.reminderSearch
         ),
-        includeEmail: intent.emailSearch,
         includeReminders: intent.reminderSearch && (!intent.action || intent.localContextRequested)
       }
     )

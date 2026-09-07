@@ -41,6 +41,29 @@ function normalizeEmailRuntimeRole(value) {
     : 'combined'
 }
 
+export function normalizeSessionCookieSameSite(value) {
+  const normalized = String(value || 'lax').trim().toLowerCase()
+  if (!new Set(['lax', 'none']).has(normalized)) {
+    const error = new Error('NAV_SESSION_COOKIE_SAME_SITE must be either lax or none')
+    error.code = 'SESSION_COOKIE_SAME_SITE_INVALID'
+    throw error
+  }
+  return normalized
+}
+
+export function resolveDatabaseUrl(value, environment = nodeEnv) {
+  const normalized = String(value || '').trim()
+  if (normalized) return normalized
+
+  if (String(environment || '').trim().toLowerCase() === 'production') {
+    const error = new Error('DATABASE_URL is required when NODE_ENV=production')
+    error.code = 'DATABASE_URL_REQUIRED'
+    throw error
+  }
+
+  return 'postgres://nav@127.0.0.1:5432/nav'
+}
+
 const nodeEnv = process.env.NODE_ENV || 'development'
 const emailRuntimeRole = normalizeEmailRuntimeRole(process.env.NAV_EMAIL_RUNTIME_ROLE)
 
@@ -110,7 +133,7 @@ export const config = {
   ),
   port: Number(process.env.PORT || 3001),
   host: process.env.HOST || '0.0.0.0',
-  databaseUrl: process.env.DATABASE_URL || 'postgres://nav:nav_password@127.0.0.1:5432/nav',
+  databaseUrl: resolveDatabaseUrl(process.env.DATABASE_URL, nodeEnv),
   databasePoolMax: normalizeDatabasePoolMax(
     process.env.NAV_DATABASE_POOL_MAX,
     emailRuntimeRole
@@ -118,6 +141,9 @@ export const config = {
   sessionCookieName: process.env.SESSION_COOKIE_NAME || 'nav_session',
   sessionTtlDays: Number(process.env.SESSION_TTL_DAYS || 14),
   sessionCookieSecure: process.env.SESSION_COOKIE_SECURE === 'true',
+  sessionCookieSameSite: normalizeSessionCookieSameSite(
+    process.env.NAV_SESSION_COOKIE_SAME_SITE
+  ),
   sessionTouchIntervalSeconds: normalizePositiveInteger(
     process.env.SESSION_TOUCH_INTERVAL_SECONDS,
     300
@@ -510,6 +536,7 @@ export const config = {
   webauthnRelyingParties: WEBAUTHN_RELYING_PARTIES,
   webauthnRpName: 'DOMO NAV',
   corsOrigin: process.env.CORS_ORIGIN || 'http://localhost:5174',
+  extensionOrigins: String(process.env.NAV_EXTENSION_ORIGINS || '').trim(),
   allowPrivateAiEndpoints: process.env.ALLOW_PRIVATE_AI_ENDPOINTS === 'true',
   allowInsecureAiEndpoints: process.env.ALLOW_INSECURE_AI_ENDPOINTS === 'true',
   aiCliProxyBaseUrl: String(process.env.NAV_AI_CLI_PROXY_BASE_URL || '').trim(),

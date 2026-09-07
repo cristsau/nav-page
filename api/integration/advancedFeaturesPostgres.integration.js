@@ -1,5 +1,6 @@
 import assert from 'node:assert/strict'
 import test, { after, before, beforeEach } from 'node:test'
+import { ACTIVE_NOTIFICATION_SQL } from '../src/lib/mailboxRetirement.js'
 
 const EXPECTED_DATABASE_NAME = 'nav_advanced_test'
 const ALLOWED_DATABASE_HOSTS = new Set(['127.0.0.1', 'localhost'])
@@ -227,17 +228,17 @@ test('sensitive notification Web Push is generic and does not expose its source 
     [SUBSCRIPTION_ID, USER_ID]
   )
   const notificationId = '12121212-1212-4212-8212-121212121212'
-  const emailEventId = '34343434-3434-4434-8434-343434343434'
+  const sourceId = '34343434-3434-4434-8434-343434343434'
   await pool.query(
     `INSERT INTO notifications (
        id, user_id, event_type, title, summary, source_type, source_id,
        action_url, dedupe_key, sensitive, push_enabled
      ) VALUES (
-       $1, $2, 'email.tier1', '数据库里可见的私密标题',
-       '数据库里可见的私密摘要', 'email', $3,
+       $1, $2, 'system.test', '数据库里可见的私密标题',
+       '数据库里可见的私密摘要', NULL, $3,
        $4, 'integration-sensitive-push', TRUE, TRUE
      )`,
-    [notificationId, USER_ID, emailEventId, `/assistant?email=${emailEventId}`]
+    [notificationId, USER_ID, sourceId, `/whisper?note=${sourceId}`]
   )
 
   const payloads = []
@@ -251,11 +252,40 @@ test('sensitive notification Web Push is generic and does not expose its source 
   })
 
   assert.equal(result.notificationDelivered, 1)
+  assert.equal((await pool.query(`SELECT id FROM notifications WHERE user_id = $1 AND ${ACTIVE_NOTIFICATION_SQL}`, [USER_ID])).rowCount, 1)
   assert.equal(payloads.length, 1)
   assert.equal(payloads[0].title, 'DOMO NAV')
   assert.equal(payloads[0].url, '/?notifications=1')
   const serialized = JSON.stringify(payloads[0])
   assert.doesNotMatch(serialized, /私密标题|私密摘要|34343434/)
+})
+
+test('retired mailbox notifications never enqueue or deliver existing pending push work', async () => {
+  await pool.query(
+    `INSERT INTO web_push_subscriptions (id, user_id, endpoint, endpoint_hash, p256dh, auth, device_label)
+     VALUES ($1, $2, 'https://fcm.googleapis.com/fcm/send/retired-mail', repeat('b', 64), repeat('A', 88), repeat('B', 24), 'CI browser')`,
+    [SUBSCRIPTION_ID, USER_ID]
+  )
+  for (const source of ['email', 'email_digest']) {
+    const notification = await pool.query(
+      `INSERT INTO notifications (user_id, event_type, title, source_type, sensitive, push_enabled)
+       VALUES ($1, 'email.retired', 'Retained history', $2, TRUE, TRUE) RETURNING id`,
+      [USER_ID, source]
+    )
+    if (source === 'email') {
+      await pool.query(`INSERT INTO notification_push_deliveries (notification_id, subscription_id) VALUES ($1, $2)`, [notification.rows[0].id, SUBSCRIPTION_ID])
+    }
+  }
+  const result = await deliverDueWebPushNotifications({
+    poolInstance: pool,
+    policy: { intervalSeconds: 60, batchSize: 10, maxAttempts: 3 },
+    async sendFn() { assert.fail('retired mailbox must never send a push') }
+  })
+  assert.equal(result.notificationDelivered, 0)
+  assert.equal((await pool.query(`SELECT id FROM notifications WHERE user_id = $1 AND ${ACTIVE_NOTIFICATION_SQL}`, [USER_ID])).rowCount, 0)
+  assert.equal(result.remaining, 0)
+  const deliveries = await pool.query('SELECT status FROM notification_push_deliveries')
+  assert.deepEqual(deliveries.rows, [{ status: 'expired' }])
 })
 
 test('database rejects rich-content privacy states that bypass the API', async () => {

@@ -1,5 +1,6 @@
 import { createHash, randomUUID } from 'node:crypto'
 import nodemailer from 'nodemailer'
+import { SYSTEM_MAIL_SQL } from './mailboxRetirement.js'
 import { config } from '../config.js'
 import { query } from '../db/index.js'
 import { sanitizeMaintenanceErrorCode } from './maintenanceJobStatus.js'
@@ -493,9 +494,11 @@ export async function deliverMailOutbox({
   poolInstance,
   policy,
   runtimeConfig = config,
-  transportFactory = createSmtpTransport
+  transportFactory = createSmtpTransport,
+  systemOnly = false
 }) {
   const validated = validateMailDeliveryPolicy(policy)
+  const deliveryScopeSql = systemOnly ? `(${DELIVERY_SCOPE_SQL}) AND ${SYSTEM_MAIL_SQL}` : DELIVERY_SCOPE_SQL
   const sourceKey = String(runtimeConfig.emailSourceKey || config.emailSourceKey || 'mxroute').trim().toLowerCase()
   if (!/^[a-z0-9_.-]{1,80}$/.test(sourceKey)) throw new Error('Email source key is invalid')
   const primaryAccount = runtimeConfig.emailPrimaryAccount !== false
@@ -520,7 +523,7 @@ export async function deliverMailOutbox({
              scrubbed_at = COALESCE(scrubbed_at, NOW()), updated_at = NOW(),
              last_error_code = 'AMBIGUOUS_DELIVERY_STATE'
          WHERE status = 'sending' AND updated_at < NOW() - INTERVAL '15 minutes'
-           AND ${DELIVERY_SCOPE_SQL}
+           AND ${deliveryScopeSql}
          RETURNING id, user_id`
         , [sourceKey, primaryAccount, ownerUsername]
       )
@@ -542,7 +545,7 @@ export async function deliverMailOutbox({
              scrubbed_at = COALESCE(scrubbed_at, NOW()),
              last_error_code = 'MAX_ATTEMPTS_EXCEEDED', updated_at = NOW()
          WHERE status IN ('pending', 'failed') AND attempt_count >= $4
-           AND ${DELIVERY_SCOPE_SQL}
+           AND ${deliveryScopeSql}
          RETURNING id, user_id`,
         [sourceKey, primaryAccount, ownerUsername, validated.maxAttempts]
       )
@@ -560,7 +563,7 @@ export async function deliverMailOutbox({
         WHERE status IN ('pending', 'failed')
           AND attempt_count < $4
           AND next_attempt_at <= NOW()
-          AND ${DELIVERY_SCOPE_SQL}
+          AND ${deliveryScopeSql}
         ORDER BY next_attempt_at ASC, created_at ASC, id ASC
         LIMIT $5
       `,
@@ -767,7 +770,7 @@ export async function deliverMailOutbox({
     const remaining = await client.query(
       `SELECT COUNT(*)::integer AS count FROM mail_outbox
        WHERE status IN ('pending', 'failed') AND attempt_count < $4
-         AND ${DELIVERY_SCOPE_SQL}`,
+         AND ${deliveryScopeSql}`,
       [sourceKey, primaryAccount, ownerUsername, validated.maxAttempts]
     )
     summary.remaining = Number(remaining.rows[0]?.count || 0)
@@ -800,6 +803,7 @@ export function startMailDeliveryScheduler({
   observer,
   runtimeConfig = config,
   deliveryFn = deliverMailOutbox,
+  systemOnly = false,
   timerApi = globalThis,
   clock = () => Date.now()
 }) {
@@ -812,7 +816,7 @@ export function startMailDeliveryScheduler({
     if (stopped || activeRun) return activeRun
     const startedAtMs = clock()
     activeRun = Promise.resolve()
-      .then(() => deliveryFn({ poolInstance, policy: validated, runtimeConfig }))
+      .then(() => deliveryFn({ poolInstance, policy: validated, runtimeConfig, systemOnly }))
       .then(async (result) => {
         const finishedAtMs = clock()
         await notifyObserver(observer, 'succeeded', {

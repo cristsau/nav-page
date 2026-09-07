@@ -52,19 +52,10 @@ const baseCommands = [
     path: '/media'
   },
   {
-    id: 'go-mail',
-    group: '页面',
-    label: '打开邮件',
-    description: '查看已接入邮箱中的重要邮件和分类结果',
-    keywords: '邮件 收件箱 重要 邮箱 mail inbox email',
-    icon: 'mail',
-    path: '/mail'
-  },
-  {
     id: 'go-assistant',
     group: '页面',
     label: '打开助理',
-    description: '从站内资料和已接入邮件中获得带来源回答',
+    description: '检索站内资料、联网搜索和管理个人内容',
     keywords: '助理 AI 对话 检索 assistant chat',
     icon: 'sparkles',
     path: '/assistant'

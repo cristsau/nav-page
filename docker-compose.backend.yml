@@ -12,9 +12,9 @@ services:
     restart: unless-stopped
     logging: *nav-logging
     environment:
-      POSTGRES_DB: nav
-      POSTGRES_USER: nav
-      POSTGRES_PASSWORD: nav_password
+      POSTGRES_DB: "${NAV_POSTGRES_DB:-nav}"
+      POSTGRES_USER: "${NAV_POSTGRES_USER:-nav}"
+      POSTGRES_PASSWORD: "${NAV_POSTGRES_PASSWORD:?set NAV_POSTGRES_PASSWORD to a unique secret}"
     ports:
       - "127.0.0.1:5432:5432"
     volumes:
@@ -24,7 +24,7 @@ services:
         bind:
           create_host_path: false
     healthcheck:
-      test: ["CMD-SHELL", "pg_isready -U nav -d nav"]
+      test: ["CMD-SHELL", "pg_isready -U \"$$POSTGRES_USER\" -d \"$$POSTGRES_DB\""]
       interval: 10s
       timeout: 5s
       retries: 10
@@ -55,41 +55,10 @@ services:
       - "${NAV_SECRETS_DIR:?set NAV_SECRETS_DIR to the release-local secrets directory}/imgbed-library-token:/run/secrets/nav/imgbed-library-token:ro"
       - "${NAV_SECRETS_DIR:?set NAV_SECRETS_DIR to the release-local secrets directory}/web-push-vapid-private-key:/run/secrets/nav/web-push-vapid-private-key:ro"
       - "${NAV_SECRETS_DIR:?set NAV_SECRETS_DIR to the release-local secrets directory}/smtp-password:/run/secrets/nav/smtp-password:ro"
-      - "${NAV_SECRETS_DIR:?set NAV_SECRETS_DIR to the release-local secrets directory}/imap-password:/run/secrets/nav/imap-password:ro"
       - "${NAV_SECRETS_DIR:?set NAV_SECRETS_DIR to the release-local secrets directory}/email-encryption-key:/run/secrets/nav/email-encryption-key:ro"
       - "${NAV_INTEGRATIONS_DIR:-/etc/nav/integrations}:${NAV_INTEGRATIONS_DIR:-/etc/nav/integrations}"
       - nav-model-cache:/var/cache/nav-models
 
-  nav-mail-worker:
-    image: "domo-nav-api:${NAV_RELEASE_SHA:-development}"
-    container_name: nav-mail-worker
-    restart: unless-stopped
-    logging: *nav-logging
-    depends_on:
-      nav-postgres:
-        condition: service_healthy
-      nav-api:
-        condition: service_healthy
-    env_file:
-      - ./api/.env
-    environment:
-      NODE_ENV: production
-      NAV_EMAIL_RUNTIME_ROLE: worker
-      NAV_MANAGED_INTEGRATIONS_DIR: "${NAV_INTEGRATIONS_DIR:-/etc/nav/integrations}"
-      NAV_MAIL_WORKER_HEARTBEAT_FILE: /tmp/nav-mail-worker-heartbeat.json
-      NAV_MAIL_WORKER_POOL_WAIT_ALERT_SECONDS: ${NAV_MAIL_WORKER_POOL_WAIT_ALERT_SECONDS:-60}
-    command: ["node", "src/mailWorker.js"]
-    healthcheck:
-      test: ["CMD", "node", "scripts/checkMailWorkerHealth.js"]
-      interval: 20s
-      timeout: 5s
-      start_period: 30s
-      retries: 3
-    volumes:
-      - "${NAV_SECRETS_DIR:?set NAV_SECRETS_DIR to the release-local secrets directory}/cliproxy-api-key:/run/secrets/nav/cli-proxy-api-key:ro"
-      - "${NAV_SECRETS_DIR:?set NAV_SECRETS_DIR to the release-local secrets directory}/imap-password:/run/secrets/nav/imap-password:ro"
-      - "${NAV_SECRETS_DIR:?set NAV_SECRETS_DIR to the release-local secrets directory}/email-encryption-key:/run/secrets/nav/email-encryption-key:ro"
-      - "${NAV_INTEGRATIONS_DIR:-/etc/nav/integrations}:${NAV_INTEGRATIONS_DIR:-/etc/nav/integrations}:ro"
 
 volumes:
   nav-model-cache:

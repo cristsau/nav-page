@@ -1,11 +1,17 @@
 <script setup>
 import { computed, onBeforeUnmount, onMounted, ref, watch } from 'vue'
-import { useRouter } from 'vue-router'
+import { RouterLink, useRouter } from 'vue-router'
 import { useConfig } from '@/shared/composables/useConfig'
 import Icon from '@/shared/components/Icon.vue'
 import { searchWorkspace } from '@/shared/services/unifiedSearchApi'
 import { createHighlightedSegments } from '@/shared/utils/unifiedSearch'
 import { queryWorkspaceAssistant } from '@/shared/services/assistantApi'
+import {
+  isInternalPath,
+  sanitizeHttpUrl,
+  sanitizeInternalPath,
+  sanitizeLinkHref
+} from '@/shared/utils/safeUrl'
 
 const router = useRouter()
 const {
@@ -235,13 +241,9 @@ function selectEngine(engineId) {
 
 function openLocalResult(result) {
   if (result.kind === 'bookmark' && result.href) {
-    try {
-      const targetUrl = new URL(result.href)
-      if (!['http:', 'https:'].includes(targetUrl.protocol)) return
-      window.open(targetUrl.toString(), '_blank', 'noopener,noreferrer')
-    } catch {
-      return
-    }
+    const targetUrl = sanitizeHttpUrl(result.href)
+    if (!targetUrl) return
+    window.open(targetUrl, '_blank', 'noopener,noreferrer')
   } else if (result.kind === 'note') {
     router.push({
       path: '/whisper',
@@ -295,12 +297,17 @@ async function handleAssistantQuery() {
 }
 
 function sourceTarget(item) {
-  return String(item?.url || '').startsWith('/') ? '_self' : '_blank'
+  return isInternalPath(item?.url) ? undefined : sanitizeHttpUrl(item?.url) ? '_blank' : undefined
+}
+
+function safeResultHref(item) {
+  return sanitizeLinkHref(item?.url)
 }
 
 function openExternalResult() {
-  if (!searchResult.value?.externalUrl) return
-  window.open(searchResult.value.externalUrl, '_blank', 'noopener,noreferrer')
+  const targetUrl = sanitizeHttpUrl(searchResult.value?.externalUrl)
+  if (!targetUrl) return
+  window.open(targetUrl, '_blank', 'noopener,noreferrer')
 }
 
 function highlight(value) {
@@ -544,19 +551,21 @@ async function copyAnswer() {
             {{ searchResult.sources ? '站内来源' : (searchResult.mode === 'answer' ? '引用来源' : '搜索结果') }}
           </div>
           <div class="search-result-list">
-            <a
+            <component
               v-for="(item, index) in searchResult.items"
               :key="item.url || index"
+              :is="isInternalPath(item.url) ? RouterLink : safeResultHref(item) ? 'a' : 'div'"
               class="search-result-item"
-              :href="item.url"
+              :to="isInternalPath(item.url) ? sanitizeInternalPath(item.url) : undefined"
+              :href="!isInternalPath(item.url) ? sanitizeHttpUrl(item.url) || undefined : undefined"
               :target="sourceTarget(item)"
-              rel="noopener noreferrer"
+              :rel="sourceTarget(item) ? 'noopener noreferrer' : undefined"
             >
               <div class="search-result-item__source">{{ item.source || '搜索结果' }}</div>
               <div class="search-result-item__title">{{ item.title }}</div>
               <div v-if="item.description" class="search-result-item__desc">{{ item.description }}</div>
               <div class="search-result-item__url">{{ item.url }}</div>
-            </a>
+            </component>
           </div>
         </div>
 

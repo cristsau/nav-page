@@ -1,5 +1,5 @@
 import { query } from '../db/index.js'
-import { getEmailNotificationDetails } from '../lib/emailEvents.js'
+import { ACTIVE_NOTIFICATION_SQL } from '../lib/mailboxRetirement.js'
 import { mapNotification } from '../lib/notifications.js'
 
 const UUID_PATTERN = /^[0-9a-f]{8}-(?:[0-9a-f]{4}-){3}[0-9a-f]{12}$/i
@@ -7,30 +7,6 @@ const UUID_PATTERN = /^[0-9a-f]{8}-(?:[0-9a-f]{4}-){3}[0-9a-f]{12}$/i
 function boundedLimit(value, fallback = 40) {
   const parsed = Number(value)
   return Number.isSafeInteger(parsed) && parsed > 0 ? Math.min(parsed, 100) : fallback
-}
-
-async function hydrate(rows, userId) {
-  const emailIds = rows
-    .filter((row) => row.source_type === 'email' && row.source_id)
-    .map((row) => row.source_id)
-  const digestIds = rows.flatMap((row) => (
-    row.source_type === 'email_digest' && Array.isArray(row.metadata?.emailEventIds)
-      ? row.metadata.emailEventIds
-      : []
-  ))
-  const details = await getEmailNotificationDetails(userId, [...new Set([...emailIds, ...digestIds])])
-  return rows.map((row) => {
-    let detail = null
-    if (row.source_type === 'email') detail = details.get(String(row.source_id)) || null
-    if (row.source_type === 'email_digest') {
-      detail = {
-        emails: (row.metadata?.emailEventIds || [])
-          .map((id) => details.get(String(id)))
-          .filter(Boolean)
-      }
-    }
-    return mapNotification(row, detail)
-  })
 }
 
 export default async function notificationRoutes(fastify) {
@@ -43,7 +19,7 @@ export default async function notificationRoutes(fastify) {
       `
         SELECT *
         FROM notifications
-        WHERE user_id = $1
+        WHERE user_id = $1 AND ${ACTIVE_NOTIFICATION_SQL}
           AND ($2::boolean = FALSE OR read_at IS NULL)
           AND (expires_at IS NULL OR expires_at > NOW())
         ORDER BY created_at DESC, id DESC
@@ -55,13 +31,13 @@ export default async function notificationRoutes(fastify) {
       `
         SELECT COUNT(*)::integer AS count
         FROM notifications
-        WHERE user_id = $1 AND read_at IS NULL
+        WHERE user_id = $1 AND ${ACTIVE_NOTIFICATION_SQL} AND read_at IS NULL
           AND (expires_at IS NULL OR expires_at > NOW())
       `,
       [request.currentUser.id]
     )
     return {
-      notifications: await hydrate(rows, request.currentUser.id),
+      notifications: rows.map((row) => mapNotification(row, null)),
       unreadCount: Number(count.rows[0]?.count || 0)
     }
   })
@@ -71,7 +47,7 @@ export default async function notificationRoutes(fastify) {
     reply.header('Cache-Control', 'private, no-store')
     const { rows } = await query(
       `SELECT COUNT(*)::integer AS count FROM notifications
-       WHERE user_id = $1 AND read_at IS NULL
+       WHERE user_id = $1 AND ${ACTIVE_NOTIFICATION_SQL} AND read_at IS NULL
          AND (expires_at IS NULL OR expires_at > NOW())`,
       [request.currentUser.id]
     )
@@ -101,7 +77,7 @@ export default async function notificationRoutes(fastify) {
     await fastify.requireAuth(request, reply)
     const result = await query(
       `UPDATE notifications SET read_at = NOW(), updated_at = NOW()
-       WHERE user_id = $1 AND read_at IS NULL`,
+       WHERE user_id = $1 AND ${ACTIVE_NOTIFICATION_SQL} AND read_at IS NULL`,
       [request.currentUser.id]
     )
     return { ok: true, updatedCount: result.rowCount }

@@ -2,25 +2,8 @@
 import { computed, nextTick, onMounted, reactive, ref, watch } from 'vue'
 import Icon from '@/shared/components/Icon.vue'
 import OauthIntegrationSettings from './OauthIntegrationSettings.vue'
-import { useAuth } from '@/shared/composables/useAuth'
-import {
-  createManagedMailAccount,
-  fetchManagedIntegrations,
-  saveManagedCloudBackup,
-  saveManagedMail,
-  saveManagedMailAccount,
-  testManagedCloudBackup,
-  testManagedImap,
-  testManagedMailAccountImap,
-  testManagedMailAccountSmtp,
-  testManagedSmtp
-} from '@/shared/services/integrationApi'
-import {
-  imapTestDisabledReason as resolveImapTestDisabledReason,
-  smtpTestDisabledReason as resolveSmtpTestDisabledReason
-} from '@/shared/services/mailIntegrationState'
-
-const { currentUser } = useAuth()
+import SystemNotificationSettings from './SystemNotificationSettings.vue'
+import { fetchManagedIntegrations, saveManagedCloudBackup, testManagedCloudBackup } from '@/shared/services/integrationApi'
 
 const loading = ref(true)
 const busyAction = ref('')
@@ -28,79 +11,11 @@ const message = ref('')
 const warning = ref('')
 const error = ref('')
 const writable = ref(false)
-const managedState = ref(null)
-const activeMailAccountId = ref('primary')
-const mailPrimaryManaged = ref(false)
+const systemMail = ref({})
 const updatedAt = ref(null)
-const savedSmtpFingerprint = ref('')
-const savedImapFingerprint = ref('')
 const savedCloudFingerprint = ref('')
 const errorNotice = ref(null)
-const smtpHostInput = ref(null)
-const imapHostInput = ref(null)
-const busyActionLabel = computed(() => ({
-  'save-mail': '正在安全保存邮件配置…',
-  'test-smtp': '正在验证 SMTP 连接…',
-  'test-imap': '正在验证 IMAP 连接…',
-  'create-mail-account': '正在添加邮箱账号…',
-  'save-mail-account': '正在安全保存邮箱账号…',
-  'test-account-smtp': '正在验证第二邮箱 SMTP…',
-  'test-account-imap': '正在验证第二邮箱 IMAP…',
-  'save-cloud': '正在安全保存云备份配置…',
-  'test-cloud': '正在验证对象存储连接…'
-}[busyAction.value] || '正在处理…'))
-
-const SERVER_HOST_PATTERN = /^(?=.{1,253}$)(?:[a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])?\.)*[a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])?$/i
-
-const mail = reactive({
-  label: '个人邮箱',
-  deliveryEnabled: false,
-  registrationEnabled: false,
-  ingestEnabled: false,
-  digestEnabled: false,
-  smtpHost: '',
-  smtpPort: 465,
-  smtpUsername: '',
-  smtpFromAddress: '',
-  smtpFromName: 'DOMO NAV',
-  adminRecipientsText: '',
-  ownerUsername: '',
-  imapHost: '',
-  imapPort: 993,
-  imapUsername: '',
-  imapMailbox: 'INBOX',
-  digestHoursText: '12,20',
-  digestTimeZone: 'Asia/Shanghai',
-  smtpPassword: '',
-  imapPassword: '',
-  reuseSmtpPasswordForImap: false,
-  smtpPasswordConfigured: false,
-  imapPasswordConfigured: false,
-  encryptionConfigured: false,
-  smtpVerified: false,
-  smtpVerifiedAt: null,
-  imapVerified: false,
-  imapVerifiedAt: null
-})
-
-const secondaryMailAccounts = computed(() => managedState.value?.mailAccounts || [])
-const isNewMailAccount = computed(() => activeMailAccountId.value === 'new')
-const isSecondaryMailAccount = computed(() => activeMailAccountId.value !== 'primary')
-const mailOwnerLocked = computed(() => Boolean(
-  !isNewMailAccount.value
-  && (isSecondaryMailAccount.value || mailPrimaryManaged.value)
-))
-const canAddMailAccount = computed(() => Boolean(
-  writable.value
-  && mailPrimaryManaged.value
-  && secondaryMailAccounts.value.length < Number(managedState.value?.mailAccountLimit || 2) - 1
-  && !busyAction.value
-))
-const activeMailAccountName = computed(() => {
-  if (!isSecondaryMailAccount.value) return mail.smtpFromAddress ? `主邮箱 · ${mail.smtpFromAddress}` : '主邮箱'
-  return mail.label || (isNewMailAccount.value ? '新邮箱' : '第二邮箱')
-})
-
+const busyActionLabel = computed(() => busyAction.value ? '正在处理…' : '')
 const cloud = reactive({
   enabled: false,
   providerLabel: 'S3 Compatible',
@@ -123,26 +38,6 @@ const cloud = reactive({
   hostAgentUpdatedAt: null
 })
 
-function smtpFingerprint() {
-  return JSON.stringify([
-    mail.smtpHost,
-    mail.smtpUsername,
-    mail.smtpFromAddress,
-    Boolean(mail.smtpPassword)
-  ])
-}
-
-function imapFingerprint() {
-  return JSON.stringify([
-    mail.ownerUsername,
-    mail.imapHost,
-    mail.imapUsername,
-    mail.imapMailbox,
-    mail.reuseSmtpPasswordForImap,
-    Boolean(mail.imapPassword)
-  ])
-}
-
 function cloudFingerprint() {
   return JSON.stringify([
     cloud.endpoint,
@@ -156,72 +51,11 @@ function cloudFingerprint() {
   ])
 }
 
-const smtpHasUnsavedChanges = computed(() => smtpFingerprint() !== savedSmtpFingerprint.value)
-const imapHasUnsavedChanges = computed(() => imapFingerprint() !== savedImapFingerprint.value)
 const cloudHasUnsavedChanges = computed(() => cloudFingerprint() !== savedCloudFingerprint.value)
-const smtpTestDisabledReason = computed(() => resolveSmtpTestDisabledReason({
-  writable: writable.value,
-  busyAction: busyAction.value,
-  host: mail.smtpHost,
-  username: mail.smtpUsername,
-  fromAddress: mail.smtpFromAddress,
-  passwordConfigured: mail.smtpPasswordConfigured,
-  hasUnsavedChanges: smtpHasUnsavedChanges.value
-}))
-const imapTestDisabledReason = computed(() => resolveImapTestDisabledReason({
-  writable: writable.value,
-  busyAction: busyAction.value,
-  ownerUsername: mail.ownerUsername,
-  host: mail.imapHost,
-  username: mail.imapUsername,
-  passwordConfigured: mail.imapPasswordConfigured
-    || (mail.reuseSmtpPasswordForImap && mail.smtpPasswordConfigured),
-  hasUnsavedChanges: imapHasUnsavedChanges.value
-}))
-const smtpReadyToTest = computed(() => !smtpTestDisabledReason.value)
-const imapReadyToTest = computed(() => !imapTestDisabledReason.value)
 const cloudReadyToTest = computed(() => Boolean(
   cloud.endpoint && cloud.bucket && cloud.accessKeyConfigured && cloud.secretKeyConfigured
   && !cloudHasUnsavedChanges.value
 ))
-
-function serverHostError(value, label) {
-  const host = String(value || '').trim().toLowerCase().replace(/\.$/, '')
-  if (!host) return ''
-  if (host.includes('@')) {
-    return `${label}要填写服务器主机名（例如 mail.example.com），不是邮箱地址。`
-  }
-  if (!SERVER_HOST_PATTERN.test(host) || host === 'localhost' || host.endsWith('.localhost') || host.endsWith('.local')) {
-    return `${label}格式无效，请填写邮箱服务商提供的服务器主机名。`
-  }
-  return ''
-}
-
-const smtpHostError = computed(() => serverHostError(mail.smtpHost, 'SMTP 主机'))
-const imapHostError = computed(() => serverHostError(mail.imapHost, 'IMAP 主机'))
-const mailSaveStatus = computed(() => {
-  if (loading.value) return '正在读取服务器配置…'
-  if (!writable.value) return '服务器集成目录当前为只读，无法保存。'
-  if (smtpHostError.value || imapHostError.value) return '请先修正标红的服务器主机名。'
-  if (['save-mail', 'save-mail-account', 'create-mail-account'].includes(busyAction.value)) return '正在安全保存，请稍候…'
-  return '点击保存后会写入服务器；保存成功后才能测试 SMTP / IMAP。'
-})
-
-watch(smtpFingerprint, (current) => {
-  if (!savedSmtpFingerprint.value || current === savedSmtpFingerprint.value) return
-  mail.smtpVerified = false
-  mail.smtpVerifiedAt = null
-  mail.deliveryEnabled = false
-  mail.registrationEnabled = false
-})
-
-watch(imapFingerprint, (current) => {
-  if (!savedImapFingerprint.value || current === savedImapFingerprint.value) return
-  mail.imapVerified = false
-  mail.imapVerifiedAt = null
-  mail.ingestEnabled = false
-  mail.digestEnabled = false
-})
 
 watch(cloudFingerprint, (current) => {
   if (!savedCloudFingerprint.value || current === savedCloudFingerprint.value) return
@@ -239,40 +73,10 @@ function statusLabel(ok, yes = '已验证', no = '待验证') {
   return ok ? yes : no
 }
 
-function applyMailState(mailState = {}, { secondary = false } = {}) {
-  const mailConfig = mailState.config || {}
-  Object.assign(mail, {
-    ...mailConfig,
-    label: secondary ? (mailState.label || '第二邮箱') : '个人邮箱',
-    adminRecipientsText: (mailConfig.adminRecipients || []).join(', '),
-    digestHoursText: (mailConfig.digestHours || [12, 20]).join(','),
-    smtpPassword: '',
-    imapPassword: '',
-    reuseSmtpPasswordForImap: false,
-    smtpPasswordConfigured: mailState.secrets?.smtpPasswordConfigured === true,
-    imapPasswordConfigured: mailState.secrets?.imapPasswordConfigured === true,
-    encryptionConfigured: mailState.secrets?.encryptionConfigured === true,
-    smtpVerified: mailState.verification?.smtpVerified === true,
-    smtpVerifiedAt: mailState.verification?.smtpVerifiedAt || null,
-    imapVerified: mailState.verification?.imapVerified === true,
-    imapVerifiedAt: mailState.verification?.imapVerifiedAt || null
-  })
-  if (!mail.ownerUsername && currentUser.value?.username) mail.ownerUsername = currentUser.value.username
-  savedSmtpFingerprint.value = smtpFingerprint()
-  savedImapFingerprint.value = imapFingerprint()
-}
-
 function applyState(state) {
-  managedState.value = state
   writable.value = state.writable === true
-  mailPrimaryManaged.value = state.mailPrimaryManaged === true
   updatedAt.value = state.updatedAt || null
-  if (activeMailAccountId.value !== 'primary' && activeMailAccountId.value !== 'new') {
-    const selected = (state.mailAccounts || []).find((account) => account.id === activeMailAccountId.value)
-    if (selected) applyMailState(selected, { secondary: true })
-    else activeMailAccountId.value = 'primary'
-  }
-  if (activeMailAccountId.value === 'primary') applyMailState(state.mail || {})
+  systemMail.value = state.systemMail || {}
   const cloudState = state.cloudBackup || {}
   const cloudConfig = cloudState.config || {}
   Object.assign(cloud, {
@@ -293,47 +97,6 @@ function applyState(state) {
   savedCloudFingerprint.value = cloudFingerprint()
 }
 
-function selectMailAccount(accountId) {
-  const nextId = String(accountId || 'primary')
-  activeMailAccountId.value = nextId
-  if (nextId === 'primary') {
-    applyMailState(managedState.value?.mail || {})
-    return
-  }
-  const selected = secondaryMailAccounts.value.find((account) => account.id === nextId)
-  if (selected) applyMailState(selected, { secondary: true })
-}
-
-function startAddMailAccount() {
-  if (!canAddMailAccount.value) return
-  activeMailAccountId.value = 'new'
-  applyMailState({
-    label: '第二邮箱',
-    config: {
-      deliveryEnabled: false,
-      registrationEnabled: false,
-      ingestEnabled: false,
-      digestEnabled: false,
-      smtpHost: '',
-      smtpPort: 465,
-      smtpUsername: '',
-      smtpFromAddress: '',
-      smtpFromName: 'DOMO NAV',
-      adminRecipients: [],
-      ownerUsername: currentUser.value?.username || '',
-      imapHost: '',
-      imapPort: 993,
-      imapUsername: '',
-      imapMailbox: 'INBOX',
-      digestHours: [12, 20],
-      digestTimeZone: 'Asia/Shanghai'
-    }
-  }, { secondary: true })
-  message.value = '请填写第二邮箱配置并保存；保存后再分别测试 SMTP 和 IMAP。'
-  warning.value = ''
-  error.value = ''
-}
-
 async function refresh() {
   loading.value = true
   warning.value = ''
@@ -344,34 +107,6 @@ async function refresh() {
     error.value = caught.message || '无法读取集成配置。'
   } finally {
     loading.value = false
-  }
-}
-
-function mailPayload() {
-  return {
-    ...(isSecondaryMailAccount.value ? { label: mail.label } : {}),
-    deliveryEnabled: mail.deliveryEnabled,
-    registrationEnabled: isSecondaryMailAccount.value ? false : mail.registrationEnabled,
-    ingestEnabled: mail.ingestEnabled,
-    digestEnabled: isSecondaryMailAccount.value ? false : mail.digestEnabled,
-    smtpHost: mail.smtpHost,
-    smtpPort: 465,
-    smtpUsername: mail.smtpUsername,
-    smtpFromAddress: mail.smtpFromAddress,
-    smtpFromName: mail.smtpFromName,
-    adminRecipients: isSecondaryMailAccount.value
-      ? []
-      : mail.adminRecipientsText.split(',').map((value) => value.trim()).filter(Boolean),
-    ownerUsername: mail.ownerUsername,
-    imapHost: mail.imapHost,
-    imapPort: 993,
-    imapUsername: mail.imapUsername,
-    imapMailbox: mail.imapMailbox,
-    digestHours: mail.digestHoursText.split(',').map((value) => Number(value.trim())).filter(Number.isInteger),
-    digestTimeZone: mail.digestTimeZone,
-    ...(mail.smtpPassword ? { smtpPassword: mail.smtpPassword } : {}),
-    ...(mail.imapPassword ? { imapPassword: mail.imapPassword } : {}),
-    reuseSmtpPasswordForImap: mail.reuseSmtpPasswordForImap
   }
 }
 
@@ -395,54 +130,6 @@ async function run(action, successText, callback) {
   } finally {
     busyAction.value = ''
   }
-}
-
-async function saveMail() {
-  const invalidHost = smtpHostError.value
-    ? { input: smtpHostInput.value, message: smtpHostError.value }
-    : imapHostError.value
-      ? { input: imapHostInput.value, message: imapHostError.value }
-      : null
-  if (invalidHost) {
-    message.value = ''
-    warning.value = ''
-    error.value = invalidHost.message
-    await nextTick()
-    invalidHost.input?.focus({ preventScroll: true })
-    invalidHost.input?.scrollIntoView({ behavior: 'smooth', block: 'center' })
-    return
-  }
-  const action = isNewMailAccount.value
-    ? 'create-mail-account'
-    : isSecondaryMailAccount.value ? 'save-mail-account' : 'save-mail'
-  const result = await run(action, isSecondaryMailAccount.value ? '邮箱账号已安全保存并应用。' : '邮件配置已安全保存并应用。', () => {
-    if (isNewMailAccount.value) return createManagedMailAccount(mailPayload())
-    if (isSecondaryMailAccount.value) return saveManagedMailAccount(activeMailAccountId.value, mailPayload())
-    return saveManagedMail(mailPayload())
-  })
-  const savedAccount = result?.account
-  if (savedAccount?.id) activeMailAccountId.value = savedAccount.id
-  if (result?.mail || savedAccount) applyState(await fetchManagedIntegrations())
-}
-
-async function testSmtp() {
-  const action = isSecondaryMailAccount.value ? 'test-account-smtp' : 'test-smtp'
-  const result = await run(action, 'SMTP 连接验证成功，现在可以启用邮件发送。', () => (
-    isSecondaryMailAccount.value
-      ? testManagedMailAccountSmtp(activeMailAccountId.value)
-      : testManagedSmtp()
-  ))
-  if (result?.mail || result?.account) applyState(await fetchManagedIntegrations())
-}
-
-async function testImap() {
-  const action = isSecondaryMailAccount.value ? 'test-account-imap' : 'test-imap'
-  const result = await run(action, 'IMAP 连接验证成功，现在可以启用智能收件。', () => (
-    isSecondaryMailAccount.value
-      ? testManagedMailAccountImap(activeMailAccountId.value)
-      : testManagedImap()
-  ))
-  if (result?.mail || result?.account) applyState(await fetchManagedIntegrations())
 }
 
 function cloudPayload() {
@@ -478,7 +165,7 @@ onMounted(refresh)
     <div class="integration-heading">
       <div>
         <h3 id="system-integrations-title">系统集成</h3>
-        <p>自行配置支持标准 SMTP / IMAP 的邮箱和任意 S3 兼容对象存储。Secret 只写入服务器，不会回传到浏览器。</p>
+        <p>配置账号登录、系统通知和加密云备份。</p>
       </div>
       <button class="button button--secondary" type="button" :disabled="loading || busyAction" @click="refresh">
         <Icon name="refresh" :size="16" />
@@ -495,166 +182,7 @@ onMounted(refresh)
 
     <OauthIntegrationSettings />
 
-    <form class="integration-card" novalidate @submit.prevent.stop="saveMail">
-      <header class="card-header">
-        <div class="card-icon"><Icon name="mail" :size="20" /></div>
-        <div>
-          <h4>{{ activeMailAccountName }}（SMTP / IMAP）</h4>
-          <p>邮件服务（SMTP / IMAP）最多连接两个真实邮箱；支持邮箱密码或应用专用密码，各账号使用独立 Secret 且不会回显。</p>
-        </div>
-      </header>
-
-      <section class="mail-account-manager" aria-labelledby="managed-mail-accounts-title">
-        <div>
-          <label id="managed-mail-accounts-title" for="managed-mail-account-select">正在配置的邮箱</label>
-          <select
-            id="managed-mail-account-select"
-            :value="activeMailAccountId"
-            :disabled="loading || Boolean(busyAction)"
-            @change="selectMailAccount($event.target.value)"
-          >
-            <option value="primary">主邮箱</option>
-            <option v-for="account in secondaryMailAccounts" :key="account.id" :value="account.id">
-              {{ account.label || account.config?.smtpFromAddress || '第二邮箱' }}
-            </option>
-            <option v-if="isNewMailAccount" value="new">新邮箱（尚未保存）</option>
-          </select>
-        </div>
-        <button class="button button--secondary" type="button" :disabled="!canAddMailAccount" @click="startAddMailAccount">
-          <Icon name="plus" :size="16" />
-          添加第二邮箱
-        </button>
-        <p v-if="!mailPrimaryManaged">请先保存一次主邮箱配置，再添加第二邮箱。</p>
-        <p v-else-if="secondaryMailAccounts.length">已连接两个邮箱；可在上方切换并分别验证。</p>
-        <p v-else>第二邮箱可独立收信和外发，注册通知与每日摘要仍由主邮箱负责。</p>
-      </section>
-
-      <label v-if="isSecondaryMailAccount" class="field-wide mail-account-label">
-        <span>邮箱显示名称</span>
-        <input v-model.trim="mail.label" type="text" maxlength="80" autocomplete="off" placeholder="例如：工作邮箱">
-      </label>
-
-      <div class="status-row" aria-label="邮件配置状态">
-        <span :class="{ 'is-ok': writable }">配置 {{ writable ? '可保存' : '只读' }}</span>
-        <span :class="{ 'is-ok': mail.smtpVerified }">SMTP {{ statusLabel(mail.smtpVerified) }}</span>
-        <span :class="{ 'is-ok': mail.imapVerified }">IMAP {{ statusLabel(mail.imapVerified) }}</span>
-        <span :class="{ 'is-ok': mail.encryptionConfigured }">正文加密 {{ mail.encryptionConfigured ? '已生成' : '待生成' }}</span>
-      </div>
-
-      <fieldset>
-        <legend>发送设置</legend>
-        <div class="field-grid">
-          <label>
-            <span>SMTP 主机</span>
-            <input
-              ref="smtpHostInput"
-              v-model.trim="mail.smtpHost"
-              type="text"
-              autocomplete="off"
-              placeholder="mail.example.com"
-              :aria-invalid="Boolean(smtpHostError)"
-              :aria-describedby="smtpHostError ? 'smtp-host-tip smtp-host-error' : 'smtp-host-tip'"
-            >
-            <small id="smtp-host-tip" class="field-help">填服务器主机名，不是邮箱地址。可在邮箱服务商的客户端设置或域名主 MX 记录中查看。</small>
-            <small v-if="smtpHostError" id="smtp-host-error" class="field-error">{{ smtpHostError }}</small>
-          </label>
-          <label><span>端口</span><input :value="465" type="number" readonly aria-describedby="smtp-tls-tip"></label>
-          <label><span>登录邮箱</span><input v-model.trim="mail.smtpUsername" type="email" autocomplete="username" placeholder="nav@example.com"></label>
-          <label><span>SMTP 密码</span><input v-model="mail.smtpPassword" type="password" autocomplete="new-password" :placeholder="mail.smtpPasswordConfigured ? '已安全保存，留空保持不变' : '输入邮箱密码'"></label>
-          <label><span>发件地址</span><input v-model.trim="mail.smtpFromAddress" type="email" autocomplete="off" placeholder="nav@example.com"></label>
-          <label><span>发件人名称</span><input v-model.trim="mail.smtpFromName" type="text" autocomplete="off"></label>
-        </div>
-        <p id="smtp-tls-tip" class="field-tip">固定使用 465 / TLS 1.2+，不提供明文或降级连接。</p>
-        <label v-if="!isSecondaryMailAccount" class="field-wide"><span>管理员通知邮箱（逗号分隔）</span><input v-model="mail.adminRecipientsText" type="text" autocomplete="off" placeholder="admin@example.com"></label>
-        <div class="action-row">
-          <span>{{ smtpTestDisabledReason || `配置已保存，可测试。最近验证：${formatDate(mail.smtpVerifiedAt)}` }}</span>
-          <button
-            class="button button--secondary"
-            :class="{ 'is-ready': smtpReadyToTest }"
-            type="button"
-            :disabled="!smtpReadyToTest"
-            :title="smtpTestDisabledReason || '验证 SMTP 连接'"
-            @click="testSmtp"
-          >
-            {{ ['test-smtp', 'test-account-smtp'].includes(busyAction) ? '测试中' : '测试 SMTP' }}
-          </button>
-        </div>
-      </fieldset>
-
-      <fieldset>
-        <legend>智能收件</legend>
-        <div class="field-grid">
-          <label>
-            <span>归属 NAV 用户名</span>
-            <input
-              v-model.trim="mail.ownerUsername"
-              type="text"
-              autocomplete="off"
-              :readonly="mailOwnerLocked"
-              :aria-describedby="mailOwnerLocked ? 'mail-owner-lock-tip' : undefined"
-              placeholder="必须填写，例如当前 NAV 用户名"
-            >
-          </label>
-          <label>
-            <span>IMAP 主机</span>
-            <input
-              ref="imapHostInput"
-              v-model.trim="mail.imapHost"
-              type="text"
-              autocomplete="off"
-              placeholder="mail.example.com"
-              :aria-invalid="Boolean(imapHostError)"
-              :aria-describedby="imapHostError ? 'imap-host-tip imap-host-error' : 'imap-host-tip'"
-            >
-            <small id="imap-host-tip" class="field-help">通常与 SMTP 主机相同；这里同样不能填写登录邮箱。</small>
-            <small v-if="imapHostError" id="imap-host-error" class="field-error">{{ imapHostError }}</small>
-          </label>
-          <label><span>登录邮箱</span><input v-model.trim="mail.imapUsername" type="email" autocomplete="off" placeholder="nav@example.com"></label>
-          <label><span>IMAP 密码</span><input v-model="mail.imapPassword" type="password" autocomplete="new-password" :disabled="mail.reuseSmtpPasswordForImap" :placeholder="mail.imapPasswordConfigured ? '已安全保存，留空保持不变' : '输入邮箱密码'"></label>
-          <label><span>邮箱目录</span><input v-model.trim="mail.imapMailbox" type="text" autocomplete="off"></label>
-          <label v-if="!isSecondaryMailAccount"><span>摘要时间（小时，逗号分隔）</span><input v-model="mail.digestHoursText" type="text" inputmode="numeric" autocomplete="off"></label>
-          <label v-if="!isSecondaryMailAccount"><span>摘要时区</span><input v-model.trim="mail.digestTimeZone" type="text" autocomplete="off"></label>
-        </div>
-        <p v-if="mailOwnerLocked" id="mail-owner-lock-tip" class="field-tip">账号保存后归属用户会锁定，避免后台任务与其他邮箱串号。</p>
-        <label class="check-row"><input v-model="mail.reuseSmtpPasswordForImap" type="checkbox">保存时将 SMTP 密码复制给 IMAP</label>
-        <div class="action-row">
-          <span>{{ imapTestDisabledReason || `配置已保存，可测试。最近验证：${formatDate(mail.imapVerifiedAt)}` }}</span>
-          <button
-            class="button button--secondary"
-            :class="{ 'is-ready': imapReadyToTest }"
-            type="button"
-            :disabled="!imapReadyToTest"
-            :title="imapTestDisabledReason || '验证 IMAP 连接'"
-            @click="testImap"
-          >
-            {{ ['test-imap', 'test-account-imap'].includes(busyAction) ? '测试中' : '测试 IMAP' }}
-          </button>
-        </div>
-      </fieldset>
-
-      <fieldset>
-        <legend>功能开关</legend>
-        <div class="toggle-grid">
-          <label><input v-model="mail.deliveryEnabled" type="checkbox" :disabled="!mail.smtpVerified">邮件发送队列</label>
-          <label v-if="!isSecondaryMailAccount"><input v-model="mail.registrationEnabled" type="checkbox" :disabled="!mail.deliveryEnabled">注册邮箱验证与审批通知</label>
-          <label><input v-model="mail.ingestEnabled" type="checkbox" :disabled="!mail.imapVerified">IMAP 智能收件</label>
-          <label v-if="!isSecondaryMailAccount"><input v-model="mail.digestEnabled" type="checkbox" :disabled="!mail.ingestEnabled">每日邮件摘要</label>
-        </div>
-      </fieldset>
-
-      <footer class="card-footer">
-        <p>{{ mailSaveStatus }} 修改主机名、账号或密码后，原验证自动失效。</p>
-        <button
-          class="button button--primary"
-          type="submit"
-          :disabled="loading || !writable || Boolean(busyAction)"
-          :aria-describedby="!writable ? 'integration-write-warning' : undefined"
-        >
-          <Icon name="check" :size="16" />
-          {{ ['save-mail', 'save-mail-account', 'create-mail-account'].includes(busyAction) ? '保存中' : isNewMailAccount ? '添加并保存邮箱' : '保存邮件配置' }}
-        </button>
-      </footer>
-    </form>
+    <SystemNotificationSettings :state="systemMail" :writable="writable" @saved="refresh" />
 
     <form class="integration-card" novalidate @submit.prevent="saveCloud">
       <header class="card-header">

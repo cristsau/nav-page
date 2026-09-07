@@ -1,6 +1,7 @@
 <script setup>
 import { nextTick, onBeforeUnmount, ref, watch } from 'vue'
 import Icon from '@/shared/components/Icon.vue'
+import { sanitizeHttpUrl } from '@/shared/utils/safeUrl'
 
 const props = defineProps({
   show: {
@@ -64,6 +65,10 @@ const closeButton = ref(null)
 const panelSheet = ref(null)
 const copied = ref(false)
 const copyError = ref('')
+
+function safeSourceUrl(item) {
+  return sanitizeHttpUrl(item?.url)
+}
 
 function handleKeydown(event) {
   if (event.key === 'Escape' && props.show) {
@@ -192,18 +197,19 @@ async function copyAnswer() {
                 <span>{{ result.answer ? '参考来源' : '相关网页' }}</span>
               </div>
               <div class="ai-panel__source-list">
-                <a
+                <component
                   v-for="(item, index) in result.items"
                   :key="item.url || index"
+                  :is="safeSourceUrl(item) ? 'a' : 'div'"
                   class="ai-panel__source"
-                  :href="item.url"
-                  target="_blank"
-                  rel="noopener noreferrer"
+                  :href="safeSourceUrl(item) || undefined"
+                  :target="safeSourceUrl(item) ? '_blank' : undefined"
+                  :rel="safeSourceUrl(item) ? 'noopener noreferrer' : undefined"
                 >
                   <span class="ai-panel__source-meta">{{ item.source || '网页来源' }}</span>
                   <strong>{{ item.title }}</strong>
                   <span v-if="item.description">{{ item.description }}</span>
-                </a>
+                </component>
               </div>
             </section>
           </template>

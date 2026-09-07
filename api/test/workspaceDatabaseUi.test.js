@@ -42,3 +42,12 @@ test('workspace database view editor renders type-aware filters and mobile-acces
   assert.match(view, /@media \(max-width: 820px\)/)
   assert.match(view, /initial-focus-selector="#database-row-title"/)
 })
+
+test('workspace database URL cells use the shared sanitizer on render and write', async () => {
+  const view = await source('app/src/modules/whisper/components/DatabaseWorkspace.vue')
+  assert.match(view, /import \{ sanitizeHttpUrl \} from '@\/shared\/utils\/safeUrl'/)
+  assert.match(view, /function safeRowUrl\(row, property\)/)
+  assert.match(view, /v-else-if="safeRowUrl\(row, property\)"/)
+  assert.doesNotMatch(view, /:href="row\.values\[property\.id\]"/)
+  assert.match(view, /必须是无账号密码的 HTTP 或 HTTPS 地址/)
+})

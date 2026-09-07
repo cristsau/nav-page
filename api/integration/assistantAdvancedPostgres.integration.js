@@ -268,42 +268,22 @@ test('undo uses an after-state CAS and never overwrites a later edit', async () 
   assert.equal((await pool.query('SELECT status FROM assistant_agent_operations WHERE user_id=$1 AND operation_id=$2', [OWNER_ID, operationIds.cas])).rows[0].status, 'succeeded')
 })
 
-test('mail confirmation keeps secrets encrypted and queues one local outbox row exactly once', async () => {
-  const recipient = 'private-recipient@example.test'
-  const subject = 'Private launch subject'
-  const body = 'Private body token 7a65b89e'
+test('mail proposals are rejected without creating operations or outbox rows', async () => {
   const draft = await createEmailDraft({
     userId: OWNER_ID,
     accountId: ACCOUNT_ID,
-    payload: { to: [recipient], cc: [], bcc: [], subject, text: body }
+    payload: { to: ['retired@example.test'], cc: [], bcc: [], subject: 'Retired mailbox', text: 'Must not send' }
   })
-  const prepared = await proposal({
+  await assert.rejects(proposal({
     operationId: operationIds.mail,
     toolName: 'send_email_draft',
     args: { draftId: draft.id, contentHash: draft.contentHash },
     candidateIds: [draft.id]
-  })
-  assert.equal(prepared.result.proposal.to[0], recipient)
-
-  const before = (await pool.query(
-    `SELECT o.result_summary::text AS summary,p.arguments::text,p.preview::text,
-            encode(p.sensitive_payload,'hex') AS encrypted
-     FROM assistant_agent_operations o
-     JOIN assistant_agent_operation_payloads p USING(user_id,operation_id)
-     WHERE o.user_id=$1 AND o.operation_id=$2`,
-    [OWNER_ID, operationIds.mail]
-  )).rows[0]
-  const plaintextBefore = `${before.summary} ${before.arguments} ${before.preview}`
-  for (const secret of [recipient, subject, body]) assert.equal(plaintextBefore.includes(secret), false)
-  assert.ok(before.encrypted.length > 64)
-
-  await confirmAssistantAdvancedOperation({ userId: OWNER_ID, operationId: operationIds.mail })
-  const replay = await confirmAssistantAdvancedOperation({ userId: OWNER_ID, operationId: operationIds.mail })
-  assert.equal(replay.receipt.replayed, true)
-  assert.equal(Number((await pool.query(`SELECT COUNT(*) FROM mail_outbox WHERE user_id=$1 AND message_type='user.mail'`, [OWNER_ID])).rows[0].count), 1)
-  assert.equal((await pool.query('SELECT status FROM email_drafts WHERE id=$1 AND user_id=$2', [draft.id, OWNER_ID])).rows[0].status, 'queued')
-  const after = (await pool.query('SELECT result_summary::text FROM assistant_agent_operations WHERE user_id=$1 AND operation_id=$2', [OWNER_ID, operationIds.mail])).rows[0].result_summary
-  for (const secret of [recipient, subject, body]) assert.equal(after.includes(secret), false)
+  }), (error) => error.code === 'MAILBOX_RETIRED')
+  const queued = await pool.query("SELECT COUNT(*) FROM mail_outbox WHERE user_id=$1 AND message_type='user.mail'", [OWNER_ID])
+  assert.equal(Number(queued.rows[0].count), 0)
+  const operation = await pool.query('SELECT COUNT(*) FROM assistant_agent_operations WHERE user_id=$1 AND operation_id=$2', [OWNER_ID, operationIds.mail])
+  assert.equal(Number(operation.rows[0].count), 0)
 })
 
 test('database relation write validates owned candidates and materializes the backlink row', async () => {

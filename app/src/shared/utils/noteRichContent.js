@@ -1,3 +1,5 @@
+import { sanitizeHttpUrl } from './safeUrl.js'
+
 export const EMPTY_TIPTAP_DOCUMENT = Object.freeze({
   type: 'doc',
   content: [{ type: 'paragraph' }]
@@ -16,17 +18,6 @@ const CLIENT_ALLOWED_MARKS = new Set([
   'bold', 'italic', 'underline', 'strike', 'code', 'highlight', 'link'
 ])
 
-function safeHttpUrl(value) {
-  try {
-    const url = new URL(String(value || ''))
-    return ['http:', 'https:'].includes(url.protocol) && !url.username && !url.password
-      ? url.toString()
-      : ''
-  } catch {
-    return ''
-  }
-}
-
 export function sanitizeTiptapDocumentForClient(value) {
   if (!isTiptapDocument(value)) return null
   let nodes = 0
@@ -43,7 +34,7 @@ export function sanitizeTiptapDocumentForClient(value) {
         .flatMap((mark) => {
           if (!CLIENT_ALLOWED_MARKS.has(mark?.type)) return []
           if (mark.type !== 'link') return [{ type: mark.type }]
-          const href = safeHttpUrl(mark?.attrs?.href)
+          const href = sanitizeHttpUrl(mark?.attrs?.href)
           return href ? [{ type: 'link', attrs: { href } }] : []
         })
       if (marks.length) node.marks = marks
@@ -60,7 +51,7 @@ export function sanitizeTiptapDocumentForClient(value) {
     } else if (rawNode.type === 'taskItem') {
       node.attrs = { checked: Boolean(rawNode.attrs?.checked) }
     } else if (rawNode.type === 'image') {
-      const src = safeHttpUrl(rawNode.attrs?.src)
+      const src = sanitizeHttpUrl(rawNode.attrs?.src)
       if (!src) return null
       node.attrs = {
         src,

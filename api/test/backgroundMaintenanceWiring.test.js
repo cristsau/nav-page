@@ -9,7 +9,7 @@ async function source(path) {
 test('server, config and Compose keep maintenance and logs bounded', async () => {
   const [server, emailRuntime, app, config, envExample, compose] = await Promise.all([
     source('../src/server.js'),
-    source('../src/lib/emailRuntimeController.js'),
+    source('../src/lib/systemMailRuntime.js'),
     source('../src/app.js'),
     source('../src/config.js'),
     source('../.env.example'),
@@ -23,15 +23,11 @@ test('server, config and Compose keep maintenance and logs bounded', async () =>
   assert.match(server, /startBookmarkHealthScheduler/)
   assert.match(server, /startSearchEmbeddingScheduler/)
   assert.match(server, /startWebPushScheduler/)
-  assert.match(server, /configureEmailRuntime/)
-  assert.match(server, /stopEmailRuntime/)
+  assert.match(server, /configureSystemMailRuntime/)
+  assert.match(server, /stopSystemMailRuntime/)
   assert.match(emailRuntime, /startMailDeliveryScheduler/)
-  assert.match(emailRuntime, /startEmailIngestWorker/)
-  assert.match(emailRuntime, /startEmailClassificationScheduler/)
-  assert.match(emailRuntime, /startEmailSentAppendScheduler/)
-  assert.match(emailRuntime, /startEmailCacheRetention/)
-  assert.match(emailRuntime, /startEmailDigestScheduler/)
-  assert.match(emailRuntime, /MAINTENANCE_JOB_NAMES\.MAIL_DELIVERY/)
+  assert.match(emailRuntime, /systemOnly: true/)
+  assert.doesNotMatch(emailRuntime, /emailRuntimeController|startEmailIngest/)
   assert.match(server, /createMaintenanceJobObserver/)
   assert.match(server, /sendMaintenanceNotification/)
   assert.doesNotMatch(server, /sendMaintenanceJobNotificationToAdmins/)
@@ -73,7 +69,7 @@ test('server, config and Compose keep maintenance and logs bounded', async () =>
   assert.match(app, /req\.body\.query/)
   assert.match(compose, /driver: local/)
   assert.match(compose, /max-size: "10m"/)
-  assert.equal((compose.match(/logging: \*nav-logging/g) || []).length, 3)
+  assert.equal((compose.match(/logging: \*nav-logging/g) || []).length, 2)
 })
 
 test('production maintenance profile opts in only the two reviewed bounded jobs', async () => {
@@ -171,8 +167,8 @@ test('migration verification keeps all maintenance jobs after feature integratio
   assert.match(maintenanceRoute, /AI_USAGE_RETENTION/)
   assert.match(maintenanceRoute, /NOTE_REMINDER_GENERATION/)
   assert.match(maintenanceRoute, /BOOKMARK_HEALTH_CHECK/)
-  assert.match(maintenanceRoute, /EMAIL_CACHE_RETENTION/)
-  assert.match(maintenanceRoute, /EMAIL_CLASSIFICATION/)
+  assert.doesNotMatch(maintenanceRoute, /EMAIL_CACHE_RETENTION/)
+  assert.doesNotMatch(maintenanceRoute, /EMAIL_CLASSIFICATION/)
 })
 
 test('routes expose retention, export and media retry status without secrets', async () => {

@@ -92,50 +92,17 @@ test('advisory lease loss invalidates leadership and notifies the worker', async
   assert.deepEqual(client.releaseCalls, [failure])
 })
 
-test('mail worker is isolated from API runtime and retained by backup and disaster restore', async () => {
-  const [controller, worker, ingestWorker, scheduler, config, env, compose, backup, restore, backupExample] = await Promise.all([
-    source('../src/lib/emailRuntimeController.js'),
-    source('../src/mailWorker.js'),
-    source('../src/lib/emailIngestWorker.js'),
-    source('../src/lib/emailIngestScheduler.js'),
-    source('../src/config.js'),
-    source('../.env.example'),
-    source('../../docker-compose.backend.yml'),
-    source('../../scripts/nav-backup.sh'),
-    source('../../scripts/nav-disaster-restore.sh'),
-    source('../../scripts/nav-backup.env.example')
+test('active deployment and recovery defaults no longer start a mailbox worker', async () => {
+  const [runtime, worker, compose, backup, restore, example] = await Promise.all([
+    source('../src/lib/systemMailRuntime.js'), source('../src/mailWorker.js'),
+    source('../../docker-compose.backend.yml'), source('../../scripts/nav-backup.sh'),
+    source('../../scripts/nav-disaster-restore.sh'), source('../../scripts/nav-backup.env.example')
   ])
-
-  assert.match(config, /\['combined', 'api', 'worker'\]/)
-  assert.match(env, /NAV_EMAIL_RUNTIME_ROLE=combined/)
-  assert.match(controller, /role === 'combined' \|\| role === 'api'/)
-  assert.match(controller, /role === 'combined' \|\| role === 'worker'/)
-  assert.match(controller, /createRecoverableSerialQueue/)
-  assert.match(worker, /NAV_EMAIL_RUNTIME_ROLE=worker/)
-  assert.match(worker, /applyManagedIntegrationsToRuntime/)
-  assert.match(worker, /SIGTERM/)
-  assert.match(ingestWorker, /tryAcquirePostgresAdvisoryLease/)
-  assert.match(ingestWorker, /nav_email_ingest:/)
-  assert.match(scheduler, /rerunRequested/)
-  assert.match(scheduler, /activeClient\?\.close/)
-
-  assert.equal((compose.match(/image: "domo-nav-api:\$\{NAV_RELEASE_SHA:-development\}"/g) || []).length, 2)
-  const workerService = compose.slice(
-    compose.indexOf('  nav-mail-worker:'),
-    compose.indexOf('\nvolumes:')
-  )
-  assert.match(workerService, /NAV_EMAIL_RUNTIME_ROLE: worker/)
-  assert.match(workerService, /nav-api:\s*\n\s+condition: service_healthy/)
-  assert.match(workerService, /command: \["node", "src\/mailWorker\.js"\]/)
-  assert.match(workerService, /scripts\/checkMailWorkerHealth\.js/)
-  assert.match(workerService, /NAV_INTEGRATIONS_DIR[^\n]+:ro"/)
-  assert.match(workerService, /imap-password:\/run\/secrets\/nav\/imap-password:ro/)
-  assert.match(workerService, /email-encryption-key:\/run\/secrets\/nav\/email-encryption-key:ro/)
-  assert.doesNotMatch(workerService, /^\s+ports:/m)
-  assert.match(backup, /NAV_RUNTIME_CONTAINERS:=nav-api;nav-mail-worker;nav-postgres/)
-  assert.match(restore, /NAV_DR_APP_CONTAINERS:=nav-mail-worker;nav-api;nav-web/)
-  assert.match(restore, /NAV_DR_COMPOSE_SERVICES:=nav-postgres;nav-api;nav-mail-worker/)
-  assert.match(backupExample, /REPLACE_NAV_MAIL_WORKER_CONTAINER/)
-  assert.match(backupExample, /^NAV_DR_APP_CONTAINERS=nav-mail-worker;nav-api;nav-web$/m)
-  assert.match(backupExample, /^NAV_DR_COMPOSE_SERVICES=nav-postgres;nav-api;nav-mail-worker$/m)
+  assert.match(runtime, /systemOnly: true/)
+  assert.doesNotMatch(runtime, /emailRuntimeController|startEmailIngest/)
+  assert.match(worker, /mailbox retired/)
+  assert.doesNotMatch(compose, /nav-mail-worker|imap-password/)
+  assert.match(backup, /NAV_RUNTIME_CONTAINERS:=nav-api;nav-postgres/)
+  assert.match(restore, /NAV_DR_COMPOSE_SERVICES:=nav-postgres;nav-api/)
+  assert.doesNotMatch(example, /REPLACE_NAV_MAIL_WORKER_CONTAINER/)
 })
