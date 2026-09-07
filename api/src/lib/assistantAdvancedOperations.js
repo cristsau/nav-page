@@ -1,3 +1,4 @@
+import { assertActiveAssistantTool, RETIRED_MAIL_TOOLS } from './mailboxRetirement.js'
 import { createHash, randomBytes, randomUUID } from 'node:crypto'
 import { withTransaction, query } from '../db/index.js'
 import { createEmailDraftInTransaction, getEmailDraftForUser, queueEmailDraft } from './emailDrafts.js'
@@ -90,7 +91,7 @@ export const ASSISTANT_ADVANCED_TOOL_DEFINITIONS = Object.freeze([
   { type: 'function', name: 'create_database_row', description: '生成在当前用户工作区数据库中新建记录的确认预览。values 的键必须来自数据库属性。', strict: false, risk: 'risky', parameters: objectSchema({ databaseId: ID, title: { type: 'string', maxLength: 500 }, values: { type: 'object' } }, ['databaseId', 'title']) },
   { type: 'function', name: 'update_database_row', description: '生成修改当前用户工作区数据库记录的确认预览。', strict: false, risk: 'risky', parameters: objectSchema({ databaseId: ID, rowId: ID, title: { type: 'string', maxLength: 500 }, values: { type: 'object' } }, ['databaseId', 'rowId']) },
   { type: 'function', name: 'archive_database_row', description: '生成归档当前用户工作区数据库记录的确认预览。', strict: false, risk: 'risky', parameters: objectSchema({ databaseId: ID, rowId: ID }, ['databaseId', 'rowId']) }
-])
+].filter((tool) => !RETIRED_MAIL_TOOLS.has(tool.name)))
 
 const DEFINITION_BY_NAME = new Map(ASSISTANT_ADVANCED_TOOL_DEFINITIONS.map((item) => [item.name, item]))
 
@@ -139,6 +140,7 @@ function timestamp(value, label, { nullable = true } = {}) {
 }
 
 function normalizeArgs(toolName, value = {}) {
+  assertActiveAssistantTool(toolName)
   switch (toolName) {
     case 'list_owned_notes':
     case 'list_owned_bookmarks': exact(value, ['query', 'limit']); return { query: text(value.query, '检索词', MAX_QUERY_LENGTH), limit: limit(value.limit) }
@@ -594,6 +596,7 @@ async function currentUndoState(client, userId, row) {
 export async function confirmAssistantAdvancedOperation({ userId, operationId, withTransactionFn = withTransaction, executeConfirmedFn = executeConfirmed, now = () => Date.now() }) {
   const outcome = await withTransactionFn(async (client) => {
     const selected = await client.query(`SELECT o.*,p.arguments,p.preview,p.sensitive_payload,p.before_snapshot,p.confirmation_fingerprint,p.expires_at FROM assistant_agent_operations o JOIN assistant_agent_operation_payloads p USING(user_id,operation_id) WHERE o.user_id=$1 AND o.operation_id=$2 FOR UPDATE OF o,p`, [userId, operationId])
+    assertActiveAssistantTool(selected.rows[0]?.tool_name)
     const row = await hydrateSensitiveOperation(selected.rows[0], userId, operationId)
     if (!row) fail('待确认操作不存在', 'assistant_operation_not_found', 404)
     if (row.status === 'succeeded' || row.status === 'undone') return { receipt: assistantAdvancedOperationReceipt(row, row, { replayed: true }), result: null }

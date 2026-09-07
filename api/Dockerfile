@@ -23,6 +23,12 @@ RUN . /etc/os-release \
 COPY src ./src
 COPY scripts ./scripts
 
+# Prove the real API can load with production-only dependencies. Retired IMAP
+# and attachment extraction libraries must not leak into the active import graph.
+RUN DATABASE_URL=postgres://nav:build-only@127.0.0.1:5432/nav \
+  NAV_PUBLIC_APP_ORIGIN=https://nav.example.test \
+  node --input-type=module -e "const { createApp } = await import('./src/app.js'); const app = createApp(); await app.ready(); await app.close()"
+
 EXPOSE 3001
 
 HEALTHCHECK --interval=10s --timeout=3s --start-period=10s --retries=6 \

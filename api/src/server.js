@@ -17,7 +17,8 @@ import { startSecurityEventRetention } from './lib/securityEventRetention.js'
 import { startNoteReminderGeneration } from './lib/noteReminderScheduler.js'
 import { startSearchEmbeddingScheduler } from './lib/searchEmbeddingScheduler.js'
 import { startWebPushScheduler } from './lib/webPushScheduler.js'
-import { configureEmailRuntime, stopEmailRuntime } from './lib/emailRuntimeController.js'
+import { configureSystemMailRuntime, stopSystemMailRuntime } from './lib/systemMailRuntime.js'
+import { enforceMailboxRetirement } from './lib/mailboxRetirement.js'
 import { applyManagedIntegrationsToRuntime } from './lib/managedIntegrations.js'
 import { applyManagedOauthToRuntime } from './lib/managedOauthIntegrations.js'
 import { sendMaintenanceNotification } from './lib/notificationDelivery.js'
@@ -34,6 +35,7 @@ async function main() {
   await runMigrations()
   await applyManagedIntegrationsToRuntime()
   await applyManagedOauthToRuntime()
+  enforceMailboxRetirement(config)
   const initialAcceptanceRecovery = await recoverExpiredReleaseAcceptanceAccounts({
     poolInstance: pool
   })
@@ -78,7 +80,7 @@ async function main() {
       stopBookmarkHealthScheduler(),
       stopSearchEmbeddingScheduler(),
       stopWebPushScheduler(),
-      stopEmailRuntime(),
+      stopSystemMailRuntime(),
       stopReleaseAcceptanceRecovery(),
       stopCollaborationWebSocket()
     ])
@@ -95,6 +97,15 @@ async function main() {
       host: config.host,
       port: config.port
     })
+    app.log.info(
+      {
+        sessionCookieSameSite: config.sessionCookieSameSite,
+        extensionOriginCount: config.extensionOrigins
+          ? config.extensionOrigins.split(',').filter(Boolean).length
+          : 0
+      },
+      'browser request security policy active'
+    )
 
     const observerOptions = {
       poolInstance: pool,
@@ -229,7 +240,7 @@ async function main() {
       })
     })
 
-    await configureEmailRuntime({
+    await configureSystemMailRuntime({
       poolInstance: pool,
       logger: app.log,
       observerFactory: (jobName, jobLabel) => createMaintenanceJobObserver({
@@ -252,7 +263,7 @@ async function main() {
       stopBookmarkHealthScheduler(),
       stopSearchEmbeddingScheduler(),
       stopWebPushScheduler(),
-      stopEmailRuntime(),
+      stopSystemMailRuntime(),
       stopReleaseAcceptanceRecovery(),
       stopCollaborationWebSocket()
     ])

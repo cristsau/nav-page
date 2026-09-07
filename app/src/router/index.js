@@ -5,6 +5,27 @@ import {
   startRouteProgress
 } from '@/shared/services/routeProgress'
 
+const DEFAULT_DESCRIPTION = 'DOMO NAV 自托管网址导航与个人工作入口'
+const PUBLIC_CANONICAL_ORIGIN = 'https://nav.cristsau.cn'
+
+function updateDocumentMetadata(route) {
+  document.title = route.meta.title
+    ? `${route.meta.title} - DOMO NAV`
+    : 'DOMO NAV - 个人导航工作台'
+
+  const description = document.querySelector('meta[name="description"]')
+  description?.setAttribute('content', route.meta.description || DEFAULT_DESCRIPTION)
+
+  document.querySelector('link[data-domo-public-canonical]')?.remove()
+  if (!route.meta.canonicalPath) return
+
+  const canonical = document.createElement('link')
+  canonical.rel = 'canonical'
+  canonical.href = `${PUBLIC_CANONICAL_ORIGIN}${route.meta.canonicalPath}`
+  canonical.dataset.domoPublicCanonical = 'true'
+  document.head.append(canonical)
+}
+
 const routes = [
   {
     path: '/auth',
@@ -18,6 +39,8 @@ const routes = [
     component: () => import('@/modules/public/AboutView.vue'),
     meta: {
       title: '关于',
+      description: '了解 DOMO NAV 自托管网址导航、个人工作入口与 Google 登录的数据边界。',
+      canonicalPath: '/about',
       public: true,
       publicShell: true,
       skipSession: true
@@ -29,6 +52,8 @@ const routes = [
     component: () => import('@/modules/public/PrivacyView.vue'),
     meta: {
       title: '隐私政策',
+      description: 'DOMO NAV 隐私政策：Google 登录数据的收集、用途、存储、保留、解除绑定与删除方式。',
+      canonicalPath: '/privacy',
       public: true,
       publicShell: true,
       skipSession: true
@@ -61,8 +86,8 @@ const routes = [
   {
     path: '/mail',
     name: 'Mail',
-    component: () => import('@/modules/mail/MailView.vue'),
-    meta: { title: '邮件' }
+    component: () => import('@/modules/public/MailRetiredView.vue'),
+    meta: { title: '邮箱已下线' }
   },
   {
     path: '/assistant',
@@ -126,9 +151,7 @@ router.beforeEach(async (to) => {
 
 router.afterEach((to, _from, failure) => {
   if (!failure) {
-    document.title = to.meta.title
-      ? `${to.meta.title} - DOMO NAV`
-      : 'DOMO NAV - 个人导航工作台'
+    updateDocumentMetadata(to)
   }
   finishRouteProgress()
 })

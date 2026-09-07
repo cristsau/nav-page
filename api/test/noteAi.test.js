@@ -174,6 +174,9 @@ test('note AI endpoint requires authentication before reading provider settings'
     const response = await app.inject({
       method: 'POST',
       url: '/api/notes/ai',
+      headers: {
+        origin: 'http://localhost:5174'
+      },
       payload: {
         action: 'summarize',
         type: 'memo',

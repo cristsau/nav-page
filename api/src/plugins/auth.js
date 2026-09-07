@@ -22,12 +22,16 @@ async function authPlugin(fastify) {
   fastify.decorateRequest('session', null)
 
   fastify.decorate('setSessionCookie', async (reply, token) => {
-    const secure = config.sessionCookieSecure || isProduction()
+    const secure = (
+      config.sessionCookieSecure
+      || isProduction()
+      || config.sessionCookieSameSite === 'none'
+    )
 
     reply.setCookie(config.sessionCookieName, token, {
       httpOnly: true,
       secure,
-      sameSite: secure ? 'none' : 'lax',
+      sameSite: config.sessionCookieSameSite,
       path: '/',
       maxAge: config.sessionTtlDays * 24 * 60 * 60
     })
@@ -35,7 +39,9 @@ async function authPlugin(fastify) {
 
   fastify.decorate('clearSessionCookie', async (reply) => {
     reply.clearCookie(config.sessionCookieName, {
-      path: '/'
+      path: '/',
+      secure: config.sessionCookieSecure || isProduction() || config.sessionCookieSameSite === 'none',
+      sameSite: config.sessionCookieSameSite
     })
   })
 

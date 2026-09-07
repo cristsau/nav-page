@@ -120,7 +120,14 @@ NAV_RATE_LIMIT_KEY_SECRET=<至少 32 字符的独立随机值>
 
 ```dotenv
 NAV_POSTGRES_DATA_DIR=/var/lib/domo-nav/postgres
+NAV_POSTGRES_DB=nav
+NAV_POSTGRES_USER=nav
+NAV_POSTGRES_PASSWORD=<只保存在部署主机上的唯一强密码>
 ```
+
+`NAV_POSTGRES_PASSWORD` 是 Compose 解析硬门禁，缺失时不得启动。API 的 owner-only
+`api/.env` 还必须显式设置与上述账号一致的 `DATABASE_URL`；生产模式不再使用默认连接串，
+缺失时 API 会在连接数据库前 fail-fast。密码不得进入 Git、镜像、命令历史、证据包或日志。
 
 Compose 缺少该变量时直接拒绝解析，并且不会自动创建宿主机来源目录。受支持的
 `scripts/deploy-backend.sh` 为全新安装提供上面的兼容默认值，同时拒绝相对路径、符号链接、
@@ -357,6 +364,17 @@ location ^~ /share/ {
 浏览器扩展默认访问：
 
 - `https://nav.skrskr.net`
+
+API 默认拒绝全部 `chrome-extension://` 来源。若使用官方扩展，先在 `chrome://extensions`
+复制该已安装包的精确 32 位扩展 ID，再在 owner-only `api/.env` 中只登记该来源：
+
+```dotenv
+NAV_EXTENSION_ORIGINS=chrome-extension://<精确扩展ID>
+NAV_SESSION_COOKIE_SAME_SITE=none
+```
+
+不使用扩展时保持 `NAV_EXTENSION_ORIGINS` 为空、`NAV_SESSION_COOKIE_SAME_SITE=lax`。
+禁止通配扩展来源；改变扩展打包身份导致 ID 变化时，应先核对新 ID，再替换白名单。
 
 如果以后你切到：
 

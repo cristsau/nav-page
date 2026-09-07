@@ -47,33 +47,9 @@ const JOB_DEFINITIONS = Object.freeze([
   },
   {
     name: MAINTENANCE_JOB_NAMES.MAIL_DELIVERY,
-    label: '邮件发送队列',
+    label: '系统通知发送',
     enabled: () => config.mailDeliveryEnabled,
     intervalSeconds: () => config.mailDeliveryIntervalSeconds
-  },
-  {
-    name: MAINTENANCE_JOB_NAMES.EMAIL_INGEST,
-    label: '邮件接收',
-    enabled: () => config.emailIngestEnabled,
-    intervalSeconds: () => config.imapPollIntervalSeconds
-  },
-  {
-    name: MAINTENANCE_JOB_NAMES.EMAIL_CLASSIFICATION,
-    label: '邮件 AI 分类与通知',
-    enabled: () => config.emailIngestEnabled,
-    intervalSeconds: () => config.emailClassificationIntervalSeconds
-  },
-  {
-    name: MAINTENANCE_JOB_NAMES.EMAIL_DIGEST,
-    label: '邮件摘要生成',
-    enabled: () => config.emailDigestEnabled,
-    intervalSeconds: () => config.emailDigestIntervalSeconds
-  },
-  {
-    name: MAINTENANCE_JOB_NAMES.EMAIL_CACHE_RETENTION,
-    label: '邮箱本地缓存清理',
-    enabled: () => config.emailCacheRetentionEnabled,
-    intervalSeconds: () => config.emailCacheRetentionIntervalSeconds
   }
 ])
 

@@ -1959,6 +1959,42 @@ test('attachment ciphertext lifecycle reaches an encrypted pending Sent job and 
   }
 })
 
+test('retirement sends only transactional notifications and leaves old mailbox outbox untouched', async () => {
+  const saved = await persistEmailMailboxMessage(mailboxFixture())
+  const draft = await createEmailDraft({
+    userId: OWNER_ID, accountId: saved.account.id,
+    payload: { to: ['personal@example.test'], subject: 'Retired message', text: 'Never send' }
+  }, { poolInstance: pool })
+  const queued = await queueEmailDraft({
+    userId: OWNER_ID, draftId: draft.id, contentHash: draft.contentHash, confirmed: true
+  }, { poolInstance: pool, assertDeliveryReadyFn: assertIntegrationDeliveryReady })
+  const systemId = randomUUID()
+  const digestId = randomUUID()
+  await pool.query(
+    `INSERT INTO mail_outbox (id,user_id,message_type,recipient,subject,text_body,dedupe_key,sensitive)
+     VALUES ($1::uuid,$3::uuid,'system.test','system@example.test','System test','Test',$1::text,false),
+            ($2::uuid,$3::uuid,'email.digest','digest@example.test','Old digest','Test',$2::text,false)`,
+    [systemId, digestId, OWNER_ID]
+  )
+  const recipients = []
+  const summary = await deliverMailOutbox({
+    poolInstance: pool, policy: {}, systemOnly: true,
+    runtimeConfig: { emailSourceKey: 'integration-mail', emailOwnerUsername: 'mail-owner', smtpFromAddress: 'nav@example.test' },
+    transportFactory: async () => ({
+      async sendMail(message) { recipients.push(message.to); return { accepted: [message.to], rejected: [] } },
+      close() {}
+    })
+  })
+  assert.deepEqual(recipients, ['system@example.test'])
+  assert.equal(summary.sent, 1)
+  assert.equal(summary.remaining, 0)
+  const { rows } = await pool.query('SELECT id,status FROM mail_outbox WHERE id=ANY($1::uuid[])', [[systemId, digestId, queued.outboxId]])
+  const states = new Map(rows.map((row) => [row.id, row.status]))
+  assert.equal(states.get(systemId), 'sent')
+  assert.equal(states.get(digestId), 'pending')
+  assert.equal(states.get(queued.outboxId), 'pending')
+})
+
 test('stale sending lease expires as ambiguous without another SMTP attempt', async () => {
   const saved = await persistEmailMailboxMessage(mailboxFixture())
   const draft = await createEmailDraft({

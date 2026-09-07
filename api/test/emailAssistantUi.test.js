@@ -20,8 +20,8 @@ test('registration UX supports email verification and privacy-preserving resend'
 test('admin mail settings expose status and an authenticated queue test without secrets', async () => {
   const [view, api, route] = await Promise.all([
     source('../../app/src/modules/settings/components/UserManagementSettings.vue'),
-    source('../../app/src/shared/services/emailApi.js'),
-    source('../src/routes/email.js')
+    source('../../app/src/shared/services/systemNotificationApi.js'),
+    source('../src/routes/systemIntegrations.js')
   ])
   assert.match(view, /Cloudflare 继续负责 DNS/)
   assert.match(view, /发送测试邮件/)
@@ -51,42 +51,27 @@ test('assistant is a first-class responsive destination with sources, history an
   assert.match(view, /历史/)
 })
 
-test('mail is a first-class destination with safe remote commands, setup, cache, and legacy deep-link states', async () => {
-  const [route, navigation, mobileNav, view, store, emailApi] = await Promise.all([
+test('legacy mail links show retirement without advertising mail in navigation', async () => {
+  const [router, navigation, view] = await Promise.all([
     source('../../app/src/router/index.js'),
     source('../../app/src/shared/navigation/appNavigation.js'),
-    source('../../app/src/shared/components/MobileTabBar.vue'),
-    source('../../app/src/modules/mail/MailView.vue'),
-    source('../../app/src/modules/mail/useMailStore.js'),
-    source('../../app/src/shared/services/emailApi.js')
+    source('../../app/src/modules/public/MailRetiredView.vue')
   ])
-  assert.match(route, /path: '\/mail'/)
-  assert.match(navigation, /id: 'mail'/)
-  assert.match(mobileNav, /flex: 1 1 0/)
-  assert.match(view, /远端已读、重要、归档、移动与删除操作进入安全队列/)
-  assert.match(view, /还没有启用智能收件/)
-  assert.match(view, /邮箱已连接，但 DOMO NAV 还没有收录邮件/)
-  assert.match(view, /已同步内容仍可只读查看/)
-  assert.match(store, /loadLegacyEvent/)
-  assert.match(emailApi, /fetchEmailEvents/)
-  assert.match(emailApi, /fetchEmailEvent/)
-  assert.match(emailApi, /createEmailMessageCommand/)
-  assert.match(emailApi, /undoEmailMessageCommand/)
+  assert.match(router, /path: '\/mail'/)
+  assert.match(router, /MailRetiredView\.vue/)
+  assert.doesNotMatch(navigation, /id: 'mail'/)
+  assert.match(view, /邮箱功能已下线/)
 })
 
-test('mail settings describe provider-neutral SMTP and IMAP constraints', async () => {
-  const [settings, userManagement, mailOutbox, ingest] = await Promise.all([
-    source('../../app/src/modules/settings/components/SystemIntegrationsSettings.vue'),
-    source('../../app/src/modules/settings/components/UserManagementSettings.vue'),
-    source('../src/lib/mailOutbox.js'),
-    source('../src/lib/emailIngestScheduler.js')
+test('system notification settings preserve TLS SMTP without personal IMAP controls', async () => {
+  const [settings, smtp] = await Promise.all([
+    source('../../app/src/modules/settings/components/SystemNotificationSettings.vue'),
+    source('../src/lib/mailOutbox.js')
   ])
-  assert.match(settings, /邮件服务（SMTP \/ IMAP）/)
-  assert.match(settings, /应用专用密码/)
-  assert.doesNotMatch(settings, /MXroute/i)
-  assert.doesNotMatch(userManagement, /MXroute/i)
-  assert.match(mailOutbox, /SMTP must use implicit TLS on port 465/)
-  assert.match(ingest, /IMAP must use TLS port 993/)
+  assert.match(settings, /系统通知/)
+  assert.match(settings, /测试 SMTP/)
+  assert.doesNotMatch(settings, /IMAP|智能收件|每日摘要/)
+  assert.match(smtp, /SMTP must use implicit TLS on port 465/)
 })
 
 test('active notification design uses in-app, Web Push and email instead of Telegram', async () => {

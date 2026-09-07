@@ -43,16 +43,9 @@ test('mail worker pool health opens one alert and records recovery', () => {
   assert.equal(recovery.waitingSince, null)
 })
 
-test('worker heartbeat and healthcheck include pool saturation state', async () => {
-  const [worker, healthcheck, compose, env] = await Promise.all([
-    fs.readFile(new URL('../src/mailWorker.js', import.meta.url), 'utf8'),
-    fs.readFile(new URL('../scripts/checkMailWorkerHealth.js', import.meta.url), 'utf8'),
-    fs.readFile(new URL('../../docker-compose.backend.yml', import.meta.url), 'utf8'),
-    fs.readFile(new URL('../.env.example', import.meta.url), 'utf8')
-  ])
-  assert.match(worker, /totalCount: poolHealth\.totalCount/)
-  assert.match(worker, /MAIL_WORKER_DATABASE_POOL_WAITING/)
-  assert.match(healthcheck, /pool\.alerting === true/)
-  assert.match(compose, /NAV_MAIL_WORKER_POOL_WAIT_ALERT_SECONDS/)
-  assert.match(env, /NAV_MAIL_WORKER_POOL_WAIT_ALERT_SECONDS=60/)
+test('retired worker is not deployed, while historical health checks remain readable', async () => {
+  const worker = await fs.readFile(new URL('../src/mailWorker.js', import.meta.url), 'utf8')
+  const compose = await fs.readFile(new URL('../../docker-compose.backend.yml', import.meta.url), 'utf8')
+  assert.match(worker, /mailbox retired/)
+  assert.doesNotMatch(compose, /nav-mail-worker|checkMailWorkerHealth/)
 })

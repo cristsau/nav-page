@@ -182,6 +182,7 @@ request_json() {
     --max-time "$HTTP_TIMEOUT_SECONDS"
     --request "$method"
     --header 'Accept: application/json'
+    --header "Origin: $base_url"
     --header 'User-Agent: DOMO-NAV-mail-release-acceptance/1'
     --cookie "$cookie_jar"
     --cookie-jar "$cookie_jar"
@@ -255,6 +256,7 @@ cleanup_json_request() {
     --max-time "$HTTP_TIMEOUT_SECONDS" \
     --request "$method" \
     --header 'Accept: application/json' \
+    --header "Origin: $base_url" \
     --header 'User-Agent: DOMO-NAV-mail-release-acceptance/1' \
     --cookie "$cookie_jar" \
     --cookie-jar "$cookie_jar" \

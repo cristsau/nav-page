@@ -1,6 +1,16 @@
 # DOMO NAV 身份登录与邮件入口实施边界
 
-状态：`LOCAL_DONE / DEFAULT_OFF`。身份 OAuth 与 OAuth-only 邮箱 Provider 已形成可测试的本地候选；未配置真实平台 Secret、未执行外部授权、未推送或部署。
+## 2026-09-07 最新决策：个人邮箱下线
+
+本节覆盖下方历史邮件路线。项目所有者要求停止个人邮箱功能，聚焦现有导航、时光、AI、媒体和账号安全。
+本地候选已移除邮件入口、邮箱 OAuth 管理、IMAP/分类/摘要/附件任务和 AI 邮件操作；仅保留注册验证、
+审批、系统告警所用的 SMTP 通道。数据库和已发布迁移不删除，旧代码保留用于历史数据恢复测试。
+状态为 `LOCAL_CANDIDATE / NOT_PUSHED / NOT_DEPLOYED`，不是生产下线完成。
+详细范围和发布门槛见 [邮箱下线计划](./NAV_MAIL_RETIREMENT_20260907.md)。Google OIDC 与现有账号绑定边界不变。
+
+## 以下为 2026-09-04 及以前的实现记录
+
+状态：`CODE_DONE / BRAND_VERIFIED / CLIENT_CONFIGURATION_PENDING`。身份 OAuth 与 OAuth-only 邮箱 Provider 已形成可测试的代码；2026-09-04 项目所有者提供的 Google Auth Platform 页面显示 DOMO NAV 品牌已通过验证。该证据不等于 OAuth Client、Secret、真实绑定、双域登录或生产验收已经完成。
 
 ## 已实现的本地候选
 
@@ -27,6 +37,10 @@
 5. “按已验证邮箱自动关联”是默认关闭的管理员开关；即便开启，也只匹配已审批且 DOMO NAV 邮箱已验证的唯一现有账号。
 6. 绑定和解绑均要求当前密码；临时验收账号禁止操作，密码登录凭据保留，避免锁号。
 7. OAuth 账号关联、解绑和登录均写入安全审计，但不记录令牌、授权码或用户资料正文。
+
+控制台字段、两条精确回调、DOMO NAV 管理界面填写位置和双域验收顺序见
+[`NAV_GOOGLE_LOGIN_SETUP.md`](./NAV_GOOGLE_LOGIN_SETUP.md)。登录功能只申请
+`openid email profile`；下方邮箱 OAuth 仅为历史记录，不再是当前开放能力。
 
 参考：
 

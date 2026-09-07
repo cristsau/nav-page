@@ -183,6 +183,7 @@ test('bookmark AI tag endpoint requires authentication before reading bookmark d
       method: 'POST',
       url: '/api/bookmarks/read-only-probe/ai/tags',
       headers: {
+        origin: 'http://localhost:5174',
         'content-type': 'application/json'
       },
       payload: {}

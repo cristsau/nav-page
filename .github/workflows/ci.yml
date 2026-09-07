@@ -78,12 +78,13 @@ jobs:
       - name: Install API dependencies
         run: npm ci --prefix api
 
-      - name: Validate backend Compose worker topology
+      - name: Validate backend Compose topology
         env:
           NAV_RELEASE_SHA: ci
           NAV_SECRETS_DIR: /tmp/nav-ci-secrets
           NAV_INTEGRATIONS_DIR: /tmp/nav-ci-integrations
           NAV_POSTGRES_DATA_DIR: /tmp/nav-ci-postgres-data
+          NAV_POSTGRES_PASSWORD: ci-only-placeholder
         run: |
           touch api/.env
           docker compose -f docker-compose.backend.yml config --quiet
@@ -307,7 +308,7 @@ jobs:
           npm run migrate --prefix api
           npm run verify:migrations --prefix api
 
-      - name: Exercise encrypted mailbox lifecycle and ownership
+      - name: Exercise legacy mailbox recovery and system-only delivery boundary
         run: npm run test:email-mailbox:integration --prefix api
 
   restore-postgres-integration:

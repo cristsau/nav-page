@@ -2,7 +2,9 @@ import test from 'node:test'
 import assert from 'node:assert/strict'
 import {
   createCorsOriginValidator,
+  isAllowedExtensionOrigin,
   isUnsafeRequestOriginTrusted,
+  parseAllowedExtensionOrigins,
   parseAllowedOrigins
 } from '../src/lib/requestSecurity.js'
 import { config } from '../src/config.js'
@@ -73,6 +75,42 @@ test('reverse-proxied unsafe requests trust the explicit public origin allowlist
     isUnsafeRequestOriginTrusted(request, 'https://nav.skrskr.net'),
     false
   )
+})
+
+test('extension origins require an exact dedicated allowlist', async () => {
+  const official = 'chrome-extension://abcdefghijklmnopabcdefghijklmnop'
+  const other = 'chrome-extension://ponmlkjihgfedcbaponmlkjihgfedcba'
+
+  assert.deepEqual(parseAllowedExtensionOrigins(`${official.toUpperCase()},invalid`), [official])
+  assert.equal(isAllowedExtensionOrigin(official, official), true)
+  assert.equal(isAllowedExtensionOrigin(other, official), false)
+  assert.equal(isAllowedExtensionOrigin(official, ''), false)
+
+  const unconfigured = createCorsOriginValidator(productionOrigins)
+  const configured = createCorsOriginValidator(productionOrigins, official)
+  const validate = (validator, origin) => new Promise((resolve, reject) => {
+    validator(origin, (error, allowed) => error ? reject(error) : resolve(allowed))
+  })
+  assert.equal(await validate(unconfigured, official), false)
+  assert.equal(await validate(configured, official), true)
+  assert.equal(await validate(configured, other), false)
+
+  const request = { method: 'POST', headers: { origin: official } }
+  assert.equal(isUnsafeRequestOriginTrusted(request, productionOrigins, ''), false)
+  assert.equal(isUnsafeRequestOriginTrusted(request, productionOrigins, official), true)
+})
+
+test('unsafe requests without Origin require an affirmative Fetch Metadata signal', () => {
+  const request = (site) => ({
+    method: 'POST',
+    headers: site ? { 'sec-fetch-site': site } : {}
+  })
+
+  assert.equal(isUnsafeRequestOriginTrusted(request('same-origin'), productionOrigins), true)
+  assert.equal(isUnsafeRequestOriginTrusted(request('same-site'), productionOrigins), true)
+  assert.equal(isUnsafeRequestOriginTrusted(request('none'), productionOrigins), true)
+  assert.equal(isUnsafeRequestOriginTrusted(request('cross-site'), productionOrigins), false)
+  assert.equal(isUnsafeRequestOriginTrusted(request(''), productionOrigins), false)
 })
 
 test('Fastify serves credentialed CORS for both production domains and blocks attackers', async () => {

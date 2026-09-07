@@ -18,7 +18,12 @@ import {
   AUTO_CHAT_MODEL_OPTION_ID,
   buildChatModelPicker
 } from '@/shared/config/aiModels'
-import { fetchEmailEvent } from '@/shared/services/emailApi'
+import {
+  isInternalPath,
+  sanitizeHttpUrl,
+  sanitizeInternalPath,
+  sanitizeLinkHref
+} from '@/shared/utils/safeUrl'
 
 const route = useRoute()
 const router = useRouter()
@@ -35,8 +40,6 @@ const preferenceSaving = ref(false)
 const errorMessage = ref('')
 const pendingSend = ref(null)
 const actionBusyId = ref('')
-const emailDetail = ref(null)
-const emailLoading = ref(false)
 const usageExpanded = ref(false)
 const composer = ref(null)
 const messageList = ref(null)
@@ -54,6 +57,14 @@ const modelCatalog = ref({
 const modelCatalogLoading = ref(false)
 const modelCatalogError = ref('')
 let streamController = null
+
+function safeSourceHref(source) {
+  return sanitizeLinkHref(source?.href)
+}
+
+function safeActionHref(action) {
+  return sanitizeInternalPath(action?.href)
+}
 
 const TOOL_LABELS = Object.freeze({
   get_current_datetime: '读取当前时间',
@@ -439,26 +450,6 @@ function retryLastQuestion() {
   void sendQuestion({ retry: true })
 }
 
-async function loadLinkedEmail(emailId) {
-  emailDetail.value = null
-  if (!emailId) return
-  emailLoading.value = true
-  try {
-    emailDetail.value = await fetchEmailEvent(emailId)
-  } catch (error) {
-    errorMessage.value = error.message || '邮件详情加载失败'
-  } finally {
-    emailLoading.value = false
-  }
-}
-
-async function closeEmailPanel() {
-  emailDetail.value = null
-  const query = { ...route.query }
-  delete query.email
-  await router.replace({ path: route.path, query })
-}
-
 function handleComposerKeydown(event) {
   if (event.key === 'Enter' && !event.shiftKey) {
     event.preventDefault()
@@ -470,15 +461,10 @@ function handleUsageToggle(event) {
   usageExpanded.value = event.currentTarget?.open === true
 }
 
-watch(() => route.query.email, (value) => {
-  void loadLinkedEmail(String(value || ''))
-})
-
 onMounted(async () => {
   await Promise.all([
     loadConversations(),
-    loadModelCatalog(),
-    loadLinkedEmail(String(route.query.email || ''))
+    loadModelCatalog()
   ])
   composer.value?.focus()
 })
@@ -597,11 +583,11 @@ onBeforeUnmount(() => streamController?.abort())
         <div v-else-if="!messages.length" class="assistant-welcome">
           <span class="assistant-welcome__icon"><Icon name="sparkles" :size="24" /></span>
           <h2>今天想找什么？</h2>
-          <p>我可以从导航、笔记、备忘录、到期提醒和已接入的邮件里检索，并把依据放在回答下方。</p>
+          <p>我可以从导航、笔记、备忘录和到期提醒里检索，并把依据放在回答下方。</p>
           <div class="assistant-suggestions">
             <button type="button" @click="question = '我今天有哪些需要处理的事情？'; sendQuestion()">我今天要处理什么？</button>
             <button type="button" @click="question = '帮我找最近保存的部署配置'; sendQuestion()">找最近的部署配置</button>
-            <button type="button" @click="question = '有哪些重要邮件需要我核对？'; sendQuestion()">查看重要邮件</button>
+            <button type="button" @click="question = '帮我整理今天的待办'; sendQuestion()">整理今日待办</button>
           </div>
         </div>
 
@@ -629,7 +615,7 @@ onBeforeUnmount(() => streamController?.abort())
                     <strong>{{ toolLabel(action.tool) }}</strong>
                     <small>{{ actionOutcome(action) }} · ID {{ action.operationId }}</small>
                   </span>
-                  <RouterLink v-if="action.href && action.status !== 'awaiting_confirmation'" :to="action.href" aria-label="打开操作对象">
+                  <RouterLink v-if="safeActionHref(action) && action.status !== 'awaiting_confirmation'" :to="safeActionHref(action)" aria-label="打开操作对象">
                     <Icon name="external-link" :size="15" />
                   </RouterLink>
                 </div>
@@ -649,13 +635,13 @@ onBeforeUnmount(() => streamController?.abort())
             </div>
             <div v-if="message.sources?.length" class="assistant-sources" aria-label="回答来源">
               <component
-                :is="source.href?.startsWith('/') ? RouterLink : 'a'"
+                :is="isInternalPath(source.href) ? RouterLink : safeSourceHref(source) ? 'a' : 'div'"
                 v-for="source in message.sources"
                 :key="source.sourceId"
-                :to="source.href?.startsWith('/') ? source.href : undefined"
-                :href="source.href?.startsWith('/') ? undefined : source.href"
-                :target="source.href?.startsWith('/') ? undefined : '_blank'"
-                :rel="source.href?.startsWith('/') ? undefined : 'noopener noreferrer'"
+                :to="isInternalPath(source.href) ? sanitizeInternalPath(source.href) : undefined"
+                :href="!isInternalPath(source.href) ? sanitizeHttpUrl(source.href) || undefined : undefined"
+                :target="!isInternalPath(source.href) && sanitizeHttpUrl(source.href) ? '_blank' : undefined"
+                :rel="!isInternalPath(source.href) && sanitizeHttpUrl(source.href) ? 'noopener noreferrer' : undefined"
               >
                 <span>{{ source.sourceId }} · {{ sourceLabel(source) }}<template v-if="source.recordId"> · ID {{ source.recordId }}</template></span>
                 <strong>{{ source.title }}</strong>
@@ -684,7 +670,7 @@ onBeforeUnmount(() => streamController?.abort())
           v-model="question"
           rows="2"
           maxlength="500"
-          placeholder="例如：我今天有哪些重要邮件和到期备忘录？"
+          placeholder="例如：帮我整理今天的待办，或创建一篇今天的日记。"
           @keydown="handleComposerKeydown"
         ></textarea>
         <div>
@@ -697,30 +683,7 @@ onBeforeUnmount(() => streamController?.abort())
       </form>
     </section>
 
-    <aside v-if="emailLoading || emailDetail" class="assistant-email" aria-label="邮件详情">
-      <header>
-        <div>
-          <span class="assistant-eyebrow">邮件证据</span>
-          <h2>{{ emailDetail?.subject || '正在读取邮件…' }}</h2>
-        </div>
-        <button type="button" aria-label="关闭邮件详情" @click="closeEmailPanel">
-          <Icon name="close" :size="18" />
-        </button>
-      </header>
-      <div v-if="emailDetail" class="assistant-email__body">
-        <dl>
-          <div><dt>发件人</dt><dd>{{ emailDetail.senderName || emailDetail.senderAddress }}</dd></div>
-          <div><dt>时间</dt><dd>{{ formatDate(emailDetail.receivedAt) }}</dd></div>
-          <div><dt>级别</dt><dd>Tier {{ emailDetail.tier }} · {{ emailDetail.urgency }}</dd></div>
-          <div><dt>判断原因</dt><dd>{{ emailDetail.reason }}</dd></div>
-          <div><dt>建议操作</dt><dd>{{ emailDetail.suggestedAction }}</dd></div>
-        </dl>
-        <section>
-          <h3>正文</h3>
-          <pre>{{ emailDetail.body }}</pre>
-        </section>
-      </div>
-    </aside>
+
   </main>
 </template>
 

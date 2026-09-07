@@ -426,7 +426,13 @@ test('session management and recovery-code rotation require authentication', asy
         url: '/api/auth/recovery-codes/status'
       }
     ]) {
-      const response = await app.inject(request)
+      const response = await app.inject({
+        ...request,
+        headers: {
+          origin: 'http://localhost:5174',
+          ...(request.headers || {})
+        }
+      })
       assert.equal(response.statusCode, 401)
       assert.equal(response.json().error, 'Authentication required')
     }

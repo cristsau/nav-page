@@ -1,3 +1,5 @@
+import { sanitizeHttpUrl } from './safeUrl.js'
+
 const DEFAULT_RESULT_LIMIT = 6
 
 function normalizeSearchText(value) {
@@ -53,18 +55,6 @@ function toTimestamp(value) {
   return Number.isFinite(timestamp) ? timestamp : 0
 }
 
-function normalizeResultUrl(value) {
-  try {
-    const url = new URL(String(value || ''))
-    if (!['http:', 'https:'].includes(url.protocol)) return ''
-    url.username = ''
-    url.password = ''
-    return url.toString()
-  } catch {
-    return ''
-  }
-}
-
 function sortRankedResults(left, right) {
   if (left.score !== right.score) return right.score - left.score
   return right.updatedTimestamp - left.updatedTimestamp
@@ -101,7 +91,7 @@ function rankBookmark(bookmark, query, term) {
     title: String(bookmark.title || bookmark.url || '未命名导航'),
     subtitle: String(bookmark.url || ''),
     snippet: makeSnippet(bookmark.description || (bookmark.tags || []).join(' · '), query),
-    href: normalizeResultUrl(bookmark.url),
+    href: sanitizeHttpUrl(bookmark.url),
     score,
     updatedTimestamp: toTimestamp(bookmark.updatedAt || bookmark.createdAt)
   }
