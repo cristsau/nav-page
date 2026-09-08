@@ -2,6 +2,7 @@
 import { computed, onBeforeUnmount, onMounted, ref } from 'vue'
 import { useRoute } from 'vue-router'
 import Icon from '@/shared/components/Icon.vue'
+import BotChallenge from '@/shared/components/BotChallenge.vue'
 import EmailAuthForm from './EmailAuthForm.vue'
 import { fetchAuthCapabilities } from '@/shared/services/authEmailApi'
 import { useAuth } from '@/shared/composables/useAuth'
@@ -11,12 +12,15 @@ import {
   verifyBackendRegistrationEmail
 } from '@/shared/services/authApi'
 import { fetchOauthLoginConfig, startOauthLogin } from '@/shared/services/oauthApi'
+import { createPwaOauthController, isHomeScreenApp } from '@/shared/services/pwaOauth'
+import { browserSupportsDeviceKeys, fetchDeviceKeyConfig, loginWithDeviceKey, deviceKeyMessage } from '@/shared/services/deviceKeyApi'
 
 const route = useRoute()
 const {
   backendAuthEnabled,
   initAuth,
   login,
+  acceptAuthenticatedSession,
   recoverAccount,
   register
 } = useAuth()
@@ -40,6 +44,45 @@ const resendEmail = ref('')
 const resendLoading = ref(false)
 const oauthConfig = ref({ providers: { google: { enabled: false }, wechat: { enabled: false } } })
 const oauthLoading = ref('')
+const trustDevice = ref(false)
+const deviceKeyReady = ref(false)
+const passwordChallengeRequired = ref(false)
+const loginChallenge = ref(null), registrationChallenge = ref(null), recoveryChallenge = ref(null), resendChallenge = ref(null)
+async function loadDeviceKeys() {
+  if (!backendAuthEnabled.value) return
+  try { deviceKeyReady.value = (await fetchDeviceKeyConfig()).enabled && await browserSupportsDeviceKeys() }
+  catch { deviceKeyReady.value = false }
+}
+async function handleDeviceKeyLogin() {
+  if (loading.value) return
+  loading.value = true; errorMessage.value = ''; successMessage.value = ''
+  try {
+    const result = await loginWithDeviceKey(trustDevice.value)
+    acceptAuthenticatedSession(result.user)
+    window.location.assign(redirectTarget.value)
+  } catch (error) { errorMessage.value = deviceKeyMessage(error) }
+  finally { loading.value = false }
+}
+const pwaState = ref('idle')
+let pwaLogin = null
+const pwaPending = computed(() => ['pending', 'reconnecting'].includes(pwaState.value))
+
+function getPwaLogin() {
+  if (!pwaLogin) pwaLogin = createPwaOauthController({
+    onState: state => { pwaState.value = state; if (state === 'idle') oauthLoading.value = '' },
+    onError: error => { errorMessage.value = error.message; oauthLoading.value = '' },
+    onComplete: result => {
+      acceptAuthenticatedSession(result.user)
+      window.location.assign(redirectTarget.value)
+    }
+  })
+  return pwaLogin
+}
+
+async function cancelPwaLogin() {
+  try { await getPwaLogin().cancel() }
+  catch { errorMessage.value = '暂时无法取消登录，请联网后重试。'; pwaState.value = 'reconnecting' }
+}
 
 const loginForm = ref({
   username: '',
@@ -121,6 +164,7 @@ onMounted(async () => {
   await Promise.all([
     initAuth(),
     loadEmailCapabilities(),
+    loadDeviceKeys(),
     loadRegistrationConfig(),
     loadOauthConfig()
   ])
@@ -131,9 +175,10 @@ onMounted(async () => {
       : '外部登录未完成或已过期，请重新尝试。'
   }
   await verifyRegistrationFromLink()
+  if (isHomeScreenApp() && oauthConfig.value.pwaHandoff) await getPwaLogin().restore()
 })
 
-onBeforeUnmount(clearFormSecrets)
+onBeforeUnmount(() => { pwaLogin?.dispose(); clearFormSecrets() })
 function clearFormSecrets() {
   clearRecoverySecrets()
   loginForm.value.password=''
@@ -147,9 +192,11 @@ async function handleLogin() {
   successMessage.value = ''
 
   try {
-    await login(loginForm.value.username, loginForm.value.password)
+    if (pwaPending.value) await getPwaLogin().cancel()
+    await login(loginForm.value.username, loginForm.value.password, { trustDevice: trustDevice.value, turnstileToken: loginChallenge.value?.takeToken() })
     window.location.assign(String(redirectTarget.value))
   } catch (error) {
+    if (String(error.code || '').startsWith('BOT_')) passwordChallengeRequired.value = true
     errorMessage.value = error.message || '登录失败，请稍后再试。'
   } finally {
     loading.value = false
@@ -162,7 +209,12 @@ async function handleOauthLogin(provider) {
   errorMessage.value = ''
   successMessage.value = ''
   try {
-    const result = await startOauthLogin(provider, redirectTarget.value)
+    if (isHomeScreenApp()) {
+      if (!oauthConfig.value.pwaHandoff) throw new Error('桌面应用的 Google 登录正在升级，请暂用账号密码。')
+      await getPwaLogin().start(provider, redirectTarget.value, trustDevice.value)
+      return
+    }
+    const result = await startOauthLogin(provider, redirectTarget.value, trustDevice.value)
     window.location.assign(result.authorizationUrl)
   } catch (error) {
     errorMessage.value = error.message || '无法发起外部登录，请稍后重试。'
@@ -241,7 +293,8 @@ async function handleRecovery() {
     await recoverAccount({
       username,
       recoveryCode,
-      newPassword: recoveryForm.value.newPassword
+      newPassword: recoveryForm.value.newPassword,
+      turnstileToken: recoveryChallenge.value?.takeToken()
     })
 
     loginForm.value = {
@@ -297,7 +350,8 @@ async function handleRegister() {
     const request = await register({
       username: registerForm.value.username,
       email: registerForm.value.email,
-      password: registerForm.value.password
+      password: registerForm.value.password,
+      turnstileToken: registrationChallenge.value?.takeToken()
     })
 
     successMessage.value = request.autoApproved
@@ -336,7 +390,7 @@ async function handleResendVerification() {
   }
   resendLoading.value = true
   try {
-    await resendBackendRegistrationEmail(email)
+    await resendBackendRegistrationEmail(email, resendChallenge.value?.takeToken())
     successMessage.value = '如果该邮箱存在待验证申请，新验证邮件已进入发送队列。请检查收件箱和垃圾邮件。'
   } catch (error) {
     errorMessage.value = error.message || '暂时无法重发验证邮件。'
@@ -366,14 +420,22 @@ async function handleResendVerification() {
           <img class="auth-card__logo" src="/icons/cristsau-mark-512-v2.png" alt="">
           <span>DOMO NAV</span>
         </div>
-        <h1 class="auth-card__title">欢迎回到你的空间</h1>
-        <p class="auth-card__desc">安全登录，继续你的日常。新用户需经管理员审批。</p>
+        <h1 class="auth-card__title">{{activeTab === 'register' ? '创建你的空间' : '欢迎回来'}}</h1>
+        <p class="auth-card__desc">{{activeTab === 'register' ? '提交申请，管理员审批后即可使用。' : '收藏、记录与灵感，都在这里。'}}</p>
       </div>
 
-      <div class="auth-tabs">
+      <section v-if="pwaPending" class="auth-handoff" role="status" aria-live="polite">
+        <Icon name="browser" :size="26" />
+        <strong>{{ pwaState === 'reconnecting' ? '等待网络恢复' : '等待身份验证完成' }}</strong>
+        <p>完成 Google 验证后，关闭那个窗口回到这里。我们会安全接续登录。</p>
+        <button type="button" class="auth-provider" @click="getPwaLogin().check()">我已完成，继续登录</button>
+        <button type="button" class="auth-link" @click="cancelPwaLogin">取消本次登录</button>
+      </section>
+
+      <div v-show="!pwaPending" class="auth-tabs auth-tabs--account" aria-label="登录或注册">
         <button
           class="auth-tab"
-          :class="{ 'is-active': activeTab === 'login' }"
+          :class="{ 'is-active': activeTab === 'login' }" :aria-pressed="activeTab === 'login'"
           type="button"
           @click="selectTab('login')"
         >
@@ -381,7 +443,7 @@ async function handleResendVerification() {
         </button>
         <button
           class="auth-tab"
-          :class="{ 'is-active': activeTab === 'register' }"
+          :class="{ 'is-active': activeTab === 'register' }" :aria-pressed="activeTab === 'register'"
           type="button"
           @click="selectTab('register')"
         >
@@ -389,16 +451,22 @@ async function handleResendVerification() {
         </button>
       </div>
 
-      <div v-if="activeTab === 'login' && !recoveryMode && !emailReset && backendAuthEnabled" class="auth-tabs" aria-label="登录方式">
+      <div v-if="!pwaPending && activeTab === 'login' && !recoveryMode && !emailReset && backendAuthEnabled" class="auth-tabs" aria-label="登录方式">
         <button type="button" class="auth-tab" :class="{'is-active':emailMode}" :disabled="!capabilities.emailLogin" @click="emailMode=true">邮箱验证码</button>
         <button type="button" class="auth-tab" :class="{'is-active':!emailMode}" @click="emailMode=false">账号密码</button>
       </div>
+      <button v-if="deviceKeyReady && !pwaPending && activeTab === 'login' && !recoveryMode && !emailReset" class="auth-device-key" type="button" :disabled="loading" @click="handleDeviceKeyLogin">
+        <Icon name="scan-face" :size="25" /><span>快捷登录<small>Face ID、Touch ID 或设备密码</small></span><Icon name="chevron-right" :size="18" />
+      </button>
       <p v-if="backendAuthEnabled && !capabilities.emailLogin && activeTab === 'login'" class="auth-card__desc">邮箱验证码暂不可用，请使用账号密码。</p>
-      <EmailAuthForm v-if="activeTab === 'login' && !recoveryMode && (emailMode || emailReset)"
-        :key="emailReset ? 'reset' : 'login'" :mode="emailReset ? 'reset' : 'login'" :redirect-target="redirectTarget" :reset-available="capabilities.emailPasswordReset"
+      <label v-if="!pwaPending && activeTab === 'login' && !recoveryMode && !emailReset && backendAuthEnabled" class="auth-trust">
+        <input v-model="trustDevice" type="checkbox" /><span>信任此设备 <small>最长 30 天保持登录，仅用于私人设备</small></span>
+      </label>
+      <EmailAuthForm v-if="!pwaPending && activeTab === 'login' && !recoveryMode && (emailMode || emailReset)"
+        :key="emailReset ? 'reset' : 'login'" :mode="emailReset ? 'reset' : 'login'" :redirect-target="redirectTarget" :reset-available="capabilities.emailPasswordReset" :trust-device="trustDevice"
         @back="emailReset=false;emailMode=false" @reset="emailReset=true" />
       <form
-        v-else-if="activeTab === 'login' && !recoveryMode"
+        v-else-if="!pwaPending && activeTab === 'login' && !recoveryMode"
         class="auth-form"
         @submit.prevent="handleLogin"
       >
@@ -410,13 +478,14 @@ async function handleResendVerification() {
           <span>密码</span>
           <input v-model="loginForm.password" type="password" autocomplete="current-password">
         </label>
+        <BotChallenge v-if="passwordChallengeRequired" ref="loginChallenge" action="password_login" />
         <button class="auth-submit" type="submit" :disabled="loading">
           {{ loading ? '登录中...' : '登录' }}
         </button>
       </form>
 
       <form
-        v-else-if="activeTab === 'login'"
+        v-else-if="!pwaPending && activeTab === 'login'"
         class="auth-form"
         @submit.prevent="handleRecovery"
       >
@@ -457,6 +526,7 @@ async function handleResendVerification() {
             minlength="15"
           >
         </label>
+        <BotChallenge v-if="backendAuthEnabled" ref="recoveryChallenge" action="account_recovery" />
         <button class="auth-submit" type="submit" :disabled="loading">
           {{ loading ? '重设中...' : '重设密码' }}
         </button>
@@ -470,7 +540,7 @@ async function handleResendVerification() {
         </button>
       </form>
 
-      <form v-else class="auth-form" @submit.prevent="handleRegister">
+      <form v-else-if="!pwaPending" class="auth-form" @submit.prevent="handleRegister">
         <label class="auth-field">
           <span>用户名</span>
           <input v-model="registerForm.username" type="text" autocomplete="username">
@@ -503,12 +573,13 @@ async function handleResendVerification() {
             :minlength="backendAuthEnabled ? 15 : undefined"
           >
         </label>
+        <BotChallenge v-if="backendAuthEnabled" ref="registrationChallenge" action="register" />
         <button class="auth-submit" type="submit" :disabled="loading">
           {{ loading ? '提交中...' : '提交注册申请' }}
         </button>
       </form>
 
-      <section v-if="activeTab === 'login' && !recoveryMode && !emailReset" class="auth-alternatives" aria-label="其他登录和恢复方式">
+      <section v-if="!pwaPending && activeTab === 'login' && !recoveryMode && !emailReset" class="auth-alternatives" aria-label="其他登录和恢复方式">
         <div
           v-if="oauthConfig.providers.google.enabled || oauthConfig.providers.wechat.enabled"
           class="auth-divider"
@@ -557,6 +628,7 @@ async function handleResendVerification() {
           <span>注册邮箱</span>
           <input v-model="resendEmail" type="email" autocomplete="email">
         </label>
+        <BotChallenge ref="resendChallenge" action="register_resend" />
         <button
           class="auth-provider"
           type="button"
@@ -882,9 +954,8 @@ async function handleResendVerification() {
 .auth-story__foot {font-size:12px;color:var(--text-secondary);letter-spacing:.15em}
 .auth-alternatives {display:grid;gap:10px;margin-top:18px}
 .auth-page button,.auth-page input {min-height:44px}
-.auth-page button:focus-visible,.auth-page a:focus-visible {outline:3px solid #98734e;outline-offset:3px}
-.auth-field input {border-color:#928477;font-size:16px}
-.auth-tab.is-active,.auth-submit {background:#74543a;color:#fff}
+.auth-page button:focus-visible,.auth-page a:focus-visible {outline:3px solid var(--text-primary);outline-offset:3px}
+.auth-field input {font-size:16px}
 .auth-link {color:var(--text-primary)}
 .auth-tab:disabled {opacity:.5;cursor:not-allowed}
 .auth-message--error {color:var(--text-primary);border:1px solid #a34949}
@@ -902,4 +973,41 @@ async function handleResendVerification() {
  .auth-tab {padding:12px 7px}
 }
 @media(prefers-reduced-motion:reduce) {.auth-page * {transition:none!important;animation:none!important}}
+
+/* iPhone-inspired hierarchy: calm content surfaces, one clear primary action. */
+.auth-page {min-height:100svh;background:var(--bg-secondary);padding:clamp(24px,5vw,72px)}
+.auth-card {border-radius:30px;border-color:var(--border-light);box-shadow:0 16px 60px color-mix(in srgb,var(--text-primary) 5%,transparent);padding:36px}
+.auth-card__brand {padding:0;background:transparent;gap:12px;font-size:12px;letter-spacing:.14em;color:var(--text-secondary)}
+.auth-card__logo {width:44px;height:44px;border-radius:13px}
+.auth-card__title {font-size:34px;font-weight:750;line-height:1.2;letter-spacing:-.05em;margin:22px 0 10px}
+.auth-card__desc {font-size:14px;line-height:1.65}
+.auth-tabs {padding:4px;gap:4px;border-radius:13px;margin-bottom:20px;background:var(--bg-secondary)}
+.auth-tab {min-height:44px;padding:9px 10px;border-radius:10px;font-size:14px;font-weight:550;transition:background .18s ease,box-shadow .18s ease}
+.auth-tab.is-active {color:var(--text-primary);background:var(--bg-card);box-shadow:0 1px 4px #00000014;font-weight:650}
+.auth-tabs--account {background:transparent;padding:0;border-bottom:1px solid var(--border-light);border-radius:0;gap:22px;display:flex;margin-bottom:22px}
+.auth-tabs--account .auth-tab {padding:6px 0;min-width:44px;background:transparent;border-radius:0;color:var(--text-secondary);box-shadow:none;border-bottom:2px solid transparent}
+.auth-tabs--account .auth-tab.is-active {border-color:var(--text-primary);color:var(--text-primary)}
+.auth-field {gap:7px;font-size:13px;font-weight:600}
+.auth-field input {min-height:52px;border-radius:13px;border-color:var(--border-color);background:var(--bg-secondary);padding:14px;font-weight:400}
+.auth-submit {min-height:50px;background:var(--text-primary);color:var(--bg-card);border-radius:14px;font-size:16px;font-weight:650;margin-top:8px}
+.auth-provider {min-height:50px;background:var(--bg-card);border-radius:14px;font-size:15px}
+.auth-trust {display:flex;align-items:center;gap:12px;min-height:56px;margin:0 0 20px;cursor:pointer}
+.auth-trust input {appearance:none;-webkit-appearance:none;flex:0 0 44px;width:44px;height:44px;min-height:44px;border:0;border-radius:12px;background:var(--bg-secondary);position:relative;cursor:pointer}
+.auth-trust input::before {content:'';position:absolute;inset:12px;border:1.5px solid var(--text-secondary);border-radius:6px}
+.auth-trust input:checked::before {background:var(--text-primary);border-color:var(--text-primary)}
+.auth-trust input:checked::after {content:'';position:absolute;left:18px;top:14px;width:7px;height:12px;border:solid var(--bg-card);border-width:0 2px 2px 0;transform:rotate(45deg)}
+.auth-trust>span {font-size:14px;line-height:1.4;font-weight:550}.auth-trust small {display:block;font-weight:400;font-size:12px;color:var(--text-secondary);margin-top:3px}
+.auth-device-key {display:flex;align-items:center;gap:13px;width:100%;padding:16px;margin-bottom:14px;border:1px solid var(--border-color);border-radius:17px;background:var(--accent-bg);color:var(--text-primary);text-align:left}
+.auth-device-key>span {flex:1;font-size:16px;font-weight:650}.auth-device-key small {display:block;font-size:12px;font-weight:400;color:var(--text-secondary);margin-top:4px}.auth-device-key:disabled {opacity:.6}
+.auth-handoff {display:grid;gap:14px;padding:24px 20px;background:var(--bg-secondary);border:1px solid var(--border-light);border-radius:20px;text-align:center;justify-items:center}.auth-handoff strong {font-size:20px}.auth-handoff p {font-size:14px;line-height:1.7;color:var(--text-secondary)}.auth-handoff .auth-provider {width:100%}
+.auth-story__tile {box-shadow:none;border-color:var(--border-light);border-radius:20px;background:var(--bg-card)}
+.auth-card__desc,.auth-tabs--account .auth-tab,.auth-public-links a,.auth-trust small,.auth-device-key small,.auth-signature,.auth-handoff p {color:color-mix(in srgb,var(--text-secondary) 75%,var(--text-primary))}
+@media(max-width:850px) {
+ .auth-page {padding:max(28px,env(safe-area-inset-top)) max(22px,env(safe-area-inset-right)) max(24px,env(safe-area-inset-bottom)) max(22px,env(safe-area-inset-left));align-items:start}
+ .auth-shell {max-width:440px}.auth-card {border:0;background:transparent;box-shadow:none;padding:14px 0}.auth-card__header {margin-bottom:20px}
+ .auth-card__title {font-size:34px;margin-top:24px}.auth-card__brand {font-size:11px}.auth-card__logo {width:48px;height:48px;border-radius:14px}
+ .auth-tabs:not(.auth-tabs--account) {background:color-mix(in srgb,var(--text-primary) 6%,var(--bg-secondary))}
+ .auth-field input {background:var(--bg-card)}.auth-trust input {background:var(--bg-card)}.auth-handoff {background:var(--bg-card)}
+ .auth-public-links {margin-top:20px}.auth-signature {letter-spacing:.035em}
+}
 </style>

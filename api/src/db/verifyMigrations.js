@@ -2987,7 +2987,7 @@ async function verifyOauthIdentitySchema() {
     requestColumns.rows.map((row) => row.column_name),
     [
       'id', 'provider', 'flow', 'user_id', 'state_digest', 'nonce_digest',
-      'origin', 'return_path', 'expires_at', 'consumed_at', 'created_at'
+      'origin', 'return_path', 'expires_at', 'consumed_at', 'created_at', 'handoff_id', 'trust_device'
     ]
   )
 
@@ -3000,6 +3000,7 @@ async function verifyOauthIdentitySchema() {
     'oauth_identities_user_provider_unique',
     'oauth_authorization_requests_pkey',
     'oauth_authorization_requests_user_id_fkey',
+    'oauth_authorization_requests_handoff_id_fkey',
     'oauth_authorization_requests_provider_check',
     'oauth_authorization_requests_flow_check',
     'oauth_authorization_requests_flow_user_check',
@@ -3285,6 +3286,33 @@ async function verifyAuthEmailSchema() {
   if(trigger.rowCount!==1)throw new Error('auth identity version trigger missing')
 }
 
+async function verifyPwaDeviceKeySchema() {
+  const expected = new Map([
+    ['auth_oauth_handoffs', ['id','provider','origin','claim_digest','launch_digest','return_path','trust_device','user_id','identity_id','credential_version','created_at','launch_expires_at','expires_at','launched_at','approved_at']],
+    ['auth_device_keys', ['id','user_id','credential_id','public_key','counter','rp_id','label','transports','device_type','backed_up','created_at','last_used_at']],
+    ['auth_device_key_challenges', ['id','kind','challenge_digest','flow_digest','origin','user_id','session_id','credential_version','label','trust_device','created_at','expires_at']]
+  ])
+  for (const [table, columns] of expected) {
+    const result = await query('SELECT column_name FROM information_schema.columns WHERE table_schema=current_schema() AND table_name=$1',[table])
+    assertExactSet(`${table} columns`,result.rows.map(row=>row.column_name),columns)
+    const constraints = await query(`SELECT contype,convalidated,pg_get_constraintdef(oid) AS definition FROM pg_constraint WHERE conrelid=$1::regclass`,[table])
+    if (!constraints.rows.some(row=>row.contype==='p') || constraints.rows.some(row=>!row.convalidated)) throw new Error(`${table} constraints invalid`)
+    if (constraints.rows.some(row=>row.contype==='f' && !row.definition.includes('ON DELETE CASCADE'))) throw new Error(`${table} cleanup unsafe`)
+    const definitions = constraints.rows.map(row=>row.definition).join(' ')
+    if (table!=='auth_device_keys' && !definitions.includes('expires_at > created_at')) throw new Error(`${table} expiry constraint missing`)
+    if (table==='auth_device_keys' && !definitions.includes("'nav.skrskr.net'")) throw new Error('Device keys must be main-origin only')
+  }
+  const changed = await query(`SELECT data_type,is_nullable FROM information_schema.columns WHERE table_schema=current_schema() AND table_name='users' AND column_name='auth_changed_at'`)
+  if (changed.rows[0]?.data_type!=='timestamp with time zone' || changed.rows[0]?.is_nullable!=='NO') throw new Error('auth change timestamp missing')
+  const trigger = await query(`SELECT 1 FROM pg_trigger WHERE tgrelid='users'::regclass AND tgname='nav_stamp_auth_change' AND NOT tgisinternal AND tgenabled='O'`)
+  if(trigger.rowCount!==1) throw new Error('auth change timestamp trigger missing')
+  const sessionLink = await query(`SELECT confdeltype FROM pg_constraint WHERE conrelid='sessions'::regclass AND conname='sessions_device_key_id_fkey' AND confrelid='auth_device_keys'::regclass AND convalidated`)
+  if(sessionLink.rows[0]?.confdeltype!=='c') throw new Error('Revoking a device key must revoke its sessions')
+  const indexes=['idx_auth_oauth_handoff_expiry','idx_auth_oauth_handoff_user','idx_auth_device_keys_user','idx_auth_device_key_challenge_expiry','idx_auth_device_key_challenge_flow']
+  const found=await query('SELECT indexname FROM pg_indexes WHERE schemaname=current_schema() AND indexname=ANY($1::text[])',[indexes])
+  assertExactSet('PWA/device key indexes',found.rows.map(row=>row.indexname),indexes)
+}
+
 async function main() {
   await verifyMigrationLedger()
   await verifyNavigationMaintenanceSchema()
@@ -3314,6 +3342,7 @@ async function main() {
   await verifyWorkspaceDatabaseSchema()
   await verifyAssistantConfirmedOperationSchema()
   await verifyAuthEmailSchema()
+  await verifyPwaDeviceKeySchema()
   console.log('migration schema verification complete')
 }
 

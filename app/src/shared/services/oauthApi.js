@@ -8,11 +8,11 @@ export function fetchOauthLoginConfig() {
   })
 }
 
-export function startOauthLogin(provider, returnTo) {
+export function startOauthLogin(provider, returnTo, trustDevice = false) {
   return request(`/auth/oauth/${encodeURIComponent(provider)}/start`, {
     method: 'POST',
     expectedUnauthorized: true,
-    body: JSON.stringify({ returnTo })
+    body: JSON.stringify({ returnTo, trustDevice: trustDevice === true })
   })
 }
 

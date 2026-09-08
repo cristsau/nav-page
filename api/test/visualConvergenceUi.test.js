@@ -14,7 +14,8 @@ test('navigation keeps real behavior while converging on the compact reference l
     readSource('app/src/modules/navigation/components/NavItem.vue')
   ])
 
-  assert.match(navigation, /<h1 class="search-section__title">统一搜索<\/h1>/)
+  assert.match(navigation, /<h1 class="search-section__title">导航<\/h1>/)
+  assert.match(navigation, /class="search-section__subtitle"/)
   assert.match(navigation, /\.search-section :deep\(\.search-box\)[\s\S]*min-height: 52px/)
   assert.match(navigation, /\.search-section :deep\(\.search-shell\)[\s\S]*width: 100%/)
   assert.match(group, /grid-template-columns: repeat\(auto-fill, minmax\(220px, 1fr\)\)/)

@@ -21,11 +21,11 @@ const policySections = [
         <p>隐私与 Google 登录数据说明</p>
         <h1 id="privacy-title">DOMO NAV 隐私政策</h1>
         <p class="privacy-hero__summary">
-          本政策说明 DOMO NAV 在用户使用 Google 登录时，如何访问、使用、存储和保护相关用户信息。
+          本政策说明 DOMO NAV 的 Google 登录、可选设备验证及安全验证如何处理相关信息。
         </p>
         <p class="privacy-effective-date">
           <span>生效日期</span>
-          <time datetime="2026-09-02">2026年9月2日</time>
+          <time datetime="2026-09-08">2026年9月8日</time>
         </p>
       </header>
 
@@ -117,6 +117,13 @@ const policySections = [
               防止用户信息遭到未经授权的访问、泄露、修改或删除。
             </p>
             <p>OAuth Client Secret 等身份验证凭据不会向普通用户公开。</p>
+            <h3>可选的设备快捷登录</h3>
+            <p>启用并由您主动设置后，通行密钥由设备系统或密码管理器保存，可能按其设置同步。DOMO NAV保存验证所需的公钥、凭据标识和使用记录，不接收人脸、指纹或设备解锁密码。您可在账号安全中移除密钥；通过邮箱找回或恢复码恢复账号也会撤销新登记的设备密钥。</p>
+            <h3>登录接续与有效期</h3>
+            <p>登录使用受保护的Cookie，默认最长14天，主动选择信任私人设备时最长30天；主动退出、改密或会话撤销仍会使旧会话失效。主屏幕应用的Google登录交接使用短期一次性证明，原应用与外部验证窗口分别处理；过期证明不可使用，记录按有界清理机制移除。</p>
+            <h3>按需安全验证</h3>
+            <p>管理员启用后，注册、找回、验证码申请或频繁密码尝试可能使用Cloudflare Turnstile。该服务会处理验证所需的网络和设备信息。本服务向其验证接口只提交验证令牌及服务端验证秘密，不主动提交账号密码、邮箱、笔记或收藏内容。</p>
+            <p><a href="https://www.cloudflare.com/privacypolicy/" target="_blank" rel="noopener noreferrer">查看 Cloudflare 隐私说明</a>。安全验证不可用时，受保护的操作可能暂时无法完成，但不会因此主动清退已有登录。</p>
           </section>
 
           <section id="retention">

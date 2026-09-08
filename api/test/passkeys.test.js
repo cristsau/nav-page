@@ -57,13 +57,13 @@ test('retired endpoints cannot be enabled by the legacy runtime flag and do no D
   } finally {await app.close();config.webauthnEnabled=previous}
 })
 
-test('retired browser and server have no WebAuthn runtime dependency or credential calls', async () => {
+test('retired protocol remains disconnected; new device-key dependencies are separately pinned', async () => {
   for(const file of ['../src/routes/passkeys.js','../../app/src/shared/services/authApi.js','../../app/src/shared/composables/useAuth.js','../../app/src/modules/auth/AuthView.vue','../../app/src/modules/settings/components/AccountSecuritySettings.vue']) {
     const source=await readSource(file)
     assert.doesNotMatch(source,/@simplewebauthn|startAuthentication|startRegistration|navigator\.credentials|username webauthn|handleRegisterPasskey/)
   }
-  assert.equal((await readJson('../package.json')).dependencies['@simplewebauthn/server'],undefined)
-  assert.equal((await readJson('../../app/package.json')).dependencies['@simplewebauthn/browser'],undefined)
+  assert.equal((await readJson('../package.json')).dependencies['@simplewebauthn/server'],'14.0.1')
+  assert.equal((await readJson('../../app/package.json')).dependencies['@simplewebauthn/browser'],'14.0.0')
 })
 
 test('passkey payloads are redacted and security events have explicit UI labels', async () => {

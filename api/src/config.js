@@ -140,6 +140,11 @@ export const config = {
   ),
   sessionCookieName: process.env.SESSION_COOKIE_NAME || 'nav_session',
   sessionTtlDays: Number(process.env.SESSION_TTL_DAYS || 14),
+  oauthPwaHandoffEnabled: process.env.NAV_OAUTH_PWA_HANDOFF_ENABLED === 'true',
+  deviceKeysEnabled: process.env.NAV_DEVICE_KEYS_ENABLED === 'true',
+  turnstileEnabled: process.env.NAV_TURNSTILE_ENABLED === 'true',
+  turnstileSiteKey: String(process.env.NAV_TURNSTILE_SITE_KEY || '').trim(),
+  turnstileSecretKey: String(process.env.NAV_TURNSTILE_SECRET_KEY || '').trim(),
   sessionCookieSecure: process.env.SESSION_COOKIE_SECURE === 'true',
   sessionCookieSameSite: normalizeSessionCookieSameSite(
     process.env.NAV_SESSION_COOKIE_SAME_SITE

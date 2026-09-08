@@ -26,11 +26,11 @@ export async function fetchBackendSession() {
   return user
 }
 
-export async function loginWithBackend(username, password) {
+export async function loginWithBackend(username, password, options = {}) {
   const payload = await request('/auth/login', {
     method: 'POST',
     expectedUnauthorized: true,
-    body: JSON.stringify({ username, password })
+    body: JSON.stringify({ username, password, trustDevice: options.trustDevice === true, turnstileToken: options.turnstileToken || undefined })
   })
 
   setCurrentUserId(payload.user?.id || null)
@@ -163,11 +163,11 @@ export async function verifyBackendRegistrationEmail(requestId, token) {
   })
 }
 
-export async function resendBackendRegistrationEmail(email) {
+export async function resendBackendRegistrationEmail(email, turnstileToken) {
   return request('/auth/register/resend-verification', {
     method: 'POST',
     expectedUnauthorized: true,
-    body: JSON.stringify({ email })
+    body: JSON.stringify({ email, turnstileToken })
   })
 }
 

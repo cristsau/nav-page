@@ -1,6 +1,7 @@
 import { randomBytes, randomUUID } from 'node:crypto'
 import { setTimeout as delay } from 'node:timers/promises'
 import { config } from '../config.js'
+import { sessionLifetimeDays } from './sessionPolicy.js'
 import { pool, withTransaction } from '../db/index.js'
 import { consumePersistentRateLimit } from './persistentRateLimit.js'
 import { normalizeEmailAddress, verifiedMailConfigurationStatus } from './mailOutbox.js'
@@ -123,10 +124,10 @@ export async function issueEmailChallenge({request,reply,purpose,email,userId=nu
   return genericResponse(id)
 }
 
-export async function createEmailSession(client,user,request) {
+export async function createEmailSession(client,user,request,trustDevice=false) {
   const token=createSessionToken()
   const s=await client.query(`INSERT INTO sessions(user_id,token_hash,ip_address,user_agent,expires_at)
-    VALUES($1,$2,$3,$4,NOW()+($5 || ' days')::interval) RETURNING id`,[user.id,hashSessionToken(token),request.ip,String(request.headers['user-agent'] || '').slice(0,1000),String(config.sessionTtlDays)])
+    VALUES($1,$2,$3,$4,NOW()+($5 || ' days')::interval) RETURNING id`,[user.id,hashSessionToken(token),request.ip,String(request.headers['user-agent'] || '').slice(0,1000),String(sessionLifetimeDays(trustDevice))])
   await client.query('UPDATE users SET last_login_at=NOW() WHERE id=$1',[user.id])
   return {token,user:sanitizeUser(user),sessionId:s.rows[0].id}
 }
@@ -172,6 +173,10 @@ export async function resetEmailPassword({client,user,challenge,keys,request,bod
   if(await verifyPassword(body.newPassword,user.password_hash))throw new AuthEmailError('AUTH_EMAIL_PASSWORD_UNCHANGED')
   await client.query('UPDATE users SET password_hash=$2,password_changed_at=NOW(),updated_at=NOW() WHERE id=$1',[user.id,await hashPassword(body.newPassword)])
   await client.query('DELETE FROM sessions WHERE user_id=$1',[user.id])
+  // Recovery invalidates previously enrolled keys; an authenticated password change keeps them.
+  if(challenge.purpose==='password_reset')await client.query('DELETE FROM auth_device_keys WHERE user_id=$1',[user.id])
+  await client.query('DELETE FROM auth_oauth_handoffs WHERE user_id=$1',[user.id])
+  await client.query('DELETE FROM auth_device_key_challenges WHERE user_id=$1',[user.id])
   await client.query('UPDATE auth_email_challenges SET revoked_at=NOW() WHERE user_id=$1 AND consumed_at IS NULL',[user.id])
   await client.query('UPDATE account_recovery_codes SET revoked_at=COALESCE(revoked_at,NOW()) WHERE user_id=$1',[user.id])
   await recordSecurityEvent({client,request,eventType:challenge.purpose==='password_reset'?'auth.password.reset':'auth.account.password.update',outcome:'success',subjectUserId:user.id,resourceType:'account',resourceId:user.id})

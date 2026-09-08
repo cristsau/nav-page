@@ -28,6 +28,12 @@ function updateDocumentMetadata(route) {
 
 const routes = [
   {
+    path: '/auth/oauth-complete',
+    name: 'OauthComplete',
+    component: () => import('@/modules/auth/OauthCompleteView.vue'),
+    meta: { title: '返回应用', public: true, publicShell: true, skipSession: true }
+  },
+  {
     path: '/auth',
     name: 'Auth',
     component: () => import('@/modules/auth/AuthView.vue'),

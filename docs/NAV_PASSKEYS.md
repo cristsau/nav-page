@@ -1,5 +1,7 @@
 # NAV Passkey / WebAuthn
 
+> 历史协议文档，不是当前启用手册。R1已将 `/auth/passkeys` 固定退役，下面的旧开关、13.3.x依赖及双RP说明不得用于恢复它。2026-09-08用户另行批准主域可选设备通行密钥；新协议使用 `/auth/device-keys`、独立表及14.0.x依赖，详见[当前追加方案](NAV_PRODUCT_SPEC_20260907.md#2026-09-08-追加实施基线pwa与iphone体验)。当前未部署、未完成真机验收。
+
 ## 状态边界
 
 Passkey 源码切片已经实现，但 `NAV_WEBAUTHN_ENABLED` 默认是 `false`。在迁移、CI、双域和

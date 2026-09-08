@@ -4,6 +4,8 @@ import {enqueueMail} from './mailOutbox.js'
 
 // Called inside the same password transaction, including the legacy password/recovery paths.
 export async function invalidatePasswordProofs(client,userId) {
+ await client.query('DELETE FROM auth_oauth_handoffs WHERE user_id=$1',[userId])
+ await client.query('DELETE FROM auth_device_key_challenges WHERE user_id=$1',[userId])
  await client.query('UPDATE auth_email_challenges SET revoked_at=COALESCE(revoked_at,NOW()) WHERE user_id=$1 AND consumed_at IS NULL',[userId])
  await client.query('UPDATE account_recovery_codes SET revoked_at=COALESCE(revoked_at,NOW()) WHERE user_id=$1',[userId])
  const user=(await client.query('SELECT email,email_verified_at FROM users WHERE id=$1',[userId])).rows[0]

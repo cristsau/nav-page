@@ -1,0 +1,37 @@
+async function insertRollbackKey() {
+  await pool.query(`INSERT INTO auth_device_keys(user_id,credential_id,public_key,label,device_type)
+    VALUES($1,$2,$3,'synthetic rollback key','multiDevice')`,[userId,randomBytes(32).toString('base64url'),Buffer.from([1])])
+}
+test('ROLLBACK-01: compatible API has no new login routes and legacy capabilities stay retired',async()=>{
+  const b=browser()
+  assert.equal((await b.call('/auth/device-keys/login/options',{})).statusCode,404)
+  assert.equal((await b.call('/auth/oauth/google/pwa/start',{})).statusCode,404)
+  assert.equal((await b.call('/auth/passkeys/login/options',{})).statusCode,410)
+  assert.equal((await b.call('/email/accounts',undefined,'GET')).statusCode,410)
+})
+test('ROLLBACK-02: ordinary password change keeps device key metadata and revokes sessions',async()=>{
+  await insertRollbackKey()
+  const b=browser();await passwordLogin(b)
+  assert.equal((await b.call('/auth/account/password',{currentPassword:oldPassword,newPassword},'PUT')).statusCode,200)
+  assert.equal(await count('sessions'),0)
+  assert.equal(await count('auth_device_keys'),1)
+  assert.equal((await b.call('/auth/session',undefined,'GET')).json().user,null)
+})
+test('ROLLBACK-03: email recovery deletes new device keys and all sessions',async()=>{
+  await insertRollbackKey()
+  const b=browser();await passwordLogin(b)
+  const recovery=browser(),p=await requestCode(recovery,'/auth/password-reset/request')
+  assert.equal((await recovery.call('/auth/password-reset/confirm',{challengeId:p.challengeId,code:p.code,newPassword,confirmPassword:newPassword})).statusCode,200)
+  assert.equal(await count('auth_device_keys'),0)
+  assert.equal(await count('sessions'),0)
+})
+test('ROLLBACK-04: recovery codes also delete new device keys and sessions',async()=>{
+  await insertRollbackKey()
+  const b=browser();await passwordLogin(b)
+  const codes=await b.call('/auth/recovery-codes',{currentPassword:oldPassword})
+  assert.equal(codes.statusCode,200)
+  const recovery=await browser().call('/auth/recover',{username:'synthetic-auth-owner',recoveryCode:codes.json().codes[0],newPassword})
+  assert.equal(recovery.statusCode,200)
+  assert.equal(await count('auth_device_keys'),0)
+  assert.equal(await count('sessions'),0)
+})

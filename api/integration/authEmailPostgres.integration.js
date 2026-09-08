@@ -16,6 +16,8 @@ const {config}=await import('../src/config.js')
 const {pool,runMigrations}=await import('../src/db/index.js')
 const {createApp}=await import('../src/app.js')
 const {hashPassword,verifyPassword}=await import('../src/lib/auth.js')
+const {oauthHandoffs,HANDOFF_COOKIE}=await import('../src/lib/oauthHandoff.js')
+const {syntheticAuthenticator}=await import('../test/helpers/deviceKeyAuthenticator.js')
 const {loadAuthEmailKeys,authEmailJobContext,decryptAuthPayload,emailCodeMac}=await import('../src/lib/authEmailCrypto.js')
 const {deliverAuthEmails}=await import('../src/lib/authEmailDelivery.js')
 const A='https://auth-a.example.test',B='https://auth-b.example.test'
@@ -32,7 +34,7 @@ before(async()=>{
     mailDeliveryEnabled:true,smtpHost:'smtp.example.test',smtpPort:465,smtpSecure:true,smtpUsername:'sender@example.test',smtpFromAddress:'sender@example.test',smtpPasswordFile:smtpFile,
     corsOrigin:`${A},${B}`,rateLimitKeySecret:randomBytes(32).toString('hex'),apiLogLevel:'silent'})
   // First establish the deployed pre-047 schema, then upgrade a real synthetic account.
-  await runMigrations({fileSystem:{...fs,readdir:async(...args)=>(await fs.readdir(...args)).filter(entry=>entry.name!=='047_auth_email_challenges.sql')}})
+  await runMigrations({fileSystem:{...fs,readdir:async(...args)=>(await fs.readdir(...args)).filter(entry=>Number(entry.name.slice(0,3))<47)}})
   const upgradeUser=randomUUID(),upgradeHash=await hashPassword(oldPassword)
   await pool.query("INSERT INTO users(id,username,password_hash,role,status) VALUES($1,'synthetic-upgrade',$2,'admin','approved')",[upgradeUser,upgradeHash])
   await runMigrations()
@@ -457,3 +459,62 @@ test('A-11/24: untrusted forwarded IP cannot reset public request quota',async()
   }
   assert.equal(await count('auth_email_delivery_jobs'),0)
 })
+
+async function withPwaApp(run) {
+  const previous={corsOrigin:config.corsOrigin,oauthPwaHandoffEnabled:config.oauthPwaHandoffEnabled,deviceKeysEnabled:config.deviceKeysEnabled,sessionCookieSecure:config.sessionCookieSecure}
+  Object.assign(config,{corsOrigin:'https://nav.skrskr.net,https://nav.cristsau.cn',oauthPwaHandoffEnabled:true,deviceKeysEnabled:true,sessionCookieSecure:true})
+  const isolated=createApp()
+  const makeBrowser=()=>{
+    const cookies={}
+    return {cookies,async call(path,payload,method='POST',host='nav.skrskr.net') {
+      const response=await isolated.inject({method,url:'/api'+path,headers:{host,origin:`https://${host}`},cookies,payload,remoteAddress:'198.51.100.210'})
+      for(const c of response.cookies)cookies[c.name]=c.value
+      return response
+    }}
+  }
+  try {await isolated.ready();return await run(makeBrowser)}finally{await isolated.close();Object.assign(config,previous)}
+}
+test('PWA-01/02: PostgreSQL concurrent claim, origin isolation, trust expiry and password invalidation',async()=>withPwaApp(async makeBrowser=>{
+  const identity=(await pool.query("INSERT INTO oauth_identities(user_id,provider,subject_digest) VALUES($1,'google',$2) RETURNING id",[userId,randomBytes(32).toString('hex')])).rows[0]
+  async function ready() {
+    const proof=await oauthHandoffs.begin({origin:'https://nav.skrskr.net',provider:'google',returnTo:'/',trustDevice:true})
+    const launches=await Promise.all([1,2].map(()=>oauthHandoffs.launch({origin:'https://nav.skrskr.net',provider:'google',secret:proof.launch})))
+    assert.equal(launches.filter(Boolean).length,1)
+    const user=(await pool.query('SELECT * FROM users WHERE id=$1',[userId])).rows[0]
+    assert.equal(await oauthHandoffs.approve(pool,{id:launches.find(Boolean).id,origin:'https://nav.skrskr.net',provider:'google',user:{...user,identity_id:identity.id}}),true)
+    return proof
+  }
+  const proof=await ready(),a=makeBrowser(),b=makeBrowser()
+  a.cookies[HANDOFF_COOKIE]=proof.claim;b.cookies[HANDOFF_COOKIE]=proof.claim
+  const otherOrigin=await b.call('/auth/oauth/pwa/status',{},'POST','nav.cristsau.cn')
+  assert.equal(otherOrigin.json().state,'expired')
+  const results=await Promise.all([a.call('/auth/oauth/pwa/complete',{}),b.call('/auth/oauth/pwa/complete',{})])
+  assert.deepEqual(results.map(r=>r.statusCode).sort(),[200,400])
+  assert.equal(await count('sessions'),1)
+  const cookie=results.find(r=>r.statusCode===200).cookies.find(c=>c.name===config.sessionCookieName)
+  assert.equal(cookie.maxAge,2592000)
+  const ttl=(await pool.query('SELECT EXTRACT(EPOCH FROM expires_at-NOW())::int AS seconds FROM sessions')).rows[0].seconds
+  assert.ok(ttl>2591900 && ttl<=2592000)
+  const changed=await ready(),c=makeBrowser();c.cookies[HANDOFF_COOKIE]=changed.claim
+  await pool.query('UPDATE users SET password_hash=$2 WHERE id=$1',[userId,await hashPassword(newPassword)])
+  assert.equal((await c.call('/auth/oauth/pwa/complete',{})).statusCode,400)
+  assert.equal(await count('sessions'),1)
+}))
+test('KEY-01/02: PostgreSQL real passkey enrollment/login, single consumption, revocation cascade and legacy retirement',async()=>withPwaApp(async makeBrowser=>{
+  const owner=makeBrowser(),guest=makeBrowser(),authenticator=syntheticAuthenticator(userId)
+  assert.equal((await owner.call('/auth/login',{username:'synthetic-auth-owner',password:oldPassword})).statusCode,200)
+  const options=await owner.call('/auth/device-keys/register/options',{currentPassword:oldPassword,name:'合成 iPhone'})
+  assert.equal(options.statusCode,200,options.json().code)
+  const registered=await owner.call('/auth/device-keys/register/verify',{challengeId:options.json().challengeId,response:authenticator.register(options.json().options.challenge)})
+  assert.equal(registered.statusCode,200,registered.json().code)
+  const login=await guest.call('/auth/device-keys/login/options',{trustDevice:true})
+  const proof={challengeId:login.json().challengeId,response:authenticator.login(login.json().options.challenge)}
+  const results=await Promise.all([guest.call('/auth/device-keys/login/verify',proof),guest.call('/auth/device-keys/login/verify',proof)])
+  assert.deepEqual(results.map(r=>r.statusCode).sort(),[200,400])
+  assert.equal((await guest.call('/auth/session',undefined,'GET')).json().user.id,userId)
+  assert.equal((await owner.call('/auth/device-keys/remove',{id:registered.json().key.id,currentPassword:oldPassword})).statusCode,200)
+  assert.equal((await guest.call('/auth/session',undefined,'GET')).json().user,null)
+  assert.equal((await owner.call('/auth/session',undefined,'GET')).json().user.id,userId)
+  assert.equal((await guest.call('/auth/passkeys/login/options',{})).statusCode,410)
+  assert.equal((await guest.call('/auth/device-keys/config',undefined,'GET','nav.cristsau.cn')).json().enabled,false)
+}))

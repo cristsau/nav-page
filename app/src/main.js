@@ -8,12 +8,15 @@ import { registerPwa } from '@/shared/services/pwa'
 import './styles/reset.css'
 import './styles/variables.css'
 import './styles/animations.css'
+import './styles/ios.css'
 
 const STATIC_PUBLIC_ENTRY_PATHS = new Set([
   '/about',
   '/about/',
   '/privacy',
-  '/privacy/'
+  '/privacy/',
+  '/auth/oauth-complete',
+  '/auth/oauth-complete/'
 ])
 
 function shouldBootstrapLocalSystem(pathname = window.location.pathname) {
