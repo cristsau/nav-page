@@ -109,7 +109,7 @@ onMounted(async () => {
     <p v-if="error" class="oauth-notice oauth-notice--error" role="alert">{{ error }}</p>
     <label class="oauth-field">
       <span>当前密码</span>
-      <input v-model="currentPassword" type="password" autocomplete="current-password" placeholder="绑定或解绑前验证身份">
+      <input v-model="currentPassword" type="password" autocomplete="current-password" placeholder="输入当前密码">
     </label>
     <div v-if="identities.length" class="oauth-list">
       <article v-for="identity in identities" :key="identity.id" class="oauth-row">
@@ -135,7 +135,7 @@ onMounted(async () => {
         {{ busy === provider ? '正在前往…' : `绑定 ${label(provider)}` }}
       </button>
     </div>
-    <p v-else-if="!loading" class="oauth-empty">管理员尚未启用外部身份登录，密码、Passkey 与恢复码不受影响。</p>
+    <p v-else-if="!loading" class="oauth-empty">管理员尚未启用外部身份登录，密码、邮箱与恢复码不受影响。</p>
   </section>
 </template>
 
@@ -160,5 +160,10 @@ onMounted(async () => {
 .oauth-notice--success { background: var(--success-bg); color: var(--success-color); }
 .oauth-notice--error { background: var(--danger-bg); color: var(--danger-color); }
 .oauth-empty { margin-top: 14px; }
+.oauth-card,.oauth-card__header>div,.oauth-field { min-width: 0; overflow-wrap: anywhere; }
+.oauth-field input { width: 100%; min-width: 0; min-height: 48px; font-size: 16px; }
+.oauth-button { min-width: 0; max-width: 100%; padding-block: 10px; line-height: 1.5; white-space: normal; overflow-wrap: anywhere; }
+.oauth-button :deep(svg) { flex-shrink: 0; }
+@media (max-width: 820px) { .oauth-card { padding: 18px 16px; border-radius: 20px; background: var(--bg-card); border-color: var(--border-light); } }
 @media (max-width: 640px) { .oauth-row { align-items: stretch; flex-direction: column; } .oauth-button { width: 100%; } }
 </style>

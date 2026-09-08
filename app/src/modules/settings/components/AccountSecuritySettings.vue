@@ -461,8 +461,8 @@ onBeforeUnmount(() => {
       {{ errorMessage }}
     </p>
 
-    <EmailAccountSettings @updated="refreshSecurityData" />
     <DeviceKeySettings />
+    <EmailAccountSettings @updated="refreshSecurityData" />
     <OauthIdentitySettings />
 
     <div class="security-block">
@@ -501,7 +501,7 @@ onBeforeUnmount(() => {
                 name="username-current-password"
                 type="password"
                 autocomplete="current-password"
-                placeholder="用于确认是本人操作"
+                placeholder="输入当前密码"
                 required
               >
             </label>
@@ -680,7 +680,7 @@ onBeforeUnmount(() => {
             v-model="currentPassword"
             type="password"
             autocomplete="current-password"
-            placeholder="验证身份后生成新恢复码"
+            placeholder="输入当前密码"
             @keyup.enter="handleRotateRecoveryCodes"
           >
         </label>
@@ -733,6 +733,8 @@ onBeforeUnmount(() => {
 
 <style scoped>
 .security-section {
+  min-width: 0;
+  overflow-wrap: anywhere;
   padding: 20px;
   background: var(--bg-card);
   border-radius: var(--radius-lg);
@@ -795,7 +797,12 @@ onBeforeUnmount(() => {
 }
 
 .button {
-  min-height: 40px;
+  min-height: 44px;
+  min-width: 0;
+  max-width: 100%;
+  line-height: 1.5;
+  white-space: normal;
+  overflow-wrap: anywhere;
   display: inline-flex;
   align-items: center;
   justify-content: center;
@@ -991,6 +998,7 @@ onBeforeUnmount(() => {
 
 .session-card__title {
   display: flex;
+  flex-wrap: wrap;
   align-items: center;
   gap: 8px;
   min-width: 0;
@@ -1081,6 +1089,7 @@ onBeforeUnmount(() => {
 }
 
 .security-field {
+  min-width: 0;
   display: grid;
   gap: 7px;
   color: var(--text-primary);
@@ -1088,6 +1097,7 @@ onBeforeUnmount(() => {
 }
 
 .security-field input {
+  min-width: 0;
   width: 100%;
   padding: 11px 13px;
   border: 1px solid var(--border-color);
@@ -1096,6 +1106,10 @@ onBeforeUnmount(() => {
   background: var(--bg-secondary);
   color: var(--text-primary);
 }
+
+.section-heading > div,.block-heading > div,.account-form,.account-form__fields { min-width: 0; }
+.button :deep(svg),.account-form__heading :deep(svg) { flex-shrink: 0; }
+.session-card__title > span,.session-card__meta > span { min-width: 0; overflow-wrap: anywhere; }
 
 .security-field input:focus {
   border-color: var(--accent-color);

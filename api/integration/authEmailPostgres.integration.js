@@ -516,5 +516,35 @@ test('KEY-01/02: PostgreSQL real passkey enrollment/login, single consumption, r
   assert.equal((await guest.call('/auth/session',undefined,'GET')).json().user,null)
   assert.equal((await owner.call('/auth/session',undefined,'GET')).json().user.id,userId)
   assert.equal((await guest.call('/auth/passkeys/login/options',{})).statusCode,410)
-  assert.equal((await guest.call('/auth/device-keys/config',undefined,'GET','nav.cristsau.cn')).json().enabled,false)
+  assert.equal((await guest.call('/auth/device-keys/config',undefined,'GET','nav.cristsau.cn')).json().enabled,true)
+}))
+
+test('KEY-03: dual-domain enrollment, challenge/key isolation and revocation on real PostgreSQL',async()=>withPwaApp(async makeBrowser=>{
+  const hosts=['nav.skrskr.net','nav.cristsau.cn'],owners=hosts.map(()=>makeBrowser()),keys=[]
+  for(const [i,host] of hosts.entries()) {
+    const owner=owners[i],authenticator=syntheticAuthenticator(userId),opts={origin:`https://${host}`,rp:host}
+    assert.equal((await owner.call('/auth/login',{username:'synthetic-auth-owner',password:oldPassword},'POST',host)).statusCode,200)
+    const start=await owner.call('/auth/device-keys/register/options',{currentPassword:oldPassword,name:'合成双域设备'},'POST',host)
+    assert.equal(start.json().options.rp.id,host)
+    const proof={challengeId:start.json().challengeId,response:authenticator.register(start.json().options.challenge,opts)}
+    const cross=await owner.call('/auth/device-keys/register/verify',proof,'POST',hosts[1-i])
+    assert.equal(cross.statusCode,400)
+    const registered=await owner.call('/auth/device-keys/register/verify',proof,'POST',host)
+    assert.equal(registered.statusCode,200);assert.equal(registered.json().key.domain,host)
+    keys.push({id:registered.json().key.id,authenticator,opts})
+  }
+  for(const [i,host] of hosts.entries()) {
+    const list=await owners[i].call('/auth/device-keys',undefined,'GET',host)
+    assert.deepEqual(list.json().keys.map(k=>k.id),[keys[i].id])
+    assert.equal((await owners[i].call('/auth/device-keys/remove',{id:keys[1-i].id,currentPassword:oldPassword},'POST',host)).statusCode,400)
+    const guest=makeBrowser(),start=await guest.call('/auth/device-keys/login/options',{},'POST',host)
+    const crossed={challengeId:start.json().challengeId,response:keys[1-i].authenticator.login(start.json().options.challenge,keys[1-i].opts)}
+    assert.equal((await guest.call('/auth/device-keys/login/verify',crossed,'POST',host)).statusCode,400)
+    const valid=await guest.call('/auth/device-keys/login/options',{},'POST',host)
+    assert.equal((await guest.call('/auth/device-keys/login/verify',{challengeId:valid.json().challengeId,response:keys[i].authenticator.login(valid.json().options.challenge,keys[i].opts)},'POST',host)).statusCode,200)
+    assert.equal((await owners[i].call('/auth/device-keys/remove',{id:keys[i].id,currentPassword:oldPassword},'POST',host)).statusCode,200)
+    assert.equal((await guest.call('/auth/session',undefined,'GET',host)).json().user,null)
+  }
+  await assert.rejects(pool.query("INSERT INTO auth_device_key_challenges(kind,challenge_digest,flow_digest,origin) VALUES('login',repeat('a',64),repeat('b',64),'https://evil.test')"),{code:'23514'})
+  await assert.rejects(pool.query("INSERT INTO auth_device_keys(user_id,credential_id,public_key,rp_id,label,device_type) VALUES($1,'synthetic-bad-rp',decode('00','hex'),'evil.test','test','singleDevice')",[userId]),{code:'23514'})
 }))

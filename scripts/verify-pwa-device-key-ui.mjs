@@ -9,10 +9,11 @@ const require=createRequire(import.meta.url),apiRequire=createRequire(new URL('.
 const {chromium}=require(process.env.NAV_PLAYWRIGHT_MODULE || 'playwright')
 const {generateRegistrationOptions,verifyRegistrationResponse,generateAuthenticationOptions,verifyAuthenticationResponse}=await import(pathToFileURL(apiRequire.resolve('@simplewebauthn/server')).href)
 const output=await mkdtemp(join(tmpdir(),'nav-pwa-device-ui-'))
-const local='http://127.0.0.1:4178',origin='https://nav.skrskr.net',rpID='nav.skrskr.net'
+const local='http://127.0.0.1:4178',origin=process.env.NAV_DEVICE_UI_ORIGIN || 'https://nav.skrskr.net',rpID=new URL(origin).hostname
+assert.ok(['https://nav.skrskr.net','https://nav.cristsau.cn'].includes(origin),'only exact synthetic origins')
 const user={id:'11111111-1111-4111-8111-111111111111',username:'synthetic-ui-owner',role:'user',status:'approved'}
 const browser=await chromium.launch({executablePath:process.env.NAV_BROWSER_PATH,headless:true,
-  args:['--host-resolver-rules=MAP nav.skrskr.net 127.0.0.1, MAP * ~NOTFOUND, EXCLUDE localhost']})
+  args:['--host-resolver-rules=MAP * ~NOTFOUND, EXCLUDE localhost']})
 const checks=[],errors=[]
 try {
  const context=await browser.newContext({viewport:{width:390,height:844},reducedMotion:'reduce',serviceWorkers:'block'})
