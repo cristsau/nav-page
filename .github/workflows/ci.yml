@@ -12,6 +12,47 @@ permissions:
   contents: read
 
 jobs:
+  auth-compatible-rollback:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    services:
+      postgres:
+        image: postgres:16-alpine
+        env:
+          POSTGRES_USER: nav
+          POSTGRES_PASSWORD: nav_password
+          POSTGRES_DB: nav_auth_email_test
+        options: >-
+          --health-cmd "pg_isready -U nav -d nav_auth_email_test"
+          --health-interval 5s
+          --health-timeout 5s
+          --health-retries 10
+    steps:
+      - uses: actions/checkout@v6
+      - uses: actions/setup-node@v6
+        with:
+          node-version: 24
+      - name: Generate the frozen baseline with reviewed additive-schema safety
+        run: |
+          git fetch --no-tags --depth=1 origin 6952684221e401eb0d41cc6aa9d53dfe8bab6377
+          node scripts/release/prepare-auth-rollback.mjs > /tmp/nav-rollback-location.json
+      - name: Build and exercise the compatible rollback against PostgreSQL 16
+        env:
+          PG_CONTAINER: ${{ job.services.postgres.id }}
+          NAV_RELEASE_SHA: ${{ github.sha }}
+        run: |
+          set -euo pipefail
+          rollback_root="$(jq -r .root /tmp/nav-rollback-location.json)"
+          docker build --build-arg NAV_RELEASE_SHA="$NAV_RELEASE_SHA" -t nav-auth-rollback:ci "$rollback_root/api"
+          docker run --rm --network "container:$PG_CONTAINER" \
+            -e NODE_ENV=test -e NAV_AUTH_EMAIL_INTEGRATION_TEST=true \
+            -e DATABASE_URL=postgres://nav:nav_password@127.0.0.1:5432/nav_auth_email_test \
+            -e NAV_AUTH_RESTORE_SCRIPT=/app/nav-disaster-restore.sh \
+            -v "$rollback_root/api/integration:/app/integration:ro" \
+            -v "$rollback_root/scripts/nav-disaster-restore.sh:/app/nav-disaster-restore.sh:ro" \
+            --entrypoint sh nav-auth-rollback:ci \
+            -c 'node --test integration/authEmailPostgres.integration.js && node src/db/verifyMigrations.js'
+
   api-production-image:
     runs-on: ubuntu-latest
     timeout-minutes: 15
