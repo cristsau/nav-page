@@ -206,13 +206,15 @@ test('navigation bookmark cards mount directly without transition wrappers', asy
   assert.match(gridSource, /<div class="bookmarks-container">\s*<div\s+class="bookmarks-grid"/)
   assert.match(
     gridSource,
-    /<NavItem\s+v-for="\(bookmark, bookmarkIndex\) in activeBookmarks"[\s\S]*?:key="bookmark\.id"/
+    /<NavItem\s+v-for="\(bookmark, bookmarkIndex\) in visibleBookmarks"[\s\S]*?:key="bookmark\.id"/
   )
   assert.match(gridSource, /class="bookmark-card bookmark-card--add"[\s\S]*添加书签/)
   assert.doesNotMatch(gridSource, /<Transition(?:Group)?\b/)
   assert.doesNotMatch(gridSource, /<Transition\b[^>]*mode="out-in"/)
   assert.doesNotMatch(gridSource, /:key="activeGroup\?\.id"/)
   assert.doesNotMatch(source, /(?:tab-slide|list)-(?:enter|leave)/)
+  assert.match(source, /activeBookmarks\.value\.slice\(0, visibleCount\.value\)/)
+  assert.match(source, /:sort-count="activeBookmarks.length"/)
 })
 
 test('navigation management calls the exact bulk and health backend contracts', async () => {

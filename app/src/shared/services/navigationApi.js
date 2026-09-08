@@ -47,13 +47,13 @@ export async function fetchBackendBookmarks(groupId = '') {
   return payload.bookmarks || []
 }
 
-export async function createBackendBookmark(bookmark) {
+export async function createBackendBookmark(bookmark, { withOutcome = false } = {}) {
   const payload = await request('/bookmarks', {
     method: 'POST',
     body: JSON.stringify(bookmark)
   })
 
-  return payload.bookmark
+  return withOutcome ? payload : payload.bookmark
 }
 
 export async function updateBackendBookmark(id, updates) {

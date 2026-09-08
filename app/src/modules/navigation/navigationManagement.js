@@ -1,5 +1,10 @@
 export const MAX_MANAGED_BOOKMARKS = 100
 
+export function normalizePinnedGroupIds(ids, groups) {
+  const available = new Set((Array.isArray(groups) ? groups : []).map((group) => group.id))
+  return normalizeManagementIds(ids).filter((id) => available.has(id)).slice(0, 20)
+}
+
 export function normalizeManagementIds(ids) {
   return [...new Set(
     (Array.isArray(ids) ? ids : [])

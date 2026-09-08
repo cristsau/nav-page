@@ -1,8 +1,10 @@
 <script setup>
 import { computed, nextTick, onBeforeUnmount, onMounted, ref, watch } from 'vue'
-import { useRouter } from 'vue-router'
+import { onBeforeRouteLeave, useRoute, useRouter } from 'vue-router'
 import { useGroups, useBookmarks } from '@/shared/composables/useDB'
 import { useConfig } from '@/shared/composables/useConfig'
+import { getSetting, setSetting } from '@/shared/db/database'
+import { fetchBackendSetting, saveBackendSetting } from '@/shared/services/settingsApi'
 import { COMMAND_ACTION_EVENT } from '@/shared/composables/useCommandPalette'
 import SearchBox from '@/shared/components/SearchBox.vue'
 import Icon from '@/shared/components/Icon.vue'
@@ -22,6 +24,7 @@ import {
   buildBookmarkOrderMap,
   buildNavigationReorderPayload,
   MAX_MANAGED_BOOKMARKS,
+  normalizePinnedGroupIds,
   moveId,
   moveIdBefore,
   orderRecords,
@@ -31,6 +34,7 @@ import {
 } from './navigationManagement'
 
 const router = useRouter()
+const route = useRoute()
 const {
   groups,
   load: loadGroups,
@@ -81,6 +85,13 @@ const groupOrderDraft = ref([])
 const bookmarkOrderDrafts = ref({})
 const sortDirty = ref(false)
 const showHealthIssues = ref(false)
+const pinnedGroupIds = ref([])
+const pinsReady = ref(false)
+const pinsSaving = ref(false)
+const pinsError = ref('')
+const PINNED_GROUPS_KEY = 'navigationPinnedGroupsV1'
+const pinnedGroups = computed(() => pinnedGroupIds.value.map((id) => groups.value.find((group) => group.id === id)).filter(Boolean))
+const currentGroupPinned = computed(() => pinnedGroupIds.value.includes(activeGroupId.value))
 let statusTimer = null
 let aiRequestId = 0
 let aiTagRequestId = 0
@@ -142,6 +153,10 @@ function chooseDefaultMoveTarget() {
 function setManagementMode(mode) {
   if (managementBusy.value) return
   const nextMode = managementMode.value === mode ? '' : mode
+  if (managementMode.value === 'sort' && sortDirty.value && nextMode !== 'sort') {
+    if (!window.confirm('排序尚未保存，退出将恢复原顺序。确定放弃排序修改吗？')) return
+    resetSortDrafts()
+  }
   managementMode.value = nextMode
   selectedBookmarkIds.value = []
 
@@ -318,6 +333,41 @@ async function loadData() {
   await Promise.all([loadGroups(), loadBookmarks()])
 }
 
+async function loadPinnedGroups() {
+  pinsReady.value = false
+  pinsError.value = ''
+  try {
+    const stored = backendNavigationEnabled ? await fetchBackendSetting(PINNED_GROUPS_KEY) : await getSetting(PINNED_GROUPS_KEY)
+    pinnedGroupIds.value = normalizePinnedGroupIds(stored, groups.value)
+    pinsReady.value = true
+  } catch {
+    pinsError.value = '常用分组未加载，重试后才能修改。'
+  }
+}
+
+async function toggleCurrentGroupPin() {
+  if (!pinsReady.value || pinsSaving.value || managementBusy.value || !activeGroupId.value) return
+  const id = activeGroupId.value
+  const previous = normalizePinnedGroupIds(pinnedGroupIds.value, groups.value)
+  if (!previous.includes(id) && previous.length >= 20) {
+    setStatus('最多固定20个常用分组，请先取消一个。', 'info')
+    return
+  }
+  const next = previous.includes(id) ? previous.filter((item) => item !== id) : [...previous, id]
+  pinsSaving.value = true
+  pinsError.value = ''
+  try {
+    if (backendNavigationEnabled) {
+      const saved = await saveBackendSetting(PINNED_GROUPS_KEY, next)
+      if (!Array.isArray(saved) || !sameIdOrder(saved, next)) throw new Error('pin-save-unconfirmed')
+    } else await setSetting(PINNED_GROUPS_KEY, next)
+    pinnedGroupIds.value = next
+    setStatus(next.includes(id) ? '已固定常用分组' : '已取消固定', 'success')
+  } catch {
+    pinsError.value = '固定状态保存失败，原有常用分组未改变，请重试。'
+  } finally { pinsSaving.value = false }
+}
+
 function setStatus(message, type = 'info') {
   status.value = { message, type }
   if (statusTimer) window.clearTimeout(statusTimer)
@@ -339,7 +389,8 @@ function handleEditGroup(group) {
 }
 
 async function handleDeleteGroup(group) {
-  if (!confirm(`确定删除分组「${group.name}」及其所有书签吗？`)) {
+  const count = bookmarks.value.filter((bookmark) => bookmark.groupId === group.id).length
+  if (!confirm(`确定删除分组「${group.name}」及其中 ${count} 个书签吗？此操作无法撤销。`)) {
     return
   }
 
@@ -515,7 +566,7 @@ function openAiSettings() {
 }
 
 async function handleDeleteBookmark(bookmark) {
-  if (!confirm(`确定删除书签「${bookmark.title}」吗？`)) {
+  if (!confirm(`确定删除书签「${bookmark.title}」吗？此操作无法撤销。`)) {
     return
   }
 
@@ -598,16 +649,49 @@ watch(activeGroupId, () => {
   chooseDefaultMoveTarget()
 })
 
+async function locateBookmark() {
+  if (!navigationReady || !route.query.bookmark) return
+  const bookmark = bookmarks.value.find((item) => item.id === route.query.bookmark)
+  if (!bookmark) {
+    setStatus('未找到该收藏，可能已被移动、删除或当前账号无权访问。', 'error')
+    return
+  }
+  activeGroupId.value = bookmark.groupId
+  showHealthIssues.value = false
+  await nextTick()
+  const card = Array.from(document.querySelectorAll('[data-bookmark-id]'))
+    .find((element) => element.dataset.bookmarkId === bookmark.id)
+  card?.scrollIntoView({ block: 'center', behavior: 'instant' })
+  card?.querySelector('.bookmark-card__main')?.focus({ preventScroll: true })
+  setStatus('已定位收藏', 'success')
+}
+
+watch(() => route.query.bookmark, locateBookmark)
+
+function protectNavigationUnload(event) {
+  if (!sortDirty.value && !managementBusy.value && !pinsSaving.value) return
+  event.preventDefault()
+  event.returnValue = ''
+}
+
+onBeforeRouteLeave(() => {
+  if (managementBusy.value || pinsSaving.value) return false
+  return !sortDirty.value || window.confirm('排序尚未保存，离开将丢失排序修改。确定离开吗？')
+})
+
 onMounted(async () => {
   window.addEventListener(COMMAND_ACTION_EVENT, handleCommandAction)
+  window.addEventListener('beforeunload', protectNavigationUnload)
 
   try {
     await loadData()
     if (groups.value.length > 0) {
       activeGroupId.value = groups.value[0].id
     }
+    await loadPinnedGroups()
   } finally {
     navigationReady = true
+    await locateBookmark()
     if (pendingNavigationCommand) {
       const action = pendingNavigationCommand
       pendingNavigationCommand = ''
@@ -618,6 +702,7 @@ onMounted(async () => {
 
 onBeforeUnmount(() => {
   window.removeEventListener(COMMAND_ACTION_EVENT, handleCommandAction)
+  window.removeEventListener('beforeunload', protectNavigationUnload)
   if (statusTimer) window.clearTimeout(statusTimer)
   navigationReady = false
   pendingNavigationCommand = ''
@@ -641,6 +726,10 @@ onBeforeUnmount(() => {
             <p class="management-heading__hint">批量整理书签，或调整分组与当前分组书签的顺序。</p>
           </div>
           <div class="management-heading__modes" role="group" aria-label="导航管理模式">
+            <button type="button" :disabled="managementBusy || Boolean(managementMode)" @click="handleAddBookmark()">
+              <Icon name="plus" :size="17" />
+              <span>添加收藏</span>
+            </button>
             <button
               type="button"
               :class="{ 'is-active': managementMode === 'select' }"
@@ -770,10 +859,28 @@ onBeforeUnmount(() => {
           </ul>
         </section>
 
+        <section v-if="groups.length" class="pinned-groups" aria-label="常用分组" :aria-busy="pinsSaving">
+          <div class="pinned-groups__items">
+            <span class="pinned-groups__label"><Icon name="pin" :size="16" /> 常用</span>
+            <button v-for="group in pinnedGroups" :key="group.id" type="button"
+              :aria-pressed="activeGroupId === group.id" :disabled="managementBusy"
+              @click="activeGroupId = group.id">{{ group.name }}</button>
+            <span v-if="!pinnedGroups.length && pinsReady" class="pinned-groups__hint">固定常用分组，快速切换</span>
+          </div>
+          <button type="button" :disabled="!pinsReady || pinsSaving || managementBusy || !activeGroupId"
+            :aria-pressed="currentGroupPinned" @click="toggleCurrentGroupPin">
+            {{ pinsSaving ? '保存中…' : currentGroupPinned ? '取消固定当前组' : '固定当前分组' }}
+          </button>
+          <p v-if="pinsError" role="alert">{{ pinsError }}
+            <button v-if="!pinsReady" type="button" @click="loadPinnedGroups">重新加载常用分组</button>
+          </p>
+        </section>
+
         <NavGroup
           :groups="orderedGroups"
           :bookmarks="orderedBookmarks"
           :active-group-id="activeGroupId"
+          :focused-bookmark-id="typeof route.query.bookmark === 'string' ? route.query.bookmark : ''"
           :pending-group-id="pendingGroupId"
           :pending-bookmark-id="pendingBookmarkId"
           :analyzing-bookmark-id="analyzingBookmarkId"
@@ -846,6 +953,25 @@ onBeforeUnmount(() => {
 </template>
 
 <style scoped>
+.pinned-groups, .pinned-groups__items {
+  display: flex;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: 8px;
+}
+.pinned-groups { margin: 16px 0 0; justify-content: space-between; }
+.pinned-groups__items { min-width: 0; flex: 1; }
+.pinned-groups__label { display: inline-flex; align-items: center; gap: 6px; }
+.pinned-groups__hint, .pinned-groups__label { color: var(--text-secondary); font-size: 14px; }
+.pinned-groups button {
+  min-height: 44px; max-width: 100%; padding: 8px 12px; overflow-wrap: anywhere;
+  border: 1px solid var(--border-color); border-radius: 12px;
+  color: var(--text-primary); background: var(--bg-card); cursor: pointer;
+}
+.pinned-groups button[aria-pressed="true"] { border-color: var(--text-secondary); font-weight: 600; }
+.pinned-groups button:disabled { opacity: .6; cursor: default; }
+.pinned-groups button:focus-visible { outline: 2px solid var(--accent-color); outline-offset: 2px; }
+.pinned-groups p { flex-basis: 100%; margin: 0; color: var(--text-secondary); }
 .page {
   min-height: calc(100vh - var(--app-shell-header-height, 64px));
   min-height: calc(100dvh - var(--app-shell-header-height, 64px));

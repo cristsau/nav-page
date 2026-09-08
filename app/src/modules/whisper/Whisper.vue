@@ -32,6 +32,7 @@ import {
   mediaCleanupMessage
 } from '@/modules/media/mediaLibrary'
 import { buildFullNoteText } from './utils/noteCopyText'
+import { resolveNoteSaveState } from './utils/noteSaveState'
 
 const route = useRoute()
 
@@ -486,18 +487,20 @@ async function handleSaveNote(data) {
         mutationResult = await updateNote(editingNote.value.id, data)
       }
     } else {
-      await addNote(data)
+      mutationResult = { note: await addNote(data) }
     }
 
+    if (shouldUseBackendNotes() && !mutationResult?.note?.id) throw new Error('未收到保存确认，当前草稿已保留')
     showEditor.value = false
     editingNote.value = null
     await loadNotes()
     await refreshReminders()
     const mediaCleanup = mutationResult?.mediaCleanup
     const cleanupMessage = mediaCleanupMessage(mediaCleanup)
+    const persistence = resolveNoteSaveState(mutationResult?.note, shouldUseBackendNotes())
     setStatus(
-      cleanupMessage ? `笔记已保存；${cleanupMessage}` : '笔记已保存',
-      mediaCleanupHasFailures(mediaCleanup) ? 'error' : 'success'
+      cleanupMessage ? `${persistence.message}；${cleanupMessage}` : persistence.message,
+      mediaCleanupHasFailures(mediaCleanup) || ['error', 'conflict'].includes(persistence.state) ? 'error' : 'success'
     )
   } catch (e) {
     console.error('Failed to save note:', e)
@@ -513,7 +516,7 @@ async function handleAutosaveNote(data) {
   const noteId = editingNote.value.id
   const mutationResult = await updateNote(noteId, data)
   if (mutationResult?.note) {
-    editingNote.value = { ...editingNote.value, ...mutationResult.note }
+    if (editingNote.value?.id === noteId) editingNote.value = { ...editingNote.value, ...mutationResult.note, syncState: mutationResult.note.syncState || 'synced' }
     const index = notes.value.findIndex((note) => note.id === noteId)
     if (index >= 0) notes.value.splice(index, 1, mutationResult.note)
     await refreshReminders()
@@ -521,7 +524,7 @@ async function handleAutosaveNote(data) {
   }
   await loadNotes()
   const updated = notes.value.find((note) => note.id === noteId) || null
-  if (updated) editingNote.value = { ...updated }
+  if (updated && editingNote.value?.id === noteId) editingNote.value = { ...updated }
   await refreshReminders()
   return updated
 }

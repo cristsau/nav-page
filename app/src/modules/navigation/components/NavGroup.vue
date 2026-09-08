@@ -18,6 +18,10 @@ const props = defineProps({
     type: String,
     default: ''
   },
+  focusedBookmarkId: {
+    type: String,
+    default: ''
+  },
   pendingGroupId: {
     type: String,
     default: ''
@@ -96,6 +100,28 @@ const activeBookmarks = computed(() => {
   if (!activeGroup.value) return []
   return props.bookmarks.filter(b => b.groupId === activeGroup.value.id)
 })
+
+const BOOKMARK_PAGE_SIZE = 40
+const visibleCount = ref(BOOKMARK_PAGE_SIZE)
+const visibleBookmarks = computed(() => activeBookmarks.value.slice(0, visibleCount.value))
+watch(() => [activeGroup.value?.id, props.focusedBookmarkId], () => {
+  const targetIndex = activeBookmarks.value.findIndex((bookmark) => bookmark.id === props.focusedBookmarkId)
+  visibleCount.value = Math.max(BOOKMARK_PAGE_SIZE, Math.ceil((targetIndex + 1) / BOOKMARK_PAGE_SIZE) * BOOKMARK_PAGE_SIZE)
+}, { immediate: true })
+// Groups and bookmarks load independently. A deep link may arrive before its
+// bookmark, so expand again when that record becomes available.
+watch(() => activeBookmarks.value.findIndex((bookmark) => bookmark.id === props.focusedBookmarkId), (targetIndex) => {
+  if (targetIndex >= 0) visibleCount.value = Math.max(visibleCount.value, Math.ceil((targetIndex + 1) / BOOKMARK_PAGE_SIZE) * BOOKMARK_PAGE_SIZE)
+})
+
+async function showMoreBookmarks() {
+  const firstNew = activeBookmarks.value[visibleCount.value]?.id
+  visibleCount.value += BOOKMARK_PAGE_SIZE
+  await nextTick()
+  Array.from(document.querySelectorAll('[data-bookmark-id]'))
+    .find((element) => element.dataset.bookmarkId === firstNew)
+    ?.querySelector('.bookmark-card__main')?.focus({ preventScroll: true })
+}
 
 // 选择分组
 function selectGroup(group) {
@@ -414,7 +440,7 @@ const mobileGroupMenuId = computed(() => (
       >
         <!-- 书签列表保持直接挂载，避免过渡状态让整组卡片滞留在不可见状态。 -->
         <NavItem
-          v-for="(bookmark, bookmarkIndex) in activeBookmarks"
+          v-for="(bookmark, bookmarkIndex) in visibleBookmarks"
           :key="bookmark.id"
           :bookmark="bookmark"
           :deleting="pendingBookmarkId === bookmark.id"
@@ -442,6 +468,12 @@ const mobileGroupMenuId = computed(() => (
           <div class="bookmark-card__icon"><Icon name="plus" :size="28" /></div>
           <div class="bookmark-card__title">添加书签</div>
         </button>
+      </div>
+
+      <div v-if="activeBookmarks.length > BOOKMARK_PAGE_SIZE" class="bookmarks-pagination">
+        <span role="status">已显示 {{ visibleBookmarks.length }} / {{ activeBookmarks.length }} 个收藏</span>
+        <button v-if="visibleBookmarks.length < activeBookmarks.length" type="button"
+          :disabled="managementBusy" @click="showMoreBookmarks">加载更多收藏</button>
       </div>
 
       <!-- 空状态 -->
@@ -512,6 +544,29 @@ const mobileGroupMenuId = computed(() => (
 </template>
 
 <style scoped>
+.bookmarks-pagination {
+  display: flex;
+  flex-wrap: wrap;
+  justify-content: center;
+  align-items: center;
+  gap: 12px;
+  margin-top: 20px;
+  color: var(--text-secondary);
+  font-size: 14px;
+}
+.bookmarks-pagination button {
+  min-height: 44px;
+  padding: 10px 18px;
+  color: var(--text-primary);
+  background: var(--bg-card);
+  border: 1px solid var(--border-color);
+  border-radius: 12px;
+  cursor: pointer;
+}
+.bookmarks-pagination button:focus-visible {
+  outline: 2px solid var(--accent-color);
+  outline-offset: 2px;
+}
 .nav-groups {
   margin-top: 20px;
 }

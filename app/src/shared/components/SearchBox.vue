@@ -1,5 +1,5 @@
 <script setup>
-import { computed, onBeforeUnmount, onMounted, ref, watch } from 'vue'
+import { computed, nextTick, onBeforeUnmount, onMounted, ref, watch } from 'vue'
 import { RouterLink, useRouter } from 'vue-router'
 import { useConfig } from '@/shared/composables/useConfig'
 import Icon from '@/shared/components/Icon.vue'
@@ -36,6 +36,13 @@ const isAssistantSearching = ref(false)
 const localSearchError = ref('')
 const showLocalResults = ref(false)
 const activeResultIndex = ref(-1)
+const searchScope = ref('all')
+const searchScopes = [
+  { id: 'all', label: '全部' },
+  { id: 'bookmarks', label: '书签' },
+  { id: 'notes', label: '笔记' },
+  { id: 'web', label: 'Web' }
+]
 const localSearchResult = ref({
   bookmarks: [],
   notes: [],
@@ -47,6 +54,7 @@ const localSearchResult = ref({
 let localSearchTimer = null
 let localSearchSequence = 0
 let assistantSearchSequence = 0
+let webSearchSequence = 0
 
 const currentEngine = computed(() => getSearchEngine())
 const allEngines = computed(() => getQuickAccessSearchEngines())
@@ -58,21 +66,16 @@ const localResultGroups = computed(() => {
       id: 'bookmarks',
       label: '导航',
       icon: 'browser',
-      items: localSearchResult.value.bookmarks.map((item) => ({
-        ...item,
-        resultIndex: resultIndex++
-      }))
+      items: localSearchResult.value.bookmarks
     },
     {
       id: 'notes',
       label: '笔记与备忘录',
       icon: 'note',
-      items: localSearchResult.value.notes.map((item) => ({
-        ...item,
-        resultIndex: resultIndex++
-      }))
+      items: localSearchResult.value.notes
     }
-  ].filter((group) => group.items.length)
+  ].filter((group) => group.items.length && (searchScope.value === 'all' || searchScope.value === group.id))
+    .map((group) => ({ ...group, items: group.items.map((item) => ({ ...item, resultIndex: resultIndex++ })) }))
 })
 const flatLocalResults = computed(() => localResultGroups.value.flatMap((group) => group.items))
 const shouldShowLocalPanel = computed(() => (
@@ -88,6 +91,9 @@ onMounted(async () => {
 
 onBeforeUnmount(() => {
   clearTimeout(localSearchTimer)
+  localSearchSequence += 1
+  assistantSearchSequence += 1
+  webSearchSequence += 1
   window.removeEventListener('keydown', handleGlobalKeydown)
   document.removeEventListener('pointerdown', handleDocumentPointerDown)
 })
@@ -95,11 +101,22 @@ onBeforeUnmount(() => {
 watch(query, (value) => {
   clearTimeout(localSearchTimer)
   assistantSearchSequence += 1
+  webSearchSequence += 1
+  isSearching.value = false
   isAssistantSearching.value = false
   activeResultIndex.value = -1
   localSearchError.value = ''
   searchResult.value = null
   searchError.value = ''
+  scheduleLocalSearch(value)
+})
+
+function scheduleLocalSearch(value = query.value, delay = 180) {
+  clearTimeout(localSearchTimer)
+  // Invalidate pending replies even when the query is cleared or retried.
+  const sequence = ++localSearchSequence
+  activeResultIndex.value = -1
+  localSearchError.value = ''
 
   const trimmed = value.trim()
   if (!trimmed) {
@@ -117,7 +134,6 @@ watch(query, (value) => {
 
   showLocalResults.value = true
   isLocalSearching.value = true
-  const sequence = ++localSearchSequence
 
   localSearchTimer = window.setTimeout(async () => {
     try {
@@ -139,8 +155,30 @@ watch(query, (value) => {
         isLocalSearching.value = false
       }
     }
-  }, 180)
-})
+  }, delay)
+}
+
+function selectScope(scope) {
+  searchScope.value = scope
+  activeResultIndex.value = -1
+}
+
+function handleScopeKeydown(event, index) {
+  let next = index
+  if (event.key === 'ArrowRight') next = (index + 1) % searchScopes.length
+  else if (event.key === 'ArrowLeft') next = (index + searchScopes.length - 1) % searchScopes.length
+  else if (event.key === 'Home') next = 0
+  else if (event.key === 'End') next = searchScopes.length - 1
+  else return
+  event.preventDefault()
+  selectScope(searchScopes[next].id)
+  nextTick(() => document.getElementById(`search-scope-${searchScopes[next].id}`)?.focus())
+}
+
+function revealActiveResult() {
+  nextTick(() => document.getElementById(`workspace-result-${activeResultIndex.value}`)
+    ?.scrollIntoView({ block: 'nearest', behavior: 'instant' }))
+}
 
 async function handleWebSearch() {
   const trimmed = query.value.trim()
@@ -149,36 +187,43 @@ async function handleWebSearch() {
   searchError.value = ''
   searchResult.value = null
   isSearching.value = true
+  const sequence = ++webSearchSequence
 
   try {
     const outcome = await search(trimmed)
+    if (sequence !== webSearchSequence) return
 
     if (outcome?.mode === 'ai') {
       searchResult.value = outcome.result
       showLocalResults.value = false
     }
   } catch (error) {
+    if (sequence !== webSearchSequence) return
     searchError.value = error.message || '搜索失败，请稍后重试'
   } finally {
-    isSearching.value = false
+    if (sequence === webSearchSequence) isSearching.value = false
   }
 }
 
 function handleKeydown(event) {
-  if (event.key === 'ArrowDown' && flatLocalResults.value.length) {
+  if (event.isComposing) return
+  const canSelect = !isLocalSearching.value && !localSearchError.value && flatLocalResults.value.length
+  if (event.key === 'ArrowDown' && canSelect) {
     event.preventDefault()
     showLocalResults.value = true
     activeResultIndex.value = Math.min(
       activeResultIndex.value + 1,
       flatLocalResults.value.length - 1
     )
+    revealActiveResult()
     return
   }
 
-  if (event.key === 'ArrowUp' && flatLocalResults.value.length) {
+  if (event.key === 'ArrowUp' && canSelect) {
     event.preventDefault()
     showLocalResults.value = true
     activeResultIndex.value = Math.max(activeResultIndex.value - 1, 0)
+    revealActiveResult()
     return
   }
 
@@ -192,7 +237,7 @@ function handleKeydown(event) {
   if (event.key !== 'Enter') return
   event.preventDefault()
 
-  if (activeResultIndex.value >= 0) {
+  if (shouldShowLocalPanel.value && canSelect && activeResultIndex.value >= 0) {
     const activeResult = flatLocalResults.value[activeResultIndex.value]
     if (activeResult) {
       openLocalResult(activeResult)
@@ -370,11 +415,12 @@ async function copyAnswer() {
           type="search"
           class="search-box__input"
           placeholder="搜索导航、笔记，或继续搜索 Web"
+          aria-label="搜索书签、笔记或 Web"
           role="combobox"
           aria-autocomplete="list"
           aria-controls="workspace-search-results"
           :aria-expanded="shouldShowLocalPanel"
-          :aria-activedescendant="activeResultIndex >= 0 ? `workspace-result-${activeResultIndex}` : undefined"
+          :aria-activedescendant="shouldShowLocalPanel && !isLocalSearching && activeResultIndex >= 0 ? `workspace-result-${activeResultIndex}` : undefined"
           @focus="handleInputFocus"
           @blur="isFocused = false"
           @keydown="handleKeydown"
@@ -396,9 +442,8 @@ async function copyAnswer() {
 
     <section
       v-if="shouldShowLocalPanel"
-      id="workspace-search-results"
       class="workspace-results"
-      role="listbox"
+      role="region"
       aria-label="站内搜索结果"
     >
       <header class="workspace-results__header">
@@ -406,7 +451,9 @@ async function copyAnswer() {
           <div class="workspace-results__eyebrow">站内搜索</div>
           <div class="workspace-results__summary" aria-live="polite">
             <template v-if="isLocalSearching">正在检索导航与笔记</template>
-            <template v-else>找到 {{ localSearchResult.total }} 项内容</template>
+            <template v-else-if="localSearchError">检索暂未完成</template>
+            <template v-else-if="searchScope === 'web'">使用 {{ currentEngine.name }} 搜索</template>
+            <template v-else>当前范围 {{ flatLocalResults.length }} 项内容</template>
           </div>
         </div>
         <div class="workspace-results__header-actions">
@@ -430,7 +477,20 @@ async function copyAnswer() {
         </div>
       </header>
 
-      <div v-if="isLocalSearching" class="workspace-results__loading">
+      <div class="workspace-results__tabs" role="tablist" aria-label="搜索范围">
+        <button v-for="(scope, index) in searchScopes" :id="`search-scope-${scope.id}`" :key="scope.id"
+          type="button" role="tab" :aria-selected="searchScope === scope.id"
+          :tabindex="searchScope === scope.id ? 0 : -1" aria-controls="workspace-search-panel"
+          @click="selectScope(scope.id)" @keydown="handleScopeKeydown($event, index)">{{ scope.label }}</button>
+      </div>
+      <div id="workspace-search-panel" role="tabpanel" :aria-labelledby="`search-scope-${searchScope}`">
+      <div v-if="searchScope === 'web'" class="workspace-results__empty">
+        <Icon name="external-link" :size="22" />
+        <div><div>搜索 Web</div><p>点击后才向 {{ currentEngine.name }} 提交关键词。</p>
+          <button class="workspace-results__action" type="button" :disabled="isSearching" @click="handleWebSearch">继续搜索 Web</button>
+        </div>
+      </div>
+      <div v-else-if="isLocalSearching" class="workspace-results__loading" role="status" aria-label="正在检索">
         <span class="workspace-results__loading-bar"></span>
         <span class="workspace-results__loading-bar"></span>
         <span class="workspace-results__loading-bar"></span>
@@ -439,6 +499,7 @@ async function copyAnswer() {
       <div v-else-if="localSearchError" class="workspace-results__message workspace-results__message--error">
         <Icon name="alert" :size="18" />
         <span>{{ localSearchError }}</span>
+        <button class="workspace-results__action" type="button" @click="scheduleLocalSearch(query, 0)">重试搜索</button>
       </div>
 
       <template v-else>
@@ -448,13 +509,15 @@ async function copyAnswer() {
         >
           <Icon name="alert" :size="17" />
           <span>{{ localSearchResult.failedSources.join('、') }}暂时未完成检索，已显示其余结果。</span>
+          <button class="workspace-results__action" type="button" @click="scheduleLocalSearch(query, 0)">重试搜索</button>
         </div>
 
-        <div v-if="localResultGroups.length" class="workspace-results__groups">
+        <div v-if="localResultGroups.length" id="workspace-search-results" class="workspace-results__groups" role="listbox" aria-label="站内搜索结果">
           <section
             v-for="group in localResultGroups"
             :key="group.id"
             class="workspace-result-group"
+            role="group" :aria-label="group.label"
           >
             <div class="workspace-result-group__title">
               <Icon :name="group.icon" :size="16" />
@@ -505,9 +568,12 @@ async function copyAnswer() {
           <div>
             <div>站内没有匹配内容</div>
             <p>可继续使用 {{ currentEngine.name }} 搜索 Web。</p>
+            <button class="workspace-results__action" type="button" @click="selectScope('web')">切换到 Web</button>
+            <RouterLink class="workspace-results__action" :to="{ path: '/quick-add', query: { title: query } }">新增收藏</RouterLink>
           </div>
         </div>
       </template>
+      </div>
 
       <footer class="workspace-results__footer">
         <span><kbd>↑</kbd><kbd>↓</kbd> 选择</span>
@@ -595,6 +661,39 @@ async function copyAnswer() {
 </template>
 
 <style scoped>
+.workspace-results__tabs {
+  display: flex;
+  gap: 4px;
+  padding: 8px 12px;
+  border-bottom: 1px solid var(--border-color);
+}
+.workspace-results__tabs button,
+.workspace-results__action {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  min-height: 44px;
+  min-width: 44px;
+  padding: 8px 12px;
+  border: 1px solid var(--border-color);
+  border-radius: 10px;
+  background: var(--bg-card);
+  color: var(--text-primary);
+  font-size: 14px;
+  text-decoration: none;
+  cursor: pointer;
+}
+.workspace-results__tabs button[aria-selected="true"] {
+  background: var(--bg-secondary);
+  font-weight: 600;
+  border-color: var(--text-secondary);
+}
+.workspace-results__tabs button:focus-visible,
+.workspace-results__action:focus-visible {
+  outline: 2px solid var(--accent-color);
+  outline-offset: 2px;
+}
+.workspace-results__message { flex-wrap: wrap; }
 .search-shell {
   position: relative;
   display: grid;
