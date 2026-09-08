@@ -1,6 +1,13 @@
 # DOMO NAV 个人邮箱下线与磁盘收口
 
-决策日期：2026-09-07。状态：LOCAL_CANDIDATE / NOT_PUSHED / NOT_DEPLOYED。
+决策日期：2026-09-07。最新状态：DEPLOYED / CORE_ACCEPTANCE_PASS / PHYSICAL_DEVICE_ACCEPTANCE_PENDING。
+
+2026-09-07 14:27（北京时间）已将 PR #69 的精确 merge SHA
+`b2ae02360d7837f0b5c21daaaa855d986b600b2b` 发布至 OVH。
+GitHub 全量 11 个作业、发布前后 PostgreSQL 16 隔离恢复、双域核心 API/AI 写入验收通过。
+旧邮件 worker 已停止；仅重建 API/Web，未执行新迁移或删除历史数据。
+执行记录、磁盘实测、回滚位置及尚未完成的实机验收见
+[本次发布记录](./NAV_RELEASE_20260907_MAIL_RETIREMENT.md)。下方只读基线和流程是发布前留档。
 
 ## 产品边界
 
@@ -35,7 +42,8 @@ Web Push、注册验证/审批/运维 SMTP 通知。未擅自移除协作、离�
 | release 目录 | 约 223M |
 | NAV 数据库 | 约 23 MB；最大邮件表各约 3 MB，邮件不是主要磁盘占用 |
 
-上表是本次时点数据。未停止任何生产服务、修改配置、清理磁盘或执行数据库写入。
+上表是发布前只读采集时点的数据，不代表发布后的运行状态；当时未做生产修改。
+发布后状态以本次发布记录为准。
 
 ## 验证与门槛
 
@@ -45,11 +53,13 @@ Web Push、注册验证/审批/运维 SMTP 通知。未擅自移除协作、离�
 修正审计脚本 Windows npm.cmd 调用方式以便本机执行同一策略。`git diff --check` 通过。
 本机在 production 配置下验证 API ready、`/api/health` 200；不连接数据库，也不启动调度器。
 测试覆盖旧接口、旧配置和旧 AI 单据不可绕过、系统 SMTP 白名单、鉴权和核心功能；历史邮箱模块保留的
-隔离测试用于数据恢复，不表示产品继续开放邮箱。增加 PostgreSQL system-only 真数据测试，待 CI 运行。
+隔离测试用于数据恢复，不表示产品继续开放邮箱。增加 PostgreSQL system-only 真数据测试，已在本次全量 CI 通过。
 本机没有 Docker，不能把本地 Node 测试称为 Linux 生产镜像或 PostgreSQL 16 全量集成已通过。
-GitHub 全量 CI（含生产镜像构建、迁移校验/隔离恢复）必须完成后才可发布。
+GitHub 全量 CI（含生产镜像构建、迁移校验/隔离恢复）已通过后才执行本次发布。
 
-## 下一次受控发布（需生产执行授权）
+## 本次发布前确定的受控流程（历史计划）
+
+以下为本次执行依据；实际完成项与待人工验收项以发布记录区分，不代表全部实机验收已完成。
 
 1. 推送当前候选、创建 PR；精确 merge SHA 的全量 CI 通过，记录当时 current 与 rollback。
    同时核实官方扩展的精确 Origin 白名单及实际 Cookie 跨站需求，不能恢复任意扩展放行。

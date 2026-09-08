@@ -4,6 +4,7 @@ import { useRoute, useRouter } from 'vue-router'
 import { useAuth } from '@/shared/composables/useAuth'
 import { useBookmarks, useGroups } from '@/shared/composables/useDB'
 import Icon from '@/shared/components/Icon.vue'
+import { normalizeBookmarkUrl } from '@/shared/utils/safeUrl'
 
 const DEFAULT_GROUP_NAME = '默认分组'
 
@@ -25,28 +26,9 @@ const saving = ref(false)
 const creatingGroup = ref(false)
 const statusMessage = ref('')
 const statusType = ref('')
+const savedBookmark = ref(null)
 
 const groups = computed(() => groupStore.groups.value || [])
-const bookmarks = computed(() => bookmarkStore.bookmarks.value || [])
-
-function normalizeWebUrl(value) {
-  const input = String(value || '').trim()
-  if (!input) return ''
-
-  const withProtocol = /^[a-z][a-z\d+.-]*:/i.test(input)
-    ? input
-    : `https://${input}`
-
-  try {
-    const parsed = new URL(withProtocol)
-    if (!['http:', 'https:'].includes(parsed.protocol)) return ''
-    parsed.username = ''
-    parsed.password = ''
-    return parsed.toString()
-  } catch {
-    return ''
-  }
-}
 
 function syncFromQuery() {
   form.value.title = String(route.query.title || '')
@@ -103,7 +85,7 @@ async function handleCreateGroup() {
 
 async function handleSave() {
   const title = form.value.title.trim()
-  const url = normalizeWebUrl(form.value.url)
+  const url = normalizeBookmarkUrl(form.value.url)
 
   if (!title || !form.value.url.trim() || saving.value) {
     setStatus('请先填写标题和网址', 'error')
@@ -111,7 +93,7 @@ async function handleSave() {
   }
 
   if (!url) {
-    setStatus('仅支持有效的 http 或 https 网页地址', 'error')
+    setStatus('仅支持不含用户名和密码的有效 http 或 https 网页地址', 'error')
     return
   }
 
@@ -127,26 +109,17 @@ async function handleSave() {
       form.value.groupId = groupId
     }
 
-    const duplicate = bookmarks.value.find((bookmark) => (
-      bookmark.groupId === groupId &&
-      normalizeWebUrl(bookmark.url).toLowerCase() === url.toLowerCase()
-    ))
-
-    if (duplicate) {
-      setStatus('该网页已在这个分组中，没有重复添加', 'success')
-      return
-    }
-
-    await bookmarkStore.create({
+    const outcome = await bookmarkStore.create({
       groupId,
       title,
       url,
       favicon: form.value.favicon,
       description: form.value.description.trim(),
       deduplicate: true
-    })
+    }, { withOutcome: true })
 
-    setStatus('已成功添加到 DOMO NAV', 'success')
+    setStatus(outcome.created ? '已成功添加到 DOMO NAV' : '该网页已在这个分组中，没有重复添加', 'success')
+    savedBookmark.value = outcome.bookmark
   } catch (error) {
     setStatus(error.message || '添加失败', 'error')
   } finally {
@@ -155,6 +128,7 @@ async function handleSave() {
 }
 
 function setStatus(message, type) {
+  savedBookmark.value = null
   statusMessage.value = message
   statusType.value = type
 }
@@ -217,6 +191,8 @@ function goHome() {
       </div>
 
       <div class="actions">
+        <button v-if="savedBookmark" class="secondary-btn" type="button"
+          @click="router.push({ path: '/', query: { bookmark: savedBookmark.id } })">定位已保存收藏</button>
         <button class="secondary-btn" type="button" @click="goHome">稍后再说</button>
         <button class="primary-btn" type="button" :disabled="saving" @click="handleSave">
           {{ saving ? '保存中...' : '添加到 DOMO NAV' }}

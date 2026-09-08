@@ -456,7 +456,7 @@ export async function enqueueUserMail({
   return rows[0]
 }
 
-async function createSmtpTransport(runtimeConfig = config, readSecretImpl = readOwnerSecretFile) {
+export async function createSmtpTransport(runtimeConfig = config, readSecretImpl = readOwnerSecretFile) {
   validateSmtpConfig(runtimeConfig)
   const auth = await resolveSmtpAuth(runtimeConfig, { readSecretImpl })
   return nodemailer.createTransport({

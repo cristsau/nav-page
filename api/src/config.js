@@ -152,6 +152,9 @@ export const config = {
     process.env.SESSION_CLEANUP_INTERVAL_SECONDS,
     900
   ),
+  emailLoginEnabled: process.env.NAV_EMAIL_LOGIN_ENABLED === 'true',
+  emailPasswordResetEnabled: process.env.NAV_EMAIL_PASSWORD_RESET_ENABLED === 'true',
+  authEmailKeysFile: String(process.env.NAV_AUTH_EMAIL_KEYS_FILE || '').trim(),
   authLoginRateLimitMax: normalizePositiveInteger(
     process.env.AUTH_LOGIN_RATE_LIMIT_MAX,
     10
@@ -530,7 +533,7 @@ export const config = {
   trustedProxyAddresses: normalizeTrustedProxyAddresses(
     process.env.TRUSTED_PROXY_ADDRESSES
   ),
-  webauthnEnabled: process.env.NAV_WEBAUTHN_ENABLED === 'true',
+  webauthnEnabled: false, // Retired; legacy environment flags cannot re-enable it.
   webauthnRpId: 'nav.skrskr.net',
   webauthnOrigin: 'https://nav.skrskr.net',
   webauthnRelyingParties: WEBAUTHN_RELYING_PARTIES,

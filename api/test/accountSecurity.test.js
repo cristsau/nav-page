@@ -27,8 +27,8 @@ async function readSource(relativeUrl) {
   return source.replace(/\r\n?/g, '\n')
 }
 
-test('new passwords require twelve characters while legacy short password hashes still verify', async () => {
-  assert.equal(MIN_PASSWORD_LENGTH, 12)
+test('new passwords require fifteen code points while legacy short password hashes still verify', async () => {
+  assert.equal(MIN_PASSWORD_LENGTH, 15)
   assert.equal(validateNewPassword('short').valid, false)
   assert.equal(validateNewPassword('correct-horse-battery-staple').valid, true)
 

@@ -167,13 +167,16 @@ export function useBookmarks() {
     }
   }
 
-  async function create(bookmark) {
-    const newBookmark = backendNavigationEnabled
-      ? await createBackendBookmark(bookmark)
-      : await addBookmark(bookmark)
+  async function create(bookmark, { withOutcome = false } = {}) {
+    const outcome = backendNavigationEnabled
+      ? await createBackendBookmark(bookmark, { withOutcome: true })
+      : await addBookmark(bookmark, { withOutcome: true })
+    const newBookmark = outcome.bookmark
 
-    bookmarks.value.push(newBookmark)
-    return newBookmark
+    const index = bookmarks.value.findIndex((item) => item.id === newBookmark.id)
+    if (index < 0) bookmarks.value.push(newBookmark)
+    else bookmarks.value[index] = newBookmark
+    return withOutcome ? outcome : newBookmark
   }
 
   async function update(id, updates) {

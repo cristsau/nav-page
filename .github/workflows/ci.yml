@@ -102,6 +102,18 @@ jobs:
       - name: Install API dependencies
         run: npm ci --prefix api
 
+      - name: Verify authentication email against isolated PostgreSQL 16
+        env:
+          NODE_ENV: test
+          NAV_AUTH_EMAIL_INTEGRATION_TEST: 'true'
+          PGPASSWORD: nav_password
+          DATABASE_URL: postgres://nav:nav_password@127.0.0.1:5432/nav_auth_email_test
+        run: |
+          createdb -h 127.0.0.1 -U nav nav_auth_email_test
+          cd api
+          node --test integration/authEmailPostgres.integration.js
+          node src/db/verifyMigrations.js
+
       - name: Validate backend Compose topology
         env:
           NAV_RELEASE_SHA: ci

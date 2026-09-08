@@ -1,4 +1,5 @@
 import Dexie from 'dexie'
+import { normalizeBookmarkUrl } from '../utils/safeUrl.js'
 
 export const CURRENT_USER_STORAGE_KEY = 'nav-current-user-id'
 export const TELEGRAM_CONFIG_META_ID = 'telegram-config'
@@ -562,24 +563,33 @@ export async function getAllBookmarks() {
   return db.bookmarks.orderBy('order').toArray()
 }
 
-export async function addBookmark(bookmark) {
+export async function addBookmark(bookmark, { withOutcome = false } = {}) {
   const db = requireUserDb()
-  const count = await db.bookmarks.where('groupId').equals(bookmark.groupId).count()
-  const now = getTimestamp()
-  const newBookmark = {
-    id: generateId(),
-    groupId: bookmark.groupId,
-    title: bookmark.title || 'Untitled',
-    url: bookmark.url,
-    favicon: bookmark.favicon || '',
-    description: bookmark.description || '',
-    tags: Array.isArray(bookmark.tags) ? [...bookmark.tags] : [],
-    order: count,
-    createdAt: now,
-    updatedAt: now
-  }
-  await db.bookmarks.add(newBookmark)
-  return newBookmark
+  const url = normalizeBookmarkUrl(bookmark.url)
+  if (!url) throw new Error('仅支持不含用户名和密码的有效 http 或 https 网页地址')
+  return db.transaction('rw', db.bookmarks, async () => {
+    const groupBookmarks = await db.bookmarks.where('groupId').equals(bookmark.groupId).toArray()
+    const existing = bookmark.deduplicate
+      ? groupBookmarks.find((item) => normalizeBookmarkUrl(item.url) === url)
+      : null
+    if (existing) return withOutcome ? { bookmark: existing, created: false } : existing
+    const nextOrder = groupBookmarks.reduce((max, item) => Math.max(max, Number(item.order) || 0), -1) + 1
+    const now = getTimestamp()
+    const newBookmark = {
+      id: generateId(),
+      groupId: bookmark.groupId,
+      title: bookmark.title || 'Untitled',
+      url,
+      favicon: bookmark.favicon || '',
+      description: bookmark.description || '',
+      tags: Array.isArray(bookmark.tags) ? [...bookmark.tags] : [],
+      order: nextOrder,
+      createdAt: now,
+      updatedAt: now
+    }
+    await db.bookmarks.add(newBookmark)
+    return withOutcome ? { bookmark: newBookmark, created: true } : newBookmark
+  })
 }
 
 export async function updateBookmark(id, updates) {

@@ -219,6 +219,7 @@ function runMobileAction(action) {
 <template>
   <article
     class="bookmark-card card-float"
+    :data-bookmark-id="bookmark.id"
     :class="{
       'is-busy': deleting || analyzing || managementBusy,
       'is-selecting': selectionMode,
@@ -296,6 +297,8 @@ function runMobileAction(action) {
         <img
           v-if="faviconUrl && !faviconFailed"
           :src="faviconUrl"
+          loading="lazy"
+          decoding="async"
           alt=""
           @error="faviconFailed = true"
         >
@@ -586,7 +589,7 @@ function runMobileAction(action) {
   position: absolute;
   top: 8px;
   right: 8px;
-  display: flex;
+  display: none;
   gap: 4px;
   z-index: 2;
   opacity: 0;
@@ -699,6 +702,7 @@ function runMobileAction(action) {
 }
 
 .bookmark-card__title {
+  overflow-wrap: anywhere;
   font-size: 14px;
   font-weight: 500;
   color: var(--text-primary);
@@ -807,7 +811,7 @@ function runMobileAction(action) {
   z-index: 3;
   width: 44px;
   height: 44px;
-  display: none;
+  display: grid;
   place-items: center;
   color: var(--text-secondary);
   background: color-mix(in srgb, var(--bg-card) 92%, var(--accent-color) 8%);
@@ -820,6 +824,10 @@ function runMobileAction(action) {
 .bookmark-card__more:focus-visible {
   outline: 2px solid var(--accent-color);
   outline-offset: 2px;
+}
+
+.bookmark-card__main {
+  padding-right: 64px;
 }
 
 .mobile-action-overlay {

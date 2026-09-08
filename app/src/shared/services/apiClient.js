@@ -7,6 +7,24 @@ const EXPECTED_UNAUTHORIZED_PATHS = new Set([
 
 const unauthorizedListeners = new Set()
 let unauthorizedNotificationPending = false
+let passwordReauthHandler = null
+
+export function registerPasswordReauthHandler(handler) {
+  passwordReauthHandler=handler
+  return ()=>{if(passwordReauthHandler===handler)passwordReauthHandler=null}
+}
+
+async function fetchWithPasswordReauth(path,options) {
+  const send=()=>fetch(`${API_BASE_URL}${path}`,buildApiRequestOptions(options))
+  const response=await send()
+  if(response.status!==403 || !passwordReauthHandler || options.body?.getReader)return response
+  let payload
+  try {payload=await response.clone().json()} catch {return response}
+  if(payload.code!=='PASSWORD_REAUTH_REQUIRED')return response
+  await passwordReauthHandler({method:String(options.method || 'GET').toUpperCase(),path:normalizeApiPath(path)})
+  // A single retry follows a one-use, method/path/session/version-bound password proof.
+  return send()
+}
 
 function hasContentTypeHeader(headers) {
   return Object.keys(headers).some((name) => name.toLowerCase() === 'content-type')
@@ -107,10 +125,7 @@ function downloadFilename(response) {
 }
 
 export async function apiRequest(path, options = {}) {
-  const response = await fetch(
-    `${API_BASE_URL}${path}`,
-    buildApiRequestOptions(options)
-  )
+  const response = await fetchWithPasswordReauth(path,options)
 
   const contentType = response.headers.get('content-type') || ''
   const payload = contentType.includes('application/json')
@@ -132,20 +147,14 @@ export async function apiRequest(path, options = {}) {
 }
 
 export async function apiRawRequest(path, options = {}) {
-  const response = await fetch(
-    `${API_BASE_URL}${path}`,
-    buildApiRequestOptions(options)
-  )
+  const response = await fetchWithPasswordReauth(path,options)
 
   if (!response.ok) throw await responseError(response, path, options)
   return response
 }
 
 export async function apiFileRequest(path, options = {}) {
-  const response = await fetch(
-    `${API_BASE_URL}${path}`,
-    buildApiRequestOptions(options)
-  )
+  const response = await fetchWithPasswordReauth(path,options)
 
   if (!response.ok) throw await responseError(response, path, options)
 

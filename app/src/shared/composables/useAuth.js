@@ -20,12 +20,7 @@ import {
   isBackendAuthEnabled,
   fetchBackendSession,
   loginWithBackend,
-  loginWithBackendPasskey,
-  browserSupportsBackendPasskeys,
-  fetchBackendPasskeyConfig,
-  fetchBackendPasskeys,
-  registerBackendPasskey,
-  deleteBackendPasskey,
+  loginWithBackendEmail,
   logoutWithBackend,
   updateBackendUsername,
   updateBackendPassword,
@@ -361,11 +356,9 @@ export function useAuth() {
     return accepted
   }
 
-  async function loginWithPasskey(username) {
-    if (!isBackendAuthEnabled()) {
-      throw new Error('当前认证模式不支持 Passkey。')
-    }
-    const user = await loginWithBackendPasskey(username)
+  async function loginWithEmail(proof) {
+    if (!isBackendAuthEnabled()) throw new Error('当前认证模式不支持邮箱验证码。')
+    const user = await loginWithBackendEmail(proof)
     const accepted = sessionCoordinator.accept(user)
     initialized.value = true
     unauthorizedRedirectPending = false
@@ -389,37 +382,6 @@ export function useAuth() {
   async function getSessions() {
     if (!isBackendAuthEnabled()) return []
     return fetchBackendSessions()
-  }
-
-  async function getPasskeyConfig() {
-    if (!isBackendAuthEnabled()) {
-      return {
-        enabled: false,
-        allowedOrigins: [],
-        rpId: '',
-        unsupportedOriginMessage: ''
-      }
-    }
-    return fetchBackendPasskeyConfig()
-  }
-
-  async function getPasskeys() {
-    if (!isBackendAuthEnabled()) return []
-    return fetchBackendPasskeys()
-  }
-
-  async function registerPasskey(payload) {
-    if (!isBackendAuthEnabled()) {
-      throw new Error('当前认证模式不支持 Passkey。')
-    }
-    return registerBackendPasskey(payload)
-  }
-
-  async function deletePasskey(passkeyId, currentPassword) {
-    if (!isBackendAuthEnabled()) {
-      throw new Error('当前认证模式不支持 Passkey。')
-    }
-    return deleteBackendPasskey(passkeyId, currentPassword)
   }
 
   async function updateUsername(payload) {
@@ -594,16 +556,12 @@ export function useAuth() {
     revalidateSessionInBackground,
     refreshAll,
     login,
-    loginWithPasskey,
-    browserSupportsPasskeys: browserSupportsBackendPasskeys,
+    loginWithEmail,
+    forgetSession: () => invalidateCurrentSession({ broadcast:true, reason:'password-changed' }),
     logout,
     updateUsername,
     updatePassword,
     getSessions,
-    getPasskeyConfig,
-    getPasskeys,
-    registerPasskey,
-    deletePasskey,
     revokeSession,
     revokeOtherSessions,
     revokeAllSessions,

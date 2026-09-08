@@ -2,6 +2,7 @@
 import { computed, onBeforeUnmount, onMounted, ref, watch } from 'vue'
 import Icon from '@/shared/components/Icon.vue'
 import OauthIdentitySettings from './OauthIdentitySettings.vue'
+import EmailAccountSettings from './EmailAccountSettings.vue'
 import { useAuth } from '@/shared/composables/useAuth'
 
 const {
@@ -9,11 +10,6 @@ const {
   backendAuthEnabled,
   updateUsername,
   updatePassword,
-  browserSupportsPasskeys,
-  getPasskeyConfig,
-  getPasskeys,
-  registerPasskey,
-  deletePasskey,
   getSessions,
   revokeSession,
   revokeOtherSessions,
@@ -23,17 +19,6 @@ const {
 } = useAuth()
 
 const sessions = ref([])
-const passkeys = ref([])
-const passkeyConfig = ref({
-  enabled: false,
-  allowedOrigins: [],
-  rpId: '',
-  unsupportedOriginMessage: ''
-})
-const passkeyBrowserSupported = ref(false)
-const passkeyDisplayName = ref('我的 Passkey')
-const passkeyCurrentPassword = ref('')
-const passkeyAction = ref('')
 const recoveryStatus = ref({
   configured: false,
   activeCodeCount: 0,
@@ -60,23 +45,6 @@ const currentSession = computed(() => (
 const otherSessionCount = computed(() => (
   sessions.value.filter((session) => !session.current).length
 ))
-const onSupportedPasskeyOrigin = computed(() => (
-  typeof window !== 'undefined'
-  && passkeyConfig.value.allowedOrigins?.some((item) => (
-    item.origin === window.location.origin
-  ))
-))
-const canRegisterPasskey = computed(() => (
-  passkeyConfig.value.enabled
-  && onSupportedPasskeyOrigin.value
-  && passkeyBrowserSupported.value
-))
-const currentPasskeyRpId = computed(() => (
-  passkeyConfig.value.allowedOrigins?.find((item) => (
-    typeof window !== 'undefined' && item.origin === window.location.origin
-  ))?.rpId || passkeyConfig.value.rpId || '未识别'
-))
-
 watch(
   () => currentUser.value?.username,
   (value) => {
@@ -143,23 +111,14 @@ function getSecurityErrorMessage(error, fallback) {
   if (/authentication required/i.test(value)) {
     return '登录状态已失效，请重新登录。'
   }
-  if (/passkeys are available only on an approved/i.test(value)) {
-    return '当前域名不在 Passkey 允许列表中。'
-  }
-  if (/passkey authentication is not enabled/i.test(value)) {
-    return '服务器暂未启用 Passkey。'
-  }
-  if (/unable to register|already exists/i.test(value)) {
-    return '无法登记这个 Passkey，它可能已经绑定或验证已超时。'
-  }
   if (/username is already in use|username already exists/i.test(value)) {
     return '这个用户名已经被使用，请换一个。'
   }
   if (/username of 1 to 128 characters/i.test(value)) {
     return '用户名需要为 1–128 个字符，且不能包含控制字符。'
   }
-  if (/password must be at least 12 characters/i.test(value)) {
-    return '新密码至少需要 12 个字符。'
+  if (/password must be at least 15 characters/i.test(value)) {
+    return '新密码至少需要 15 个字符。'
   }
   if (/password must be 1024 characters or fewer/i.test(value)) {
     return '密码长度不能超过 1024 个字符。'
@@ -211,8 +170,8 @@ async function handlePasswordUpdate() {
     setFeedback({ error: '请输入当前密码以验证身份。' })
     return
   }
-  if (newPassword.value.length < 12) {
-    setFeedback({ error: '新密码至少需要 12 个字符。' })
+  if (Array.from(newPassword.value).length < 15) {
+    setFeedback({ error: '新密码至少需要 15 个字符。' })
     return
   }
   if (newPassword.value !== confirmPassword.value) {
@@ -251,16 +210,9 @@ async function refreshSecurityData() {
   loading.value = true
   setFeedback()
   try {
-    const [nextSessions, nextRecoveryStatus, nextPasskeyConfig, nextPasskeys] = await Promise.all([
-      getSessions(),
-      getRecoveryCodeStatus(),
-      getPasskeyConfig(),
-      getPasskeys()
-    ])
+    const [nextSessions, nextRecoveryStatus] = await Promise.all([getSessions(),getRecoveryCodeStatus()])
     sessions.value = nextSessions
     recoveryStatus.value = nextRecoveryStatus
-    passkeyConfig.value = nextPasskeyConfig
-    passkeys.value = nextPasskeys
   } catch (error) {
     setFeedback({
       error: getSecurityErrorMessage(
@@ -270,69 +222,6 @@ async function refreshSecurityData() {
     })
   } finally {
     loading.value = false
-  }
-}
-
-async function handleRegisterPasskey() {
-  if (passkeyAction.value) return
-  if (!passkeyDisplayName.value.trim()) {
-    setFeedback({ error: '请填写 Passkey 名称。' })
-    return
-  }
-  if (!passkeyCurrentPassword.value) {
-    setFeedback({ error: '请输入当前密码以登记 Passkey。' })
-    return
-  }
-
-  passkeyAction.value = 'register'
-  setFeedback()
-  try {
-    const passkey = await registerPasskey({
-      displayName: passkeyDisplayName.value,
-      currentPassword: passkeyCurrentPassword.value
-    })
-    passkeys.value = [
-      passkey,
-      ...passkeys.value.filter((item) => item.id !== passkey.id)
-    ]
-    passkeyCurrentPassword.value = ''
-    setFeedback({ message: 'Passkey 已登记，可在当前域名的登录页使用；另一个域名需要单独登记。' })
-  } catch (error) {
-    passkeyCurrentPassword.value = ''
-    setFeedback({
-      error: error?.name === 'NotAllowedError'
-        ? 'Passkey 登记已取消或超时。'
-        : getSecurityErrorMessage(error, 'Passkey 登记失败，请稍后重试。')
-    })
-  } finally {
-    passkeyAction.value = ''
-  }
-}
-
-async function handleDeletePasskey(passkey) {
-  if (passkeyAction.value) return
-  if (!passkeyCurrentPassword.value) {
-    setFeedback({ error: '请输入当前密码后再删除 Passkey。' })
-    return
-  }
-  if (!window.confirm(`确定删除“${passkey.displayName}”吗？此操作不会退出当前会话。`)) {
-    return
-  }
-
-  passkeyAction.value = passkey.id
-  setFeedback()
-  try {
-    await deletePasskey(passkey.id, passkeyCurrentPassword.value)
-    passkeys.value = passkeys.value.filter((item) => item.id !== passkey.id)
-    passkeyCurrentPassword.value = ''
-    setFeedback({ message: 'Passkey 已删除。' })
-  } catch (error) {
-    passkeyCurrentPassword.value = ''
-    setFeedback({
-      error: getSecurityErrorMessage(error, 'Passkey 删除失败，请稍后重试。')
-    })
-  } finally {
-    passkeyAction.value = ''
   }
 }
 
@@ -531,7 +420,6 @@ function hideRecoveryCodes() {
 }
 
 onMounted(() => {
-  passkeyBrowserSupported.value = browserSupportsPasskeys()
   void refreshSecurityData()
 })
 
@@ -542,7 +430,6 @@ onBeforeUnmount(() => {
   passwordCurrentPassword.value = ''
   newPassword.value = ''
   confirmPassword.value = ''
-  passkeyCurrentPassword.value = ''
 })
 </script>
 
@@ -552,7 +439,7 @@ onBeforeUnmount(() => {
       <div>
         <h3 class="section-heading__title">账号安全</h3>
         <p class="section-heading__desc">
-          管理账号资料、Passkey、已登录设备和一次性恢复码。恢复码不会写入浏览器存储。
+          管理账号资料、验证邮箱、已登录设备和一次性恢复码。恢复码不会写入浏览器存储。
         </p>
       </div>
       <button
@@ -573,6 +460,7 @@ onBeforeUnmount(() => {
       {{ errorMessage }}
     </p>
 
+    <EmailAccountSettings @updated="refreshSecurityData" />
     <OauthIdentitySettings />
 
     <div class="security-block">
@@ -630,7 +518,7 @@ onBeforeUnmount(() => {
             <Icon name="lock" :size="18" />
             <div>
               <strong>修改密码</strong>
-              <p>新密码至少 12 个字符；成功后所有设备都会退出登录。</p>
+              <p>新密码至少 15 个字符；成功后所有设备都会退出登录。</p>
             </div>
           </div>
           <div class="account-form__fields">
@@ -651,7 +539,7 @@ onBeforeUnmount(() => {
                 name="new-password"
                 type="password"
                 autocomplete="new-password"
-                minlength="12"
+                minlength="15"
                 required
               >
             </label>
@@ -662,7 +550,7 @@ onBeforeUnmount(() => {
                 name="confirm-password"
                 type="password"
                 autocomplete="new-password"
-                minlength="12"
+                minlength="15"
                 required
               >
             </label>
@@ -675,100 +563,6 @@ onBeforeUnmount(() => {
             {{ passwordLoading ? '修改中...' : '修改密码并退出所有设备' }}
           </button>
         </form>
-      </div>
-    </div>
-
-    <div class="security-block">
-      <div class="block-heading">
-        <div>
-          <h4>Passkey</h4>
-          <p>
-            使用设备锁屏、指纹或面容登录。当前域名 RP ID 为
-            <code>{{ currentPasskeyRpId }}</code>；两个域名需要分别登记。
-          </p>
-        </div>
-        <span
-          class="status-badge"
-          :class="{ 'status-badge--active': passkeyConfig.enabled }"
-        >
-          {{ passkeyConfig.enabled ? '已启用' : '未启用' }}
-        </span>
-      </div>
-
-      <div
-        v-if="passkeyConfig.enabled && !onSupportedPasskeyOrigin"
-        class="passkey-notice"
-      >
-        {{ passkeyConfig.unsupportedOriginMessage || '当前域名不支持 Passkey。' }}
-      </div>
-      <div v-else-if="!passkeyConfig.enabled" class="passkey-notice">
-        服务器默认关闭 Passkey。管理员完成迁移与双域验收后，可设置
-        <code>NAV_WEBAUTHN_ENABLED=true</code> 启用。
-      </div>
-      <div
-        v-else-if="!passkeyBrowserSupported"
-        class="passkey-notice"
-      >
-        当前浏览器不支持 WebAuthn，不能登记新 Passkey。
-      </div>
-
-      <div v-if="onSupportedPasskeyOrigin" class="passkey-form">
-        <label class="security-field">
-          <span>Passkey 名称</span>
-          <input
-            v-model="passkeyDisplayName"
-            type="text"
-            maxlength="128"
-            placeholder="例如：iPhone 或办公电脑"
-          >
-        </label>
-        <label class="security-field">
-          <span>当前密码</span>
-          <input
-            v-model="passkeyCurrentPassword"
-            type="password"
-            autocomplete="current-password"
-            placeholder="登记或删除前验证身份"
-          >
-        </label>
-        <button
-          class="button button--primary"
-          type="button"
-          :disabled="!canRegisterPasskey || Boolean(passkeyAction)"
-          @click="handleRegisterPasskey"
-        >
-          <Icon name="key" :size="16" />
-          {{ passkeyAction === 'register' ? '登记中...' : '登记新 Passkey' }}
-        </button>
-      </div>
-
-      <div v-if="passkeys.length" class="passkey-list">
-        <article v-for="passkey in passkeys" :key="passkey.id" class="passkey-card">
-          <div class="session-card__icon">
-            <Icon name="key" :size="20" />
-          </div>
-          <div class="passkey-card__content">
-            <strong>{{ passkey.displayName }}</strong>
-            <div class="session-card__meta">
-              <span>{{ passkey.backedUp ? '已同步/备份' : '仅此设备' }}</span>
-              <span>适用域名：{{ passkey.rpId }}</span>
-              <span>登记于：{{ formatDate(passkey.createdAt) }}</span>
-              <span>最近使用：{{ formatDate(passkey.lastUsedAt) }}</span>
-            </div>
-          </div>
-          <button
-            v-if="onSupportedPasskeyOrigin"
-            class="button button--danger"
-            type="button"
-            :disabled="Boolean(passkeyAction)"
-            @click="handleDeletePasskey(passkey)"
-          >
-            {{ passkeyAction === passkey.id ? '删除中...' : '删除' }}
-          </button>
-        </article>
-      </div>
-      <div v-else class="empty-state">
-        当前账号还没有登记 Passkey，密码和恢复码登录仍然可用。
       </div>
     </div>
 

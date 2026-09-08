@@ -15,6 +15,7 @@ import Icon from '@/shared/components/Icon.vue'
 import NoteAiPanel from './NoteAiPanel.vue'
 import CollaborationPanel from './CollaborationPanel.vue'
 import BlockEditor from './BlockEditor.vue'
+import { resolveNoteSaveState } from '../utils/noteSaveState'
 import {
   plainTextToTiptapDocument,
   tiptapDocumentImageUrls
@@ -72,6 +73,8 @@ const tagMessageType = ref('')
 const initialSnapshot = ref('')
 const copiedId = ref(false)
 const titleInputRef = ref(null)
+const editorDialog = ref(null)
+let editorTrigger = null
 const imageInputRef = ref(null)
 const blockEditorRef = ref(null)
 const uploadingImage = ref(false)
@@ -85,6 +88,9 @@ const collaborationActivated = ref(false)
 const initialEncrypted = ref(false)
 let autosaveTimer = null
 let autosaveSequence = 0
+let autosavePromise = null
+const autosaveInFlight = ref(false)
+const draftActionMessage = ref('')
 let initializingForm = false
 let embeddedImageUrls = new Set()
 
@@ -165,6 +171,7 @@ function currentDirtySnapshot() {
 // 监听显示状态，初始化表单
 watch(() => props.show, async (val) => {
   if (val) {
+    editorTrigger = document.activeElement
     initializingForm = true
     clearAutosaveTimer()
     if (props.note?.id) {
@@ -199,7 +206,10 @@ watch(() => props.show, async (val) => {
     imageMessageType.value = ''
     collaborationActivated.value = Boolean(props.note?.collaborative)
     autosaveStatus.value = props.note?.id && !props.note.encrypted ? 'saved' : 'idle'
-    autosaveMessage.value = ''
+    const persisted = resolveNoteSaveState(props.note, shouldUseBackendNotes())
+    if (props.note?.id && !props.note.encrypted) autosaveStatus.value = persisted.state
+    autosaveMessage.value = props.note?.id && !props.note.encrypted ? persisted.message : ''
+    draftActionMessage.value = ''
     collaborationStatus.value = realtimeEnabled.value ? 'loading' : 'disabled'
     initialSnapshot.value = currentDirtySnapshot()
     await nextTick()
@@ -208,6 +218,7 @@ watch(() => props.show, async (val) => {
   } else {
     clearAutosaveTimer()
     autosaveSequence += 1
+    nextTick(() => { if (editorTrigger?.isConnected) editorTrigger.focus({ preventScroll: true }) })
   }
 })
 
@@ -270,7 +281,12 @@ function buildPlainPayload() {
 }
 
 async function runAutosave() {
-  autosaveTimer = null
+  clearAutosaveTimer()
+  if (autosavePromise) {
+    await autosavePromise
+    if (autosaveStatus.value !== 'error' && autosaveStatus.value !== 'conflict') return runAutosave()
+    return
+  }
   if (
     !props.show
     || !isEdit.value
@@ -280,38 +296,47 @@ async function runAutosave() {
     || props.saving
     || uploadingImage.value
     || typeof props.autosaveHandler !== 'function'
+    || autosaveStatus.value === 'conflict'
   ) return
-
-  if (autosaveStatus.value === 'saving') {
-    autosaveTimer = window.setTimeout(runAutosave, 1200)
-    return
-  }
 
   const savedSnapshot = currentDirtySnapshot()
   if (savedSnapshot === initialSnapshot.value) return
+  const noteId = props.note.id
   const sequence = ++autosaveSequence
   autosaveStatus.value = 'saving'
+  autosaveInFlight.value = true
   autosaveMessage.value = '正在自动保存'
-  try {
-    const updated = await props.autosaveHandler(buildPlainPayload())
-    if (sequence !== autosaveSequence || !props.show) return
-    if (updated?.revision) formData.value.revision = Number(updated.revision)
-    if (currentDirtySnapshot() === savedSnapshot) {
-      initialSnapshot.value = currentDirtySnapshot()
-      autosaveStatus.value = 'saved'
-      autosaveMessage.value = '已自动保存'
-    } else {
-      autosaveStatus.value = 'pending'
-      autosaveMessage.value = '有新修改等待保存'
-      clearAutosaveTimer()
-      autosaveTimer = window.setTimeout(runAutosave, 1200)
+  const operation = (async () => {
+    try {
+      const updated = await props.autosaveHandler(buildPlainPayload())
+      if (sequence !== autosaveSequence || !props.show || props.note?.id !== noteId) return
+      if (updated?.id !== noteId) throw new Error('未收到保存确认，当前草稿已保留')
+      if (updated?.revision) formData.value.revision = Number(updated.revision)
+      initialSnapshot.value = savedSnapshot
+      if (currentDirtySnapshot() === savedSnapshot) {
+        const persisted = resolveNoteSaveState(updated, shouldUseBackendNotes())
+        autosaveStatus.value = persisted.state
+        autosaveMessage.value = persisted.message
+      } else {
+        autosaveStatus.value = 'pending'
+        autosaveMessage.value = '有新修改等待保存'
+        clearAutosaveTimer()
+        autosaveTimer = window.setTimeout(runAutosave, 1200)
+      }
+    } catch (error) {
+      if (sequence !== autosaveSequence) return
+      autosaveStatus.value = error?.status === 409 ? 'conflict' : 'error'
+      autosaveMessage.value = error?.status === 409
+        ? '其他设备已修改此笔记。当前草稿保留在编辑器中，请复制草稿后再重新打开；不会自动覆盖。'
+        : `自动保存失败：${error?.message || '请手动保存'}`
     }
-  } catch (error) {
-    if (sequence !== autosaveSequence) return
-    autosaveStatus.value = 'error'
-    autosaveMessage.value = error?.status === 409
-      ? '其他设备已修改此笔记，请关闭后重新打开'
-      : `自动保存失败：${error?.message || '请手动保存'}`
+  })()
+  autosavePromise = operation
+  try { await operation } finally {
+    if (autosavePromise === operation) {
+      autosavePromise = null
+      autosaveInFlight.value = false
+    }
   }
 }
 
@@ -326,6 +351,8 @@ watch(formData, () => {
     || typeof props.autosaveHandler !== 'function'
   ) return
   if (currentDirtySnapshot() === initialSnapshot.value) return
+  if (autosaveStatus.value === 'conflict') return
+  if (autosaveInFlight.value) return
   autosaveStatus.value = 'pending'
   autosaveMessage.value = '修改将在片刻后自动保存'
   clearAutosaveTimer()
@@ -576,7 +603,7 @@ function handleEncryptionToggle() {
 
 // 提交表单
 async function handleSubmit() {
-  if (formDisabled.value || uploadingImage.value || autosaveStatus.value === 'saving') return
+  if (formDisabled.value || uploadingImage.value || autosaveInFlight.value || autosaveStatus.value === 'conflict') return
 
   let content = formData.value.content
   let contentJson = formData.value.contentJson
@@ -642,17 +669,35 @@ async function handleSubmit() {
 }
 
 function close() {
-  if (uploadingImage.value || autosaveStatus.value === 'saving') return
+  if (uploadingImage.value || autosaveInFlight.value) return
   if (!props.saving && initialSnapshot.value && currentDirtySnapshot() !== initialSnapshot.value) {
     if (!confirm('尚有未保存的修改，确定关闭吗？')) return
   }
   emit('close')
 }
+
+function trapEditorFocus(event) {
+  const controls = Array.from(editorDialog.value?.querySelectorAll('button:not(:disabled), input:not(:disabled), textarea:not(:disabled), select:not(:disabled), a[href], [tabindex="0"], [contenteditable="true"]') || [])
+    .filter((element) => element.getClientRects().length && element.tabIndex >= 0)
+  const first = controls[0]
+  const last = controls[controls.length - 1]
+  if (!first) return
+  if (event.shiftKey && document.activeElement === first) { event.preventDefault(); last.focus() }
+  else if (!event.shiftKey && document.activeElement === last) { event.preventDefault(); first.focus() }
+}
+
+async function copyUnsavedDraft() {
+  try {
+    await navigator.clipboard.writeText([formData.value.title, formData.value.content].filter(Boolean).join('\n\n'))
+    draftActionMessage.value = '已复制标题和正文；标签、附件和提醒请另行保留。'
+  } catch { draftActionMessage.value = '复制失败，请在编辑器中手动选择并复制正文。' }
+}
 </script>
 
 <template>
   <div v-if="show" class="editor-modal" @click.self="close">
-    <div class="editor-content" role="dialog" aria-modal="true" :aria-label="modalTitle">
+    <div ref="editorDialog" class="editor-content" role="dialog" aria-modal="true" :aria-label="modalTitle"
+      @keydown.tab="trapEditorFocus" @keydown.esc.stop.prevent="close">
       <!-- 头部 -->
       <div class="editor__header">
         <div class="editor__heading">
@@ -930,8 +975,13 @@ function close() {
         <p v-else-if="isEdit && formData.encrypted" class="editor__autosave">
           加密笔记需手动保存
         </p>
-        <button type="button" class="btn btn--secondary" :disabled="saving || autosaveStatus === 'saving'" @click="close">取消</button>
-        <button v-if="!collaborationReadOnly" type="button" class="btn btn--primary" :disabled="formDisabled || autosaveStatus === 'saving'" @click="handleSubmit">
+        <div v-if="!realtimeEnabled && ['error', 'conflict'].includes(autosaveStatus)" class="editor__save-recovery">
+          <button v-if="autosaveStatus === 'error'" type="button" class="btn btn--secondary" @click="runAutosave">重试保存</button>
+          <button type="button" class="btn btn--secondary" @click="copyUnsavedDraft">复制当前草稿</button>
+          <span v-if="draftActionMessage" role="status">{{ draftActionMessage }}</span>
+        </div>
+        <button type="button" class="btn btn--secondary" :disabled="saving || autosaveInFlight" @click="close">取消</button>
+        <button v-if="!collaborationReadOnly" type="button" class="btn btn--primary" :disabled="formDisabled || autosaveInFlight || autosaveStatus === 'conflict'" @click="handleSubmit">
           <span v-if="saving" class="button-spinner" aria-hidden="true"></span>
           {{ saving ? '保存中' : (isEdit ? '保存' : '创建') }}
         </button>
@@ -1408,19 +1458,29 @@ function close() {
 
 /* 底部 */
 .editor__footer {
+  position: sticky;
+  bottom: 0;
+  z-index: 12;
   display: flex;
+  flex-wrap: wrap;
+  align-items: center;
   justify-content: flex-end;
   gap: 12px;
   padding: 20px 24px;
   border-top: 1px solid var(--border-light);
+  background: var(--bg-card);
+  padding-bottom: max(20px, env(safe-area-inset-bottom));
 }
 
+.editor__footer .btn { min-height: 44px; }
+
 .editor__autosave {
+  flex: 1 1 220px;
   min-width: 0;
   margin: 0 auto 0 0;
   align-self: center;
   color: var(--text-muted);
-  font-size: 11px;
+  font-size: 14px;
   line-height: 1.45;
 }
 
@@ -1436,6 +1496,11 @@ function close() {
 .editor__autosave.is-error {
   color: var(--error-color);
 }
+
+.editor__autosave.is-conflict { color: var(--text-primary); font-weight: 600; }
+.editor__autosave.is-offline { color: var(--text-secondary); }
+.editor__save-recovery { display: flex; flex: 1 1 100%; flex-wrap: wrap; align-items: center; gap: 8px; }
+.editor__save-recovery span { flex-basis: 100%; font-size: 13px; color: var(--text-secondary); }
 
 .btn {
   display: inline-flex;

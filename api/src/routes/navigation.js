@@ -1082,7 +1082,7 @@ export default async function navigationRoutes(fastify) {
             FROM nav_bookmarks
             WHERE user_id = $1
               AND group_id = $2
-              AND LOWER(url) = LOWER($3)
+              AND url = $3
             LIMIT 1
           `,
           [request.currentUser.id, groupId, url]

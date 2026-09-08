@@ -3265,6 +3265,26 @@ async function verifyAssistantConfirmedOperationSchema() {
   )
 }
 
+async function verifyAuthEmailSchema() {
+  const tables=['auth_email_challenges','auth_reauth_grants','auth_email_delivery_jobs','auth_action_grants']
+  const found=await query(`SELECT table_name FROM information_schema.tables WHERE table_schema=current_schema() AND table_name=ANY($1::text[])`,[tables])
+  assertExactSet('authentication email tables',found.rows.map(r=>r.table_name),tables)
+  const version=await query(`SELECT data_type,is_nullable,column_default FROM information_schema.columns WHERE table_schema=current_schema() AND table_name='users' AND column_name='auth_version'`)
+  if(version.rows[0]?.data_type!=='bigint' || version.rows[0]?.is_nullable!=='NO')throw new Error('auth_version must be a required bigint')
+  const indexes=['idx_auth_email_challenge_expiry','idx_auth_email_challenge_user','idx_auth_email_grant_expiry','idx_auth_email_delivery_pending','idx_auth_email_delivery_expiry','idx_auth_action_grants_expiry']
+  const foundIndexes=await query('SELECT indexname FROM pg_indexes WHERE schemaname=current_schema() AND indexname=ANY($1::text[])',[indexes])
+  assertExactSet('authentication email indexes',foundIndexes.rows.map(r=>r.indexname),indexes)
+  const constraints=await query(`SELECT c.conrelid::regclass::text AS table_name,c.contype,pg_get_constraintdef(c.oid) AS definition
+    FROM pg_constraint c WHERE c.conrelid=ANY($1::regclass[])`,[tables])
+  for(const table of tables) {
+    const rows=constraints.rows.filter(r=>r.table_name===table)
+    if(!rows.some(r=>r.contype==='p') || !rows.some(r=>r.definition.includes('expires_at > created_at')))throw new Error('auth email primary/expiry constraint missing')
+    if(rows.some(r=>r.contype==='f' && !r.definition.includes('ON DELETE CASCADE')))throw new Error('auth email foreign key cleanup unsafe')
+  }
+  const trigger=await query(`SELECT 1 FROM pg_trigger WHERE tgrelid='users'::regclass AND tgname='nav_auth_identity_version' AND NOT tgisinternal AND tgenabled='O'`)
+  if(trigger.rowCount!==1)throw new Error('auth identity version trigger missing')
+}
+
 async function main() {
   await verifyMigrationLedger()
   await verifyNavigationMaintenanceSchema()
@@ -3293,6 +3313,7 @@ async function main() {
   await verifyAssistantAgentOperationsSchema()
   await verifyWorkspaceDatabaseSchema()
   await verifyAssistantConfirmedOperationSchema()
+  await verifyAuthEmailSchema()
   console.log('migration schema verification complete')
 }
 

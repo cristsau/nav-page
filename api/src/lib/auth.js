@@ -1,7 +1,8 @@
 import crypto from 'node:crypto'
+import { isCommonPassword } from './commonPasswords.js'
 
 const SCRYPT_KEYLEN = 64
-export const MIN_PASSWORD_LENGTH = 12
+export const MIN_PASSWORD_LENGTH = 15
 export const MAX_PASSWORD_LENGTH = 1024
 export const MAX_USERNAME_LENGTH = 128
 export const RECOVERY_CODE_COUNT = 8
@@ -29,14 +30,15 @@ export function isValidUsername(username) {
 
 export function validateNewPassword(password) {
   const value = String(password || '')
-  if (value.length < MIN_PASSWORD_LENGTH) {
+  const length = Array.from(value).length
+  if (length < MIN_PASSWORD_LENGTH) {
     return {
       valid: false,
       error: `Password must be at least ${MIN_PASSWORD_LENGTH} characters`
     }
   }
 
-  if (value.length > MAX_PASSWORD_LENGTH) {
+  if (length > MAX_PASSWORD_LENGTH || Buffer.byteLength(value, 'utf8') > 4096) {
     return {
       valid: false,
       error: `Password must be ${MAX_PASSWORD_LENGTH} characters or fewer`
@@ -44,8 +46,8 @@ export function validateNewPassword(password) {
   }
 
   return {
-    valid: true,
-    error: ''
+    valid: !isCommonPassword(value),
+    error: isCommonPassword(value) ? 'Password is too common; choose a unique passphrase' : ''
   }
 }
 
@@ -64,7 +66,7 @@ export async function hashPassword(password) {
 
 export async function verifyPassword(password, storedHash) {
   const passwordValue = String(password || '')
-  if (passwordValue.length > MAX_PASSWORD_LENGTH) return false
+  if (Array.from(passwordValue).length > MAX_PASSWORD_LENGTH || Buffer.byteLength(passwordValue, 'utf8') > 4096) return false
 
   const [algorithm, salt, hash] = String(storedHash || '').split(':')
   if (algorithm !== 'scrypt' || !salt || !hash) return false

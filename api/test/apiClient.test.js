@@ -2,11 +2,36 @@ import test from 'node:test'
 import assert from 'node:assert/strict'
 import {
   apiRequest,
+  registerPasswordReauthHandler,
   buildApiRequestOptions,
   onApiUnauthorized,
   resetApiUnauthorizedNotification,
   shouldNotifyUnauthorized
 } from '../../app/src/shared/services/apiClient.js'
+
+test('sensitive API requests retry once after scoped password proof, never loop',async()=>{
+ const original=globalThis.fetch
+ let calls=0,proofs=0
+ const unregister=registerPasswordReauthHandler(async action=>{
+   proofs++;assert.deepEqual(action,{method:'GET',path:'/migration/export-cloud'})
+ })
+ try {
+   globalThis.fetch=async()=>{calls++;return Response.json({code:'PASSWORD_REAUTH_REQUIRED'},{status:403})}
+   await assert.rejects(apiRequest('/migration/export-cloud?format=json'),e=>e.code==='PASSWORD_REAUTH_REQUIRED')
+   assert.equal(calls,2);assert.equal(proofs,1)
+ } finally {unregister();globalThis.fetch=original}
+})
+
+test('cancelling password proof prevents the second business request',async()=>{
+ const original=globalThis.fetch
+ let calls=0
+ const unregister=registerPasswordReauthHandler(async()=>{throw new Error('synthetic cancellation')})
+ try {
+   globalThis.fetch=async()=>{calls++;return Response.json({code:'PASSWORD_REAUTH_REQUIRED'},{status:403})}
+   await assert.rejects(apiRequest('/migration/export-cloud'),/synthetic cancellation/)
+   assert.equal(calls,1)
+ } finally {unregister();globalThis.fetch=original}
+})
 
 test('bodyless API requests do not advertise an empty JSON document', () => {
   const options = buildApiRequestOptions({

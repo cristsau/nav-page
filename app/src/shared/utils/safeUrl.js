@@ -1,5 +1,13 @@
 const CONTROL_CHARACTER_PATTERN = /[\u0000-\u001f\u007f]/u
 
+// Match the API's bookmark normalization without changing path/query case,
+// fragments, parameter order, or trailing slashes. They can carry meaning.
+export function normalizeBookmarkUrl(value) {
+  const input = String(value ?? '').trim()
+  if (!input || CONTROL_CHARACTER_PATTERN.test(input)) return ''
+  return sanitizeHttpUrl(/^[a-z][a-z\d+.-]*:/i.test(input) ? input : `https://${input}`)
+}
+
 /**
  * Return a canonical HTTP(S) URL or an empty string.
  *

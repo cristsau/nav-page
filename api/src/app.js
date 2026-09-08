@@ -13,6 +13,7 @@ import adminTelegramRoutes from './routes/adminTelegram.js'
 import aiSearchRoutes from './routes/aiSearch.js'
 import aiUsageRoutes from './routes/aiUsage.js'
 import authRoutes from './routes/auth.js'
+import authEmailRoutes from './routes/authEmail.js'
 import assistantRoutes from './routes/assistant.js'
 import collaborationRoutes from './routes/collaboration.js'
 import customSearchEngineRoutes from './routes/customSearchEngines.js'
@@ -74,6 +75,9 @@ export function createApp() {
           'req.body.password',
           'req.body.currentPassword',
           'req.body.newPassword',
+          'req.body.confirmPassword',
+          'req.body.code',
+          'req.body.challengeId',
           'req.body.recoveryCode',
           'req.body.apiKey',
           'req.body.smtpPassword',
@@ -163,6 +167,7 @@ export function createApp() {
   app.register(aiSearchRoutes, { prefix: '/api' })
   app.register(aiUsageRoutes, { prefix: '/api' })
   app.register(authRoutes, { prefix: '/api' })
+  app.register(authEmailRoutes, { prefix: '/api' })
   app.register(collaborationRoutes, { prefix: '/api' })
   app.register(customSearchEngineRoutes, { prefix: '/api' })
   app.register(migrationRoutes, { prefix: '/api' })

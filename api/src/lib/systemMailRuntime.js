@@ -2,17 +2,22 @@ import { config } from '../config.js'
 import { startMailDeliveryScheduler } from './mailOutbox.js'
 import { enforceMailboxRetirement } from './mailboxRetirement.js'
 import { createRecoverableSerialQueue } from './runtimeLifecycle.js'
+import { startAuthEmailDeliveryScheduler } from './authEmailDelivery.js'
 
 const queue = createRecoverableSerialQueue()
 let context = null
 let stopDelivery = null
+let stopAuthDelivery = null
 
 export function refreshSystemMailRuntime() {
   return queue.run(async () => {
+    if (stopAuthDelivery) await stopAuthDelivery()
+    stopAuthDelivery = null
     if (stopDelivery) await stopDelivery()
     stopDelivery = null
     enforceMailboxRetirement(config)
     if (!context) return
+    stopAuthDelivery = startAuthEmailDeliveryScheduler({poolInstance:context.poolInstance,runtimeConfig:{...config},logger:context.logger})
     stopDelivery = startMailDeliveryScheduler({
       enabled: config.mailDeliveryEnabled,
       policy: {
@@ -36,6 +41,8 @@ export function configureSystemMailRuntime(nextContext) {
 
 export async function stopSystemMailRuntime() {
   await queue.run(async () => {
+    if (stopAuthDelivery) await stopAuthDelivery()
+    stopAuthDelivery = null
     if (stopDelivery) await stopDelivery()
     stopDelivery = null
     context = null
@@ -44,6 +51,8 @@ export async function stopSystemMailRuntime() {
 
 export async function suspendSystemMailRuntime() {
   await queue.run(async () => {
+    if (stopAuthDelivery) await stopAuthDelivery()
+    stopAuthDelivery = null
     if (stopDelivery) await stopDelivery()
     stopDelivery = null
   })

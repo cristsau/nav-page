@@ -28,7 +28,6 @@
     "@fastify/cookie": "^11.0.2",
     "@fastify/cors": "^11.1.0",
     "@huggingface/transformers": "4.2.0",
-    "@simplewebauthn/server": "^13.3.2",
     "fastify": "5.12.1",
     "fastify-plugin": "^5.0.1",
     "nodemailer": "9.0.5",
@@ -36,6 +35,10 @@
     "web-push": "3.6.7",
     "ws": "8.21.3",
     "yjs": "13.6.32"
+  },
+  "overrides": {
+    "sharp": "0.35.0",
+    "adm-zip": "0.6.0"
   },
   "devDependencies": {
     "imapflow": "1.7.6",

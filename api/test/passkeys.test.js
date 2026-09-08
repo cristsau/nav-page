@@ -37,134 +37,33 @@ test('WebAuthn storage binds credentials and challenges to one of two exact RP o
   assert.match(dualDomainMigration, /UNIQUE \(rp_id, credential_id\)/)
 })
 
-test('server uses SimpleWebAuthn v13 with an exact dual-origin allowlist and opt-in feature flag', async () => {
-  const [route, config, origins, env, packageJson, lock, app, verifier] = await Promise.all([
-    readSource('../src/routes/passkeys.js'),
-    readSource('../src/config.js'),
-    readSource('../src/lib/webauthnRelyingParties.js'),
-    readSource('../.env.example'),
-    readJson('../package.json'),
-    readJson('../package-lock.json'),
-    readSource('../src/app.js'),
-    readSource('../src/db/verifyMigrations.js')
-  ])
-
-  assert.equal(packageJson.dependencies['@simplewebauthn/server'], '^13.3.2')
-  assert.equal(lock.packages['node_modules/@simplewebauthn/server'].version, '13.3.2')
-  assert.match(route, /from '@simplewebauthn\/server'/)
-  assert.match(route, /generateRegistrationOptions/)
-  assert.match(route, /verifyRegistrationResponse/)
-  assert.match(route, /generateAuthenticationOptions/)
-  assert.match(route, /verifyAuthenticationResponse/)
-  assert.match(config, /webauthnRpId: 'nav\.skrskr\.net'/)
-  assert.match(config, /webauthnOrigin: 'https:\/\/nav\.skrskr\.net'/)
-  assert.match(config, /webauthnRelyingParties: WEBAUTHN_RELYING_PARTIES/)
-  assert.match(origins, /https:\/\/nav\.skrskr\.net/)
-  assert.match(origins, /https:\/\/nav\.cristsau\.cn/)
-  assert.match(route, /resolveWebAuthnRelyingParty\(request\.headers\?\.origin\)/)
-  assert.match(config, /process\.env\.NAV_WEBAUTHN_ENABLED === 'true'/)
-  assert.match(env, /^NAV_WEBAUTHN_ENABLED=false$/m)
-  assert.doesNotMatch(config, /process\.env\.NAV_WEBAUTHN_(?:RP_ID|ORIGIN)/)
-  assert.match(app, /app\.register\(passkeyRoutes, \{ prefix: '\/api' \}\)/)
-  assert.match(verifier, /verifyWebAuthnSchema\(\)/)
-  assert.match(verifier, /webauthn_credentials/)
-  assert.match(verifier, /webauthn_challenges/)
-  assert.match(verifier, /webauthn_credentials_rp_credential_unique/)
-  assert.match(verifier, /webauthn_challenges_challenge_key/)
-  assert.match(verifier, /WebAuthn foreign keys must use ON DELETE CASCADE/)
+test('retired endpoints cannot be enabled by the legacy runtime flag and do no DB I/O', async () => {
+  const {createApp}=await import('../src/app.js')
+  const {config}=await import('../src/config.js')
+  const previous=config.webauthnEnabled
+  config.webauthnEnabled=true
+  const app=createApp()
+  try {
+    const capabilities=await app.inject('/api/auth/passkeys/config')
+    assert.deepEqual(capabilities.json(),{enabled:false,retired:true})
+    for(const path of ['/auth/passkeys','/auth/passkeys/register/options','/auth/passkeys/register/verify','/auth/passkeys/login/options','/auth/passkeys/login/verify','/auth/passkeys/old-credential']) {
+      for(const method of ['GET','POST','PUT','DELETE']) {
+        const response=await app.inject({method,url:'/api'+path,headers:{origin:config.corsOrigin.split(',')[0]}})
+        assert.equal(response.statusCode,410,method+' '+path)
+        assert.equal(response.json().code,'PASSKEY_RETIRED')
+        assert.equal(response.headers['cache-control'],'no-store')
+      }
+    }
+  } finally {await app.close();config.webauthnEnabled=previous}
 })
 
-test('registration and deletion require authentication, an allowed origin, and current password', async () => {
-  const source = await readSource('../src/routes/passkeys.js')
-  const registration = source.slice(
-    source.indexOf("fastify.post('/auth/passkeys/register/options'"),
-    source.indexOf("fastify.post('/auth/passkeys/register/verify'")
-  )
-  const deletion = source.slice(
-    source.indexOf("fastify.delete('/auth/passkeys/:passkeyId'"),
-    source.indexOf("fastify.post('/auth/passkeys/login/options'")
-  )
-
-  for (const route of [registration, deletion]) {
-    assert.match(route, /requireAuth\(request, reply\)/)
-    assert.match(route, /currentPassword/)
-    assert.match(route, /verifyPassword\(currentPassword, user\.password_hash\)/)
+test('retired browser and server have no WebAuthn runtime dependency or credential calls', async () => {
+  for(const file of ['../src/routes/passkeys.js','../../app/src/shared/services/authApi.js','../../app/src/shared/composables/useAuth.js','../../app/src/modules/auth/AuthView.vue','../../app/src/modules/settings/components/AccountSecuritySettings.vue']) {
+    const source=await readSource(file)
+    assert.doesNotMatch(source,/@simplewebauthn|startAuthentication|startRegistration|navigator\.credentials|username webauthn|handleRegisterPasskey/)
   }
-  assert.match(registration, /requirePasskeyRelyingParty\(request, reply\)/)
-  assert.match(registration, /residentKey: 'required'/)
-  assert.match(registration, /userVerification: 'required'/)
-  assert.match(registration, /attestationType: 'none'/)
-  assert.match(deletion, /requirePasskeyRelyingParty\(request, reply\)/)
-  assert.match(deletion, /DELETE FROM webauthn_credentials[\s\S]*user_id = \$2/)
-  assert.match(deletion, /auth\.passkey\.delete/)
-})
-
-test('challenge consumption is committed before verification and cannot be replayed', async () => {
-  const source = await readSource('../src/routes/passkeys.js')
-  const consume = source.slice(
-    source.indexOf('async function consumeChallenge'),
-    source.indexOf('async function enforcePasskeyLoginRateLimit')
-  )
-  const registrationVerify = source.slice(
-    source.indexOf("fastify.post('/auth/passkeys/register/verify'"),
-    source.indexOf("fastify.delete('/auth/passkeys/:passkeyId'")
-  )
-  const loginVerify = source.slice(
-    source.indexOf("fastify.post('/auth/passkeys/login/verify'")
-  )
-
-  assert.match(consume, /SET used_at = NOW\(\)/)
-  assert.match(consume, /used_at IS NULL/)
-  assert.match(consume, /expires_at > NOW\(\)/)
-  assert.match(consume, /origin = \$4/)
-  assert.ok(registrationVerify.indexOf('await consumeChallenge') < registrationVerify.indexOf('verifyRegistrationResponse'))
-  assert.ok(loginVerify.indexOf('await consumeChallenge') < loginVerify.indexOf('verifyAuthenticationResponse'))
-  assert.equal(source.includes('const CHALLENGE_TTL_SECONDS = 300'), true)
-})
-
-test('passkey login is enumeration-resistant and reuses persistent limits, sessions, and cookie handling', async () => {
-  const source = await readSource('../src/routes/passkeys.js')
-  const options = source.slice(
-    source.indexOf("fastify.post('/auth/passkeys/login/options'"),
-    source.indexOf("fastify.post('/auth/passkeys/login/verify'")
-  )
-  const verify = source.slice(source.indexOf("fastify.post('/auth/passkeys/login/verify'"))
-
-  assert.match(options, /enforcePasskeyLoginRateLimit\(request, reply\)/)
-  assert.match(options, /enforcePasskeyLoginRateLimit\([\s\S]*username/)
-  assert.match(source, /consumePublicAuthRateLimit\('passkey', request, identity\)/)
-  assert.match(source, /allowCredentials: \[\]/)
-  assert.match(source, /userId = userResult\.rows\[0\]\?\.id \|\| null/)
-  assert.match(verify, /error: GENERIC_PASSKEY_ERROR/)
-  assert.match(verify, /enforcePasskeyLoginRateLimit\(request, reply\)/)
-  assert.match(verify, /INSERT INTO sessions/)
-  assert.match(verify, /hashSessionToken\(token\)/)
-  assert.match(verify, /setSessionCookie\(reply, login\.token\)/)
-  assert.match(verify, /auth\.passkey\.login/)
-  assert.doesNotMatch(verify, /Invalid username|Username not found|No passkey/i)
-})
-
-test('browser flow uses SimpleWebAuthn and explains per-domain enrollment', async () => {
-  const [service, login, settings, packageJson, lock] = await Promise.all([
-    readSource('../../app/src/shared/services/authApi.js'),
-    readSource('../../app/src/modules/auth/AuthView.vue'),
-    readSource('../../app/src/modules/settings/components/AccountSecuritySettings.vue'),
-    readJson('../../app/package.json'),
-    readJson('../../app/package-lock.json')
-  ])
-
-  assert.equal(packageJson.dependencies['@simplewebauthn/browser'], '^13.3.0')
-  assert.equal(lock.packages['node_modules/@simplewebauthn/browser'].version, '13.3.0')
-  assert.match(service, /from '@simplewebauthn\/browser'/)
-  assert.match(service, /startRegistration\(\{[\s\S]*optionsJSON: ceremony\.options/)
-  assert.match(service, /startAuthentication\(\{[\s\S]*optionsJSON: ceremony\.options/)
-  assert.match(login, /autocomplete="username webauthn"/)
-  assert.match(login, /当前域名未启用 Passkey/)
-  assert.match(login, /使用 Passkey 登录/)
-  assert.match(settings, /当前域名 RP ID/)
-  assert.match(settings, /两个域名需要分别登记/)
-  assert.match(settings, /v-model="passkeyCurrentPassword"/)
-  assert.match(settings, /handleDeletePasskey/)
+  assert.equal((await readJson('../package.json')).dependencies['@simplewebauthn/server'],undefined)
+  assert.equal((await readJson('../../app/package.json')).dependencies['@simplewebauthn/browser'],undefined)
 })
 
 test('passkey payloads are redacted and security events have explicit UI labels', async () => {
