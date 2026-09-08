@@ -14,6 +14,13 @@ import { isReleaseAcceptanceUsername } from '../ops/releaseAcceptanceAccount.js'
 
 export const DEVICE_KEY_ORIGIN = 'https://nav.skrskr.net'
 export const DEVICE_KEY_RP_ID = 'nav.skrskr.net'
+export const DEVICE_KEY_SITES = Object.freeze([
+  Object.freeze({ origin: DEVICE_KEY_ORIGIN, rpId: DEVICE_KEY_RP_ID }),
+  Object.freeze({ origin: 'https://nav.cristsau.cn', rpId: 'nav.cristsau.cn' })
+])
+export function deviceKeySite(request) {
+  return DEVICE_KEY_SITES.find(site => site.rpId === request.hostname) || null
+}
 const FLOW_COOKIE = 'nav_device_key_flow'
 const COOKIE_OPTIONS = { httpOnly: true, secure: true, sameSite: 'strict', path: '/api/auth/device-keys', maxAge: 300 }
 const TRANSPORTS = new Set(['ble', 'cable', 'hybrid', 'internal', 'nfc', 'smart-card', 'usb'])
@@ -22,11 +29,13 @@ export function deviceKeyError(code = 'DEVICE_KEY_INVALID', statusCode = 400) {
   return Object.assign(new Error(code), { code, statusCode })
 }
 export function deviceKeysAvailable(request) {
-  return config.deviceKeysEnabled && request.hostname === DEVICE_KEY_RP_ID
+  return config.deviceKeysEnabled && Boolean(deviceKeySite(request))
 }
 export function requireDeviceKeyOrigin(request) {
   if (!deviceKeysAvailable(request)) throw deviceKeyError('DEVICE_KEY_UNAVAILABLE', 503)
-  if (request.headers.origin !== DEVICE_KEY_ORIGIN) throw deviceKeyError('DEVICE_KEY_ORIGIN', 403)
+  const site = deviceKeySite(request)
+  if (request.headers.origin !== site.origin) throw deviceKeyError('DEVICE_KEY_ORIGIN', 403)
+  return site
 }
 export function deviceKeyUserHandle(id) { return new Uint8Array(Buffer.from(String(id), 'utf8')) }
 export function sanitizedTransports(value) {
@@ -50,37 +59,38 @@ export function createDeviceKeyService(database = { query: pool.query.bind(pool)
   const cleanup = client => client.query(`DELETE FROM auth_device_key_challenges WHERE id IN
     (SELECT id FROM auth_device_key_challenges WHERE expires_at<=NOW() ORDER BY expires_at LIMIT 100)`)
   return {
-    async list(userId) {
+    async list(userId, request) {
+      if (!deviceKeysAvailable(request)) throw deviceKeyError('DEVICE_KEY_UNAVAILABLE', 503)
       const result = await database.query(`SELECT id,label,created_at,last_used_at,device_type,backed_up,rp_id
-        FROM auth_device_keys WHERE user_id=$1 ORDER BY created_at,id`, [userId])
+        FROM auth_device_keys WHERE user_id=$1 AND rp_id=$2 ORDER BY created_at,id`, [userId, deviceKeySite(request).rpId])
       return result.rows.map(publicKeyInfo)
     },
     async registerOptions(request, reply, { currentPassword, name }) {
-      requireDeviceKeyOrigin(request)
+      const { origin, rpId } = requireDeviceKeyOrigin(request)
       const digest = flow(request, reply, true)
       return database.withTransaction(async client => {
         const user = (await client.query('SELECT * FROM users WHERE id=$1 FOR UPDATE', [request.currentUser.id])).rows[0]
         if (!approved(user) || !await verifyPassword(currentPassword, user.password_hash)) throw deviceKeyError('DEVICE_KEY_REAUTH_REQUIRED', 403)
         const session = await client.query('SELECT id FROM sessions WHERE id=$1 AND user_id=$2 AND expires_at>NOW() FOR UPDATE', [request.session.id, user.id])
         if (!session.rowCount) throw deviceKeyError('AUTHENTICATION_REQUIRED', 401)
-        const keys = (await client.query('SELECT credential_id,transports FROM auth_device_keys WHERE user_id=$1', [user.id])).rows
+        const keys = (await client.query('SELECT credential_id,transports,rp_id FROM auth_device_keys WHERE user_id=$1', [user.id])).rows
         if (keys.length >= 10) throw deviceKeyError('DEVICE_KEY_LIMIT')
-        const options = await webauthn.generateRegistrationOptions({ rpName: 'DOMO NAV', rpID: DEVICE_KEY_RP_ID,
+        const options = await webauthn.generateRegistrationOptions({ rpName: 'DOMO NAV', rpID: rpId,
           userID: deviceKeyUserHandle(user.id), userName: user.username, userDisplayName: user.username,
           attestationType: 'none', timeout: 60000,
           authenticatorSelection: { residentKey: 'required', userVerification: 'required', authenticatorAttachment: 'platform' },
-          excludeCredentials: keys.map(key => ({ id: key.credential_id, transports: sanitizedTransports(key.transports) })) })
+          excludeCredentials: keys.filter(key => key.rp_id === rpId).map(key => ({ id: key.credential_id, transports: sanitizedTransports(key.transports) })) })
         await cleanup(client)
-        await client.query("DELETE FROM auth_device_key_challenges WHERE flow_digest=$1 AND kind='register'", [digest])
+        await client.query("DELETE FROM auth_device_key_challenges WHERE flow_digest=$1 AND kind='register' AND origin=$2", [digest, origin])
         const challenge = await client.query(`INSERT INTO auth_device_key_challenges
           (kind,challenge_digest,flow_digest,origin,user_id,session_id,credential_version,label)
           VALUES('register',$1,$2,$3,$4,$5,$6,$7) RETURNING id`,
-        [sha256(options.challenge), digest, DEVICE_KEY_ORIGIN, user.id, request.session.id, user.auth_version, name.trim()])
+        [sha256(options.challenge), digest, origin, user.id, request.session.id, user.auth_version, name.trim()])
         return { options, challengeId: challenge.rows[0].id }
       })
     },
     async registerVerify(request, reply, { challengeId, response }) {
-      requireDeviceKeyOrigin(request)
+      const { origin, rpId } = requireDeviceKeyOrigin(request)
       const digest = flow(request, reply)
       if (!digest) throw deviceKeyError()
       const result = await database.withTransaction(async client => {
@@ -88,7 +98,7 @@ export function createDeviceKeyService(database = { query: pool.query.bind(pool)
         const challenge = (await client.query(`DELETE FROM auth_device_key_challenges
           WHERE id=$1 AND flow_digest=$2 AND kind='register' AND user_id=$3 AND session_id=$4
           AND origin=$5 AND expires_at>NOW() RETURNING *`,
-        [challengeId, digest, request.currentUser.id, request.session.id, DEVICE_KEY_ORIGIN])).rows[0]
+        [challengeId, digest, request.currentUser.id, request.session.id, origin])).rows[0]
         if (!challenge || !approved(user) || String(user.auth_version) !== String(challenge.credential_version)) return null
         const session = await client.query('SELECT id FROM sessions WHERE id=$1 AND user_id=$2 AND expires_at>NOW() FOR UPDATE', [request.session.id, user.id])
         if (!session.rowCount) return null
@@ -97,15 +107,15 @@ export function createDeviceKeyService(database = { query: pool.query.bind(pool)
         let verification
         try {
           verification = await webauthn.verifyRegistrationResponse({ response, expectedChallenge: value => sha256(value) === challenge.challenge_digest,
-            expectedOrigin: DEVICE_KEY_ORIGIN, expectedRPID: DEVICE_KEY_RP_ID, requireUserVerification: true })
+            expectedOrigin: origin, expectedRPID: rpId, requireUserVerification: true })
         } catch { return null }
         const info = verification.registrationInfo
         if (!verification.verified || !info?.credential || !info.userVerified) return null
         const inserted = await client.query(`INSERT INTO auth_device_keys
-          (user_id,credential_id,public_key,counter,label,transports,device_type,backed_up)
-          VALUES($1,$2,$3,$4,$5,$6::jsonb,$7,$8) RETURNING *`,
+          (user_id,credential_id,public_key,counter,label,transports,device_type,backed_up,rp_id)
+          VALUES($1,$2,$3,$4,$5,$6::jsonb,$7,$8,$9) RETURNING *`,
         [user.id, info.credential.id, Buffer.from(info.credential.publicKey), info.credential.counter, challenge.label,
-          JSON.stringify(sanitizedTransports(info.credential.transports)), info.credentialDeviceType, info.credentialBackedUp])
+          JSON.stringify(sanitizedTransports(info.credential.transports)), info.credentialDeviceType, info.credentialBackedUp, rpId])
         await recordSecurityEvent({ client, request, eventType: 'auth.passkey.register', outcome: 'success', subjectUserId: user.id,
           resourceType: 'passkey', resourceId: inserted.rows[0].id, affectedCount: 1 })
         return publicKeyInfo(inserted.rows[0])
@@ -114,35 +124,35 @@ export function createDeviceKeyService(database = { query: pool.query.bind(pool)
       return { key: result }
     },
     async loginOptions(request, reply, { trustDevice = false }) {
-      requireDeviceKeyOrigin(request)
+      const { origin, rpId } = requireDeviceKeyOrigin(request)
       const digest = flow(request, reply, true)
-      const options = await webauthn.generateAuthenticationOptions({ rpID: DEVICE_KEY_RP_ID, userVerification: 'required', timeout: 60000 })
+      const options = await webauthn.generateAuthenticationOptions({ rpID: rpId, userVerification: 'required', timeout: 60000 })
       const challenge = await database.withTransaction(async client => {
         await cleanup(client)
-        await client.query("DELETE FROM auth_device_key_challenges WHERE flow_digest=$1 AND kind='login'", [digest])
+        await client.query("DELETE FROM auth_device_key_challenges WHERE flow_digest=$1 AND kind='login' AND origin=$2", [digest, origin])
         return client.query(`INSERT INTO auth_device_key_challenges(kind,challenge_digest,flow_digest,origin,trust_device)
-          VALUES('login',$1,$2,$3,$4) RETURNING id`, [sha256(options.challenge), digest, DEVICE_KEY_ORIGIN, trustDevice === true])
+          VALUES('login',$1,$2,$3,$4) RETURNING id`, [sha256(options.challenge), digest, origin, trustDevice === true])
       })
       return { options, challengeId: challenge.rows[0].id }
     },
     async loginVerify(request, reply, { challengeId, response }) {
-      requireDeviceKeyOrigin(request)
+      const { origin, rpId } = requireDeviceKeyOrigin(request)
       const digest = flow(request, reply)
       if (!digest) throw deviceKeyError()
       const result = await database.withTransaction(async client => {
         const user = (await client.query(`SELECT u.* FROM users u JOIN auth_device_keys k ON k.user_id=u.id
-          WHERE k.credential_id=$1 AND k.rp_id=$2 FOR UPDATE OF u`, [response.id, DEVICE_KEY_RP_ID])).rows[0]
+          WHERE k.credential_id=$1 AND k.rp_id=$2 FOR UPDATE OF u`, [response.id, rpId])).rows[0]
         const challenge = (await client.query(`DELETE FROM auth_device_key_challenges
           WHERE id=$1 AND flow_digest=$2 AND kind='login' AND origin=$3 AND expires_at>NOW() RETURNING *`,
-        [challengeId, digest, DEVICE_KEY_ORIGIN])).rows[0]
+        [challengeId, digest, origin])).rows[0]
         if (!challenge || !approved(user) || new Date(user.auth_changed_at).getTime() > new Date(challenge.created_at).getTime()) return null
-        const key = (await client.query('SELECT * FROM auth_device_keys WHERE credential_id=$1 AND user_id=$2 AND rp_id=$3 FOR UPDATE', [response.id, user.id, DEVICE_KEY_RP_ID])).rows[0]
+        const key = (await client.query('SELECT * FROM auth_device_keys WHERE credential_id=$1 AND user_id=$2 AND rp_id=$3 FOR UPDATE', [response.id, user.id, rpId])).rows[0]
         if (!key || response.response?.userHandle !== Buffer.from(deviceKeyUserHandle(user.id)).toString('base64url')) return null
         let verification
         try {
           verification = await webauthn.verifyAuthenticationResponse({ response,
             expectedChallenge: value => sha256(value) === challenge.challenge_digest,
-            expectedOrigin: DEVICE_KEY_ORIGIN, expectedRPID: DEVICE_KEY_RP_ID, requireUserVerification: true,
+            expectedOrigin: origin, expectedRPID: rpId, requireUserVerification: true,
             credential: { id: key.credential_id, publicKey: new Uint8Array(key.public_key), counter: Number(key.counter), transports: sanitizedTransports(key.transports) } })
         } catch { return null }
         if (!verification.verified || !verification.authenticationInfo?.userVerified) return null
@@ -161,15 +171,15 @@ export function createDeviceKeyService(database = { query: pool.query.bind(pool)
       return result
     },
     async remove(request, { id, currentPassword }) {
-      requireDeviceKeyOrigin(request)
+      const { origin, rpId } = requireDeviceKeyOrigin(request)
       return database.withTransaction(async client => {
         const user = (await client.query('SELECT * FROM users WHERE id=$1 FOR UPDATE', [request.currentUser.id])).rows[0]
         if (!approved(user) || !await verifyPassword(currentPassword, user.password_hash)) throw deviceKeyError('DEVICE_KEY_REAUTH_REQUIRED', 403)
         const session = await client.query('SELECT id,device_key_id FROM sessions WHERE id=$1 AND user_id=$2 AND expires_at>NOW() FOR UPDATE', [request.session.id,user.id])
         if (!session.rowCount) throw deviceKeyError('AUTHENTICATION_REQUIRED',401)
-        const removed = await client.query('DELETE FROM auth_device_keys WHERE id=$1 AND user_id=$2 RETURNING id', [id,user.id])
+        const removed = await client.query('DELETE FROM auth_device_keys WHERE id=$1 AND user_id=$2 AND rp_id=$3 RETURNING id', [id,user.id,rpId])
         if (!removed.rowCount) throw deviceKeyError()
-        await client.query('DELETE FROM auth_device_key_challenges WHERE user_id=$1', [user.id])
+        await client.query('DELETE FROM auth_device_key_challenges WHERE user_id=$1 AND origin=$2', [user.id,origin])
         await recordSecurityEvent({ client, request, eventType:'auth.passkey.delete',outcome:'success',subjectUserId:user.id,resourceType:'passkey',resourceId:id,affectedCount:1 })
         return { ok: true, currentSessionRevoked: session.rows[0].device_key_id === id }
       })

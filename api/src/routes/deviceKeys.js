@@ -1,7 +1,7 @@
 import { config } from '../config.js'
 import { pool } from '../db/index.js'
 import { consumePersistentRateLimit } from '../lib/persistentRateLimit.js'
-import { DEVICE_KEY_ORIGIN, deviceKeys, deviceKeysAvailable, deviceKeyError } from '../lib/deviceKeys.js'
+import { deviceKeySite, deviceKeys, deviceKeysAvailable, deviceKeyError } from '../lib/deviceKeys.js'
 
 const password = { type: 'string', minLength: 1, maxLength: 2048 }
 const uuid = { type: 'string', format: 'uuid' }
@@ -25,12 +25,12 @@ export default async function deviceKeyRoutes(app) {
   })
   app.get('/auth/device-keys/config', { config: { skipSession: true } }, async request => ({
     enabled: deviceKeysAvailable(request), configured: config.deviceKeysEnabled,
-    origin: DEVICE_KEY_ORIGIN, optional: true, label: '快捷登录（通行密钥）'
+    origin: deviceKeySite(request)?.origin || null, optional: true, label: '快捷登录（通行密钥）'
   }))
   app.get('/auth/device-keys', async (request, reply) => {
     await app.requireAuth(request, reply)
     if (!deviceKeysAvailable(request)) throw deviceKeyError('DEVICE_KEY_UNAVAILABLE', 503)
-    return { keys: await deviceKeys.list(request.currentUser.id) }
+    return { keys: await deviceKeys.list(request.currentUser.id, request) }
   })
 
   function post(path, properties, authenticated, handler, required = Object.keys(properties)) {

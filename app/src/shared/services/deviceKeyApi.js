@@ -36,6 +36,6 @@ export function deviceKeyMessage(error) {
     DEVICE_KEY_LIMIT: '最多可保存 10 个通行密钥，请先移除不再使用的密钥。',
     DEVICE_KEY_RATE_LIMIT: '尝试过于频繁，请稍后再试。',
     DEVICE_KEY_UNAVAILABLE: '快捷登录暂不可用，请使用邮箱或账号密码。',
-    DEVICE_KEY_ORIGIN: '请从已登记的主域名使用快捷登录。'
+    DEVICE_KEY_ORIGIN: '请在当前通行密钥所属的已登记域名使用快捷登录。'
   })[error?.code] || '设备验证未完成，请重试或使用其他登录方式。'
 }

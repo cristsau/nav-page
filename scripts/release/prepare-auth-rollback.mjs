@@ -25,6 +25,7 @@ function replaceOnce(value, from, to) {
 for (const relative of [
   'api/src/db/migrations/048_pwa_oauth_handoffs.sql',
   'api/src/db/migrations/049_optional_device_keys.sql',
+  'api/src/db/migrations/050_device_keys_dual_origin.sql',
   'api/src/db/verifyMigrations.js',
   'api/src/lib/accountPasswordEffects.js'
 ]) await fs.copyFile(path.join(repo, relative), path.join(root, relative))

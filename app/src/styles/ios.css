@@ -21,6 +21,17 @@
  .app-shell .settings-page .settings-content__header {padding:0 4px}.app-shell .settings-page .settings-content__header h2 {font-size:24px}
  .app-shell .settings-page .security-block,.app-shell .settings-page .email-auth__section {padding:18px 16px}
  .app-shell .settings-page .account-form {padding:16px 13px}
+ /* Grouped iPhone settings: a single card edge, not a card inside a card. */
+ .app-shell .settings-page .security-section {padding:0;background:transparent;border-radius:0;box-shadow:none}
+ .app-shell .settings-page .section-heading {padding:0 4px 16px}
+ .app-shell .settings-page .account-forms {gap:20px}
+ .app-shell .settings-page .account-form {padding:0;border:0;border-radius:0;background:transparent}
+ .app-shell .settings-page .account-form + .account-form {padding-top:20px;border-top:1px solid var(--border-light)}
+ .app-shell .settings-page .session-card {padding:13px 12px;gap:10px;border-radius:16px}
+ .app-shell .settings-page .session-card__icon {width:32px;height:32px;border-radius:10px}
+ .app-shell .settings-page .email-auth__actions {display:grid;grid-template-columns:repeat(auto-fit,minmax(min(100%,180px),1fr));margin-top:14px}
+ .app-shell .settings-page .email-auth button {min-width:0;max-width:100%;line-height:1.5;white-space:normal;overflow-wrap:anywhere;border-color:var(--border-color)}
+ .app-shell .settings-page .email-auth h3 {font-size:18px}
 }
 @media(prefers-reduced-transparency:reduce) {
  .app-shell .primary-header,.app-shell .category-tabs {background:var(--bg-card);backdrop-filter:none;-webkit-backdrop-filter:none}

@@ -3300,7 +3300,13 @@ async function verifyPwaDeviceKeySchema() {
     if (constraints.rows.some(row=>row.contype==='f' && !row.definition.includes('ON DELETE CASCADE'))) throw new Error(`${table} cleanup unsafe`)
     const definitions = constraints.rows.map(row=>row.definition).join(' ')
     if (table!=='auth_device_keys' && !definitions.includes('expires_at > created_at')) throw new Error(`${table} expiry constraint missing`)
-    if (table==='auth_device_keys' && !definitions.includes("'nav.skrskr.net'")) throw new Error('Device keys must be main-origin only')
+    if (table==='auth_device_keys' || table==='auth_device_key_challenges') {
+      const field = table==='auth_device_keys' ? 'rp_id' : 'origin'
+      const prefix = field==='origin' ? 'https://' : ''
+      const scoped = constraints.rows.find(row=>row.contype==='c' && row.definition.includes(`(${field} = ANY`))
+      const values = scoped?.definition.match(/'[^']+'/g) || []
+      assertExactSet(`${table} exact site allowlist`,values,[`'${prefix}nav.skrskr.net'`,`'${prefix}nav.cristsau.cn'`])
+    }
   }
   const changed = await query(`SELECT data_type,is_nullable FROM information_schema.columns WHERE table_schema=current_schema() AND table_name='users' AND column_name='auth_changed_at'`)
   if (changed.rows[0]?.data_type!=='timestamp with time zone' || changed.rows[0]?.is_nullable!=='NO') throw new Error('auth change timestamp missing')

@@ -13,6 +13,7 @@ const activeCategoryId = ref('basic')
 const pendingSectionId = ref('')
 const pendingCategoryScroll = ref(false)
 const settingsContentRef = ref(null)
+const categoryTabsRef = ref(null)
 
 const { persistConfigNow } = useConfig()
 const { currentUser, backendAuthEnabled, logout, initAuth } = useAuth()
@@ -76,6 +77,15 @@ function prefersReducedMotion() {
 
 async function completePendingNavigation({ categoryResolved = false } = {}) {
   await nextTick()
+  // Only scroll the horizontal strip; never move the page just to reveal a tab.
+  const tabs = categoryTabsRef.value
+  const selectedTab = tabs?.querySelector('[aria-current="page"]')
+  if (tabs?.clientWidth && selectedTab) {
+    const strip = tabs.getBoundingClientRect(), selected = selectedTab.getBoundingClientRect()
+    if (selected.left < strip.left + 12 || selected.right > strip.right - 12) {
+      tabs.scrollLeft += selected.left - strip.left - (strip.width - selected.width) / 2
+    }
+  }
 
   if (pendingSectionId.value) {
     const target = document.getElementById(`settings-${pendingSectionId.value}`)
@@ -210,7 +220,7 @@ async function handleExit() {
     <main class="main">
       <div v-if="saveMessage" class="save-message" role="status" aria-live="polite">{{ saveMessage }}</div>
 
-      <nav class="category-tabs" aria-label="设置分类">
+      <nav ref="categoryTabsRef" class="category-tabs" aria-label="设置分类">
         <button
           v-for="category in categories"
           :key="category.id"
@@ -292,7 +302,8 @@ async function handleExit() {
 .settings-toolbar__eyebrow { margin: 0 0 3px; color: var(--accent-color); font-size: .7rem; font-weight: 750; letter-spacing: .14em; text-transform: uppercase; }
 .settings-toolbar h1 { margin: 0; color: var(--text-primary); font-size: 1.5rem; letter-spacing: -.035em; }
 .settings-toolbar > div > p:last-child { margin: 5px 0 0; color: var(--text-muted); font-size: .78rem; }
-.settings-toolbar__actions { display: flex; gap: 9px; }
+.settings-toolbar > div:first-child { min-width: 0; overflow-wrap: anywhere; }
+.settings-toolbar__actions { display: flex; flex-shrink: 0; gap: 9px; }
 .toolbar-button {
   display: inline-flex;
   min-height: 44px;
@@ -361,7 +372,10 @@ button:focus-visible { outline: 3px solid color-mix(in srgb, var(--accent-color)
     backdrop-filter: blur(16px);
   }
   .category-tabs::-webkit-scrollbar { display: none; }
-  .category-tabs button { display: inline-flex; min-width: max-content; min-height: 44px; padding: 0 13px; align-items: center; gap: 7px; color: var(--text-secondary); background: var(--bg-card); border: 1px solid var(--border-light); border-radius: 13px; }
+  .category-tabs { overscroll-behavior-x: contain; scroll-padding-inline: 18px; }
+  .category-tabs button { display: inline-flex; flex: 0 0 auto; width: max-content; min-width: max-content; min-height: 44px; padding: 10px 14px; align-items: center; gap: 7px; font-size: .8125rem; line-height: 1.4; white-space: nowrap; color: var(--text-secondary); background: var(--bg-card); border: 1px solid var(--border-light); border-radius: 13px; }
+  .category-tabs button > span { flex: 0 0 auto; white-space: nowrap; }
+  .category-tabs button :deep(svg) { flex-shrink: 0; }
   .category-tabs button.is-active { color: var(--accent-contrast, #fff); background: var(--accent-color); border-color: var(--accent-color); }
   .settings-layout { display: block; }
   .settings-content,

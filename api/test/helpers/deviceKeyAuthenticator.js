@@ -9,9 +9,9 @@ export function syntheticAuthenticator(userId='11111111-1111-4111-8111-111111111
  function clientData(type,challenge,origin) {return Buffer.from(JSON.stringify({type,challenge,origin,crossOrigin:false}))}
  function authData(flags,counter=0,rp=rpDefault) {const count=Buffer.alloc(4);count.writeUInt32BE(counter);return Buffer.concat([sha(rp),Buffer.from([flags]),count])}
  return {id:id.toString('base64url'),publicKey,
-   register(challenge,{flags=0x45,origin=originDefault}={}) {
+   register(challenge,{flags=0x45,origin=originDefault,rp=rpDefault}={}) {
      const length=Buffer.alloc(2);length.writeUInt16BE(id.length)
-     const attestation=isoCBOR.encode(new Map([['fmt','none'],['attStmt',new Map()],['authData',Buffer.concat([authData(flags),Buffer.alloc(16),length,id,publicKey])]]))
+     const attestation=isoCBOR.encode(new Map([['fmt','none'],['attStmt',new Map()],['authData',Buffer.concat([authData(flags,0,rp),Buffer.alloc(16),length,id,publicKey])]]))
      return {id:id.toString('base64url'),rawId:id.toString('base64url'),type:'public-key',response:{clientDataJSON:clientData('webauthn.create',challenge,origin).toString('base64url'),attestationObject:Buffer.from(attestation).toString('base64url'),transports:['internal']},clientExtensionResults:{credProps:{rk:true}},authenticatorAttachment:'platform'}
    },
    login(challenge,{flags=5,counter=1,origin=originDefault,rp=rpDefault,userHandle=Buffer.from(userId).toString('base64url'),tamper=false}={}) {
