@@ -1,19 +1,27 @@
 # DOMO NAV Status Report
 
+> 当前任务先读 [CURRENT.md](CURRENT.md)。本页保留带日期的状态与发布台账，旧章节不能覆盖当前入口。
+
 最后更新：2026-09-07
 
-## 2026-09-07 安全加固与邮箱下线候选
+## 2026-09-07 安全加固与邮箱下线已发布
 
-- 状态：`LOCAL_CANDIDATE / NOT_PUSHED / NOT_DEPLOYED`。个人邮箱退出主线；导航、时光、媒体、AI、
+- 状态：`DEPLOYED / CORE_ACCEPTANCE_PASS / PHYSICAL_DEVICE_ACCEPTANCE_PENDING`。个人邮箱退出主线；导航、时光、媒体、AI、
   Google 身份登录、备忘录 Web Push、注册/审批/运维 SMTP 通知保留。
 - 已完成前端安全链接、精确扩展 Origin、无头写请求信任门槛、Cookie 策略和生产数据库配置加固。
 - 已移除个人邮箱 UI、API 接线、邮件 AI 工具和 worker 部署服务；阻止旧配置开启收件、旧 AI 确认单发送邮件、
   旧邮件通知继续送入站内列表/Web Push。保留历史表/迁移/密钥；未执行迁移或数据清理。
-- 全量本地测试和构建的最终记录见 [邮箱下线计划](./docs/NAV_MAIL_RETIREMENT_20260907.md)。
-  Linux 生产镜像构建、隔离 PostgreSQL 集成矩阵、GitHub CI、双域真实用户验收仍为发布门槛。
-- 2026-09-07 OVH 只读实测：current=`/opt/nav-stack/releases/20260903-160400-94543f6`；API/Web 健康；
-  mail worker 仍运行 `888a31c` 镜像。根盘 20G，已用 18G / 92%，剩余约 1.7G；数据库仅约 23 MB，
-  `/var/lib/docker` 约 14G。不能把删除邮件数据当作主要磁盘解法。
+- PR #69 已合并，精确 merge SHA 为 `b2ae02360d7837f0b5c21daaaa855d986b600b2b`；master CI
+  `34088401099` 的 11 个作业全部通过。发布前后 canonical 备份和 PostgreSQL 16 隔离恢复均通过。
+- 2026-09-07 14:27（北京时间）OVH current=`/opt/nav-stack/releases/20260907-140500-b2ae023`；
+  rollback=`/opt/nav-stack/releases/20260903-160400-94543f6`；API/Web 健康，mail worker 已停止并保留供回滚。
+  仅重建 API/Web，没有更改 PostgreSQL、CLIProxy、NPM 或其他服务，没有执行新迁移或历史数据清理。
+- 双域临时独立管理员核心 API、笔记创建/删除后复查、书签安全、通知已读及真实 AI 日记写入通过，
+  验收账号及其数据已清理。系统 SMTP 连接通过，但未把连接检查当作真实收件验收。
+- 双域 1440/390 宽度浏览器匿名公开页、登录页链接及无横向溢出检查通过；模拟视口不是 iPhone 实机。
+  iPhone 核心操作/备忘录通知实收、真实 Google 授权仍待所有者验收。
+- 发布后根盘约 1.4G 可用 / 93% 已用；没有删除旧镜像、备份或历史邮件数据，不能称为已释放磁盘空间。
+  详细证据见 [本次发布记录](./docs/NAV_RELEASE_20260907_MAIL_RETIREMENT.md)。
 - Google 品牌已由用户截图证明通过；Client ID/Secret 和双域真实登录尚未在本次受控流程中验收。
   [配置手册](./docs/NAV_GOOGLE_LOGIN_SETUP.md)已更新到身份登录入口；不得索取或记录 Secret。
 

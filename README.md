@@ -8,11 +8,14 @@ DOMO NAV 是面向个人与小团队的私有化导航工作台。它把导航�
 - [nav.skrskr.net](https://nav.skrskr.net)
 - [nav.cristsau.cn](https://nav.cristsau.cn)
 
-精确生产版本、验收证据和已知缺口见 [STATUS_REPORT.md](./STATUS_REPORT.md)。
+精确当前状态先读 [CURRENT.md](./CURRENT.md)；[STATUS_REPORT.md](./STATUS_REPORT.md) 保留分阶段台账。
 
-2026-09-07 当前本地候选：完成第一批安全加固，并按新决策下线个人邮箱（保留系统 SMTP 通知）。
-尚未推送、合并或发布；线上当天只读核实仍为 `94543f6`，邮件 worker 仍运行旧镜像。
-范围、磁盘实测和受控发布方案见 [邮箱下线计划](./docs/NAV_MAIL_RETIREMENT_20260907.md)。
+2026-09-07 新需求方案已整理：[完整项目文档、功能与 UI 优化、实施计划和验收标准](./docs/NAV_PRODUCT_SPEC_20260907.md)，
+附[可交互 UI 概念原型](./docs/prototypes/nav-product-20260907.html)。目标为取消 Passkey、增加邮箱验证码登录和改密；
+R1认证候选已实现并通过其精确SHA的CI，R2导航/搜索/分组固定与笔记保存优化已于2026-09-08推送为 `c8269ba`，新候选CI及发布门禁单独跟踪；都未据此宣称新认证或R2已部署。最新范围见[当前入口](./CURRENT.md)和[R2验收记录](./docs/NAV_R2_ACCEPTANCE_20260907.md)。个人邮箱工作台继续退役，验证码仅使用系统发信。
+
+2026-09-07 安全加固与个人邮箱下线已发布为 `b2ae023`，系统 SMTP 通知保留，旧邮件 worker 已停止。
+这依据同日 14:31 的 [发布台账](./docs/NAV_RELEASE_20260907_MAIL_RETIREMENT.md)，不是本次重新远程核验；实机、通知实收及 Google 登录仍有验收缺口。
 
 历史生产验收基线（2026-08-27）为
 `15fd83e3f197afb7a03fe119ce118feae26ab10f`，release 为
@@ -49,7 +52,7 @@ DOMO NAV 是面向个人与小团队的私有化导航工作台。它把导航�
 - 默认仅本地的自动备份、保留和定期隔离恢复 timer 启用前门禁
 - 保留 current+rollback、30 天日志且不触碰容器/卷/网络的受控磁盘清理候选
 
-Passkey/WebAuthn、BM25/本地向量语义搜索、Web Push、块编辑器、多人协作、离线同步、流式
+Passkey/WebAuthn在新候选中固定退役，旧说明仅作历史参考，不重新启用。BM25/本地向量语义搜索、Web Push、块编辑器、多人协作、离线同步、流式
 恢复和整套灾难恢复的源码状态与生产状态可能不同，必须以状态页的精确证据为准；异地加密备份
 仍为 `SOURCE_READY / USER_CONFIG_LATER / NOT_DEPLOYED`。主机外失联监测和扩展商店提交仍需
 外部资源或人工流程，详见
