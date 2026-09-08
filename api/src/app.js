@@ -3,6 +3,7 @@ import cookie from '@fastify/cookie'
 import cors from '@fastify/cors'
 import { config } from './config.js'
 import { mailboxRetiredResponse } from './lib/mailboxRetirement.js'
+import { BotGuardError } from './lib/botGuard.js'
 import {
   createCorsOriginValidator,
   isUnsafeRequestOriginTrusted
@@ -210,9 +211,15 @@ export function createApp() {
       request.log.warn(error)
     }
 
-    reply.code(statusCode).send({
-      error: error.message || 'Internal Server Error'
-    })
+    const body = { error: error.message || 'Internal Server Error' }
+    // Only expose the explicit public challenge contract, never arbitrary internal codes.
+    if (error instanceof BotGuardError && [
+      'BOT_CHALLENGE_REQUIRED', 'BOT_CHALLENGE_INVALID',
+      'BOT_ORIGIN_INVALID', 'BOT_GUARD_UNAVAILABLE'
+    ].includes(error.code)) {
+      body.code = error.code
+    }
+    reply.code(statusCode).send(body)
   })
 
   return app
