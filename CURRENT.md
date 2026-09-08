@@ -1,13 +1,41 @@
 # DOMO NAV 当前入口
 
-更新：2026-09-08 08:26 +08:00。归属：个人。真实目录 `D:\DomoCodex\projects\NAV-security-first-batch-20260904`。
-分支 `codex/nav-security-first-batch-20260904`；运行实现与测试已推送为 `c8269ba48c5fa6f8d60fdf6e050565e1c2c518c9`（含R1及R2两批），原有项目文档/原型正在同分支整理上传；未合并 master。保留无关 dirty，不回旧 NAV 目录、不拼接历史工作树。
+更新：2026-09-08 15:49 +08:00。归属：个人。真实目录 `D:\DomoCodex\projects\NAV-security-first-batch-20260904`。
+本地分支 `codex/nav-security-first-batch-20260904`，HEAD `f92b371674b305bbafac00fcc70f159b70c1481a`；上轮运行实现与测试提交为 `c8269ba`，文档/原型提交为 `f92b371`，均已推送。PR #70已合并为GitHub master `6952684221e401eb0d41cc6aa9d53dfe8bab6377`，当时合并树与候选树一致；本地未切分支。**本次PWA/设备验证/UI为另外一批未提交运行代码，未推送、未部署**；旧CI与产物不能覆盖。保留原有 CURRENT/R1/R2台账及UI脚本 dirty，不回旧NAV目录、不拼接历史工作树。
 
 ## 最新发布推进（2026-09-08）
 
-- 用户明确要求“上传并发布”。`SOURCE_PUSHED / CI_RUNNING / NOT_DEPLOYED`；候选 [CI 34173155958](https://github.com/cristsau/nav-page/actions/runs/34173155958) 已开始，旧R1 CI不替代本轮候选结果。
+### 15:57 授权后发布门禁进行中
+
+- 用户回复“授权完成”，继续本候选提交、推送、CI、仅NAV API/Web受控发布与验收。不是购买App、扩大Google权限、重启PG/其他服务或追加真实邮件额度的授权。
+- 当前GitHub master仍为`6952684221e401eb0d41cc6aa9d53dfe8bab6377`；仓库实时可见性为公开，发布前只提交代码与脱敏文档，不提交临时秘密/收件载荷。
+- 现场只读：current/rollback仍为下文原路径，双域健康200、API/Web/PG健康、旧worker exited，根盘可用6,001,684,480字节。认证邮箱密钥指定路径仍缺失。没有生产写入；新增PG16、精确候选CI、现场备份恢复及回滚兼容尚待执行。
+- 本地知识DailyCheck为WRITER/NONE、pending-source-diverged、DIRTY，不Stage/上传/改变知识所有权。
+
+### 当前任务覆盖说明：PWA / iPhone UI 本地开发
+
+- 用户随后明确授权“按你的建议实施，并帮我把ui设计的更好看一些。更像iphone ui的风格”。范围：PWA Google 安全交接、默认14天/主动信任30天绝对会话、可选新设备通行密钥协议、人机验证接入及移动 UI；不购买原生 App 方案，不扩大 Google scope/注册绑定规则，不恢复个人邮箱 worker。
+- `LOCAL_CANDIDATE / LOCAL_CHECKS_PASS / PG16_AND_REAL_DEVICE_PENDING / NOT_COMMITTED / NOT_DEPLOYED`。新增048 PWA交接、049设备密钥与凭据变更时间戳；所有新增能力独立开关默认关闭，旧 `/auth/passkeys` 仍410。主域新密钥仅保存验证公钥和元数据，不接收人脸/指纹；普通改密保留密钥但撤销旧会话，邮箱找回/恢复码恢复还撤销新密钥。
+- 最终全量本地单测910项：897通过、13环境条件跳过、0失败；包含真实ES256签名及UV/RP/Origin/handle/counter/重放负例、PWA状态机/失联恢复/取消和服务端Turnstile模拟。后端模式构建通过；API/前端npm审计均0已知漏洞；`git diff --check`、新迁移验证脚本/PG集成脚本Node语法、隔离脚本Bash语法通过。新增PG16并发、TTL、撤销级联用例已接入既有CI测试文件，但本机未发现可用PostgreSQL/Docker运行入口，**这些新增PG16用例未执行**，不能把单测SQL桩算作数据库验收。
+- 浏览器：认证54组（320–1440、浅深/自定义、交互/抽样对比度/触控尺寸）通过；导航20项通过，含真实IndexedDB并发去重、完整批选/分页、搜索/排序保护；最终同机30次切组p95 94.3ms，仅本地无节流。另4项实际构建Vue+虚拟认证器/合成API闭环通过：登记、真实签名登录、原PWA弹窗接续、风险触发验证码组件及单次令牌使用；不是实际Face ID、真实Google/Turnstile/SMTP或iPhone Cookie隔离证明。手机认证/导航/安全/返回页截图已目视核对。
+- 本轮失败处理：加深浅色辅助文字至通过抽样对比度；旧标题/卡片材质/隐私日期源码断言随明确产品变更更新，其他保障断言保留；导航真实IndexedDB项改在对应开发服务器验，不跳过；浏览器模拟Provider的HTTP重定向曾脱离mock链，改为独立本地文档跳转并加DNS拒绝外网保护后复测通过。没有生产写入、重启、部署、真实认证/发信或新付费服务。
+- 证据：单测`C:\Users\ASUS\AppData\Local\Temp\CodexLocalChecks\NAV-security-first-batch-20260904-Full-20260908T074358743Z-3c0adee418824834b35d7c439bff28fa.log`；认证`C:\Users\ASUS\AppData\Local\Temp\nav-auth-ui-bDENg6\report.json`；导航`C:\Users\ASUS\AppData\Local\Temp\nav-r2-ui-hts85D\report.json`；新认证闭环`C:\Users\ASUS\AppData\Local\Temp\nav-pwa-device-ui-VlEIyd\report.json`。可复用入口为对应`scripts/verify-*.mjs`与既有检查摘要脚本。
+- [同一份完整方案v1.1](docs/NAV_PRODUCT_SPEC_20260907.md)已补PWA/密钥/防滥用设计、配置、实施顺序、验收及回滚；README/隐私说明/旧Passkey历史标记同步。真实iPhone、Cloudflare站点配置、PG16迁移与真实备份恢复、精确新候选CI和发布授权仍待核验。此前12封真实邮件闭环仍暂停，新真实投递为0。下文10:21及更早状态均为历史证据。
+- 收口：本轮4178/4179测试服务器已停止，监听为0；只保存一份本地待汇总知识摘要，DailyCheck为WRITER/NONE、pending-source-diverged、DIRTY，无网络/上传/所有权变化。没有提交或推送，新能力不会自动出现在当前线上。
+
+### 此前发布推进（历史证据）
+
+- 用户明确要求“上传并发布”。`MERGED / MASTER_CI_PASS / PRODUCTION_SWITCH_PENDING_SCOPE`；[PR #70](https://github.com/cristsau/nav-page/pull/70)于08:30合并。master [CI 34173534307](https://github.com/cristsau/nav-page/actions/runs/34173534307) 11/11通过，含生产镜像、认证/047 schema、恢复和既有集成；不是生产现场恢复或真实邮件验收。
+- 运行提交 `c8269ba` 的 [CI 34173155958](https://github.com/cristsau/nav-page/actions/runs/34173155958) 11/11通过。文档候选 `f92b371` 的push [CI 34173293452](https://github.com/cristsau/nav-page/actions/runs/34173293452)首次10/11，assistant-advanced在依赖下载连接失败、尚未进入测试；仅重跑失败作业后11/11通过。PR [CI 34173323985](https://github.com/cristsau/nav-page/actions/runs/34173323985)亦11/11通过，未跳过失败检查。
+- master产物：Web artifact 10036496239（1,700,626字节）已由GitHub下载到本地私有暂存，revision精确匹配`6952684`，内部`SHA256SUMS`两项通过，`frontend-dist.tar.gz` SHA-256为`c61ea8795b0189373ccf2f8426887a7879ab09bb6443089e2562b7852b574c04`；79个归档条目无越界路径或链接，未上传到服务器。API artifact 10036489577（453,168,862字节）已在服务器下载，ZIP SHA-256 `8ffe965fb694bee628daefe76cfe76dbd87599cb8b8d0d404a97deadf92054f7` 与GitHub元数据一致，内部 `SHA256SUMS` 三项、revision及镜像revision标签通过。候选镜像ID `sha256:14b3bebf1831d0d4d9fcabd278575766651bf9e8d89d640b178046d23b0e943e`，只用于临时隔离验收，未用于生产容器。归档在 `/opt/nav-stack/staging/nav-auth-smoke-20260908-6952684`；保留镜像及发布tar包，已删除本轮重复ZIP（可由GitHub重新下载）。
 - 08:21–08:23现场只读：current仍为`20260907-140500-b2ae023`、rollback为`20260903-160400-94543f6`，API/Web/PG健康、旧邮件worker停止。根盘可用7,298,920,448字节/64%已用；双域HTTPS健康200。检查只输出运行元数据和文件权限，不读取秘密。
-- 新认证密钥文件 `/etc/nav/integrations/auth-email-keys.json` 尚不存在；真实收件P-03未完成。已请求用户选择“先发布其他功能、验证码保持关闭”或“先完成专用收件验证再完整发布”，未把预选项当作答复。未生成/读取生产密钥、发送邮件、迁移或切换服务。
+- 08:23指定路径 `/etc/nav/integrations/auth-email-keys.json` 未发现合规的非符号链接常规密钥文件。随后用户授权先做隔离收件冒烟，并提供QQ/Gmail各一个目的地；本次额度严格为每个1封、总计2封，不代表正式P-03批量样本或生产OTP启用授权。地址、验证码和SMTP秘密不进入项目文档/GitHub；未生成生产认证密钥。
+- 09:34:40.847 / 09:34:42.417 +08分别向QQ/Gmail发起一次登录验证码SMTP投递，09:34:43.648批次结束：`accepted=2 / failed=0 / unknown=0`，没有重发。使用精确候选镜像、独立空PG16临时数据库、合成身份和临时独立认证密钥，走真实请求→加密队列→SMTP；未使用生产账号或生产数据库，未启动调度器或开放端口。用户先反馈09:34收件，随后明确确认QQ、Gmail均收到且均未进入垃圾箱：**首轮双服务商收件冒烟通过（各1封，用户确认）**。逐封精确耗时未记录，不据此宣称完整P-03或≤120秒受控样本验收通过；本轮未验登录消费或改密。
+- 本轮准备阶段保留失败边界：本机产物下载无数据后停止该单一下载进程，改为服务器校验下载；缺失PG标签时复用已有PG16镜像ID，未修仓库凭据；临时入口漏配域名、检测脚本状态字段错误均在生成挑战/SMTP前停止，核实空队列和零投递后修正。发送防护自测通过：精确2目的地、每个仅一次、禁止额外收件人或替代信封。生产代码未因此改动。
+- 09:35–09:37清理完成：临时容器、网络、内存数据库、测试密钥及运行配置已移除；生产API/PG/Web容器ID及StartedAt与09:17基线逐项不变，current仍为`20260907-140500-b2ae023`，旧mail-worker仍exited，双域HTTPS健康200。未迁移、重启或切换生产；根盘可用6,058,491,904字节/70%已用。临时发信入口留有已用标记，不得重复执行或另发邮件冒充原授权。
+- 本轮“继续完成”：GitHub只读确认master CI仍success且SHA匹配；实际Web发布包的54组模拟API页面检查通过，登录路由gzip合计119,707字节，无浏览器异常；桌面浅色与移动自定义色截图目视核对。本地127.0.0.1预览已按端口/PID/命令确认归属后停止。`scripts/verify-auth-ui.mjs`新增可选`NAV_UI_DIST_DIR`，避免测实际包时误读本地旧dist；这是本地验收脚本改动，未改生产运行代码、未推送。报告为`C:\Users\ASUS\AppData\Local\Temp\nav-auth-ui-JlTK05\report.json`，Web暂存在`D:\DomoCodex\tmp-private\nav-release-20260908-6952684\web-artifact`，临时材料不纳入知识库。
+- 下一轮真实功能闭环范围见[R1验收记录](docs/NAV_R1_ACCEPTANCE_20260907.md#2026-09-08-后续闭环范围拟定尚未获追加发信授权)中的先前提案；用户随后明确回复“好的”，授权独立临时环境向原两个邮箱各6封，共12封（8验证码＋4安全通知），覆盖两Origin登录、已登录改密、未登录找回和旧会话撤销，不自动重发。10:11完成精确候选镜像、空PG16、合成身份和模拟SMTP的8步骤演练，12次仅模拟投递，临时容器/网络/运行秘密已清理；用户转问认证安全及iOS后暂停真实闭环，**本轮新增真实邮件为0，真实发信环境及本地交互入口尚未启动，交互入口仍待验证**。12封仍不等于正式P-03逐用途10样本，更不等于生产上线验收。
+- 手机登录问题只读诊断：线上API实际配置为14天、SameSite=Lax、Secure；部署版本对应代码使用持久HttpOnly Cookie、按域隔离，关闭页面未挂接退出登录，回前台/5分钟轮询为会话复核而非定时清退。尚无用户手机Cookie/请求证据，需区分主动退出与关闭页面、浏览器/桌面入口及域名，未定位根因。人机验证、Face ID和iOS上架目前仅为用户询问，未视为恢复Passkey、改会话策略或新开发/发布授权；生产未改动。
 - 发布前必须再验证精确候选CI、现场备份/PG16隔离恢复及兼容回滚版本；只允许NAV API/Web范围，不重建PG、代理或其他应用，不恢复旧邮件worker，不删除备份。真实手机和24–48h观察仍不冒充自动通过。
 
 ## 最近已记录发布
@@ -58,9 +86,9 @@
 
 ## 下一步最多三项
 
-1. 上传当前项目文档，完成精确候选CI和PR核验；不得用旧SHA的通过成绩覆盖新候选。
-2. 确认验证码本次启用范围；启用需两个服务商专用目的地/模板/数量、owner-only认证密钥及真实收件。仅发布其他功能须保留OTP关闭并明确标注未交付启用，不静默跳过门禁。
-3. 通过精确备份/隔离恢复、现场容量与兼容回滚门禁后按授权切换NAV API/Web，完成双域技术验收；本人/iPhone及24–48h观察保留人工边界。未完成的R2余项不计入本次已实现范围。
+1. 提交/推送范围经确认后，以精确新SHA运行CI和新增PG16集成/048–049 schema验证；旧master产物不再是此次候选。查验默认14/信任30天、并发领取、改密失效和移除密钥的会话级联，不用SQL桩代替。
+2. 所有者配置Turnstile双域站点键/服务端秘密并冻结三个开关的启用范围；另行复核生产基线、备份独立PG16恢复及兼容回滚，再授权仅NAV API/Web发布。不得复用恢复旧mail-worker/旧Passkey的发布脚本，也不删除备份或业务缓存。
+3. 真机按方案验Safari添加桌面、Google返回、杀应用/重启/隔日、设备密钥登记与取消/恢复；24–48h观察和双域差异保留人工边界。真实邮件闭环恢复前重新核对原12封额度与现场，不自动追加发信，P-03完整样本仍独立。
 
 ## 验证与授权
 

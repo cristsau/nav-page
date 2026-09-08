@@ -29,6 +29,7 @@ import noteReminderRoutes from './routes/noteReminders.js'
 import notesRoutes from './routes/notes.js'
 import offlineSyncRoutes from './routes/offlineSync.js'
 import passkeyRoutes from './routes/passkeys.js'
+import deviceKeyRoutes from './routes/deviceKeys.js'
 import oauthRoutes from './routes/oauth.js'
 import publicSharePageRoutes from './routes/publicSharePage.js'
 import productivityImportRoutes from './routes/productivityImports.js'
@@ -92,6 +93,8 @@ export function createApp() {
           'req.query.code',
           'req.query.state',
           'req.body.token',
+          'req.body.launch',
+          'req.body.turnstileToken',
           'req.body.email',
           'req.body.planToken',
           'req.body.backupReceipt',
@@ -186,6 +189,7 @@ export function createApp() {
   app.register(notesRoutes, { prefix: '/api' })
   app.register(offlineSyncRoutes, { prefix: '/api' })
   app.register(passkeyRoutes, { prefix: '/api' })
+  app.register(deviceKeyRoutes, { prefix: '/api' })
   app.register(oauthRoutes, { prefix: '/api' })
   app.register(productivityImportRoutes, { prefix: '/api' })
   app.register(settingsRoutes, { prefix: '/api' })

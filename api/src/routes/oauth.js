@@ -27,6 +27,12 @@ import {
   consumePublicAuthRateLimit
 } from '../lib/requestRateLimit.js'
 import { isReleaseAcceptanceUsername } from '../ops/releaseAcceptanceAccount.js'
+import { sanitizeUser } from '../lib/users.js'
+import { consumePersistentRateLimit } from '../lib/persistentRateLimit.js'
+import { sessionLifetimeDays } from '../lib/sessionPolicy.js'
+import {
+  oauthHandoffs, HANDOFF_COOKIE, setHandoffCookie, clearHandoffCookie, requireHandoffOrigin
+} from '../lib/oauthHandoff.js'
 
 const PROVIDERS = new Set(['google', 'wechat'])
 const ORIGINS = new Map([
@@ -107,7 +113,9 @@ async function createAuthorization(request, reply, {
   provider,
   flow,
   userId = null,
-  returnTo = '/'
+  returnTo = '/',
+  handoffId = null,
+  trustDevice = false
 }) {
   const origin = exactOrigin(request)
   const runtime = await getIdentityProviderRuntime(provider)
@@ -131,9 +139,9 @@ async function createAuthorization(request, reply, {
   await query(
     `INSERT INTO oauth_authorization_requests (
        provider, flow, user_id, state_digest, nonce_digest,
-       origin, return_path, expires_at
-     ) VALUES ($1, $2, $3, $4, $5, $6, $7, TO_TIMESTAMP($8 / 1000.0))`,
-    [provider, flow, userId, sha256(state), sha256(nonce), origin, returnPath, expiresAt]
+       origin, return_path, expires_at, handoff_id, trust_device
+     ) VALUES ($1, $2, $3, $4, $5, $6, $7, TO_TIMESTAMP($8 / 1000.0), $9, $10)`,
+    [provider, flow, userId, sha256(state), sha256(nonce), origin, returnPath, expiresAt, handoffId, trustDevice === true]
   )
   const transaction = {
     provider,
@@ -193,14 +201,14 @@ async function loadApprovedOauthUser(client, provider, profile, runtime, subject
   return linked.rows[0] ? { ...user, identity_id: linked.rows[0].id } : null
 }
 
-async function createOauthSession(client, request, user) {
+async function createOauthSession(client, request, user, trustDevice = false) {
   if (!user || user.status !== 'approved' || isReleaseAcceptanceUsername(user.username)) return null
   const token = createSessionToken()
   const session = await client.query(
     `INSERT INTO sessions (user_id, token_hash, ip_address, user_agent, expires_at)
      VALUES ($1, $2, $3, $4, NOW() + ($5 || ' days')::interval)
      RETURNING id`,
-    [user.id, hashSessionToken(token), request.ip, request.headers['user-agent'] || '', String(config.sessionTtlDays)]
+    [user.id, hashSessionToken(token), request.ip, request.headers['user-agent'] || '', String(sessionLifetimeDays(trustDevice))]
   )
   const updated = await client.query(
     'UPDATE users SET last_login_at = NOW(), updated_at = NOW() WHERE id = $1 RETURNING *',
@@ -265,12 +273,94 @@ async function linkIdentity(request, transaction, provider, profile, digest) {
 }
 
 export default async function oauthRoutes(fastify) {
+  fastify.addHook('onRequest', async (_request, reply) => {
+    reply.header('Cache-Control', 'no-store').header('Referrer-Policy', 'no-referrer')
+  })
+  // The launch capability travels in a form POST body, never a URL or referrer.
+  fastify.addContentTypeParser('application/x-www-form-urlencoded', { parseAs: 'string', bodyLimit: 2048 }, (_request, body, done) => {
+    const entries = [...new URLSearchParams(body)]
+    if (entries.length !== 1 || entries[0][0] !== 'launch' || entries[0][1].length !== 43) {
+      done(Object.assign(new Error('登录请求格式不正确'), { statusCode: 400 }))
+      return
+    }
+    done(null, { launch: entries[0][1] })
+  })
+
+  function handoffRequest(request, reply) {
+    if (!config.oauthPwaHandoffEnabled) {
+      reply.code(503).send({ code: 'OAUTH_HANDOFF_UNAVAILABLE', error: '应用快捷登录尚未启用，请使用账号密码' })
+      return null
+    }
+    const origin = exactOrigin(request)
+    requireHandoffOrigin(request, origin)
+    return origin
+  }
+
+  fastify.post('/auth/oauth/:provider/pwa/start', { bodyLimit: 2048 }, async (request, reply) => {
+    const origin = handoffRequest(request, reply)
+    if (!origin) return
+    if (request.currentUser) return reply.code(409).send({ error: '当前应用已登录，请先返回首页' })
+    const provider = providerName(request.params.provider)
+    if (await enforceOauthStartRateLimit(request, reply, provider)) return
+    if (!(await getIdentityProviderRuntime(provider)).enabled) return reply.code(503).send({ error: '该登录方式尚未启用' })
+    const result = await oauthHandoffs.begin({ origin, provider, returnTo: request.body?.returnTo,
+      trustDevice: request.body?.trustDevice, previousClaim: request.cookies[HANDOFF_COOKIE] })
+    setHandoffCookie(reply, result.claim)
+    return { launch: result.launch, expiresIn: result.expiresIn }
+  })
+
+  fastify.post('/auth/oauth/:provider/pwa/launch', { config: { skipSession: true }, bodyLimit: 2048 }, async (request, reply) => {
+    const origin = handoffRequest(request, reply)
+    if (!origin) return
+    const provider = providerName(request.params.provider)
+    const handoff = await oauthHandoffs.launch({ origin, provider, secret: request.body?.launch })
+    if (!handoff) return reply.code(400).send({ error: '登录窗口已过期或已使用，请关闭后从原应用重试' })
+    const authorization = await createAuthorization(request, reply, { provider, flow: 'login',
+      returnTo: handoff.return_path, handoffId: handoff.id, trustDevice: handoff.trust_device })
+    if (!authorization.authorizationUrl) return authorization
+    return reply.redirect(authorization.authorizationUrl, 303)
+  })
+
+  fastify.post('/auth/oauth/pwa/status', { config: { skipSession: true }, bodyLimit: 256 }, async (request, reply) => {
+    const origin = handoffRequest(request, reply)
+    if (!origin) return
+    const rate = await consumePersistentRateLimit(request.ip, { scope: 'oauth_handoff_poll', limit: 120, windowMs: 60000, queryFn: query })
+    if (!rate.allowed) return reply.code(429).header('Retry-After', rate.retryAfterSeconds).send({ error: '请稍后再试' })
+    return oauthHandoffs.inspect({ origin, claim: request.cookies[HANDOFF_COOKIE] })
+  })
+
+  fastify.post('/auth/oauth/pwa/complete', { bodyLimit: 256 }, async (request, reply) => {
+    const origin = handoffRequest(request, reply)
+    if (!origin) return
+    const claim = request.cookies[HANDOFF_COOKIE]
+    if (request.currentUser) {
+      await oauthHandoffs.cancel({ origin, claim })
+      clearHandoffCookie(reply)
+      return reply.code(409).send({ error: '当前应用已经登录，请返回首页' })
+    }
+    const result = await oauthHandoffs.finish({ origin, claim,
+      createSession: (client, user, trust) => createOauthSession(client, request, user, trust) })
+    clearHandoffCookie(reply)
+    if (!result) return reply.code(400).send({ code: 'OAUTH_HANDOFF_INVALID', error: '本次登录已失效，请重新登录' })
+    await fastify.setSessionCookie(reply, result.token, result.trustDevice)
+    return { user: sanitizeUser(result.user), returnTo: result.returnTo }
+  })
+
+  fastify.post('/auth/oauth/pwa/cancel', { config: { skipSession: true }, bodyLimit: 256 }, async (request, reply) => {
+    const origin = handoffRequest(request, reply)
+    if (!origin) return
+    await oauthHandoffs.cancel({ origin, claim: request.cookies[HANDOFF_COOKIE] })
+    clearHandoffCookie(reply)
+    return { ok: true }
+  })
+
   fastify.get('/auth/oauth/config', {
     config: { skipSession: true }
   }, async (_request, reply) => {
     const state = await getManagedOauthState()
     reply.header('Cache-Control', 'public, max-age=60')
     return {
+      pwaHandoff: config.oauthPwaHandoffEnabled,
       providers: {
         google: { enabled: state.identity.google.enabled && state.identity.google.secretConfigured },
         wechat: { enabled: state.identity.wechat.enabled && state.identity.wechat.secretConfigured }
@@ -286,7 +376,8 @@ export default async function oauthRoutes(fastify) {
     return createAuthorization(request, reply, {
       provider,
       flow: 'login',
-      returnTo: request.body?.returnTo
+      returnTo: request.body?.returnTo,
+      trustDevice: request.body?.trustDevice
     })
   })
 
@@ -329,12 +420,14 @@ export default async function oauthRoutes(fastify) {
          WHERE state_digest = $1 AND nonce_digest = $2
            AND provider = $3 AND flow = $4 AND origin = $5
            AND consumed_at IS NULL AND expires_at > NOW()
-         RETURNING user_id, return_path`,
+         RETURNING user_id, return_path, handoff_id, trust_device`,
         [sha256(transaction.state), sha256(transaction.nonce), provider, transaction.flow, origin]
       )
       if (!consumed.rows[0]) throw new Error('OAuth transaction is invalid or expired')
       transaction.userId = consumed.rows[0].user_id
       transaction.returnPath = safeReturnPath(consumed.rows[0].return_path)
+      transaction.handoffId = consumed.rows[0].handoff_id
+      transaction.trustDevice = consumed.rows[0].trust_device === true
     } catch {
       clearTransactionCookie(reply)
       await audit(request, transaction?.flow === 'link' ? 'auth.oauth.link' : 'auth.oauth.login', 'failure')
@@ -362,19 +455,27 @@ export default async function oauthRoutes(fastify) {
 
       const login = await withTransaction(async (client) => {
         const user = await loadApprovedOauthUser(client, provider, profile, runtime, subjectKey)
-        return createOauthSession(client, request, user)
+        if (transaction.handoffId) {
+          if (!config.oauthPwaHandoffEnabled || !user || user.status !== 'approved' || isReleaseAcceptanceUsername(user.username)) return null
+          const approved = await oauthHandoffs.approve(client, { id: transaction.handoffId, origin, provider, user })
+          return approved ? { handoff: true } : null
+        }
+        return createOauthSession(client, request, user, transaction.trustDevice)
       })
       if (!login) {
         await audit(request, 'auth.oauth.login', 'denied')
+        if (transaction.handoffId) return reply.redirect(`${origin}/auth/oauth-complete?result=failed`)
         return reply.redirect(`${origin}/auth?oauth_error=not_linked`)
       }
-      await fastify.setSessionCookie(reply, login.token)
+      if (login.handoff) return reply.redirect(`${origin}/auth/oauth-complete`)
+      await fastify.setSessionCookie(reply, login.token, transaction.trustDevice)
       return reply.redirect(`${origin}${transaction.returnPath}`)
     } catch (error) {
       await audit(request, transaction.flow === 'link' ? 'auth.oauth.link' : 'auth.oauth.login', 'failure', {
         subjectUserId: transaction.userId || null
       })
-      request.log.warn({ err: error, provider }, 'oauth callback failed')
+      request.log.warn({ provider, event: 'oauth_callback_failed' }, 'oauth callback failed')
+      if (transaction.handoffId) return reply.redirect(`${origin}/auth/oauth-complete?result=failed`)
       return reply.redirect(`${origin}/auth?oauth_error=provider_failed`)
     }
   })

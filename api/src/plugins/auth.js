@@ -1,5 +1,6 @@
 import fp from 'fastify-plugin'
 import { config, isProduction } from '../config.js'
+import { sessionCookieMaxAge } from '../lib/sessionPolicy.js'
 import { query } from '../db/index.js'
 import { hashSessionToken, shouldTouchSession } from '../lib/auth.js'
 import {
@@ -22,7 +23,7 @@ async function authPlugin(fastify) {
   fastify.decorateRequest('currentUser', null)
   fastify.decorateRequest('session', null)
 
-  fastify.decorate('setSessionCookie', async (reply, token) => {
+  fastify.decorate('setSessionCookie', async (reply, token, trustDevice = false) => {
     const secure = (
       config.sessionCookieSecure
       || isProduction()
@@ -34,7 +35,7 @@ async function authPlugin(fastify) {
       secure,
       sameSite: config.sessionCookieSameSite,
       path: '/',
-      maxAge: config.sessionTtlDays * 24 * 60 * 60
+      maxAge: sessionCookieMaxAge(trustDevice)
     })
   })
 

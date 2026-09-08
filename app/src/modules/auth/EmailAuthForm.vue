@@ -1,13 +1,15 @@
 <script setup>
 import {computed,nextTick,onBeforeUnmount,ref} from 'vue'
 import {useAuth} from '@/shared/composables/useAuth'
+import BotChallenge from '@/shared/components/BotChallenge.vue'
 import {authEmailRequest,authEmailError} from '@/shared/services/authEmailApi'
 import '@/styles/auth-email.css'
 
-const props=defineProps({mode:{type:String,default:'login'},redirectTarget:{type:String,default:'/'},maskedEmail:{type:String,default:''},resetAvailable:{type:Boolean,default:false}})
+const props=defineProps({mode:{type:String,default:'login'},redirectTarget:{type:String,default:'/'},maskedEmail:{type:String,default:''},resetAvailable:{type:Boolean,default:false},trustDevice:{type:Boolean,default:false}})
 const emit=defineEmits(['back','reset','completed'])
 const {loginWithEmail,forgetSession}=useAuth()
 const email=ref(''),code=ref(''),newPassword=ref(''),confirmPassword=ref('')
+const botChallenge=ref(null)
 const challengeId=ref(''),busy=ref(false),error=ref(''),message=ref(''),complete=ref(false),codeInput=ref(null)
 const retryAt=ref(0),expiresAt=ref(0),now=ref(Date.now())
 const timer=setInterval(()=>{now.value=Date.now()},1000)
@@ -19,7 +21,7 @@ async function send() {
  if(busy.value || remaining.value)return
  busy.value=true;error.value='';message.value=''
  try {
-   const result=await authEmailRequest(`${prefix.value}/request`,props.mode==='change'?{}:{email:email.value})
+   const result=await authEmailRequest(`${prefix.value}/request`,props.mode==='change'?{}:{email:email.value,turnstileToken:botChallenge.value?.takeToken()})
    challengeId.value=result.challengeId;code.value=''
    now.value=Date.now();retryAt.value=now.value+result.resendAfter*1000;expiresAt.value=now.value+result.expiresIn*1000
    message.value=result.message
@@ -40,7 +42,7 @@ async function submit() {
  try {
    const proof={challengeId:challengeId.value,code:code.value}
    if(props.mode==='login') {
-     await loginWithEmail(proof)
+     await loginWithEmail({...proof,trustDevice:props.trustDevice})
      code.value=''
      const url=new URL(props.redirectTarget,window.location.origin)
      window.location.assign(url.origin===window.location.origin && !props.redirectTarget.includes('\\')?`${url.pathname}${url.search}${url.hash}`:'/')
@@ -60,7 +62,7 @@ onBeforeUnmount(()=>{clearInterval(timer);code.value='';newPassword.value='';con
 <template>
  <section class="email-auth" :aria-busy="busy">
   <div v-if="complete" class="email-auth__notice" role="status">
-   <h3>密码已重设</h3><p>所有设备均已退出。请使用新密码重新登录。</p>
+   <h3>密码已重设</h3><p>所有设备均已退出，旧设备通行密钥已撤销。请使用新密码登录后重新添加。</p>
    <button class="email-auth__primary" type="button" @click="emit('back')">返回账号密码登录</button>
   </div>
   <form v-else class="email-auth__form" @submit.prevent="submit">
@@ -78,6 +80,7 @@ onBeforeUnmount(()=>{clearInterval(timer);code.value='';newPassword.value='';con
      <p>至少 15 个字符，支持空格、粘贴和密码管理器。</p>
     </template>
    </template>
+   <BotChallenge v-if="mode!=='change'" ref="botChallenge" :action="mode==='login'?'email_login':'password_reset'" />
    <p v-if="error" class="email-auth__error" role="alert">{{error}}</p>
    <p v-if="message" class="email-auth__notice" role="status">{{message}}</p>
    <button class="email-auth__primary" type="submit" :disabled="busy || (challengeId && expired) || (!challengeId && remaining>0)">{{busy?'处理中…':!challengeId?(remaining>0?`${remaining} 秒后重新申请`:'获取验证码'):isPassword?'确认修改并退出全部设备':'验证并登录'}}</button>

@@ -448,14 +448,11 @@ function runMobileAction(action) {
   width: 100%;
   min-width: 0;
   overflow: hidden;
-  background:
-    linear-gradient(145deg, color-mix(in srgb, var(--bg-card) 96%, white 4%), var(--bg-card));
-  border-radius: 16px;
+  background: var(--bg-card);
+  border-radius: 19px;
   text-align: left;
-  box-shadow:
-    0 1px 0 color-mix(in srgb, white 72%, transparent) inset,
-    var(--shadow-card);
-  border: 1px solid color-mix(in srgb, var(--border-light) 76%, transparent);
+  box-shadow: 0 2px 10px color-mix(in srgb,var(--text-primary) 3%,transparent);
+  border: 1px solid var(--border-light);
   transition:
     transform var(--transition-normal) var(--ease-smooth),
     box-shadow var(--transition-normal) var(--ease-smooth),
@@ -662,7 +659,7 @@ function runMobileAction(action) {
   align-items: center;
   justify-content: center;
   margin-bottom: 0;
-  filter: drop-shadow(0 7px 12px color-mix(in srgb, var(--accent-color) 14%, transparent));
+  filter: none;
 }
 
 .bookmark-card__monogram {
@@ -704,7 +701,7 @@ function runMobileAction(action) {
 .bookmark-card__title {
   overflow-wrap: anywhere;
   font-size: 14px;
-  font-weight: 500;
+  font-weight: 600;
   color: var(--text-primary);
   line-height: 1.3;
   display: -webkit-box;
@@ -814,10 +811,10 @@ function runMobileAction(action) {
   display: grid;
   place-items: center;
   color: var(--text-secondary);
-  background: color-mix(in srgb, var(--bg-card) 92%, var(--accent-color) 8%);
-  border: 1px solid var(--border-color);
-  border-radius: 13px;
-  box-shadow: var(--shadow-sm);
+  background: var(--bg-secondary);
+  border: 1px solid transparent;
+  border-radius: 50%;
+  box-shadow: none;
   cursor: pointer;
 }
 

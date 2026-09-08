@@ -710,10 +710,11 @@ onBeforeUnmount(() => {
 </script>
 
 <template>
-  <div class="page">
+  <div class="page nav-page">
     <main class="main" :class="{ 'has-management-bar': groups.length && managementMode }">
       <section class="search-section animate-fade-in">
-        <h1 class="search-section__title">统一搜索</h1>
+        <h1 class="search-section__title">导航</h1>
+        <p class="search-section__subtitle">常用网站与随手记录，一处抵达。</p>
         <div ref="searchBoxHost">
           <SearchBox />
         </div>
@@ -722,8 +723,8 @@ onBeforeUnmount(() => {
       <section class="content-section">
         <div v-if="groups.length" class="management-heading">
           <div>
-            <p class="management-heading__eyebrow">导航管理</p>
-            <p class="management-heading__hint">批量整理书签，或调整分组与当前分组书签的顺序。</p>
+            <p class="management-heading__eyebrow">我的收藏</p>
+            <p class="management-heading__hint">按分组整理你的日常。</p>
           </div>
           <div class="management-heading__modes" role="group" aria-label="导航管理模式">
             <button type="button" :disabled="managementBusy || Boolean(managementMode)" @click="handleAddBookmark()">
@@ -1000,10 +1001,8 @@ onBeforeUnmount(() => {
 .search-section :deep(.search-box) {
   min-height: 52px;
   padding: 3px;
-  border-radius: 999px;
-  box-shadow:
-    0 12px 30px color-mix(in srgb, var(--text-primary) 7%, transparent),
-    inset 0 1px color-mix(in srgb, white 62%, transparent);
+  border-radius: 17px;
+  box-shadow: none;
 }
 
 .search-section :deep(.search-box__engine),
@@ -1021,12 +1020,13 @@ onBeforeUnmount(() => {
 }
 
 .search-section__title {
-  margin: 0 0 10px;
-  color: var(--text-muted);
-  font-size: 11px;
+  margin: 0 0 6px;
+  color: var(--text-primary);
+  font-size: 34px;
   font-weight: 750;
-  letter-spacing: 0.14em;
+  letter-spacing: -.045em;
 }
+.search-section__subtitle {margin:0 0 20px;color:var(--text-secondary);font-size:14px}
 
 .content-section {
   min-height: 300px;

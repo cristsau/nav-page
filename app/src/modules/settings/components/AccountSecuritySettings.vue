@@ -3,6 +3,7 @@ import { computed, onBeforeUnmount, onMounted, ref, watch } from 'vue'
 import Icon from '@/shared/components/Icon.vue'
 import OauthIdentitySettings from './OauthIdentitySettings.vue'
 import EmailAccountSettings from './EmailAccountSettings.vue'
+import DeviceKeySettings from './DeviceKeySettings.vue'
 import { useAuth } from '@/shared/composables/useAuth'
 
 const {
@@ -461,6 +462,7 @@ onBeforeUnmount(() => {
     </p>
 
     <EmailAccountSettings @updated="refreshSecurityData" />
+    <DeviceKeySettings />
     <OauthIdentitySettings />
 
     <div class="security-block">

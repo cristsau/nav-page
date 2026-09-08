@@ -9,6 +9,7 @@ import {gzipSync} from 'node:zlib'
 const require=createRequire(import.meta.url)
 const {chromium}=require(process.env.NAV_PLAYWRIGHT_MODULE || 'playwright')
 const origin=process.env.NAV_UI_PREVIEW || 'http://127.0.0.1:4178'
+const distRoot=path.resolve(process.env.NAV_UI_DIST_DIR || 'app/dist')
 assert.equal(new URL(origin).hostname,'127.0.0.1','UI preview must remain local')
 const output=await mkdtemp(path.join(tmpdir(),'nav-auth-ui-'))
 const browser=await chromium.launch({executablePath:process.env.NAV_BROWSER_PATH,headless:true})
@@ -100,7 +101,7 @@ try {
  assert.deepEqual(errors,[],'browser runtime exceptions')
  const jsBytes=[]
  for(const file of loadedJs) {
-  const buffer=await readFile(path.resolve('app/dist',`.${file}`))
+  const buffer=await readFile(path.resolve(distRoot,`.${file}`))
   jsBytes.push({file,gzipBytes:gzipSync(buffer).length})
  }
  const report={scope:'mocked-API UI only; not SMTP, live authentication, real iPhone or production acceptance',checks:results.length,results,jsBytes,initialRouteGzipBytes:jsBytes.reduce((n,r)=>n+r.gzipBytes,0),errors}

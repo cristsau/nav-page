@@ -1,6 +1,8 @@
 import { createHash, randomBytes } from 'node:crypto'
 import { invalidatePasswordProofs } from '../lib/accountPasswordEffects.js'
+import { botGuardPublicConfig, enforceBotGuard } from '../lib/botGuard.js'
 import { config } from '../config.js'
+import { sessionLifetimeDays } from '../lib/sessionPolicy.js'
 import { query, withTransaction } from '../db/index.js'
 import {
   PUBLIC_ACCOUNT_RECOVERY_ERROR,
@@ -91,6 +93,11 @@ export default async function authRoutes(fastify) {
     user: request.currentUser || null
   }))
 
+  fastify.get('/auth/bot-guard/config', {config:{skipSession:true}}, async (_request,reply) => {
+    reply.header('Cache-Control','no-store')
+    return botGuardPublicConfig()
+  })
+
   fastify.get('/auth/registration/config', {
     config: { skipSession: true }
   }, async (_request, reply) => {
@@ -104,6 +111,7 @@ export default async function authRoutes(fastify) {
   fastify.post('/auth/register', async (request, reply) => {
     const rateLimited = await enforcePublicAuthRateLimit('register', request, reply)
     if (rateLimited) return rateLimited.response
+    await enforceBotGuard(request, 'register')
 
     const username = normalizeUsername(request.body?.username)
     const password = String(request.body?.password || '')
@@ -269,6 +277,7 @@ export default async function authRoutes(fastify) {
   }, async (request, reply) => {
     const rateLimited = await enforcePublicAuthRateLimit('register', request, reply)
     if (rateLimited) return rateLimited.response
+    await enforceBotGuard(request, 'register_resend')
 
     let email
     try {
@@ -335,6 +344,7 @@ export default async function authRoutes(fastify) {
       return ipRateLimited.response
     }
 
+    await enforceBotGuard(request, 'password_login')
     const username = normalizeUsername(request.body?.username)
     if (!isValidUsername(username)) {
       reply.code(401)
@@ -430,7 +440,7 @@ export default async function authRoutes(fastify) {
           tokenHash,
           request.ip,
           request.headers['user-agent'] || '',
-          String(config.sessionTtlDays)
+          String(sessionLifetimeDays(request.body?.trustDevice))
         ]
       )
 
@@ -475,7 +485,7 @@ export default async function authRoutes(fastify) {
       return { error: 'This account is not approved yet' }
     }
 
-    await fastify.setSessionCookie(reply, login.token)
+    await fastify.setSessionCookie(reply, login.token, request.body?.trustDevice === true)
 
     return {
       user: sanitizeUser(login.user)
@@ -977,6 +987,7 @@ export default async function authRoutes(fastify) {
       return ipRateLimited.response
     }
 
+    await enforceBotGuard(request, 'account_recovery')
     if (!isValidUsername(username)) {
       reply.code(401)
       return { error: PUBLIC_ACCOUNT_RECOVERY_ERROR }
@@ -1066,6 +1077,7 @@ export default async function authRoutes(fastify) {
         'DELETE FROM webauthn_credentials WHERE user_id = $1',
         [match.user_id]
       )
+      const removedDeviceKeys = await client.query('DELETE FROM auth_device_keys WHERE user_id=$1', [match.user_id])
 
       await recordSecurityEvent({
         client,
@@ -1078,11 +1090,12 @@ export default async function authRoutes(fastify) {
         affectedCount:
           (revokedSessions.rowCount || 0)
           + (removedPasskeys.rowCount || 0)
+          + (removedDeviceKeys.rowCount || 0)
       })
 
       return {
         userId: match.user_id,
-        removedPasskeyCount: removedPasskeys.rowCount || 0
+        removedPasskeyCount: (removedPasskeys.rowCount || 0) + (removedDeviceKeys.rowCount || 0)
       }
     })
 

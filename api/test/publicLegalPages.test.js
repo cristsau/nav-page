@@ -69,7 +69,9 @@ test('privacy policy is responsive HTML and covers the complete Google data life
 
   assert.match(source, /<article[\s\S]*aria-labelledby="privacy-title"/)
   assert.match(source, /DOMO NAV 隐私政策/)
-  assert.match(source, /datetime="2026-09-02">2026年9月2日/)
+  assert.match(source, /datetime="2026-09-08">2026年9月8日/)
+  assert.match(source, /Cloudflare Turnstile/)
+  assert.match(source, /不接收人脸、指纹或设备解锁密码/)
   assert.match(source, /Google 账号唯一身份标识/)
   assert.match(source, /Google 账号邮箱地址/)
   assert.match(source, /用户显示名称/)

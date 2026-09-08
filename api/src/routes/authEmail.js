@@ -1,4 +1,5 @@
 import { pool } from '../db/index.js'
+import { BotGuardError, enforceBotGuard, turnstileTokenSchema } from '../lib/botGuard.js'
 import { validateNewPassword } from '../lib/auth.js'
 import { recordSecurityEvent } from '../lib/securityEvents.js'
 import { issueActionProof } from '../lib/authActionProof.js'
@@ -24,7 +25,7 @@ function validatePasswords(body) {
 export default async function authEmailRoutes(app) {
   app.addHook('onRequest',async (_request,reply)=>{ reply.header('Cache-Control','no-store') })
   app.setErrorHandler((error,request,reply)=>{
-    const known=error instanceof AuthEmailError
+    const known=error instanceof AuthEmailError || error instanceof BotGuardError
     const status=known?error.statusCode:(error.validation?400:(error.code==='23505'?400:503))
     if(error.retryAfter)reply.header('Retry-After',error.retryAfter)
     if(!known && !error.validation && error.code!=='23505')request.log.error({event:'auth_email_unavailable'},'Authentication email operation unavailable')
@@ -51,18 +52,19 @@ export default async function authEmailRoutes(app) {
     identityProviderConfig:'/api/auth/oauth/config'
   }))
   for(const [path,purpose] of [['email-login','login'],['password-reset','password_reset']]) {
-    post(`/auth/${path}/request`,{email},{},async(request,reply)=>{
+    post(`/auth/${path}/request`,{email,turnstileToken:turnstileTokenSchema},{required:['email']},async(request,reply)=>{
+      await enforceBotGuard(request,purpose==='login'?'email_login':'password_reset')
       const result=await issueEmailChallenge({request,reply,purpose,email:request.body.email})
       return reply.code(202).send(result)
     })
   }
-  post('/auth/email-login/verify',proof,{operation:'verify'},async(request,reply)=>{
+  post('/auth/email-login/verify',{...proof,trustDevice:{type:'boolean'}},{operation:'verify',required:Object.keys(proof)},async(request,reply)=>{
     const result=await consumeEmailChallenge({request,reply,purpose:'login',body:request.body,callback:async({client,user})=>{
-      const session=await createEmailSession(client,user,request)
+      const session=await createEmailSession(client,user,request,request.body.trustDevice)
       await recordSecurityEvent({client,request,eventType:'auth.email.login',outcome:'success',subjectUserId:user.id,resourceType:'account',resourceId:user.id})
       return session
     }})
-    await app.setSessionCookie(reply,result.token)
+    await app.setSessionCookie(reply,result.token,request.body.trustDevice === true)
     return {user:result.user}
   })
   for(const [path,purpose,authenticated] of [

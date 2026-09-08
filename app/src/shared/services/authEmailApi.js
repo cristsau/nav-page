@@ -1,6 +1,9 @@
 import { apiRequest } from './apiClient'
 
 const messages={
+ BOT_CHALLENGE_REQUIRED:'请先完成安全验证，再提交。',
+ BOT_CHALLENGE_INVALID:'安全验证已过期或无效，请重新完成验证。',
+ BOT_GUARD_UNAVAILABLE:'安全验证暂不可用，请稍后再试。',
  AUTH_EMAIL_CODE_INVALID:'验证码无效或已过期，请使用本次请求收到的验证码。',
  AUTH_EMAIL_RATE_LIMITED:'操作过于频繁，请稍后再试。',
  AUTH_EMAIL_UNAVAILABLE:'邮箱验证暂不可用，请稍后重试或使用账号密码。',

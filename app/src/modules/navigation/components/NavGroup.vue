@@ -578,11 +578,10 @@ const mobileGroupMenuId = computed(() => (
   gap: 10px;
   margin-bottom: 16px;
   padding: 7px;
-  background:
-    linear-gradient(135deg, color-mix(in srgb, var(--bg-secondary) 96%, white 4%), var(--bg-secondary));
+  background: var(--bg-secondary);
   border: 1px solid color-mix(in srgb, var(--border-light) 78%, transparent);
   border-radius: 18px;
-  box-shadow: 0 1px 0 color-mix(in srgb, white 66%, transparent) inset;
+  box-shadow: none;
 }
 
 .groups-tabs__list {
@@ -616,12 +615,9 @@ const mobileGroupMenuId = computed(() => (
 }
 
 .groups-tabs__tab.is-active {
-  background: color-mix(in srgb, var(--group-color) 17%, var(--bg-card));
-  border-color: color-mix(in srgb, var(--group-color) 58%, var(--border-light));
-  box-shadow:
-    0 10px 24px color-mix(in srgb, var(--group-color) 18%, transparent),
-    inset 0 -3px color-mix(in srgb, var(--group-color) 72%, transparent),
-    0 1px 0 color-mix(in srgb, white 72%, transparent) inset;
+  background: var(--bg-card);
+  border-color: var(--border-color);
+  box-shadow: 0 1px 4px #0000000a;
 }
 
 .groups-tabs__tab.is-active .groups-tabs__main {

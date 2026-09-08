@@ -38,14 +38,14 @@ const navigationItems = computed(() => (
   left: max(10px, env(safe-area-inset-left));
   z-index: 640;
   display: none;
-  min-height: 62px;
-  padding: 6px;
+  min-height: 64px;
+  padding: 5px;
   align-items: stretch;
   justify-content: space-around;
-  background: color-mix(in srgb, var(--bg-card) 94%, transparent);
-  border: 1px solid var(--border-color);
-  border-radius: 20px;
-  box-shadow: 0 16px 44px rgba(22, 15, 10, 0.22);
+  background: color-mix(in srgb, var(--bg-card) 92%, transparent);
+  border: 1px solid color-mix(in srgb,var(--border-color) 70%,transparent);
+  border-radius: 25px;
+  box-shadow: 0 4px 24px #00000010, 0 1px 3px #00000006;
   -webkit-backdrop-filter: blur(18px);
   backdrop-filter: blur(18px);
 }
@@ -64,7 +64,7 @@ const navigationItems = computed(() => (
   font-size: 0.68rem;
   font-weight: 670;
   text-decoration: none;
-  border-radius: 15px;
+  border-radius: 20px;
 }
 
 @media (max-width: 420px) {
@@ -76,9 +76,12 @@ const navigationItems = computed(() => (
 }
 
 .mobile-tabs a.is-active {
-  color: var(--accent-color);
+  color: var(--text-primary);
   background: var(--accent-bg);
 }
+
+@media(prefers-reduced-transparency:reduce) {.mobile-tabs{background:var(--bg-card);backdrop-filter:none;-webkit-backdrop-filter:none}}
+@supports not (backdrop-filter:blur(1px)) {.mobile-tabs{background:var(--bg-card)}}
 
 @media (max-width: 820px), (pointer: coarse) and (max-width: 1024px) {
   .mobile-tabs {

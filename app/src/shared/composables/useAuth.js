@@ -153,6 +153,8 @@ function redirectToLoginOnce(reason = 'session-expired') {
   if (typeof window === 'undefined' || unauthorizedRedirectPending) return
   if (
     window.location.pathname === '/auth'
+    || window.location.pathname === '/auth/oauth-complete'
+    || window.location.pathname === '/auth/oauth-complete/'
     || window.location.pathname === '/about'
     || window.location.pathname === '/about/'
     || window.location.pathname === '/privacy'
@@ -344,9 +346,17 @@ export function useAuth() {
     await refreshAdminData()
   }
 
-  async function login(username, password) {
+  function acceptAuthenticatedSession(user) {
+    const accepted = sessionCoordinator.accept(user)
+    initialized.value = true
+    unauthorizedRedirectPending = false
+    resetApiUnauthorizedNotification()
+    return accepted
+  }
+
+  async function login(username, password, options = {}) {
     const user = isBackendAuthEnabled()
-      ? await loginWithBackend(username, password)
+      ? await loginWithBackend(username, password, options)
       : await loginUser(username, password)
 
     const accepted = sessionCoordinator.accept(user)
@@ -556,6 +566,7 @@ export function useAuth() {
     revalidateSessionInBackground,
     refreshAll,
     login,
+    acceptAuthenticatedSession,
     loginWithEmail,
     forgetSession: () => invalidateCurrentSession({ broadcast:true, reason:'password-changed' }),
     logout,

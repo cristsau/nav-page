@@ -21,6 +21,10 @@ const props = defineProps({
 })
 
 const iconPaths = {
+  'chevron-right': [ ['path', { d: 'm9 18 6-6-6-6' }] ],
+  'scan-face': [
+    ['path', { d: 'M4 7V4h3M17 4h3v3M20 17v3h-3M7 20H4v-3M9 9v1M15 9v1M12 9v4h-1M9 16c1.5 1 4.5 1 6 0' }]
+  ],
   alert: [
     ['path', { d: 'M10.3 2.9 1.8 17a2 2 0 0 0 1.7 3h17a2 2 0 0 0 1.7-3L13.7 2.9a2 2 0 0 0-3.4 0Z' }],
     ['path', { d: 'M12 9v4' }],

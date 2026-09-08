@@ -4,6 +4,12 @@ set -Eeuo pipefail
 umask 077
 archive=${1:?exact uploaded source archive required}
 expected_hash=${2:?expected sha256 required}
+candidate_image=${3:?exact new candidate image sha256 required}
+candidate_revision=${4:?exact new candidate revision required}
+[[ "$candidate_image" =~ ^sha256:[a-f0-9]{64}$ ]]
+[[ "$candidate_revision" =~ ^[a-f0-9]{40}$ ]]
+[[ $(docker image inspect --format '{{.Id}}' "$candidate_image") == "$candidate_image" ]]
+[[ $(docker image inspect --format '{{index .Config.Labels "org.opencontainers.image.revision"}}' "$candidate_image") == "$candidate_revision" ]]
 [[ "$archive" =~ ^/tmp/nav-auth-test-[0-9]{14}\.tar\.gz$ && ! -L "$archive" && -f "$archive" ]]
 [[ $(realpath -e "$archive") == "$archive" ]]
 [[ "$expected_hash" =~ ^[a-f0-9]{64}$ ]]
@@ -37,7 +43,7 @@ runner_id=$(docker create --name "$run_id-api" --label "nav.auth-test=$run_id" \
   -e NODE_ENV=test -e NAV_AUTH_EMAIL_INTEGRATION_TEST=true \
   -e NAV_AUTH_RESTORE_SCRIPT=/app/nav-disaster-restore.sh \
   -e DATABASE_URL=postgres://postgres@127.0.0.1:5432/nav_auth_email_test \
-  --entrypoint sh nav-ovh-api:b2ae02360d7837f0b5c21daaaa855d986b600b2b \
+  --entrypoint sh "$candidate_image" \
   -c 'tar -xzf /tmp/auth-test-source.tar.gz -C /app && cd /app && node --test integration/authEmailPostgres.integration.js && exec node src/db/verifyMigrations.js')
 docker cp "$archive" "$runner_id:/tmp/auth-test-source.tar.gz"
 docker start -a "$runner_id"

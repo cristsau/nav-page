@@ -122,7 +122,7 @@ test('static cream theme helper tokens match the runtime resolver', async () => 
   assert.equal(readMutedToken(darkSource), resolved.dark)
 })
 
-test('dark helper text accounts for the raised card surface used by live CSS', async () => {
+test('dark helper text covers flat bookmark cards and the raised command palette', async () => {
   const [bookmarkCard, commandPalette] = await Promise.all([
     fs.readFile(
       fileURLToPath(new URL('../../app/src/modules/navigation/components/NavItem.vue', import.meta.url)),
@@ -134,7 +134,7 @@ test('dark helper text accounts for the raised card surface used by live CSS', a
     )
   ])
 
-  assert.match(bookmarkCard, /var\(--bg-card\) 96%, white 4%/)
+  assert.match(bookmarkCard, /\.bookmark-card \{[^}]*background: var\(--bg-card\)/)
   assert.match(commandPalette, /var\(--bg-card\) 96%, white/)
   assert.equal(DARK_RAISED_SURFACE_WHITE_MIX, 0.04)
 })

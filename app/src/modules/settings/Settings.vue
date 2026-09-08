@@ -182,7 +182,7 @@ async function handleExit() {
 </script>
 
 <template>
-  <div class="page">
+  <div class="page settings-page">
     <div class="settings-toolbar">
       <div>
         <p class="settings-toolbar__eyebrow">工作台设置</p>

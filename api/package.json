@@ -23,6 +23,7 @@
     "test:assistant-advanced:integration": "node --test --test-concurrency=1 integration/assistantAdvancedPostgres.integration.js"
   },
   "dependencies": {
+    "@simplewebauthn/server": "14.0.1",
     "@tiptap/y-tiptap": "3.0.9",
     "@y/websocket-server": "0.1.1",
     "@fastify/cookie": "^11.0.2",

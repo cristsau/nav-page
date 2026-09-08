@@ -10,6 +10,7 @@
     "lint": "eslint . --ext .vue,.js,.jsx,.cjs,.mjs --fix"
   },
   "dependencies": {
+    "@simplewebauthn/browser": "14.0.0",
     "@tiptap/extension-bubble-menu": "3.30.4",
     "@tiptap/extension-drag-handle-vue-3": "3.30.4",
     "@tiptap/extension-collaboration": "3.30.4",

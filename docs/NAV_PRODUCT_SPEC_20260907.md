@@ -1,6 +1,56 @@
 # DOMO NAV 完整项目方案：账号体系、功能与 UI 优化
 
-版本：1.0 · 2026-09-07 · 归属：个人。本文为产品与实施设计基线，状态为 `SPEC_READY / IMPLEMENTATION_PENDING`。
+版本：1.1 · 2026-09-08 · 归属：个人。R1/R2实现与发布状态见CURRENT；本次追加PWA/设备验证/UI为 `LOCAL_CANDIDATE / NOT_DEPLOYED`。文内2026-09-07方案与原型记录保留为历史基线，下列追加决策覆盖冲突内容。
+
+## 2026-09-08 追加实施基线：PWA与iPhone体验
+
+用户先要求讨论后统一修改，随后明确“按你的建议实施……更像iphone ui的风格”。本次只实施和验证本地候选，不自动提交、上架、连接Cloudflare账号、发真实邮件或切换生产。
+
+### 冻结的产品选择
+
+- 继续Safari“添加到主屏幕”的PWA；不新增原生App、年度开发者订阅或付费平台。先完善现有个人工作台，不增加营销/付费/多租户范围。
+- 关闭窗口不等于主动退出。密码、邮箱、普通OAuth和新设备密钥登录共用默认14天（管理员可配置更短）/明确勾选“信任此设备”最长30天的**绝对期限**，不滚动续期。公用设备不勾选。主动退出、改密、冻结或会话撤销仍生效，系统清理网站数据后不能保证保持登录。
+- 保留密码、邮箱及既有Google账号绑定/审批规则。Google只用`openid email profile`，双域回调仍逐条精确登记；不创建Google直注册或按微信昵称合并。
+- 新可选“快捷登录”是WebAuthn通行密钥，由系统选择Face ID、Touch ID或设备密码；不是人脸识别服务，也不保证每次只弹Face ID。服务端不接收生物特征。只在`nav.skrskr.net`启用第一期，另一域保留原登录方式，不跨不同RP转移密钥。
+- **旧Passkey退役不撤销**：`/auth/passkeys`仍410；历史019/032和旧凭据不改。新增`/auth/device-keys`及独立表，需已登录+当前密码复核才能新登记，不能导入旧凭据绕过复核。SimpleWebAuthn server14.0.1/browser14.0.0；生产基础镜像仍Node24。
+
+### Google在原PWA接续登录
+
+1. 原PWA在点击手势中打开空窗口，并向同源API申请一次性交接；原窗口保存10分钟HttpOnly/Secure/SameSite=Strict领取Cookie，数据库仅存摘要。
+2. 独立32字节启动秘密仅经表单POST送往外部窗口的同源launch端点，1分钟有效、一次使用，不进入URL/Referer/浏览器存储；随后执行既有OAuth state/nonce/PKCE验证。
+3. Provider回调只确认原有用户与绑定，将交接标记为可领取（最多再2分钟），不在外部窗口建立PWA登录会话；返回专用提示页，指导关“×”回原应用。
+4. 原PWA回前台/有限轮询，用自己的Cookie领取。数据库重新检查审批状态、凭据版本和身份归属，原子消费后给原PWA发持久会话Cookie。取消、过期、跨域、重复领取拒绝；丢失完成响应时只复核真实会话，不依据浏览器缓存强行登录。
+
+接口：`POST /api/auth/oauth/:provider/pwa/start|launch`；`POST /api/auth/oauth/pwa/status|complete|cancel`；`/auth/oauth-complete`为公开、无需读取私有业务库的返回页。状态查询有独立120次/分钟/IP持久限流，正常2.5秒轮询且后台暂停。新增迁移048。主域/备用域交接各自隔离，不能靠放宽Domain Cookie或跨域localStorage实现。
+
+### 可选通行密钥与防滥用
+
+- `/api/auth/device-keys/config`公开能力；本人列表/移除、`register/options|verify`、`login/options|verify`均独立处理。登记和移除验证当前密码；5分钟挑战绑定精确origin、flow Cookie、当前用户/会话/凭据版本，登录为可发现凭据，强制用户验证，验证真实签名/RP/挑战/用户handle/counter。最多10枚，每IP每10分钟30次操作；仅返回本人必要元数据。
+- 普通改密撤销旧会话和未完成证明，但保留已登记密钥；**邮箱找回密码和恢复码恢复还删除新密钥**，须重新登记。移除一枚密钥会级联撤销由它建立的会话；冻结账号立即阻止所有登录。新增迁移049及认证变更时间戳，历史表保留。
+- Turnstile启用后：注册/注册重发/找回/邮箱验证码申请必校验；密码登录同IP10分钟内前三次无需挑战，之后需要挑战（尝试阈值，不是账号锁定）。现有IP/身份/用途/邮箱限流仍执行，验证码不是MFA，人机验证也不是防DDoS保证。
+- 服务器向固定Siteverify地址验证一次性令牌，核对成功、当前精确hostname、action和5分钟期限；6秒超时或配置缺失失败关闭受保护操作，不自动重试、不清退已有会话。请求仅含验证秘密及令牌，不把账号、密码、邮箱提交给Cloudflare；前端组件加载仍会由Cloudflare处理必要的设备/网络验证信息。
+- 无流量和付款依赖的默认配置见[api/.env.example](../api/.env.example)。`NAV_TURNSTILE_ENABLED=false`、`NAV_DEVICE_KEYS_ENABLED=false`、`NAV_OAUTH_PWA_HANDOFF_ENABLED=false`。启用Turnstile需要所有者自行登记`nav.skrskr.net`和`nav.cristsau.cn`、填写站点键及服务端秘密；秘密只进受限运行配置，不进`VITE_*`、仓库或聊天。若站点有CSP，按官方指南精确允许`https://challenges.cloudflare.com`的script/frame等必要来源，不能用`*`或关闭CSP绕过。
+
+### iPhone风格UI
+
+系统字体优先，34px入口标题、分组信息、13–16px正文、44px以上主要触控目标；认证采用明确主操作、分段切换、私人设备勾选行与快捷登录卡片。导航弱化多层阴影和拟物分组，下方胶囊栏仅在控制层保留轻玻璃效果；安全中心使用分组卡片和清晰的登记/移除确认。浅色、深色、自定义色沿用现有token，不强制全局蓝色；保留减少动效/减少透明度与不支持模糊时的实色回退、安全区、键盘和未保存草稿保护。
+
+### 实施顺序与追加验收
+
+| 阶段 | 交付与通过条件 | 当前边界 |
+|---|---|---|
+| PWA-01/02 | 原窗口领取；并发只建一个会话；跨Origin/过期/取消/改密拒绝；不泄露领取秘密 | 单测与模拟浏览器完成；新增PG16用例待执行 |
+| KEY-01/02 | 新登记/登录/移除；真实签名验证；UV/RP/挑战/handle/counter/重放负例；撤销关联会话，旧接口410 | 真实密码学单测+虚拟认证器UI完成；PG16级联/并发和真机待验 |
+| BOT-01 | 缺令牌、伪造、跨域/action、重复/过期、Provider超时失败关闭；阈值来自服务器；不扩大已有会话影响 | 本地模拟校验完成；真实站点键/网络/CSP/供应商验收待配置 |
+| UI-09 | 320–1440浅深/自定义、字体/文字对比度/44px目标、底栏与菜单焦点、原功能回归 | 本地浏览器检查；iPhone键盘/横屏/系统弹窗待验 |
+| SESSION-30 | 默认14天及明确30天，Cookie与DB一致，关闭/重开不主动清退，主动退出有效 | 策略单测；PG16 TTL及iPhone重启/隔日待验 |
+| RELEASE-NEW | 精确新SHA CI、048/049迁移、生产备份独立PG16恢复、兼容回滚、明确启用范围和授权 | 未提交/未推送/未部署；不能复用旧master产物 |
+
+真机最小清单：主域Safari添加桌面→Google登录→关闭验证窗口回原PWA→杀掉PWA再开→重启iPhone再开→隔日复核；分别验证默认/信任设备。再在安全中心登记密钥，主动退出后快捷登录，取消系统弹窗后密码/邮箱仍可用；邮件找回后旧密钥失败，重新登记成功。记录iOS版本、入口、时间和结果，不记录密码、验证码、Cookie或系统密钥。两域只验各自承诺能力，不宣称共享登录。
+
+发布/回滚：先完成新增PG16用例和精确候选CI，重新备份并隔离恢复，再按所有者确认范围仅更新NAV API/Web。失败先关闭三个新增开关，保留密码/邮箱可用入口与历史业务数据；回滚镜像必须兼容新增表/列并保持旧邮件/旧Passkey退役，不能盲回旧生产版本。不得DROP表、删密钥/备份或清空PWA业务缓存作为回滚捷径。真实邮件闭环仍按此前额度单独恢复，本轮不自动发送。
+
+参考：[Apple iOS界面指南](https://developer.apple.com/design/human-interface-guidelines/designing-for-ios/)、[材质层次](https://developer.apple.com/design/human-interface-guidelines/materials)、[SimpleWebAuthn服务端](https://simplewebauthn.dev/docs/packages/server)、[Turnstile服务端验证](https://developers.cloudflare.com/turnstile/get-started/server-side-validation/)。
 
 本轮交付：完整项目文档、实施计划、可追踪验收标准、[可交互 UI 概念原型](./prototypes/nav-product-20260907.html)。原型使用虚构数据，不连接 API，不接收真实密码或验证码。设计、估时和验收目标不代表功能已实现。
 
