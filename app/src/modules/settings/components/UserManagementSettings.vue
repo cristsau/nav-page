@@ -1,6 +1,7 @@
 <script setup>
-import { computed, nextTick, onMounted, ref } from 'vue'
+import { computed, onMounted, ref } from 'vue'
 import { useRoute } from 'vue-router'
+import Modal from '@/shared/components/Modal.vue'
 import { useAuth } from '@/shared/composables/useAuth'
 import { fetchAdminMailStatus, queueAdminMailTest } from '@/shared/services/systemNotificationApi'
 
@@ -27,17 +28,30 @@ const mailTestError = ref('')
 const pendingCount = computed(() => pendingRequests.value.length)
 const route = useRoute()
 const decision = ref(null), deciding = ref(false), decisionMessage = ref(''), decisionError = ref(''), refreshRequired = ref(false)
-const decisionPanel = ref(null)
+const refreshingLists = ref(false)
+const decisionBusy = computed(() => deciding.value || refreshingLists.value)
+const pendingSection = ref(null)
+let decisionTrigger = null
 const linkedRequest = computed(() => registrationHistory.value.find(item => item.id === String(route.query.request || '')))
 const statusLabels = { email_pending: '待验证邮箱', pending: '待管理员审核', approved: '已批准', rejected: '已拒绝', expired: '已过期' }
 function statusLabel(status) { return statusLabels[status] || '未知状态' }
-async function selectDecision(request, action) {
-  if (deciding.value) return
+function selectDecision(request, action) {
+  if (decisionBusy.value || decision.value) return
+  decisionTrigger = document.activeElement
   decision.value = { request, action }; decisionMessage.value = ''; decisionError.value = ''
-  await nextTick(); decisionPanel.value?.focus()
+}
+function cancelDecision() {
+  if (decisionBusy.value) return
+  decision.value = null
+}
+function afterDecisionClose() {
+  // A completed decision removes its row. Keep keyboard focus near the list,
+  // without scrolling to the page header or a now-detached action button.
+  if (decisionTrigger && !decisionTrigger.isConnected) pendingSection.value?.focus({ preventScroll: true })
+  decisionTrigger = null
 }
 async function confirmDecision() {
-  if (!decision.value || deciding.value) return
+  if (!decision.value || decisionBusy.value || decisionError.value) return
   deciding.value = true; decisionError.value = ''; decisionMessage.value = ''
   try {
     const { request, action } = decision.value
@@ -58,8 +72,11 @@ async function confirmDecision() {
   } finally { deciding.value = false }
 }
 async function refreshLists() {
+  if (decisionBusy.value) return
+  refreshingLists.value = true
   try { await refreshAll(); refreshRequired.value = false; decisionError.value = ''; decision.value = null }
   catch { decisionError.value = '列表刷新失败，请检查网络后重试。' }
+  finally { refreshingLists.value = false }
 }
 
 function formatDate(timestamp) {
@@ -128,17 +145,33 @@ onMounted(async () => {
         <button class="btn btn--primary" :disabled="deciding" @click="selectDecision(linkedRequest, 'approved')">批准此申请</button>
       </div>
     </div>
-    <section v-if="decision" ref="decisionPanel" tabindex="-1" class="decision-panel" aria-label="确认审批">
-      <strong>确认{{ decision.action === 'approved' ? '批准' : '拒绝' }} {{ decision.request.username }} 的申请？</strong>
-      <p>{{ decision.action === 'approved' ? '批准后创建普通用户账号，不授予管理员权限。' : '拒绝后不会创建账号。' }}有绑定邮箱时会自动通知申请人。</p>
-      <div class="request-card__actions">
-        <button class="btn btn--secondary" :disabled="deciding" @click="decision=null">取消</button>
-        <button class="btn btn--primary" :disabled="deciding" @click="confirmDecision">{{ deciding ? '处理中…' : '确认' + (decision.action === 'approved' ? '批准' : '拒绝') }}</button>
+    <Modal
+      :show="Boolean(decision)"
+      :title="decision?.action === 'approved' ? '批准注册申请' : '拒绝注册申请'"
+      initial-focus-selector=".decision-cancel"
+      :close-disabled="decisionBusy"
+      @close="cancelDecision"
+      @after-close="afterDecisionClose"
+    >
+      <div v-if="decision" class="decision-details" :aria-busy="decisionBusy">
+        <div class="decision-applicant">
+          <span>申请人</span>
+          <strong>{{ decision.request.username }}</strong>
+          <span v-if="decision.request.email">{{ decision.request.email }}</span>
+        </div>
+        <p>{{ decision.action === 'approved' ? '批准后创建普通用户账号，不授予管理员权限。' : '拒绝后不会创建账号。' }}有绑定邮箱时会自动通知申请人。</p>
+        <p v-if="decisionError" class="decision-error" role="alert">{{ decisionError }}</p>
+        <button v-if="decisionError && refreshRequired" class="btn btn--secondary" :disabled="decisionBusy" @click="refreshLists">
+          {{ refreshingLists ? '刷新中…' : '刷新审批列表' }}
+        </button>
       </div>
-    </section>
-    <p v-if="decisionMessage" class="sync-message" role="status">{{ decisionMessage }}</p>
-    <p v-if="decisionError" class="sync-message" role="alert">{{ decisionError }}</p>
-    <button v-if="refreshRequired" class="btn btn--secondary" :disabled="deciding" @click="refreshLists">刷新审批列表</button>
+      <template v-if="decision" #footer>
+        <button class="btn btn--secondary decision-cancel" :disabled="decisionBusy" @click="cancelDecision">取消</button>
+        <button class="btn btn--primary" :disabled="decisionBusy || Boolean(decisionError)" @click="confirmDecision">
+          {{ deciding ? '处理中…' : '确认' + (decision.action === 'approved' ? '批准' : '拒绝') }}
+        </button>
+      </template>
+    </Modal>
 
     <div class="summary-grid">
       <div class="summary-card">
@@ -185,8 +218,13 @@ onMounted(async () => {
       <p v-if="mailTestError" class="mail-test-message is-error">{{ mailTestError }}</p>
     </div>
 
-    <div class="user-block">
+    <div ref="pendingSection" class="user-block" tabindex="-1" aria-label="注册审批列表">
       <div class="user-block__title">待审批注册</div>
+      <p v-if="decisionMessage" class="sync-message decision-feedback" role="status">{{ decisionMessage }}</p>
+      <p v-if="decisionError && !decision" class="sync-message decision-feedback" role="alert">{{ decisionError }}</p>
+      <button v-if="refreshRequired && !decision" class="btn btn--secondary decision-feedback" :disabled="decisionBusy" @click="refreshLists">
+        {{ refreshingLists ? '刷新中…' : '刷新审批列表' }}
+      </button>
       <div v-if="pendingRequests.length" class="request-list">
         <div v-for="request in pendingRequests" :key="request.id" class="request-card">
           <div>
@@ -301,9 +339,14 @@ onMounted(async () => {
   background: var(--bg-secondary);
   color: var(--text-secondary);
 }
-.decision-panel {display:grid;gap:12px;margin-top:16px;padding:18px;border:1px solid var(--accent-color);border-radius:16px;color:var(--text-primary);background:var(--bg-secondary)}
-.decision-panel p {font-size:13px;line-height:1.7;color:var(--text-secondary)}
-.decision-panel:focus {outline:2px solid var(--accent-color);outline-offset:3px}
+.decision-details {display:grid;gap:16px;color:var(--text-primary);overflow-wrap:anywhere}
+.decision-details p {margin:0;font-size:14px;line-height:1.7;color:var(--text-secondary)}
+.decision-applicant {display:grid;gap:6px;min-width:0;padding:16px;border:1px solid var(--border-light);border-radius:14px;background:var(--bg-secondary)}
+.decision-applicant span {font-size:13px;color:var(--text-secondary)}
+.decision-applicant strong {font-size:17px}
+.decision-details .decision-error {padding:12px;border:1px solid var(--border-color);border-radius:12px;background:var(--bg-secondary)}
+.decision-feedback {margin:0 0 12px}
+.btn:focus-visible,.user-block:focus-visible {outline:2px solid var(--accent-color);outline-offset:3px}
 .sync-message,.request-card__meta,.table__row {overflow-wrap:anywhere}
 
 .summary-grid {
