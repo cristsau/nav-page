@@ -3,6 +3,7 @@ FROM node:24-bookworm-slim@sha256:a9f5f7c91a432850b2a8a7797adf5eadb6c733ceed6116
 ARG NAV_RELEASE_SHA=development
 
 LABEL org.opencontainers.image.revision=$NAV_RELEASE_SHA
+LABEL io.domo.embedding-isolation=cpu-no-installer-v1
 
 ENV NODE_ENV=production
 ENV NAV_RELEASE_SHA=$NAV_RELEASE_SHA
@@ -10,7 +11,12 @@ ENV NAV_RELEASE_SHA=$NAV_RELEASE_SHA
 WORKDIR /app
 
 COPY package*.json ./
-RUN npm ci --omit=dev && npm cache clean --force
+COPY scripts/embeddingIsolationContract.js scripts/verifyEmbeddingIsolation.js ./scripts/
+# Use bundled CPU binaries; never run optional GPU extraction. Remove the ZIP
+# code and installer in the SAME layer, then prove native CPU inference works.
+RUN ONNXRUNTIME_NODE_INSTALL=skip npm ci --omit=dev \
+  && ONNXRUNTIME_NODE_INSTALL=skip NAV_BUILD_ISOLATION=1 node scripts/verifyEmbeddingIsolation.js --strip-install-tools \
+  && npm cache clean --force
 
 # The local embedding runtime ships a glibc-linked native library.  Refuse to
 # build if a stale or incorrectly tagged musl/Alpine base image is supplied,
