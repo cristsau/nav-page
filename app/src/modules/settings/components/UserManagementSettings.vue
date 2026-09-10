@@ -1,5 +1,6 @@
 <script setup>
-import { computed, onMounted, ref } from 'vue'
+import { computed, nextTick, onMounted, ref } from 'vue'
+import { useRoute } from 'vue-router'
 import { useAuth } from '@/shared/composables/useAuth'
 import { fetchAdminMailStatus, queueAdminMailTest } from '@/shared/services/systemNotificationApi'
 
@@ -24,24 +25,54 @@ const mailTestMessage = ref('')
 const mailTestError = ref('')
 
 const pendingCount = computed(() => pendingRequests.value.length)
+const route = useRoute()
+const decision = ref(null), deciding = ref(false), decisionMessage = ref(''), decisionError = ref(''), refreshRequired = ref(false)
+const decisionPanel = ref(null)
+const linkedRequest = computed(() => registrationHistory.value.find(item => item.id === String(route.query.request || '')))
+const statusLabels = { email_pending: '待验证邮箱', pending: '待管理员审核', approved: '已批准', rejected: '已拒绝', expired: '已过期' }
+function statusLabel(status) { return statusLabels[status] || '未知状态' }
+async function selectDecision(request, action) {
+  if (deciding.value) return
+  decision.value = { request, action }; decisionMessage.value = ''; decisionError.value = ''
+  await nextTick(); decisionPanel.value?.focus()
+}
+async function confirmDecision() {
+  if (!decision.value || deciding.value) return
+  deciding.value = true; decisionError.value = ''; decisionMessage.value = ''
+  try {
+    const { request, action } = decision.value
+    const result = await (action === 'approved' ? approve(request.id) : reject(request.id))
+    const mail = result.notification?.mailStatus
+    const notificationText = mail === 'sent' ? '结果通知已交给邮件服务器。'
+      : ['pending', 'sending'].includes(mail) ? '结果邮件已进入发送队列。'
+      : mail === 'not_applicable' ? '此申请未绑定邮箱，无邮件通知。'
+      : '请在邮件状态中确认结果通知的投递情况。'
+    decisionMessage.value = `申请${statusLabel(result.status)}。${notificationText}`
+    refreshRequired.value = result.refreshRequired === true
+    decision.value = null
+  } catch (error) {
+    decisionError.value = error.code === 'REGISTRATION_NOT_PENDING'
+      ? '该申请状态已变化，请刷新列表后查看。'
+      : '未能确认审批完成，请刷新列表核对状态后再重试。'
+    refreshRequired.value = true
+  } finally { deciding.value = false }
+}
+async function refreshLists() {
+  try { await refreshAll(); refreshRequired.value = false; decisionError.value = ''; decision.value = null }
+  catch { decisionError.value = '列表刷新失败，请检查网络后重试。' }
+}
 
 function formatDate(timestamp) {
   if (!timestamp) return '-'
   return new Date(timestamp).toLocaleString('zh-CN', { hour12: false })
 }
 
-async function handleApprove(requestId) {
-  await approve(requestId)
-}
-
-async function handleReject(requestId) {
-  await reject(requestId)
-}
-
 async function loadMailStatus() {
   mailStatusLoading.value = true
   try {
     mailStatus.value = await fetchAdminMailStatus()
+  } catch {
+    mailTestError.value = '暂时无法获取邮件状态，请稍后刷新。'
   } finally {
     mailStatusLoading.value = false
   }
@@ -67,8 +98,8 @@ async function sendMailTest() {
 }
 
 onMounted(async () => {
-  await initAuth()
-  await refreshAll()
+  try { await initAuth(); await refreshAll() }
+  catch { decisionError.value = '用户列表未加载完整，请刷新重试。'; refreshRequired.value = true }
 
   if (currentUser.value?.role !== 'admin') return
 
@@ -88,6 +119,26 @@ onMounted(async () => {
         {{ mailStatusLoading ? '检查中...' : '刷新邮件状态' }}
       </button>
     </div>
+
+    <div v-if="linkedRequest" class="sync-message" aria-label="邮件对应的注册申请">
+      <strong>{{ linkedRequest.username }} · {{ statusLabel(linkedRequest.status) }}</strong>
+      <p>邮件只定位此申请，批准仍需管理员在下方确认。</p>
+      <div v-if="linkedRequest.status === 'pending'" class="request-card__actions">
+        <button class="btn btn--secondary" :disabled="deciding" @click="selectDecision(linkedRequest, 'rejected')">拒绝此申请</button>
+        <button class="btn btn--primary" :disabled="deciding" @click="selectDecision(linkedRequest, 'approved')">批准此申请</button>
+      </div>
+    </div>
+    <section v-if="decision" ref="decisionPanel" tabindex="-1" class="decision-panel" aria-label="确认审批">
+      <strong>确认{{ decision.action === 'approved' ? '批准' : '拒绝' }} {{ decision.request.username }} 的申请？</strong>
+      <p>{{ decision.action === 'approved' ? '批准后创建普通用户账号，不授予管理员权限。' : '拒绝后不会创建账号。' }}有绑定邮箱时会自动通知申请人。</p>
+      <div class="request-card__actions">
+        <button class="btn btn--secondary" :disabled="deciding" @click="decision=null">取消</button>
+        <button class="btn btn--primary" :disabled="deciding" @click="confirmDecision">{{ deciding ? '处理中…' : '确认' + (decision.action === 'approved' ? '批准' : '拒绝') }}</button>
+      </div>
+    </section>
+    <p v-if="decisionMessage" class="sync-message" role="status">{{ decisionMessage }}</p>
+    <p v-if="decisionError" class="sync-message" role="alert">{{ decisionError }}</p>
+    <button v-if="refreshRequired" class="btn btn--secondary" :disabled="deciding" @click="refreshLists">刷新审批列表</button>
 
     <div class="summary-grid">
       <div class="summary-card">
@@ -145,8 +196,8 @@ onMounted(async () => {
             <div class="request-card__meta">提交时间：{{ formatDate(request.createdAt) }}</div>
           </div>
           <div class="request-card__actions">
-            <button class="btn btn--secondary" @click="handleReject(request.id)">拒绝</button>
-            <button class="btn btn--primary" @click="handleApprove(request.id)">批准</button>
+            <button class="btn btn--secondary" :disabled="deciding" @click="selectDecision(request, 'rejected')">拒绝</button>
+            <button class="btn btn--primary" :disabled="deciding" @click="selectDecision(request, 'approved')">批准</button>
           </div>
         </div>
       </div>
@@ -182,7 +233,7 @@ onMounted(async () => {
         </div>
         <div v-for="item in registrationHistory" :key="item.id" class="table__row">
           <span>{{ item.username }}</span>
-          <span>{{ item.status }}</span>
+          <span>{{ statusLabel(item.status) }}</span>
           <span>{{ item.decidedBy || '-' }}</span>
           <span>{{ formatDate(item.updatedAt) }}</span>
         </div>
@@ -224,6 +275,7 @@ onMounted(async () => {
 
 .sync-btn,
 .btn {
+  min-height: 44px;
   border: none;
   border-radius: 14px;
   padding: 10px 16px;
@@ -249,6 +301,10 @@ onMounted(async () => {
   background: var(--bg-secondary);
   color: var(--text-secondary);
 }
+.decision-panel {display:grid;gap:12px;margin-top:16px;padding:18px;border:1px solid var(--accent-color);border-radius:16px;color:var(--text-primary);background:var(--bg-secondary)}
+.decision-panel p {font-size:13px;line-height:1.7;color:var(--text-secondary)}
+.decision-panel:focus {outline:2px solid var(--accent-color);outline-offset:3px}
+.sync-message,.request-card__meta,.table__row {overflow-wrap:anywhere}
 
 .summary-grid {
   display: grid;

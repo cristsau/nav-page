@@ -323,15 +323,25 @@ async function refreshAdminData() {
   }
 
   if (isBackendAuthEnabled()) {
-    pendingRequests.value = await fetchBackendRegistrationRequests('pending')
-    approvedUsers.value = await fetchBackendApprovedUsers()
-    registrationHistory.value = await fetchBackendRegistrationRequests('all')
+    const [pending, users, history] = await Promise.all([fetchBackendRegistrationRequests('pending'), fetchBackendApprovedUsers(), fetchBackendRegistrationRequests('all')])
+    pendingRequests.value = pending
+    approvedUsers.value = users
+    registrationHistory.value = history
     return
   }
 
   pendingRequests.value = await getPendingRegistrationRequests()
   approvedUsers.value = await getApprovedUsers()
   registrationHistory.value = await getRegistrationHistory()
+}
+
+async function applyRegistrationDecision(result) {
+  // Commit the acknowledged decision locally before secondary list reads. A
+  // refresh failure must not invite another approval or show a stale pending row.
+  pendingRequests.value = pendingRequests.value.filter(item => item.id !== result.id)
+  registrationHistory.value = [result, ...registrationHistory.value.filter(item => item.id !== result.id)]
+  try { await refreshAdminData(); return result }
+  catch { return { ...result, refreshRequired: true } }
 }
 
 export function useAuth() {
@@ -505,8 +515,8 @@ export function useAuth() {
   async function approve(requestId) {
     if (isBackendAuthEnabled()) {
       const result = await approveBackendRegistration(requestId)
-      await refreshAdminData()
-      return result
+      if (result?.status !== 'approved') throw Object.assign(new Error('Registration request is not approved'), { code: 'REGISTRATION_NOT_PENDING' })
+      return applyRegistrationDecision(result)
     }
 
     const result = await approveRegistration(requestId, currentUser.value?.username || 'admin')
@@ -524,8 +534,8 @@ export function useAuth() {
   async function reject(requestId) {
     if (isBackendAuthEnabled()) {
       const result = await rejectBackendRegistration(requestId)
-      await refreshAdminData()
-      return result
+      if (result?.status !== 'rejected') throw Object.assign(new Error('Registration request is not rejected'), { code: 'REGISTRATION_NOT_PENDING' })
+      return applyRegistrationDecision(result)
     }
 
     const result = await rejectRegistration(requestId, currentUser.value?.username || 'admin')

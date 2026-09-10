@@ -5,7 +5,7 @@ import BotChallenge from '@/shared/components/BotChallenge.vue'
 import {authEmailRequest,authEmailError} from '@/shared/services/authEmailApi'
 import '@/styles/auth-email.css'
 
-const props=defineProps({mode:{type:String,default:'login'},redirectTarget:{type:String,default:'/'},maskedEmail:{type:String,default:''},resetAvailable:{type:Boolean,default:false},trustDevice:{type:Boolean,default:false}})
+const props=defineProps({mode:{type:String,default:'login'},redirectTarget:{type:String,default:'/'},maskedEmail:{type:String,default:''},resetAvailable:{type:Boolean,default:false},trustDevice:{type:Boolean,default:false},compact:{type:Boolean,default:false},showResetLink:{type:Boolean,default:true}})
 const emit=defineEmits(['back','reset','completed'])
 const {loginWithEmail,forgetSession}=useAuth()
 const email=ref(''),code=ref(''),newPassword=ref(''),confirmPassword=ref('')
@@ -66,7 +66,7 @@ onBeforeUnmount(()=>{clearInterval(timer);code.value='';newPassword.value='';con
    <button class="email-auth__primary" type="button" @click="emit('back')">返回账号密码登录</button>
   </div>
   <form v-else class="email-auth__form" @submit.prevent="submit">
-   <header><h3>{{mode==='login'?'一封邮件，回到你的工作台':mode==='reset'?'找回账号密码':'通过邮箱验证修改密码'}}</h3>
+   <header><h3 v-if="!compact || mode!=='login'">{{mode==='login'?'一封邮件，回到你的工作台':mode==='reset'?'找回账号密码':'通过邮箱验证修改密码'}}</h3>
     <p>{{isPassword?'修改成功后，两个域名的全部设备会话和旧恢复码都将失效。':'仅限已审批且已验证绑定的邮箱，不会自动创建账号。'}}</p>
    </header>
    <label v-if="mode!=='change'">绑定邮箱<input v-model="email" type="email" autocomplete="email" inputmode="email" maxlength="320" required :readonly="Boolean(challengeId)" @input="error=''" /></label>
@@ -89,7 +89,7 @@ onBeforeUnmount(()=>{clearInterval(timer);code.value='';newPassword.value='';con
     <button v-if="mode!=='change'" type="button" :disabled="busy" @click="changeAddress">修改邮箱</button>
    </div>
    <button v-if="mode==='reset'" type="button" @click="emit('back')">返回登录</button>
-   <button v-else-if="mode==='login' && resetAvailable" type="button" @click="emit('reset')">忘记密码？通过邮箱重设</button>
+   <button v-else-if="mode==='login' && resetAvailable && showResetLink" type="button" @click="emit('reset')">忘记密码？通过邮箱重设</button>
   </form>
  </section>
 </template>

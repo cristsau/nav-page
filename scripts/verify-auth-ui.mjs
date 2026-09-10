@@ -26,7 +26,8 @@ try {
    let body={},status=200
    if(url==='/api/auth/capabilities')body={password:true,emailLogin:otpAvailable,emailPasswordReset:resetAvailable,emailBinding:true,passkey:false}
    else if(url==='/api/auth/session')body={user:null}
-   else if(url==='/api/auth/register/config')body={emailVerificationEnabled:true,emailRequired:true}
+   else if(url==='/api/auth/registration/config')body={emailVerificationEnabled:true,emailRequired:true}
+   else if(url==='/api/auth/bot-guard/config')body={enabled:false}
    else if(url.includes('oauth') && url.endsWith('/config'))body={providers:{google:{enabled:true},wechat:{enabled:false}}}
    else if(url.endsWith('/request')){status=202;body={challengeId:'11111111-1111-4111-8111-111111111111',expiresIn:300,resendAfter:60,message:'如果该邮箱可用于此操作，验证码将发送至该邮箱，请检查收件箱和垃圾邮件。'}}
    else if(url.endsWith('/verify')){status=400;body={code:'AUTH_EMAIL_CODE_INVALID'}}
@@ -79,6 +80,7 @@ try {
   assert.equal(storage.includes('synthetic@example.test'),false)
   await page.getByRole('button',{name:'修改邮箱',exact:true}).click()
   assert.equal(await page.getByRole('button',{name:/秒后重新申请/}).isDisabled(),true)
+  await page.locator('.auth-help summary').click()
   await page.getByRole('button',{name:'忘记密码？通过邮箱重设',exact:true}).click()
   await page.getByLabel('绑定邮箱',{exact:true}).fill('synthetic@example.test')
   await page.getByRole('button',{name:'获取验证码',exact:true}).click()

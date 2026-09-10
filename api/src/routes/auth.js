@@ -29,6 +29,7 @@ import {
 import {
   notifyRegistrationRequestToAdmins,
   queueRegistrationDecision,
+  updateRegistrationNotification,
   queueRegistrationVerification
 } from '../lib/notificationDelivery.js'
 import { normalizeEmailAddress, verifiedMailConfigurationStatus } from '../lib/mailOutbox.js'
@@ -1181,7 +1182,13 @@ export default async function authRoutes(fastify) {
       }
 
       if (registration.status !== 'pending') {
-        return mapRegistrationRequest(registration)
+        if (registration.status !== 'approved') {
+          reply.code(409)
+          return { conflict: true }
+        }
+        const mail = await queueRegistrationDecision(registration, 'approved', { queryFn: client.query.bind(client) })
+        await updateRegistrationNotification(registration, 'approved', { queryFn: client.query.bind(client) })
+        return { request: mapRegistrationRequest(registration), notification: { mailStatus: mail.skipped ? 'not_applicable' : mail.status } }
       }
 
       const existingUser = await client.query('SELECT id FROM users WHERE username = $1 LIMIT 1', [registration.username])
@@ -1236,18 +1243,19 @@ export default async function authRoutes(fastify) {
         affectedCount: 1
       })
 
-      return mapRegistrationRequest(approved.rows[0])
+      // Approval, ordinary account creation, audit, notice state and result mail
+      // commit together. Queue failure must never look like a completed decision.
+      const mail = await queueRegistrationDecision(approved.rows[0], 'approved', { queryFn: client.query.bind(client) })
+      await updateRegistrationNotification(approved.rows[0], 'approved', { queryFn: client.query.bind(client) })
+      return { request: mapRegistrationRequest(approved.rows[0]), notification: { mailStatus: mail.skipped ? 'not_applicable' : mail.status } }
     })
 
     if (!result) {
       return { error: 'Registration request not found' }
     }
 
-    await queueRegistrationDecision(result, 'approved').catch((error) => {
-      fastify.log.error(error, 'failed to queue registration approval email')
-    })
-
-    return { request: result }
+    if (result.conflict) return { error: 'Registration request is not awaiting approval', code: 'REGISTRATION_NOT_PENDING' }
+    return result
   })
 
   fastify.post('/admin/registration-requests/:requestId/reject', async (request, reply) => {
@@ -1259,6 +1267,14 @@ export default async function authRoutes(fastify) {
     }
 
     const rejected = await withTransaction(async (client) => {
+      const existing = (await client.query('SELECT * FROM registration_requests WHERE id = $1 FOR UPDATE', [requestId])).rows[0]
+      if (!existing) return null
+      if (!['pending', 'rejected'].includes(existing.status)) { reply.code(409); return { conflict: true } }
+      if (existing.status === 'rejected') {
+        const mail = await queueRegistrationDecision(existing, 'rejected', { queryFn: client.query.bind(client) })
+        await updateRegistrationNotification(existing, 'rejected', { queryFn: client.query.bind(client) })
+        return { request: mapRegistrationRequest(existing), notification: { mailStatus: mail.skipped ? 'not_applicable' : mail.status } }
+      }
       const requestResult = await client.query(
         `
           UPDATE registration_requests
@@ -1285,7 +1301,9 @@ export default async function authRoutes(fastify) {
         resourceId: requestId,
         affectedCount: 1
       })
-      return requestResult.rows[0]
+      const mail = await queueRegistrationDecision(requestResult.rows[0], 'rejected', { queryFn: client.query.bind(client) })
+      await updateRegistrationNotification(requestResult.rows[0], 'rejected', { queryFn: client.query.bind(client) })
+      return { request: mapRegistrationRequest(requestResult.rows[0]), notification: { mailStatus: mail.skipped ? 'not_applicable' : mail.status } }
     })
 
     if (!rejected) {
@@ -1293,10 +1311,7 @@ export default async function authRoutes(fastify) {
       return { error: 'Pending registration request not found' }
     }
 
-    await queueRegistrationDecision(rejected, 'rejected').catch((error) => {
-      fastify.log.error(error, 'failed to queue registration rejection email')
-    })
-
-    return { request: mapRegistrationRequest(rejected) }
+    if (rejected.conflict) return { error: 'Registration request is not awaiting approval', code: 'REGISTRATION_NOT_PENDING' }
+    return rejected
   })
 }

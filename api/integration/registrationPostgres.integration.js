@@ -112,6 +112,7 @@ beforeEach(async () => {
   await pool.query("INSERT INTO users(username,password_hash,role,status) VALUES('synthetic-review-admin',$1,'admin','approved')", [passwordHash])
   config.registrationEmailEnabled = true
   config.mailDeliveryEnabled = true
+  config.adminEmailRecipients = []
   proofs.clear()
 })
 
@@ -131,6 +132,9 @@ test('real PostgreSQL rejects the original parameter conflict and accepts the fi
 
 for (const [index, origin] of origins.entries()) {
   test(`registration, email proof, approval and ordinary-user login on domain ${index + 1}`, async () => {
+    // Same destination in settings and admin profile must not duplicate mail.
+    config.adminEmailRecipients = ['reviewer@example.test']
+    await pool.query("UPDATE users SET email='reviewer@example.test' WHERE role='admin'")
     const user = browser(origin), admin = browser(origin)
     const username = `synthetic-flow-${index}`
     const registration = await register(user, username)
@@ -139,6 +143,7 @@ for (const [index, origin] of origins.entries()) {
     assert.equal(request.status, 'email_pending')
     assert.equal((await counts()).users, 1)
     assert.equal((await counts()).messages, 1)
+    assert.equal((await pool.query("SELECT count(*)::int AS count FROM notifications WHERE event_type='registration.requested'")).rows[0].count, 0, 'No approval notice before email proof')
     assert.doesNotMatch(registration.body, /password_hash|verification_token_hash|verification_expires_at/)
     const token = await verification(request.id)
     const pending = (await pool.query('SELECT * FROM registration_requests WHERE id=$1', [request.id])).rows[0]
@@ -151,12 +156,23 @@ for (const [index, origin] of origins.entries()) {
     const verified = await user.call('/auth/register/verify', { requestId: request.id, token })
     assert.equal(verified.statusCode, 200)
     assert.equal(verified.json().request.status, 'pending')
+    const reviewMail = await pool.query("SELECT recipient,text_body FROM mail_outbox WHERE message_type='registration.requested'")
+    assert.equal(reviewMail.rowCount, 1, 'Verified request queues one mail for the deduplicated admin destination')
+    assert.equal(reviewMail.rows[0].recipient, 'reviewer@example.test')
+    assert.match(reviewMail.rows[0].text_body, /settings\?category=users/)
+    assert.equal((await pool.query("SELECT count(*)::int AS count FROM notifications WHERE event_type='registration.requested'")).rows[0].count, 1)
     assert.equal((await user.call('/auth/register/verify', { requestId: request.id, token })).statusCode, 400)
+    assert.equal((await pool.query("SELECT count(*)::int AS count FROM mail_outbox WHERE message_type='registration.requested'")).rows[0].count, 1, 'Replayed proof cannot send another approval mail')
     const adminLogin = await admin.call('/auth/login', { username: 'synthetic-review-admin', password }, { action: 'password_login' })
     assert.equal(adminLogin.statusCode, 200)
     const approved = await admin.call(`/admin/registration-requests/${request.id}/approve`)
     assert.equal(approved.statusCode, 200)
     assert.equal(approved.json().request.status, 'approved')
+    assert.equal(approved.json().notification.mailStatus, 'pending')
+    const updatedNotice = (await pool.query("SELECT title,metadata,push_enabled FROM notifications WHERE event_type='registration.requested'")).rows[0]
+    assert.equal(updatedNotice.metadata.registrationStatus, 'approved')
+    assert.match(updatedNotice.title, /已批准/)
+    assert.equal(updatedNotice.push_enabled, false)
     const repeat = await admin.call(`/admin/registration-requests/${request.id}/approve`)
     assert.equal(repeat.statusCode, 200)
     assert.equal((await counts()).users, 2)
@@ -172,6 +188,49 @@ for (const [index, origin] of origins.entries()) {
     assert.equal((await user.call('/auth/session', undefined, { method: 'GET' })).json().user, null)
   })
 }
+
+for (const action of ['approve', 'reject']) {
+  test(`${action}: result-mail queue failure rolls back decision and permits safe retry`, async () => {
+    const user = browser(), admin = browser()
+    const registration = await register(user, `synthetic-${action}-atomic`)
+    const id = registration.json().request.id
+    await user.call('/auth/register/verify', { requestId: id, token: await verification(id) })
+    await admin.call('/auth/login', { username: 'synthetic-review-admin', password }, { action: 'password_login' })
+    await pool.query("ALTER TABLE mail_outbox ADD CONSTRAINT synthetic_decision_queue_failure CHECK (message_type NOT IN ('registration.approved','registration.rejected'))")
+    try {
+      const failed = await admin.call(`/admin/registration-requests/${id}/${action}`)
+      assert.equal(failed.statusCode, 500)
+      assert.doesNotMatch(failed.body, /constraint|synthetic_decision|INSERT|mail_outbox/)
+      assert.equal((await pool.query('SELECT status FROM registration_requests WHERE id=$1', [id])).rows[0].status, 'pending')
+      assert.equal((await counts()).users, 1)
+      assert.equal((await pool.query("SELECT metadata FROM notifications WHERE source_id=$1", [id])).rows[0].metadata.registrationStatus, undefined)
+    } finally { await pool.query('ALTER TABLE mail_outbox DROP CONSTRAINT synthetic_decision_queue_failure') }
+    const successful = await admin.call(`/admin/registration-requests/${id}/${action}`)
+    assert.equal(successful.statusCode, 200)
+    assert.equal(successful.json().notification.mailStatus, 'pending')
+    assert.equal(successful.json().request.status, action === 'approve' ? 'approved' : 'rejected')
+    const repeated = await admin.call(`/admin/registration-requests/${id}/${action}`)
+    assert.equal(repeated.statusCode, 200)
+    const opposite = await admin.call(`/admin/registration-requests/${id}/${action === 'approve' ? 'reject' : 'approve'}`)
+    assert.equal(opposite.statusCode, 409, 'Terminal decision cannot be reversed by a stale link/button')
+    assert.equal((await pool.query("SELECT count(*)::int AS count FROM mail_outbox WHERE message_type IN ('registration.approved','registration.rejected')")).rows[0].count, 1)
+    assert.equal((await counts()).users, action === 'approve' ? 2 : 1)
+  })
+}
+
+test('unverified requests and link GETs cannot authorize or send approval mail', async () => {
+  const user = browser(), admin = browser()
+  const id = (await register(user, 'synthetic-still-unverified')).json().request.id
+  await admin.call('/auth/login', { username: 'synthetic-review-admin', password }, { action: 'password_login' })
+  for (const action of ['approve', 'reject']) {
+    assert.equal((await admin.call(`/admin/registration-requests/${id}/${action}`)).statusCode, 409)
+    const get = await admin.call(`/admin/registration-requests/${id}/${action}`, undefined, { method: 'GET' })
+    assert.ok(get.statusCode >= 400)
+  }
+  assert.equal((await pool.query('SELECT status FROM registration_requests WHERE id=$1', [id])).rows[0].status, 'email_pending')
+  assert.equal((await counts()).users, 1)
+  assert.equal((await counts()).messages, 1)
+})
 
 test('email-disabled registration accepts null proof without weakening pending approval', async () => {
   config.registrationEmailEnabled = false
