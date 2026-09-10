@@ -211,12 +211,21 @@ export function createApp() {
       request.log.warn(error)
     }
 
-    const body = { error: error.message || 'Internal Server Error' }
-    // Only expose the explicit public challenge contract, never arbitrary internal codes.
-    if (error instanceof BotGuardError && [
+    // Only allow the explicit public challenge contract to describe a 5xx failure.
+    // Database/provider messages may contain internal SQL or sensitive details.
+    const publicBotGuardError = error instanceof BotGuardError && [
       'BOT_CHALLENGE_REQUIRED', 'BOT_CHALLENGE_INVALID',
       'BOT_ORIGIN_INVALID', 'BOT_GUARD_UNAVAILABLE'
-    ].includes(error.code)) {
+    ].includes(error.code)
+    const body = {
+      error: statusCode >= 500
+        ? '服务暂时不可用，请稍后重试。'
+        : error.message || 'Request failed'
+    }
+    if (publicBotGuardError) {
+      body.error = statusCode === 503
+        ? '安全验证暂不可用，请稍后重试。'
+        : '请先完成安全验证，再提交。'
       body.code = error.code
     }
     reply.code(statusCode).send(body)
