@@ -187,6 +187,7 @@ export default async function authRoutes(fastify) {
       : null
     let rows
     try {
+      // Match the text casts in CASE; the target hash column is CHAR(64).
       const inserted = await query(
         `
           INSERT INTO registration_requests (
@@ -194,7 +195,7 @@ export default async function authRoutes(fastify) {
             verification_token_hash, verification_expires_at, verification_sent_at
           )
           VALUES (
-            $1, $2, $3, $4, $5,
+            $1, $2, $3, $4, $5::text,
             CASE WHEN $5::text IS NULL THEN NULL ELSE NOW() + ($6::integer * INTERVAL '1 minute') END,
             CASE WHEN $5::text IS NULL THEN NULL ELSE NOW() END
           )
