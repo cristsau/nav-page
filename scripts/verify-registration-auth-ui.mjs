@@ -1,4 +1,4 @@
-// Build HEAD + only the six auth/approval UI edits. API/Turnstile responses are synthetic;
+// Build HEAD + only the scoped auth/approval UI edits. API/Turnstile responses are synthetic;
 // no real account, mail, CF challenge or deployed app is exercised by this script.
 import assert from 'node:assert/strict'
 import { createRequire } from 'node:module'
@@ -12,6 +12,8 @@ import { createServer } from 'node:http'
 import { checkRegistrationAdminUi } from './check-registration-admin-ui.mjs'
 
 const run = promisify(execFile)
+const scope = process.env.NAV_UI_SCOPE || 'all'
+assert.ok(['all', 'admin'].includes(scope), 'NAV_UI_SCOPE must be all or admin')
 const root = fileURLToPath(new URL('../', import.meta.url)), appRoot = join(root, 'app')
 const require = createRequire(import.meta.url), appRequire = createRequire(join(appRoot, 'package.json'))
 const { chromium } = require(process.env.NAV_PLAYWRIGHT_MODULE || 'playwright')
@@ -19,7 +21,7 @@ const { build } = await import(pathToFileURL(appRequire.resolve('vite')))
 const { default: vue } = await import(pathToFileURL(appRequire.resolve('@vitejs/plugin-vue')))
 const output = await mkdtemp(join(tmpdir(), 'nav-registration-ui-'))
 const snapshot = join(output, 'source'), dist = join(snapshot, 'app/dist')
-const changed = ['src/modules/auth/AuthView.vue', 'src/modules/auth/EmailAuthForm.vue', 'src/shared/components/BotChallenge.vue', 'src/modules/settings/components/UserManagementSettings.vue', 'src/shared/composables/useAuth.js', 'src/shared/services/authApi.js']
+const changed = scope === 'admin' ? ['src/modules/settings/components/UserManagementSettings.vue'] : ['src/modules/auth/AuthView.vue', 'src/modules/auth/EmailAuthForm.vue', 'src/shared/components/BotChallenge.vue', 'src/modules/settings/components/UserManagementSettings.vue', 'src/shared/composables/useAuth.js', 'src/shared/services/authApi.js']
 await mkdir(snapshot)
 await run('git', ['archive', '--output', join(output, 'app.tar'), 'HEAD', 'app'], { cwd: root, windowsHide: true })
 await run('tar', ['-xf', join(output, 'app.tar'), '-C', snapshot], { windowsHide: true })
@@ -29,7 +31,7 @@ await symlink(join(appRoot, 'node_modules'), join(snapshot, 'app/node_modules'),
 await build({ configFile: false, envFile: false, root: join(snapshot, 'app'), plugins: [vue()], logLevel: 'error',
   resolve: { alias: { '@': join(snapshot, 'app/src') } }, define: { 'import.meta.env.VITE_AUTH_MODE': JSON.stringify('backend') },
   build: { outDir: dist, reportCompressedSize: false } })
-console.log('PASS isolated auth-only build')
+console.log(`PASS isolated ${scope === 'admin' ? 'admin-only' : 'auth-only'} build`)
 const types = { '.html': 'text/html', '.js': 'application/javascript', '.css': 'text/css', '.json': 'application/json', '.png': 'image/png', '.svg': 'image/svg+xml' }
 const server = createServer(async (req, res) => {
   try {
@@ -47,7 +49,7 @@ const checks = [], errors = [], layouts = []
 const pass = name => { checks.push(name); console.log('PASS ' + name) }
 const fixtureId = '11111111-1111-4111-8111-111111111111'
 try {
-  for (const width of process.env.NAV_UI_WIDTHS ? process.env.NAV_UI_WIDTHS.split(',').map(Number) : [320, 375, 390, 768, 1024, 1440]) for (const theme of ['light', 'dark', 'custom']) {
+  for (const width of scope === 'admin' ? [] : process.env.NAV_UI_WIDTHS ? process.env.NAV_UI_WIDTHS.split(',').map(Number) : [320, 375, 390, 768, 1024, 1440]) for (const theme of ['light', 'dark', 'custom']) {
     const context = await browser.newContext({ viewport: { width, height: 900 }, colorScheme: theme === 'dark' ? 'dark' : 'light', reducedMotion: 'reduce', serviceWorkers: 'block' })
     await context.addInitScript(() => {
       window.PublicKeyCredential = { isUserVerifyingPlatformAuthenticatorAvailable: async () => true }
@@ -178,11 +180,14 @@ try {
   }
   assert.deepEqual(errors, [])
   for (const name of await checkRegistrationAdminUi({ browser, origin, output })) pass(name)
-  const legacy = await run(process.execPath, [join(root, 'scripts/verify-auth-ui.mjs')], { cwd: root, windowsHide: true, timeout: 180000,
+  let legacyReport = null
+  if (scope === 'all') {
+    const legacy = await run(process.execPath, [join(root, 'scripts/verify-auth-ui.mjs')], { cwd: root, windowsHide: true, timeout: 180000,
     env: { ...process.env, NAV_UI_PREVIEW: origin, NAV_UI_DIST_DIR: dist } })
-  const legacyReport = JSON.parse(legacy.stdout.trim().split(/\r?\n/).at(-1))
-  pass(`existing email login/reset, fallback and contrast: ${legacyReport.checks} checks`)
-  const report = { status: 'PASS', checkedAt: new Date().toISOString(), scope: 'Clean HEAD + six auth/approval UI files, real build/browser. Synthetic API and CF layout/proof lifecycle only; not real mail/CF/device or production acceptance.', changed, checks, layouts, legacyReport, errors }
+    legacyReport = JSON.parse(legacy.stdout.trim().split(/\r?\n/).at(-1))
+    pass(`existing email login/reset, fallback and contrast: ${legacyReport.checks} checks`)
+  }
+  const report = { status: 'PASS', checkedAt: new Date().toISOString(), scope: `Clean HEAD + ${changed.length} scoped ${scope} UI file(s), real build/browser. Synthetic API only; CF fixtures only in all mode. Not real mail/CF/device or production acceptance.`, changed, checks, layouts, legacyReport, errors }
   await writeFile(join(output, 'report.json'), JSON.stringify(report, null, 2))
   console.log(JSON.stringify({ status: 'PASS', checks: checks.length, layouts: layouts.length, output }))
 } catch (e) {
