@@ -190,7 +190,7 @@ export async function approveBackendRegistration(requestId) {
     body: JSON.stringify({})
   })
 
-  return result.request
+  return { ...result.request, notification: result.notification }
 }
 
 export async function rejectBackendRegistration(requestId) {
@@ -199,5 +199,5 @@ export async function rejectBackendRegistration(requestId) {
     body: JSON.stringify({})
   })
 
-  return result.request
+  return { ...result.request, notification: result.notification }
 }

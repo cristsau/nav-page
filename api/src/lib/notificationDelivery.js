@@ -50,7 +50,7 @@ export async function notifyRegistrationRequestToAdmins(registration) {
   const username = String(registration.username || '').slice(0, 128)
   const requestId = String(registration.id || '')
   const email = String(registration.email || '')
-  const actionUrl = '/settings?category=users'
+  const actionUrl = `/settings?category=users&request=${encodeURIComponent(requestId)}`
   const notifications = await createAdminNotifications({
     eventType: 'registration.requested',
     title: '新的注册申请',
@@ -113,7 +113,7 @@ export async function queueRegistrationVerification(registration, token) {
   })
 }
 
-export async function queueRegistrationDecision(registration, decision) {
+export async function queueRegistrationDecision(registration, decision, { queryFn = query } = {}) {
   if (!registration?.email) return { skipped: true }
   const approved = decision === 'approved'
   const username = String(registration.username || '').slice(0, 128)
@@ -130,8 +130,19 @@ export async function queueRegistrationDecision(registration, decision) {
       ? `<p>你好，${escapeHtml(username)}：</p><p>你的 DOMO NAV 注册申请已批准。</p><p><a href="${safeOrigin()}/auth">现在登录</a></p>`
       : `<p>你好，${escapeHtml(username)}：</p><p>你的 DOMO NAV 注册申请未通过。如需了解原因，请联系站点管理员。</p>`,
     dedupeKey: `registration-decision:${registration.id}:${approved ? 'approved' : 'rejected'}`,
-    sensitive: true
+    sensitive: true,
+    queryFn
   })
+}
+
+export async function updateRegistrationNotification(registration, decision, { queryFn = query } = {}) {
+  const label = decision === 'approved' ? '已批准' : '已拒绝'
+  await queryFn(
+    `UPDATE notifications SET title = $2, summary = $3,
+      metadata = metadata || $4::jsonb, push_enabled = FALSE, updated_at = NOW()
+     WHERE source_type = 'registration' AND source_id = $1 AND event_type = 'registration.requested'`,
+    [String(registration.id), `注册申请${label}`, `${String(registration.username || '').slice(0, 128)} 的申请${label}。`, JSON.stringify({ registrationStatus: decision })]
+  )
 }
 
 export async function sendMaintenanceNotification({

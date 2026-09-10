@@ -1,5 +1,5 @@
 <script setup>
-import { computed, onBeforeUnmount, onMounted, ref } from 'vue'
+import { computed, nextTick, onBeforeUnmount, onMounted, ref, watch } from 'vue'
 import { useRoute } from 'vue-router'
 import Icon from '@/shared/components/Icon.vue'
 import BotChallenge from '@/shared/components/BotChallenge.vue'
@@ -40,6 +40,44 @@ async function loadEmailCapabilities() {
 }
 const registrationConfig = ref({ emailVerificationEnabled: false, emailRequired: false })
 const showVerificationResend = ref(false)
+// This is the result of this browser's request, not a public account-status lookup.
+const registrationStatus = ref('')
+const registrationUsesEmail = ref(true)
+const pageTitle = ref(null)
+const cardTitle = computed(() => {
+  if (showVerificationResend.value) return '重发验证邮件'
+  if (registrationStatus.value === 'email_pending') return '申请已提交，请验证邮箱'
+  if (registrationStatus.value === 'pending') return '待管理员审核'
+  if (registrationStatus.value === 'verifying') return '正在验证邮箱'
+  if (registrationStatus.value === 'verify_error') return '邮箱验证未完成'
+  if (registrationStatus.value === 'approved') return '账号已准备好'
+  if (recoveryMode.value || emailReset.value) return '找回你的账号'
+  return activeTab.value === 'register' ? '创建你的空间' : '欢迎回来'
+})
+const cardDescription = computed(() => {
+  if (showVerificationResend.value) return '使用注册时的邮箱，获取新的验证链接。'
+  if (registrationStatus.value) return '注册进度已为你整理在这里。'
+  if (recoveryMode.value || emailReset.value) return '选择你已配置的恢复方式。'
+  if (activeTab.value === 'register') return registrationConfig.value.emailVerificationEnabled
+    ? '提交申请 → 验证邮箱 → 管理员审核'
+    : '提交申请，管理员审核后即可使用。'
+  return '收藏、记录与灵感，都在这里。'
+})
+async function focusPageTitle() {
+  await nextTick()
+  pageTitle.value?.focus()
+}
+function openVerificationResend() {
+  clearFormSecrets()
+  errorMessage.value = ''; successMessage.value = ''
+  showVerificationResend.value = true
+  focusPageTitle()
+}
+function closeVerificationResend() {
+  showVerificationResend.value = false
+  errorMessage.value = ''; successMessage.value = ''
+  focusPageTitle()
+}
 const resendEmail = ref('')
 const resendLoading = ref(false)
 const oauthConfig = ref({ providers: { google: { enabled: false }, wechat: { enabled: false } } })
@@ -141,21 +179,37 @@ async function verifyRegistrationFromLink() {
   const params = new URLSearchParams(fragment.slice('#register-verify?'.length))
   const requestId = String(params.get('request') || '')
   const token = String(params.get('token') || '')
-  if (!requestId || !token || !backendAuthEnabled.value) return
+  // Remove email proof from browser history on success AND failure.
+  window.history.replaceState({}, '', `${window.location.pathname}${window.location.search}`)
+  errorMessage.value = ''; successMessage.value = ''; showVerificationResend.value = false
+  registrationStatus.value = 'verifying'
+  registrationUsesEmail.value = true
+  if (!requestId || !token || !backendAuthEnabled.value) {
+    registrationStatus.value = 'verify_error'
+    errorMessage.value = '邮箱验证链接不完整或当前不可用，请重新申请验证邮件。'
+    await focusPageTitle()
+    return
+  }
   loading.value = true
   try {
     await verifyBackendRegistrationEmail(requestId, token)
     activeTab.value = 'login'
-    successMessage.value = '邮箱验证成功，注册申请已提交给管理员审批。审批结果会发送到该邮箱。'
+    registrationStatus.value = 'pending'
+    successMessage.value = ''
     showVerificationResend.value = false
-    window.history.replaceState({}, '', '/auth')
   } catch (error) {
+    registrationStatus.value = 'verify_error'
     errorMessage.value = error.message || '邮箱验证链接无效或已过期。'
-    showVerificationResend.value = true
   } finally {
     loading.value = false
+    await focusPageTitle()
   }
 }
+
+// Email links may target an auth tab that is already open (same component).
+watch(() => route.hash, hash => {
+  if (String(hash || '').startsWith('#register-verify?')) void verifyRegistrationFromLink()
+})
 
 onMounted(async () => {
   if (String(route.query.passwordChanged || '') === '1') {
@@ -249,7 +303,8 @@ function selectTab(tab) {
   closeRecoveryMode({ preserveUsername: tab === 'login' })
   emailReset.value = false
   activeTab.value = tab
-  if (tab === 'register') showVerificationResend.value = false
+  registrationStatus.value = ''
+  showVerificationResend.value = false
   successMessage.value = ''
 }
 
@@ -354,17 +409,12 @@ async function handleRegister() {
       turnstileToken: registrationChallenge.value?.takeToken()
     })
 
-    successMessage.value = request.autoApproved
-      ? '本地管理员已创建，请使用刚才的账号登录。'
-      : request.status === 'email_pending'
-        ? `验证邮件已发送。请先打开邮件完成验证，申请编号：${request.id}`
-        : `注册申请已提交，等待管理员审批。申请编号：${request.id}`
+    registrationStatus.value = request.autoApproved ? 'approved' : request.status === 'email_pending' ? 'email_pending' : 'pending'
+    registrationUsesEmail.value = Boolean(request.email || request.status === 'email_pending')
     if (request.status === 'email_pending') {
       resendEmail.value = registerForm.value.email.trim()
-      showVerificationResend.value = true
-    } else {
-      showVerificationResend.value = false
     }
+    showVerificationResend.value = false
     registerForm.value = {
       username: '',
       email: '',
@@ -373,6 +423,7 @@ async function handleRegister() {
     }
     activeTab.value = 'login'
     recoveryMode.value = false
+    await focusPageTitle()
   } catch (error) {
     errorMessage.value = error.message || '注册失败，请稍后再试。'
   } finally {
@@ -420,8 +471,8 @@ async function handleResendVerification() {
           <img class="auth-card__logo" src="/icons/cristsau-mark-512-v2.png" alt="">
           <span>DOMO NAV</span>
         </div>
-        <h1 class="auth-card__title">{{activeTab === 'register' ? '创建你的空间' : '欢迎回来'}}</h1>
-        <p class="auth-card__desc">{{activeTab === 'register' ? '提交申请，管理员审批后即可使用。' : '收藏、记录与灵感，都在这里。'}}</p>
+        <h1 ref="pageTitle" tabindex="-1" class="auth-card__title">{{ cardTitle }}</h1>
+        <p class="auth-card__desc">{{ cardDescription }}</p>
       </div>
 
       <section v-if="pwaPending" class="auth-handoff" role="status" aria-live="polite">
@@ -432,7 +483,25 @@ async function handleResendVerification() {
         <button type="button" class="auth-link" @click="cancelPwaLogin">取消本次登录</button>
       </section>
 
-      <div v-show="!pwaPending" class="auth-tabs auth-tabs--account" aria-label="登录或注册">
+      <section v-if="registrationStatus && !showVerificationResend" class="registration-result" aria-label="注册申请进度" aria-live="polite">
+        <template v-if="registrationStatus === 'email_pending' || registrationStatus === 'pending'">
+          <ol class="registration-steps">
+            <li class="is-complete"><Icon name="check" :size="18" /><span>提交申请<small>已完成</small></span></li>
+            <li v-if="registrationUsesEmail" :class="{ 'is-complete': registrationStatus === 'pending' }" :aria-current="registrationStatus === 'email_pending' ? 'step' : undefined"><Icon :name="registrationStatus === 'pending' ? 'check' : 'mail'" :size="18" /><span>验证邮箱<small>{{ registrationStatus === 'pending' ? '已完成' : '请打开验证邮件' }}</small></span></li>
+            <li :aria-current="registrationStatus === 'pending' ? 'step' : undefined"><Icon name="shield" :size="18" /><span>管理员审核<small>{{ registrationStatus === 'pending' ? '等待审核' : '邮箱验证后进入审核' }}</small></span></li>
+          </ol>
+          <p v-if="registrationStatus === 'email_pending'">验证邮件已进入发送队列。请检查收件箱和垃圾邮件，点击邮件中的链接；验证完成后，申请才会进入管理员审核。</p>
+          <p v-else>{{ registrationUsesEmail ? '邮箱验证已完成，' : '' }}申请正在等待管理员审核。审核通过后即可登录{{ registrationUsesEmail ? '，结果会通过邮件通知' : '' }}，请勿重复注册。</p>
+        </template>
+        <p v-else-if="registrationStatus === 'approved'">本地管理员已创建，请使用刚才的账号登录。</p>
+        <p v-else-if="registrationStatus === 'verifying'">正在确认验证链接，请稍候。</p>
+        <p v-else>链接可能不完整、已使用或已过期。你可以重新申请验证邮件。</p>
+        <button v-if="['email_pending', 'verify_error'].includes(registrationStatus)" class="auth-provider" type="button" @click="openVerificationResend">没有收到邮件？重新发送</button>
+        <button v-if="registrationStatus !== 'verifying'" class="auth-submit" type="button" @click="selectTab('login'); focusPageTitle()">返回登录</button>
+      </section>
+
+      <template v-if="!registrationStatus && !showVerificationResend">
+      <div v-show="!pwaPending && !recoveryMode && !emailReset" class="auth-tabs auth-tabs--account" aria-label="登录或注册">
         <button
           class="auth-tab"
           :class="{ 'is-active': activeTab === 'login' }" :aria-pressed="activeTab === 'login'"
@@ -455,15 +524,13 @@ async function handleResendVerification() {
         <button type="button" class="auth-tab" :class="{'is-active':emailMode}" :disabled="!capabilities.emailLogin" @click="emailMode=true">邮箱验证码</button>
         <button type="button" class="auth-tab" :class="{'is-active':!emailMode}" @click="emailMode=false">账号密码</button>
       </div>
-      <button v-if="deviceKeyReady && !pwaPending && activeTab === 'login' && !recoveryMode && !emailReset" class="auth-device-key" type="button" :disabled="loading" @click="handleDeviceKeyLogin">
-        <Icon name="scan-face" :size="25" /><span>快捷登录<small>Face ID、Touch ID 或设备密码</small></span><Icon name="chevron-right" :size="18" />
-      </button>
       <p v-if="backendAuthEnabled && !capabilities.emailLogin && activeTab === 'login'" class="auth-card__desc">邮箱验证码暂不可用，请使用账号密码。</p>
       <label v-if="!pwaPending && activeTab === 'login' && !recoveryMode && !emailReset && backendAuthEnabled" class="auth-trust">
         <input v-model="trustDevice" type="checkbox" /><span>信任此设备 <small>最长 30 天保持登录，仅用于私人设备</small></span>
       </label>
       <EmailAuthForm v-if="!pwaPending && activeTab === 'login' && !recoveryMode && (emailMode || emailReset)"
         :key="emailReset ? 'reset' : 'login'" :mode="emailReset ? 'reset' : 'login'" :redirect-target="redirectTarget" :reset-available="capabilities.emailPasswordReset" :trust-device="trustDevice"
+        :compact="true" :show-reset-link="false"
         @back="emailReset=false;emailMode=false" @reset="emailReset=true" />
       <form
         v-else-if="!pwaPending && activeTab === 'login' && !recoveryMode"
@@ -580,13 +647,9 @@ async function handleResendVerification() {
       </form>
 
       <section v-if="!pwaPending && activeTab === 'login' && !recoveryMode && !emailReset" class="auth-alternatives" aria-label="其他登录和恢复方式">
-        <div
-          v-if="oauthConfig.providers.google.enabled || oauthConfig.providers.wechat.enabled"
-          class="auth-divider"
-          aria-hidden="true"
-        >
-          <span>外部账号</span>
-        </div>
+        <button v-if="deviceKeyReady" class="auth-device-key" type="button" :disabled="loading" @click="handleDeviceKeyLogin">
+          <Icon name="scan-face" :size="22" /><span>快捷登录<small>Face ID、Touch ID 或设备密码</small></span>
+        </button>
         <button
           v-if="oauthConfig.providers.google.enabled"
           class="auth-provider"
@@ -607,7 +670,11 @@ async function handleResendVerification() {
           <Icon name="link" :size="18" />
           {{ oauthLoading === 'wechat' ? '正在前往微信…' : '使用微信登录' }}
         </button>
-        <button v-if="capabilities.emailPasswordReset && !emailMode" class="auth-link" type="button" @click="emailReset=true">忘记密码？通过邮箱重设</button>
+      </section>
+      <details v-if="!pwaPending && activeTab === 'login' && !recoveryMode && !emailReset && backendAuthEnabled" class="auth-help">
+        <summary>登录遇到问题？<Icon name="chevron-down" :size="16" /></summary>
+        <div class="auth-help__links">
+        <button v-if="capabilities.emailPasswordReset" class="auth-link" type="button" @click="emailReset=true; focusPageTitle()">忘记密码？通过邮箱重设</button>
         <button
           v-if="backendAuthEnabled"
           class="auth-link"
@@ -617,27 +684,30 @@ async function handleResendVerification() {
         >
           使用恢复码重设密码
         </button>
-      </section>
+        <button v-if="registrationConfig.emailVerificationEnabled" class="auth-link" type="button" @click="openVerificationResend">重发注册验证邮件</button>
+        </div>
+      </details>
+      </template>
 
-      <div v-if="showVerificationResend" class="verification-resend">
+      <form v-if="showVerificationResend" class="verification-resend" @submit.prevent="handleResendVerification">
         <div>
           <strong>没有收到验证邮件？</strong>
           <p>验证链接过期后可在这里重发。为了保护账号，页面不会透露该邮箱是否存在。</p>
         </div>
         <label class="auth-field">
           <span>注册邮箱</span>
-          <input v-model="resendEmail" type="email" autocomplete="email">
+          <input v-model="resendEmail" type="email" autocomplete="email" required>
         </label>
         <BotChallenge ref="resendChallenge" action="register_resend" />
         <button
           class="auth-provider"
-          type="button"
+          type="submit"
           :disabled="resendLoading || loading"
-          @click="handleResendVerification"
         >
           {{ resendLoading ? '重发中...' : '重发验证邮件' }}
         </button>
-      </div>
+        <button class="auth-link" type="button" :disabled="resendLoading" @click="closeVerificationResend">{{ registrationStatus ? '返回申请进度' : '返回登录' }}</button>
+      </form>
 
       <p v-if="errorMessage" role="alert" class="auth-message auth-message--error">{{ errorMessage }}</p>
       <p v-if="successMessage" role="status" class="auth-message auth-message--success">{{ successMessage }}</p>
@@ -939,7 +1009,7 @@ async function handleResendVerification() {
   letter-spacing: 0.08em;
 }
 
-.auth-shell {width:min(1100px,100%);display:grid;grid-template-columns:1.08fr 1fr;gap:clamp(32px,6vw,84px);align-items:center}
+.auth-shell {width:min(1100px,100%);display:grid;grid-template-columns:1.08fr 1fr;gap:clamp(32px,6vw,84px);align-items:start}
 .auth-story {min-width:0;color:var(--text-primary);padding:32px 0}
 .auth-story__eyebrow {font-size:11px;letter-spacing:.22em;color:var(--text-secondary)}
 .auth-story h2 {font-size:clamp(30px,3.2vw,44px);font-weight:550;line-height:1.4;letter-spacing:-.045em;margin:26px 0 20px}
@@ -952,7 +1022,23 @@ async function handleResendVerification() {
 .auth-story__tile span {font-size:14px}
 .auth-story__tile i {font-style:normal;letter-spacing:.12em;font-size:9px;color:var(--text-secondary)}
 .auth-story__foot {font-size:12px;color:var(--text-secondary);letter-spacing:.15em}
-.auth-alternatives {display:grid;gap:10px;margin-top:18px}
+.auth-alternatives {display:flex;flex-wrap:wrap;gap:8px;margin-top:12px}
+.auth-alternatives>.auth-provider,.auth-alternatives>.auth-device-key {flex:1;min-width:150px}
+.auth-help {margin-top:8px;border-top:1px solid var(--border-light);color:var(--text-primary);font-size:13px}
+.auth-help summary {min-height:44px;display:flex;align-items:center;justify-content:space-between;gap:8px;cursor:pointer;list-style:none}
+.auth-help summary::-webkit-details-marker {display:none}
+.auth-help summary:focus-visible {outline:3px solid var(--text-primary);outline-offset:3px}
+.auth-help[open] summary svg {transform:rotate(180deg)}
+.auth-help__links {display:grid;justify-items:start;gap:2px}
+.auth-help__links .auth-link {justify-self:start;text-align:left}
+.registration-result {display:grid;gap:16px;color:var(--text-primary)}
+.registration-result>p {margin:0;font-size:14px;line-height:1.8;color:var(--text-secondary)}
+.registration-steps {list-style:none;margin:0;padding:4px 16px;border:1px solid var(--border-light);border-radius:16px;background:var(--bg-secondary)}
+.registration-steps li {display:flex;align-items:center;gap:14px;padding:14px 0;line-height:1.5;font-size:14px}
+.registration-steps li+li {border-top:1px solid var(--border-light)}
+.registration-steps small {display:block;font-size:12px;color:var(--text-secondary)}
+.registration-steps [aria-current=step] {font-weight:700}
+.registration-steps .is-complete svg {color:var(--text-primary)}
 .auth-page button,.auth-page input {min-height:44px}
 .auth-page button:focus-visible,.auth-page a:focus-visible {outline:3px solid var(--text-primary);outline-offset:3px}
 .auth-field input {font-size:16px}
@@ -975,39 +1061,42 @@ async function handleResendVerification() {
 @media(prefers-reduced-motion:reduce) {.auth-page * {transition:none!important;animation:none!important}}
 
 /* iPhone-inspired hierarchy: calm content surfaces, one clear primary action. */
-.auth-page {min-height:100svh;background:var(--bg-secondary);padding:clamp(24px,5vw,72px)}
-.auth-card {border-radius:30px;border-color:var(--border-light);box-shadow:0 16px 60px color-mix(in srgb,var(--text-primary) 5%,transparent);padding:36px}
+.auth-page {min-height:100svh;background:var(--bg-secondary);padding:16px clamp(24px,5vw,72px)}
+.auth-card {border-radius:26px;border-color:var(--border-light);box-shadow:0 16px 60px color-mix(in srgb,var(--text-primary) 5%,transparent);padding:24px}
+.auth-card__header {margin-bottom:14px}
 .auth-card__brand {padding:0;background:transparent;gap:12px;font-size:12px;letter-spacing:.14em;color:var(--text-secondary)}
 .auth-card__logo {width:44px;height:44px;border-radius:13px}
-.auth-card__title {font-size:34px;font-weight:750;line-height:1.2;letter-spacing:-.05em;margin:22px 0 10px}
-.auth-card__desc {font-size:14px;line-height:1.65}
-.auth-tabs {padding:4px;gap:4px;border-radius:13px;margin-bottom:20px;background:var(--bg-secondary)}
+.auth-card__title {font-size:30px;font-weight:750;line-height:1.25;letter-spacing:-.04em;margin:10px 0 6px}
+.auth-card__desc {font-size:13px;line-height:1.65;margin:0}
+.auth-tabs {padding:4px;gap:4px;border-radius:13px;margin-bottom:12px;background:var(--bg-secondary)}
 .auth-tab {min-height:44px;padding:9px 10px;border-radius:10px;font-size:14px;font-weight:550;transition:background .18s ease,box-shadow .18s ease}
 .auth-tab.is-active {color:var(--text-primary);background:var(--bg-card);box-shadow:0 1px 4px #00000014;font-weight:650}
-.auth-tabs--account {background:transparent;padding:0;border-bottom:1px solid var(--border-light);border-radius:0;gap:22px;display:flex;margin-bottom:22px}
+.auth-tabs--account {background:transparent;padding:0;border-bottom:1px solid var(--border-light);border-radius:0;gap:22px;display:flex;margin-bottom:12px}
 .auth-tabs--account .auth-tab {padding:6px 0;min-width:44px;background:transparent;border-radius:0;color:var(--text-secondary);box-shadow:none;border-bottom:2px solid transparent}
 .auth-tabs--account .auth-tab.is-active {border-color:var(--text-primary);color:var(--text-primary)}
 .auth-field {gap:7px;font-size:13px;font-weight:600}
 .auth-field input {min-height:52px;border-radius:13px;border-color:var(--border-color);background:var(--bg-secondary);padding:14px;font-weight:400}
 .auth-submit {min-height:50px;background:var(--text-primary);color:var(--bg-card);border-radius:14px;font-size:16px;font-weight:650;margin-top:8px}
 .auth-provider {min-height:50px;background:var(--bg-card);border-radius:14px;font-size:15px}
-.auth-trust {display:flex;align-items:center;gap:12px;min-height:56px;margin:0 0 20px;cursor:pointer}
+.auth-trust {display:flex;align-items:center;gap:10px;min-height:44px;margin:0 0 12px;cursor:pointer}
 .auth-trust input {appearance:none;-webkit-appearance:none;flex:0 0 44px;width:44px;height:44px;min-height:44px;border:0;border-radius:12px;background:var(--bg-secondary);position:relative;cursor:pointer}
 .auth-trust input::before {content:'';position:absolute;inset:12px;border:1.5px solid var(--text-secondary);border-radius:6px}
 .auth-trust input:checked::before {background:var(--text-primary);border-color:var(--text-primary)}
 .auth-trust input:checked::after {content:'';position:absolute;left:18px;top:14px;width:7px;height:12px;border:solid var(--bg-card);border-width:0 2px 2px 0;transform:rotate(45deg)}
 .auth-trust>span {font-size:14px;line-height:1.4;font-weight:550}.auth-trust small {display:block;font-weight:400;font-size:12px;color:var(--text-secondary);margin-top:3px}
-.auth-device-key {display:flex;align-items:center;gap:13px;width:100%;padding:16px;margin-bottom:14px;border:1px solid var(--border-color);border-radius:17px;background:var(--accent-bg);color:var(--text-primary);text-align:left}
-.auth-device-key>span {flex:1;font-size:16px;font-weight:650}.auth-device-key small {display:block;font-size:12px;font-weight:400;color:var(--text-secondary);margin-top:4px}.auth-device-key:disabled {opacity:.6}
+.auth-device-key {display:flex;align-items:center;gap:8px;padding:10px;border:1px solid var(--border-color);border-radius:14px;background:var(--accent-bg);color:var(--text-primary);text-align:left}
+.auth-device-key>span {flex:1;font-size:14px;font-weight:650}.auth-device-key small {display:block;font-size:11px;font-weight:400;color:var(--text-secondary);margin-top:2px}.auth-device-key:disabled {opacity:.6}
 .auth-handoff {display:grid;gap:14px;padding:24px 20px;background:var(--bg-secondary);border:1px solid var(--border-light);border-radius:20px;text-align:center;justify-items:center}.auth-handoff strong {font-size:20px}.auth-handoff p {font-size:14px;line-height:1.7;color:var(--text-secondary)}.auth-handoff .auth-provider {width:100%}
 .auth-story__tile {box-shadow:none;border-color:var(--border-light);border-radius:20px;background:var(--bg-card)}
 .auth-card__desc,.auth-tabs--account .auth-tab,.auth-public-links a,.auth-trust small,.auth-device-key small,.auth-signature,.auth-handoff p {color:color-mix(in srgb,var(--text-secondary) 75%,var(--text-primary))}
+.auth-public-links {margin-top:8px}
+.auth-card :deep(.email-auth__form) {gap:12px}
 @media(max-width:850px) {
- .auth-page {padding:max(28px,env(safe-area-inset-top)) max(22px,env(safe-area-inset-right)) max(24px,env(safe-area-inset-bottom)) max(22px,env(safe-area-inset-left));align-items:start}
- .auth-shell {max-width:440px}.auth-card {border:0;background:transparent;box-shadow:none;padding:14px 0}.auth-card__header {margin-bottom:20px}
- .auth-card__title {font-size:34px;margin-top:24px}.auth-card__brand {font-size:11px}.auth-card__logo {width:48px;height:48px;border-radius:14px}
+ .auth-page {padding:max(18px,env(safe-area-inset-top)) max(16px,env(safe-area-inset-right)) max(20px,env(safe-area-inset-bottom)) max(16px,env(safe-area-inset-left));align-items:start}
+ .auth-shell {max-width:440px}.auth-card {border:0;background:transparent;box-shadow:none;padding:6px 0}.auth-card__header {margin-bottom:14px}
+ .auth-card__title {font-size:28px;margin-top:14px}.auth-card__brand {font-size:11px}.auth-card__logo {width:40px;height:40px;border-radius:12px}
  .auth-tabs:not(.auth-tabs--account) {background:color-mix(in srgb,var(--text-primary) 6%,var(--bg-secondary))}
  .auth-field input {background:var(--bg-card)}.auth-trust input {background:var(--bg-card)}.auth-handoff {background:var(--bg-card)}
- .auth-public-links {margin-top:20px}.auth-signature {letter-spacing:.035em}
+ .auth-public-links {margin-top:12px}.auth-signature {letter-spacing:.035em}
 }
 </style>
