@@ -14,8 +14,7 @@ let unsubscribePwa = null
 
 const navUrl = computed(() => window.location.origin)
 const quickAddUrl = computed(() => `${window.location.origin}/quick-add`)
-const extensionDownloadUrl = computed(() => `${window.location.origin}/downloads/nav-extension.zip`)
-const extensionGuideUrl = computed(() => `${window.location.origin}/downloads/nav-extension/README.html`)
+const extensionStoreUrl = 'https://microsoftedge.microsoft.com/addons/detail/celcpcibfppoeodciojlbgmbkkaaoaep'
 const iphoneShortcutTemplate = computed(() => `${window.location.origin}/quick-add?url={{链接}}&title={{标题}}`)
 
 async function copyText(value, label) {
@@ -94,13 +93,18 @@ onBeforeUnmount(() => unsubscribePwa?.())
       <div class="settings-item__info">
         <div class="settings-item__label">安装浏览器扩展</div>
         <div class="settings-item__desc">
-          浏览器不允许网站静默安装扩展，所以这里提供下载包和安装指引。安装后可以直接把当前网页加入 DOMO NAV。
+          从微软 Edge 扩展商店安装 DOMO NAV，直接把当前网页加入收藏。后续版本通过商店更新，本站不再提供扩展下载包。
         </div>
       </div>
       <div class="settings-item__control settings-item__control--stack">
-        <button class="btn btn--primary" @click="openLink(extensionDownloadUrl)">下载扩展包</button>
-        <button class="btn btn--secondary" @click="openLink(extensionGuideUrl)">查看安装说明</button>
-        <p class="helper-text">Chrome / Edge：打开扩展程序页面，启用“开发者模式”，再选择“加载已解压的扩展程序”。</p>
+        <a
+          class="btn btn--primary extension-store-link"
+          :href="extensionStoreUrl"
+          target="_blank"
+          rel="noopener noreferrer"
+        >前往微软商店安装</a>
+        <p class="helper-text">将在新标签页打开 Microsoft Edge Add-ons。请使用 Edge 安装，无需开启开发者模式。</p>
+        <p class="helper-text">已安装解压版？先停用旧版，再安装商店版，避免同时启用两份扩展。安装后在扩展设置选择 NAV 地址，并在同一浏览器登录。</p>
       </div>
     </div>
 
@@ -196,6 +200,21 @@ onBeforeUnmount(() => unsubscribePwa?.())
 .btn--primary {
   background: var(--accent-color);
   color: #fff;
+}
+
+.extension-store-link {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  min-height: 44px;
+  box-sizing: border-box;
+  text-align: center;
+  text-decoration: none;
+}
+
+.extension-store-link:focus-visible {
+  outline: 2px solid var(--accent-color);
+  outline-offset: 3px;
 }
 
 .btn--secondary {
