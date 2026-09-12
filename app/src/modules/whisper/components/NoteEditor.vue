@@ -16,6 +16,7 @@ import NoteAiPanel from './NoteAiPanel.vue'
 import CollaborationPanel from './CollaborationPanel.vue'
 import BlockEditor from './BlockEditor.vue'
 import { resolveNoteSaveState } from '../utils/noteSaveState'
+import { registerReloadGuard } from '@/shared/services/reloadGuards'
 import {
   plainTextToTiptapDocument,
   tiptapDocumentImageUrls
@@ -365,8 +366,14 @@ function handleBeforeUnload(event) {
   event.returnValue = ''
 }
 
+const releaseReloadGuard = registerReloadGuard(() => props.show && (
+  props.saving || uploadingImage.value || autosaveInFlight.value
+  || currentDirtySnapshot() !== initialSnapshot.value
+) ? '笔记正在编辑或保存。请先完成保存并关闭编辑器，再更新。' : '')
+
 onMounted(() => window.addEventListener('beforeunload', handleBeforeUnload))
 onBeforeUnmount(() => {
+  releaseReloadGuard()
   clearAutosaveTimer()
   autosaveSequence += 1
   window.removeEventListener('beforeunload', handleBeforeUnload)

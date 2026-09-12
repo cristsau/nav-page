@@ -54,7 +54,7 @@ const mobileFirstAction = ref(null)
 const mobileActionSheet = ref(null)
 
 const cardStyle = computed(() => {
-  const size = config.value.style.cardSize
+  const size = config.value.style?.cardSize
   const sizes = {
     small: { minHeight: '92px', iconSize: '36px' },
     medium: { minHeight: '104px', iconSize: '44px' },
@@ -696,6 +696,7 @@ function runMobileAction(action) {
   min-width: 0;
   display: grid;
   justify-items: start;
+  text-align: left;
 }
 
 .bookmark-card__title {

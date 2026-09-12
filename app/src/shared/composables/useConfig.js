@@ -256,6 +256,11 @@ function ensureConfigShape() {
     config.value.search.quickAccessEngineIds = [...defaultConfig.search.quickAccessEngineIds]
   }
 
+  // Old/imported settings may explicitly contain null or an invalid style value.
+  // Keep the rest of the user's settings while restoring only this section.
+  if (!config.value.style || typeof config.value.style !== 'object' || Array.isArray(config.value.style)) {
+    config.value.style = clone(defaultConfig.style)
+  }
   if (!config.value.style.customTheme) {
     config.value.style.customTheme = { ...defaultCustomTheme }
   }

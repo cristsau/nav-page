@@ -2,11 +2,13 @@ import {
   createRegistrationGeneration,
   isRootServiceWorkerScope
 } from './pwaRegistrationState.js'
+import { assertSafeToReload, confirmVersionReload } from './reloadGuards.js'
 
 let registration = null
 let registrationPromise = null
 let repairPromise = null
 let applyingUpdate = false
+let updateTimer = null
 let controllerListenerInstalled = false
 const ACTIVATION_POLL_INTERVAL_MS = 200
 const ACTIVATION_REFRESH_INTERVAL_MS = 1_000
@@ -18,6 +20,7 @@ const state = {
   registered: false,
   active: false,
   updateReady: false,
+  updating: false,
   error: ''
 }
 
@@ -235,7 +238,16 @@ function ensureControllerListener() {
   navigator.serviceWorker.addEventListener('controllerchange', () => {
     if (!applyingUpdate) return
     applyingUpdate = false
-    window.location.reload()
+    clearTimeout(updateTimer)
+    state.updating = false
+    try {
+      // Re-check after activation too: a form may have changed while waiting.
+      assertSafeToReload()
+      window.location.reload()
+    } catch (error) {
+      state.error = error.message
+      emitState()
+    }
   })
 }
 
@@ -423,16 +435,43 @@ export async function repairPwaRegistration() {
 }
 
 export async function checkPwaUpdate() {
-  if (!registration) return false
-  await registration.update()
+  if (!registration) throw new Error('离线服务尚未就绪，无法检查组件更新。')
+  state.error = ''
+  try {
+    await withPwaTimeout(() => registration.update(), 8_000, '检查离线组件超时，请稍后重试。', 'update')
+  } catch (error) {
+    state.error = error.message
+    emitState()
+    throw error
+  }
   state.updateReady = Boolean(registration.waiting)
   emitState()
   return state.updateReady
 }
 
 export function applyPwaUpdate() {
-  if (!registration?.waiting) return false
-  applyingUpdate = true
-  registration.waiting.postMessage({ type: 'SKIP_WAITING' })
-  return true
+  if (!registration?.waiting || applyingUpdate) return false
+  state.error = ''
+  try {
+    if (!confirmVersionReload()) return false
+    ensureControllerListener()
+    applyingUpdate = true
+    state.updating = true
+    updateTimer = setTimeout(() => {
+      applyingUpdate = false
+      state.updating = false
+      state.error = '未确认离线组件已更新，页面未自动刷新。请保存内容后重试。'
+      emitState()
+    }, 8_000)
+    registration.waiting.postMessage({ type: 'SKIP_WAITING' })
+    emitState()
+    return true
+  } catch (error) {
+    clearTimeout(updateTimer)
+    applyingUpdate = false
+    state.updating = false
+    state.error = error.message || '无法应用离线组件更新。'
+    emitState()
+    return false
+  }
 }

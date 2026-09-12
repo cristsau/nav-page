@@ -1,6 +1,7 @@
 import { defineConfig, loadEnv } from 'vite'
 import vue from '@vitejs/plugin-vue'
 import { fileURLToPath, URL } from 'node:url'
+import { createVersionPlugin } from './build/versionPlugin.mjs'
 
 function readJsonBody(req) {
   return new Promise((resolve, reject) => {
@@ -126,9 +127,9 @@ function createTelegramProxyPlugin(env) {
   }
 }
 
-export default defineConfig(({ mode }) => {
+export default defineConfig(({ mode, command }) => {
   const env = loadEnv(mode, process.cwd(), '')
-  const plugins = [vue()]
+  const plugins = [vue(), createVersionPlugin({ command })]
 
   if (isExplicitlyEnabled(env.NAV_ENABLE_TELEGRAM_DEV_PROXY)) {
     plugins.push(createTelegramProxyPlugin(env))

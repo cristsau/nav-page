@@ -8,7 +8,7 @@ const require = createRequire(import.meta.url)
 const { chromium } = require(process.env.NAV_PLAYWRIGHT_MODULE || 'playwright')
 const origin = 'http://127.0.0.1:4179'
 const output = await mkdtemp(join(tmpdir(), 'nav-note-save-r2-'))
-const browser = await chromium.launch({ executablePath: process.env.NAV_BROWSER_PATH, headless: true })
+const browser = await chromium.launch({ executablePath: process.env.NAV_BROWSER_PATH, headless: true, args: ['--disable-gpu'] })
 const checks = []
 const passed = (name) => { checks.push(name); console.log(`PASS ${name}`) }
 try {
@@ -56,6 +56,11 @@ try {
   await title.waitFor()
   await page.getByText('已保存到云端', { exact: true }).waitFor()
   await title.fill('First edit')
+  assert.ok(await page.evaluate(async () => {
+    const { assertSafeToReload } = await import('/src/shared/services/reloadGuards.js')
+    try { assertSafeToReload(); return false } catch (error) { return /笔记正在编辑或保存/.test(error.message) }
+  }))
+  passed('actual-note-editor-unsaved-content-blocks-version-refresh')
   await page.waitForFunction(() => noteHarness.calls.length === 1)
   await title.fill('Second edit while saving')
   // Longer than the debounce: there must still be only one unresolved write.

@@ -1,5 +1,6 @@
 <script setup>
 import { computed, onBeforeUnmount, onMounted, ref } from 'vue'
+import AppUpdatePanel from '@/shared/components/AppUpdatePanel.vue'
 import {
   applyPwaUpdate,
   checkPwaUpdate,
@@ -37,7 +38,9 @@ async function handlePwaUpdate() {
   pwaChecking.value = true
   try {
     const ready = await checkPwaUpdate()
-    copiedText.value = ready ? '发现新版本，可以立即更新' : '当前已是最新版本'
+    copiedText.value = ready ? '离线组件有可用更新' : '离线组件暂无更新；网页版本请以上方检查为准'
+  } catch (error) {
+    copiedText.value = error.message || '检查离线组件失败，请稍后重试'
   } finally {
     pwaChecking.value = false
   }
@@ -50,6 +53,8 @@ onBeforeUnmount(() => unsubscribePwa?.())
 </script>
 
 <template>
+  <div class="browser-integrations">
+  <AppUpdatePanel />
   <div class="settings-section">
     <h3 class="settings-section__title">浏览器集成</h3>
 
@@ -76,16 +81,17 @@ onBeforeUnmount(() => unsubscribePwa?.())
       <div class="settings-item__control settings-item__control--stack">
         <button
           class="btn btn--secondary"
-          :disabled="!pwaState.registered || pwaChecking"
+          :disabled="!pwaState.registered || pwaChecking || pwaState.updating"
           @click="handlePwaUpdate"
         >
-          {{ pwaState.updateReady ? '应用新版本' : (pwaChecking ? '检查中' : '检查应用更新') }}
+          {{ pwaState.updateReady ? '更新离线组件' : (pwaChecking ? '检查中' : '检查离线组件') }}
         </button>
         <p class="helper-text">
           {{ pwaState.supported
             ? (pwaState.registered ? '离线外壳已就绪；新版本会等待你确认后刷新。' : '生产 HTTPS 环境加载后会自动启用。')
             : '当前浏览器不支持 Service Worker。' }}
         </p>
+        <p v-if="pwaState.error" class="helper-text" role="status">{{ pwaState.error }}</p>
       </div>
     </div>
 
@@ -123,6 +129,7 @@ onBeforeUnmount(() => unsubscribePwa?.())
     </div>
 
     <div v-if="copiedText" class="copied-tip">{{ copiedText }}</div>
+  </div>
   </div>
 </template>
 
