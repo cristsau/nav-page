@@ -1,11 +1,13 @@
 <script setup>
 import PrimaryNavigation from '@/shared/components/PrimaryNavigation.vue'
 import MobileTabBar from '@/shared/components/MobileTabBar.vue'
+import AppUpdateNotice from '@/shared/components/AppUpdateNotice.vue'
 </script>
 
 <template>
   <div class="app-shell">
     <PrimaryNavigation />
+    <AppUpdateNotice />
     <div class="app-shell__content">
       <slot />
     </div>
@@ -32,7 +34,7 @@ import MobileTabBar from '@/shared/components/MobileTabBar.vue'
   }
 
   .app-shell__content {
-    padding-bottom: calc(86px + env(safe-area-inset-bottom));
+    padding-bottom: var(--mobile-tabs-space, calc(86px + env(safe-area-inset-bottom)));
   }
 }
 </style>

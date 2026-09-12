@@ -3,6 +3,7 @@ import { computed, nextTick, onBeforeUnmount, onMounted, ref, watch } from 'vue'
 import { onBeforeRouteLeave, useRoute, useRouter } from 'vue-router'
 import { useGroups, useBookmarks } from '@/shared/composables/useDB'
 import { useConfig } from '@/shared/composables/useConfig'
+import { registerReloadGuard } from '@/shared/services/reloadGuards'
 import { getSetting, setSetting } from '@/shared/db/database'
 import { fetchBackendSetting, saveBackendSetting } from '@/shared/services/settingsApi'
 import { COMMAND_ACTION_EVENT } from '@/shared/composables/useCommandPalette'
@@ -14,6 +15,7 @@ import { mergeSuggestedNoteTags } from '@/shared/utils/noteTags'
 import NavGroup from './components/NavGroup.vue'
 import AddToNav from './components/AddToNav.vue'
 import BookmarkAiPanel from './components/BookmarkAiPanel.vue'
+import { HEALTH_DISMISSALS_KEY, isHealthProblem, healthResultKey, normalizeHealthDismissals, dismissHealthResults } from './navigationHealth'
 import {
   buildBookmarkAiPrompt,
   isCurrentBookmarkTagSave,
@@ -85,6 +87,12 @@ const groupOrderDraft = ref([])
 const bookmarkOrderDrafts = ref({})
 const sortDirty = ref(false)
 const showHealthIssues = ref(false)
+const healthDismissals = ref([])
+const healthDismissalsReady = ref(false)
+const healthDismissalsSaving = ref(false)
+const healthDismissalsError = ref('')
+const restoreHealthButton = ref(null)
+const dismissAllHealthButton = ref(null)
 const pinnedGroupIds = ref([])
 const pinsReady = ref(false)
 const pinsSaving = ref(false)
@@ -134,9 +142,51 @@ const allCurrentBookmarksSelected = computed(() => (
 const availableMoveGroups = computed(() => (
   groups.value.filter((group) => group.id !== activeGroupId.value)
 ))
-const problemBookmarks = computed(() => orderedBookmarks.value.filter((bookmark) => (
-  ['broken', 'suspect', 'unsupported'].includes(bookmark.healthStatus)
-)))
+const allProblemBookmarks = computed(() => orderedBookmarks.value.filter(isHealthProblem))
+const problemBookmarks = computed(() => {
+  const dismissed = new Set(healthDismissals.value)
+  return allProblemBookmarks.value.filter(bookmark => !dismissed.has(healthResultKey(bookmark)))
+})
+const dismissedHealthCount = computed(() => allProblemBookmarks.value.length - problemBookmarks.value.length)
+
+async function loadHealthDismissals() {
+  healthDismissalsReady.value = false
+  healthDismissalsError.value = ''
+  try {
+    const stored = backendNavigationEnabled ? await fetchBackendSetting(HEALTH_DISMISSALS_KEY) : await getSetting(HEALTH_DISMISSALS_KEY)
+    healthDismissals.value = normalizeHealthDismissals(stored, bookmarks.value)
+    healthDismissalsReady.value = true
+  } catch {
+    healthDismissalsError.value = '消除记录未加载，当前仍显示检查结果。'
+  }
+}
+
+async function saveHealthDismissals(next, message) {
+  if (!healthDismissalsReady.value || healthDismissalsSaving.value || managementBusy.value) return
+  healthDismissalsSaving.value = true
+  healthDismissalsError.value = ''
+  try {
+    if (backendNavigationEnabled) await saveBackendSetting(HEALTH_DISMISSALS_KEY, next)
+    else await setSetting(HEALTH_DISMISSALS_KEY, next)
+    healthDismissals.value = next
+    setStatus(message, 'success')
+    healthDismissalsSaving.value = false
+    await nextTick()
+    const focusTarget = restoreHealthButton.value || dismissAllHealthButton.value
+    focusTarget?.focus({ preventScroll: true })
+  } catch {
+    healthDismissalsError.value = '消除记录保存失败，提示保持不变，请重试。'
+  } finally {
+    healthDismissalsSaving.value = false
+  }
+}
+
+function dismissHealthProblems(targets) {
+  return saveHealthDismissals(
+    dismissHealthResults(healthDismissals.value, bookmarks.value, targets),
+    '已消除本轮提示，收藏未删除；新的检查结果仍会提醒。'
+  )
+}
 
 function resetSortDrafts() {
   groupOrderDraft.value = groups.value.map((group) => group.id)
@@ -674,6 +724,10 @@ function protectNavigationUnload(event) {
   event.returnValue = ''
 }
 
+const releaseReloadGuard = registerReloadGuard(() => (
+  sortDirty.value || managementBusy.value || pinsSaving.value || healthDismissalsSaving.value || savingItem.value || showModal.value || aiTagSaving.value
+) ? '收藏或排序尚未完成。请先保存并关闭编辑窗口，再更新。' : '')
+
 onBeforeRouteLeave(() => {
   if (managementBusy.value || pinsSaving.value) return false
   return !sortDirty.value || window.confirm('排序尚未保存，离开将丢失排序修改。确定离开吗？')
@@ -688,7 +742,7 @@ onMounted(async () => {
     if (groups.value.length > 0) {
       activeGroupId.value = groups.value[0].id
     }
-    await loadPinnedGroups()
+    await Promise.all([loadPinnedGroups(), loadHealthDismissals()])
   } finally {
     navigationReady = true
     await locateBookmark()
@@ -701,6 +755,7 @@ onMounted(async () => {
 })
 
 onBeforeUnmount(() => {
+  releaseReloadGuard()
   window.removeEventListener(COMMAND_ACTION_EVENT, handleCommandAction)
   window.removeEventListener('beforeunload', protectNavigationUnload)
   if (statusTimer) window.clearTimeout(statusTimer)
@@ -845,6 +900,10 @@ onBeforeUnmount(() => {
                 <Icon name="refresh" :size="16" />
                 复查全部
               </button>
+              <button ref="dismissAllHealthButton" type="button" :disabled="!healthDismissalsReady || healthDismissalsSaving || managementBusy"
+                @click="dismissHealthProblems(problemBookmarks)">
+                <Icon name="close" :size="16" />消除本轮提示
+              </button>
             </div>
           </div>
           <ul v-if="showHealthIssues" class="health-issues__list">
@@ -855,10 +914,24 @@ onBeforeUnmount(() => {
                 <small>{{ bookmark.url }}</small>
               </div>
               <span class="health-issues__label">{{ bookmark.healthStatus === 'broken' ? '连续失败' : bookmark.healthStatus === 'unsupported' ? '无法安全检查' : '待确认' }}</span>
-              <button type="button" :disabled="managementBusy || !backendNavigationEnabled" @click="recheckProblemBookmark(bookmark)">复查</button>
+              <div class="health-issues__item-actions">
+                <button type="button" :disabled="managementBusy || !backendNavigationEnabled" @click="recheckProblemBookmark(bookmark)">复查</button>
+                <button type="button" :aria-label="`消除 ${bookmark.title} 的本轮提示`"
+                  :disabled="!healthDismissalsReady || healthDismissalsSaving || managementBusy"
+                  @click="dismissHealthProblems([bookmark])">消除提示</button>
+              </div>
             </li>
           </ul>
         </section>
+
+        <div v-if="dismissedHealthCount || healthDismissalsError" class="health-dismissals" aria-live="polite">
+          <span v-if="dismissedHealthCount">已消除 {{ dismissedHealthCount }} 个本轮提示，收藏保留；新检查仍会提醒。</span>
+          <button v-if="dismissedHealthCount" ref="restoreHealthButton" type="button"
+            :disabled="healthDismissalsSaving || managementBusy || !healthDismissalsReady"
+            @click="saveHealthDismissals([], '已恢复链接健康提示')">恢复提示</button>
+          <span v-if="healthDismissalsError" role="alert">{{ healthDismissalsError }}</span>
+          <button v-if="!healthDismissalsReady && healthDismissalsError" type="button" @click="loadHealthDismissals">重试加载</button>
+        </div>
 
         <section v-if="groups.length" class="pinned-groups" aria-label="常用分组" :aria-busy="pinsSaving">
           <div class="pinned-groups__items">
@@ -1174,13 +1247,17 @@ onBeforeUnmount(() => {
 .health-issues__list small { color: var(--text-muted); }
 .health-issues__state { width: 9px; height: 9px; flex: 0 0 auto; background: var(--warning-color); border-radius: 50%; }
 .health-issues__state.is-broken { background: var(--error-color); }
+.health-issues__list .health-issues__item-actions { display: flex; flex: 0 0 auto; gap: 6px; }
+.health-dismissals { display: flex; align-items: center; flex-wrap: wrap; gap: 8px; margin: 12px 0; color: var(--text-muted); font-size: 13px; }
+.health-dismissals button { min-height: 44px; padding: 8px 12px; border: 1px solid var(--border-color); border-radius: 12px; background: var(--bg-card); color: var(--text-primary); cursor: pointer; }
+.health-issues button:focus-visible, .health-dismissals button:focus-visible { outline: 2px solid var(--accent-color); outline-offset: 2px; }
 
 @media (max-width: 720px) {
   .health-issues__header { align-items: stretch; flex-direction: column; }
-  .health-issues__actions { display: grid; grid-template-columns: 1fr 1fr; }
+  .health-issues__actions { display: flex; flex-wrap: wrap; }
   .health-issues__list li { display: grid; grid-template-columns: 9px minmax(0, 1fr) auto; }
   .health-issues__label { grid-column: 2; color: var(--text-muted); font-size: 11px; }
-  .health-issues__list li button { grid-column: 3; grid-row: 1 / 3; }
+  .health-issues__list .health-issues__item-actions { grid-column: 2 / -1; grid-row: 3; }
 }
 
 .page-status {
@@ -1234,7 +1311,8 @@ onBeforeUnmount(() => {
 
 @media (max-width: 640px) {
   .main {
-    padding: 0 16px 48px;
+    /* AppShell owns the dock reserve; this is only the footer's breathing room. */
+    padding: 0 16px 20px;
   }
 
   .main.has-management-bar {
