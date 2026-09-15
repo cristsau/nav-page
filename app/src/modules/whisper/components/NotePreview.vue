@@ -22,6 +22,8 @@ const props = defineProps({
 
 const emit = defineEmits(['close', 'edit', 'ai', 'history', 'copyId', 'copyExtract', 'copyValue'])
 const dialogRef = ref(null)
+const copyStatus = ref('')
+let copyAttempt = 0
 let previouslyFocusedElement = null
 
 function formatDate(timestamp) {
@@ -39,7 +41,12 @@ function formatEntryDate(value) {
 }
 
 function forwardCopy(payload) {
-  emit('copyValue', payload)
+  const attempt = ++copyAttempt
+  copyStatus.value = '正在复制…'
+  emit('copyValue', { ...payload, onResult: (ok) => {
+    if (attempt !== copyAttempt) return
+    copyStatus.value = ok ? `已复制${payload.label === '整行' ? '整行内容' : payload.label || '内容'}` : '复制失败，请选中文字手动复制'
+  } })
 }
 
 function restorePreviousFocus() {
@@ -88,6 +95,8 @@ function handleDialogKeydown(event) {
 watch(
   () => props.show,
   async (show) => {
+    copyAttempt++
+    copyStatus.value = ''
     if (show) {
       previouslyFocusedElement = props.returnFocus instanceof HTMLElement
         && props.returnFocus.isConnected
@@ -203,12 +212,14 @@ onBeforeUnmount(restorePreviousFocus)
         <div v-else class="preview-card__content">
           <div class="preview-card__copy-hint">
             <Icon name="copy" :size="13" />
-            悬停高亮可复制单项，行尾按钮复制字段值或整行
+            悬停后点击复制 · 手机点按 · 仅在本机识别
           </div>
           <BlockContent
             v-if="note.contentFormat === 'tiptap-json' && note.contentJson"
             :document="note.contentJson"
             :plain-text="note.content"
+            copyable
+            @copy="forwardCopy"
           />
           <CopyableNoteContent v-else :content="note.content" @copy="forwardCopy" />
           <div v-if="note.attachments?.length" class="preview-card__images" aria-label="笔记图片">
@@ -232,8 +243,8 @@ onBeforeUnmount(restorePreviousFocus)
         </div>
       </div>
 
+      <p v-if="copyStatus" class="preview-card__copy-status" role="status" aria-live="polite">{{ copyStatus }}</p>
       <div class="preview-card__footer">
-        <button type="button" class="btn btn--secondary" @click="emit('close')">关闭</button>
         <button type="button" class="btn btn--secondary" @click="emit('copyExtract', note)">
           <Icon name="copy" :size="16" /> 快速复制
         </button>
@@ -243,6 +254,7 @@ onBeforeUnmount(restorePreviousFocus)
         <button type="button" class="btn btn--secondary" @click="emit('history', note)">
           <Icon name="clock" :size="16" /> 版本历史
         </button>
+        <button type="button" class="btn btn--secondary preview-card__dismiss" @click="emit('close')">关闭</button>
         <button type="button" class="btn btn--primary" @click="emit('edit', note)">
           <Icon name="edit" :size="16" /> 编辑
         </button>
@@ -422,11 +434,17 @@ onBeforeUnmount(restorePreviousFocus)
   display: inline-flex;
   align-items: center;
   gap: 7px;
-  padding: 10px 18px;
-  border: none;
-  border-radius: 14px;
+  min-height: 42px;
+  padding: 8px 13px;
+  border: 1px solid var(--border-light);
+  border-radius: 9px;
+  font: inherit;
+  font-size: 13px;
   cursor: pointer;
 }
+.preview-card__copy-status { flex: 0 0 auto; margin: 0; padding: 8px 22px; color: var(--accent-color); background: var(--accent-bg); font-size: 12px; }
+.preview-card__footer .btn:focus-visible { outline: 2px solid var(--accent-color); outline-offset: 3px; }
+.preview-card__dismiss { margin-left: auto; }
 
 .btn--primary {
   background: var(--accent-color);
@@ -451,8 +469,13 @@ onBeforeUnmount(restorePreviousFocus)
 
   .preview-card__footer {
     display: grid;
-    grid-template-columns: repeat(2, minmax(0, 1fr));
+    grid-template-columns: repeat(6, minmax(0, 1fr));
+    gap: 8px;
+    padding: 12px 16px;
   }
+  .preview-card__footer .btn { grid-column: span 2; padding-inline: 5px; gap: 4px; font-size: 12px; }
+  .preview-card__footer :is(.preview-card__dismiss, .btn--primary) { grid-column: span 3; margin: 0; }
+  .preview-card__close { min-width: 44px; }
 
   .preview-card__close,
   .preview-card__id,

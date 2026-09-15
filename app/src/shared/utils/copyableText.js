@@ -1,6 +1,37 @@
 const MAX_ANALYZED_CHARACTERS = 50_000
 const MAX_COPY_TOKENS = 500
 
+const ADDRESS_FIELD = /^(?:(?:完整|收货|收件|联系|家庭|账单)?地址(?:[（(][^()（）]{1,12}[）)])?|街道|城市|省|省份|州|地区|国家|邮编|邮政编码|(?:full |billing |shipping )?address|street(?: address)?|city|state|province|country|zip(?: code)?|postal code)$/iu
+
+function isIpv6(value) {
+  if (!value.includes('::') && (value.match(/:/g) || []).length < 2) return false
+  try {
+    const authority = value.startsWith('[') ? value : `[${value}]`
+    const url = new URL(`http://${authority}/`)
+    return url.hostname.startsWith('[') && (!url.port || Number(url.port) >= 1)
+  } catch { return false }
+}
+
+// A checksum is only a recognition hint, never proof that an account exists.
+function hasCardChecksum(value) {
+  const digits = value.replace(/[ -]/g, '')
+  if (!/^\d{13,19}$/.test(digits) || /^(\d)\1+$/.test(digits)) return false
+  let total = 0
+  for (let index = digits.length - 1, double = false; index >= 0; index--, double = !double) {
+    let digit = Number(digits[index])
+    if (double) { digit *= 2; if (digit > 9) digit -= 9 }
+    total += digit
+  }
+  return total % 10 === 0
+}
+
+function addAddressField(ranges, line, maxRanges) {
+  const target = extractLineCopyTarget(line)
+  if (!target || !ADDRESS_FIELD.test(target.label)) return
+  const start = line.lastIndexOf(target.value)
+  addRange(ranges, start, start + target.value.length, target.value, 'postal-address', target.label, maxRanges)
+}
+
 function hasOverlap(ranges, start, end) {
   return ranges.some((range) => start < range.end && end > range.start)
 }
@@ -232,6 +263,7 @@ function isValidChineseResidentId(value) {
 function extractLineCopyTarget(line) {
   const trimmed = line.trim()
   if (!trimmed) return null
+  if (isIpv6(trimmed)) return { label: '整行', value: trimmed }
 
   const fieldMatch = (
     line.match(/^(\s*(?:[-*•]\s*)?)([^:：\n]{1,32})[:：]\s*(\S(?:.*\S)?)\s*$/u)
@@ -309,12 +341,45 @@ function tokenizeLine(line, maxRanges = MAX_COPY_TOKENS) {
   addPatternRanges(
     ranges,
     line,
+    /(?<![\w:])(?:\[[0-9a-f:.]+\](?::\d{1,5})?|[0-9a-f]*:[0-9a-f:.]*:[0-9a-f:.]*)(?![\w:])/giu,
+    'address',
+    'IPv6 地址',
+    withLimit({ validate: isIpv6 })
+  )
+  addPatternRanges(
+    ranges,
+    line,
     /\b(?:\d{1,3}\.){3}\d{1,3}(?::\d{1,5})?\b/gu,
     'address',
-    '地址',
+    'IP 地址',
     withLimit({ validate: isValidIpAddress })
   )
   addLabeledIdRanges(ranges, line, maxRanges)
+  addPatternRanges(
+    ranges,
+    line,
+    /(?<![\w-])(?:\d{13,19}|\d{4}(?:[ -]\d{4}){2,3}(?:[ -]\d{1,3})?|\d{4}[ -]\d{6}[ -]\d{5})(?![\d-])/gu,
+    'bank-card',
+    '卡号（仅数字）',
+    withLimit({ validate: hasCardChecksum })
+  )
+  addAddressField(ranges, line, maxRanges)
+  addPatternRanges(
+    ranges,
+    line,
+    /^\s*(\d{1,6}[A-Za-z]?(?:[-/]\d{1,6})?\s+(?:[\p{L}\d.'-]+\s+){1,8}(?:Street|St|Road|Rd|Avenue|Ave|Boulevard|Blvd|Lane|Ln|Drive|Dr|Court|Ct|Way|Place|Pl)\.?(?:\s*(?:,|#|Suite|Unit|Apt)\s*[\p{L}\d ,.#-]{1,100})?)\s*$/giu,
+    'postal-address',
+    '地址',
+    withLimit({ captureIndex: 1 })
+  )
+  addPatternRanges(
+    ranges,
+    line,
+    /^\s*([\p{Script=Han}]{2,12}(?:省|市|区|县)[\p{Script=Han}\d]{1,45}(?:路|街|大道|巷)\d{1,6}号[\p{Script=Han}\d-]{0,24})\s*$/gu,
+    'postal-address',
+    '地址',
+    withLimit({ captureIndex: 1 })
+  )
   addStructuredValueRange(ranges, line, maxRanges, true)
   addPatternRanges(
     ranges,
@@ -359,7 +424,8 @@ function tokenizeLine(line, maxRanges = MAX_COPY_TOKENS) {
       type: 'copy',
       value: range.value,
       kind: range.kind,
-      label: range.label
+      label: range.label,
+      ...(range.kind === 'bank-card' ? { copyValue: range.value.replace(/[ -]/g, '') } : {})
     })
     cursor = range.end
   }
@@ -378,7 +444,7 @@ export function parseCopyableContent(value) {
   let analyzedCharacters = 0
   let remainingTokens = MAX_COPY_TOKENS
 
-  return String(value ?? '')
+  const lines = String(value ?? '')
     .split('\n')
     .map((line, index) => {
       const charactersLeft = Math.max(0, MAX_ANALYZED_CHARACTERS - analyzedCharacters)
@@ -415,4 +481,24 @@ export function parseCopyableContent(value) {
         copyTarget: extractLineCopyTarget(line)
       }
     })
+
+  // Only group explicitly headed address blocks. Arbitrary prose stays selectable.
+  let scanned = 0
+  for (let index = 0; index < lines.length && scanned < MAX_ANALYZED_CHARACTERS; index++) {
+    const line = lines[index]
+    scanned += line.raw.length + 1
+    if (!/^\s*(?:完整地址(?:[（(][^()（）]{1,12}[）)])?|(?:full |billing |shipping )?address)\s*[:：]\s*$/iu.test(line.raw)) continue
+    const parts = []
+    let blanks = 0
+    for (let next = index + 1; next < Math.min(lines.length, index + 12); next++) {
+      const text = lines[next].raw.trim()
+      if (!text) { if (++blanks >= 2) break; continue }
+      blanks = 0
+      if (text.length > 160 || /[:：=<>]|[。！？!?]$/u.test(text)) break
+      parts.push(text)
+      if (parts.length === 6 || /^(?:United States(?: of America)?|USA|United Kingdom|UK|Canada|Australia|China|中国|美国|英国|加拿大|澳大利亚)(?:\s*[（(].*[）)])?$/iu.test(text)) break
+    }
+    if (parts.length >= 2) line.blockCopyTarget = { label: '完整地址', value: parts.join('\n') }
+  }
+  return lines
 }

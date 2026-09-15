@@ -451,8 +451,10 @@ async function handleCopyValue(payload) {
   try {
     await copyText(value)
     setStatus(`已复制${label === '整行' ? '整行内容' : label}`)
+    if (typeof payload?.onResult === 'function') payload.onResult(true)
   } catch {
     setStatus('复制失败，请手动复制', 'error')
+    if (typeof payload?.onResult === 'function') payload.onResult(false)
   }
 }
 
