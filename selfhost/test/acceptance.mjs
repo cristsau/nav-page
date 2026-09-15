@@ -1,6 +1,6 @@
 import assert from 'node:assert/strict'
 import https from 'node:https'
-import { readFileSync, readdirSync, statSync } from 'node:fs'
+import { readFileSync, readdirSync, statSync, mkdirSync, writeFileSync } from 'node:fs'
 import { execFileSync } from 'node:child_process'
 import { join, resolve } from 'node:path'
 
@@ -93,6 +93,23 @@ try {
   } finally {
     if (created) execFileSync('docker', ['rm', '-f', isolated], { stdio: 'pipe' })
   }
+  // Only this synthetic CI process uses the fault wrapper; never install it globally.
+  const faultDir = join(root, 'test-fault-bin')
+  mkdirSync(faultDir, { mode: 0o700 })
+  const realDocker = execFileSync('which', ['docker'], { encoding: 'utf8' }).trim()
+  assert.match(realDocker, /^\/[a-zA-Z0-9/._-]+$/)
+  writeFileSync(join(faultDir, 'docker'), `#!/usr/bin/env bash\nif [[ \"$NAV_FAULT\" == dump && \" $* \" == *\" pg_dump \"* ]]; then exit 71; fi\nif [[ \"$NAV_FAULT\" == restart && \" $* \" == *\" up -d --wait \"* ]]; then exit 72; fi\nexec ${realDocker} \"$@\"\n`, { mode: 0o700 })
+  for (const [fault, expectedExit] of [['dump', 71], ['restart', 1]]) {
+    let result = 0
+    try {
+      execFileSync('bash', ['manage.sh', 'backup', '--allow-pause'], { cwd: root, timeout: 300000, stdio: 'pipe', env: { ...process.env, PATH: `${faultDir}:${process.env.PATH}`, NAV_FAULT: fault } })
+    } catch (error) { result = error.status }
+    assert.equal(result, expectedExit, 'Backup failure must not be reported as success')
+    if (fault === 'restart') dc(['up', '-d', '--wait', '--wait-timeout', '240'])
+    await login()
+    assert.equal((await request('/api/bookmarks')).json().bookmarks.filter(item => item.title === marker).length, 1)
+  }
+  console.log('PASS injected dump failure resumes services; injected restart failure returns nonzero; data preserved')
   console.log('COMPOSE_ACCEPTANCE_PASS — synthetic Linux test only; no public DNS, external mail or production changes')
 } catch (error) {
   // Never dump child-process stdout/stderr or request/response bodies into CI logs.

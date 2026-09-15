@@ -27,11 +27,22 @@ case ${1:-status} in
     # A stopped application is required so the DB + integration secrets form one snapshot.
     [[ ${2:-} == --allow-pause ]] || fail 'Backup briefly stops this stack web/API. Run: bash manage.sh backup --allow-pause (only when no users are editing).'
     dc exec -T db pg_isready -U nav -d nav >/dev/null
+    running=$(dc ps --status running --services)
+    [[ $'\n'$running$'\n' == *$'\napi\n'* && $'\n'$running$'\n' == *$'\nweb\n'* ]] || fail 'Backup expects web and API to be running so their prior state can be restored.'
     mkdir -p -- backups
     [[ ! -L backups ]] || fail 'Backup directory cannot be a symlink.'
     backup_dir=$(mktemp -d "$(pwd -P)/backups/nav-$(date -u +%Y%m%dT%H%M%SZ)-XXXXXX")
+    restore_services() {
+      result=$?
+      trap - EXIT
+      if ! dc up -d --wait --wait-timeout 240 web api >/dev/null; then
+        printf 'Restart failed: run bash manage.sh start\n' >&2
+        exit 1
+      fi
+      exit "$result"
+    }
+    trap restore_services EXIT
     dc stop web api
-    trap 'dc up -d --wait --wait-timeout 240 web api >/dev/null || printf "Restart failed: run bash manage.sh start\n" >&2' EXIT
     dc exec -T db pg_dump -U nav -d nav -Fc > "$backup_dir/database.dump"
     dc run --rm --no-deps -T --entrypoint node api -e 'const fs=require("fs");const cp=require("child_process");cp.execFileSync("tar",["-czf","/tmp/integrations.tar.gz","-C","/data","integrations"]);process.stdout.write(fs.readFileSync("/tmp/integrations.tar.gz"));' > "$backup_dir/integrations.tar.gz"
     tar -czf "$backup_dir/config.tar.gz" .env config image-lock.json package-info.json
