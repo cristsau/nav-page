@@ -4,6 +4,9 @@ umask 077
 cd -- "$(dirname -- "${BASH_SOURCE[0]}")"
 fail() { printf '%s\n' "$1" >&2; exit 1; }
 [[ -f .env && ! -L .env && -f config/settings.json && ! -L config ]] || fail 'Run install.sh first; do not overwrite a partial installation.'
+[[ -z ${DOCKER_HOST:-} ]] || fail 'Remote/overridden Docker endpoints are not supported.'
+docker_host=$(docker context inspect --format '{{.Endpoints.docker.Host}}')
+[[ $docker_host == unix://* ]] || fail 'Use the original local Docker Unix-socket context.'
 dc() { docker compose --env-file .env -f compose.yaml "$@"; }
 case ${1:-status} in
   start)

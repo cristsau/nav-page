@@ -92,7 +92,7 @@ test('archive file manifest matches every distributed byte', () => {
     assert.ok(match)
     const [, expected, name] = match
     assert.ok(!name.includes('..') && !name.startsWith('/') && !name.includes('\\'))
-    assert.ok(!/(^|\/)\.env($|\.)|(^|\/)node_modules\/|(^|\/)config\/|\/downloads\//.test(name))
+    assert.ok(!/(^|\/)\.env($|\.)|(^|\/)node_modules\/|^config\/|\/downloads\//.test(name), name)
     assert.equal(createHash('sha256').update(readFileSync(join(root, name))).digest('hex'), expected, name)
   }
 })

@@ -22,7 +22,7 @@ if ($LASTEXITCODE -ne 0) { throw 'Source archive failed' }
 if ($LASTEXITCODE -ne 0) { throw 'Source extraction failed' }
 # A precise source-files exclusion is used by the final pack, not recursive deletion.
 $excluded = @()
-foreach ($file in Get-ChildItem -LiteralPath (Join-Path $package 'source') -File -Recurse) {
+foreach ($file in Get-ChildItem -LiteralPath (Join-Path $package 'source') -File -Recurse -Force) {
     $relative = $file.FullName.Substring($package.Length + 1).Replace('\','/')
     if ($relative -match '/(?:\.env(?:\..*)?|[^/]+\.(?:pem|key|p12|pfx|zip|crx))$' -or $relative -like 'source/app/public/downloads/*') { $excluded += $relative }
 }
@@ -51,7 +51,7 @@ $images = [ordered]@{
 [IO.File]::WriteAllText((Join-Path $package 'image-lock.json'), ($images | ConvertTo-Json) + "`n", $utf8)
 $info = [ordered]@{ version=$Version; sourceRevision=$revision; packagedAtUtc=[DateTime]::UtcNow.ToString('o'); platform='linux/amd64'; status='candidate-requires-compose-acceptance'; sourceSelection='committed allowlist; no working-tree application changes' }
 [IO.File]::WriteAllText((Join-Path $package 'package-info.json'), ($info | ConvertTo-Json) + "`n", $utf8)
-$allowed = @(Get-ChildItem -LiteralPath $package -File -Recurse | ForEach-Object {
+$allowed = @(Get-ChildItem -LiteralPath $package -File -Recurse -Force | ForEach-Object {
     $relative = $_.FullName.Substring($package.Length + 1).Replace('\','/')
     if ($relative -notin $excluded) { $relative }
 } | Sort-Object)

@@ -9,6 +9,9 @@ for tool in docker sha256sum; do command -v "$tool" >/dev/null || fail "Missing 
 [[ -f SHA256SUMS && -f image-lock.json && -f package-info.json ]] || fail 'Use the prepared release archive, not an incomplete source folder.'
 sha256sum --check --status SHA256SUMS || fail 'Package integrity check failed; nothing was installed.'
 docker compose version >/dev/null || fail 'Install Docker Compose v2 first. This script never modifies the host Docker installation.'
+compose_version=$(docker compose version --short)
+[[ $compose_version =~ ^v?([0-9]+)\.([0-9]+)\. ]] || fail 'Cannot determine Compose version.'
+(( BASH_REMATCH[1] > 2 || (BASH_REMATCH[1] == 2 && BASH_REMATCH[2] >= 20) )) || fail 'Docker Compose 2.20 or newer is required.'
 engine=$(docker info --format '{{.OSType}}/{{.Architecture}}')
 [[ $engine == linux/x86_64 || $engine == linux/amd64 ]] || fail 'The selected Docker daemon must be Linux x86-64.'
 docker_host=$(docker context inspect --format '{{.Endpoints.docker.Host}}')
