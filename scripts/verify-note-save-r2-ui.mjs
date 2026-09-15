@@ -27,6 +27,7 @@ try {
     await route.fulfill({ contentType: 'application/json', body: JSON.stringify(body) })
   })
   await page.goto(`${origin}/auth`, { waitUntil: 'networkidle' })
+  await page.waitForFunction(() => Boolean(document.querySelector('#app')?.__vue_app__))
   await page.evaluate(async () => {
     const resources = performance.getEntriesByType('resource').map((item) => item.name)
     const vueUrl = resources.find((url) => /\/vue\.js\?/.test(url))

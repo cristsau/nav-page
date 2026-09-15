@@ -75,6 +75,7 @@ const initialSnapshot = ref('')
 const copiedId = ref(false)
 const titleInputRef = ref(null)
 const editorDialog = ref(null)
+const editorPane = ref('writing')
 let editorTrigger = null
 const imageInputRef = ref(null)
 const blockEditorRef = ref(null)
@@ -112,6 +113,7 @@ const canManageImages = computed(() => (
   !realtimeEnabled.value || accessRole.value === 'owner'
 ))
 const formDisabled = computed(() => props.saving || collaborationReadOnly.value)
+watch(() => props.show, (show) => { if (show) editorPane.value = 'writing' })
 
 // 标题
 const modalTitle = computed(() => {
@@ -676,7 +678,7 @@ async function handleSubmit() {
 }
 
 function close() {
-  if (uploadingImage.value || autosaveInFlight.value) return
+  if (props.saving || uploadingImage.value || autosaveInFlight.value) return
   if (!props.saving && initialSnapshot.value && currentDirtySnapshot() !== initialSnapshot.value) {
     if (!confirm('尚有未保存的修改，确定关闭吗？')) return
   }
@@ -721,21 +723,31 @@ async function copyUnsavedDraft() {
             {{ noteNumberLabel }}
           </button>
         </div>
+        <div class="editor__header-actions">
+          <button v-if="isEdit && note?.id" type="button" class="editor__pane-toggle"
+            :aria-pressed="editorPane === 'comments'" aria-controls="note-editor-comments"
+            @click="editorPane = editorPane === 'comments' ? 'writing' : 'comments'">
+            <Icon :name="editorPane === 'comments' ? 'edit' : 'users'" :size="16" />
+            {{ editorPane === 'comments' ? '返回正文' : '评论' }}
+          </button>
         <button type="button" class="editor__close" aria-label="关闭编辑器" :disabled="saving || autosaveStatus === 'saving'" @click="close">
           <Icon name="close" :size="18" />
         </button>
+        </div>
       </div>
 
+      <div class="editor__workspace" :class="{ 'has-comments': isEdit && note?.id, 'is-comments': editorPane === 'comments' }">
+      <div class="editor__writing" aria-label="笔记正文与设置">
       <!-- 类型选择 -->
-      <div class="editor__type">
+      <div class="editor__type" role="group" aria-label="笔记类型">
         <label class="type-option" :class="{ 'is-active': formData.type === 'memo' }">
           <input v-model="formData.type" type="radio" value="memo" :disabled="formDisabled">
-          <span class="type-option__icon"><Icon name="list" :size="24" /></span>
+          <span class="type-option__icon"><Icon name="list" :size="16" /></span>
           <span class="type-option__label">备忘录</span>
         </label>
         <label class="type-option" :class="{ 'is-active': formData.type === 'diary' }">
           <input v-model="formData.type" type="radio" value="diary" :disabled="formDisabled">
-          <span class="type-option__icon"><Icon name="book" :size="24" /></span>
+          <span class="type-option__icon"><Icon name="book" :size="16" /></span>
           <span class="type-option__label">日记</span>
         </label>
       </div>
@@ -746,7 +758,8 @@ async function copyUnsavedDraft() {
           ref="titleInputRef"
           v-model="formData.title"
           type="text"
-          class="input"
+          class="input editor__title-input"
+          aria-label="笔记标题"
           placeholder="标题"
           :disabled="formDisabled"
         >
@@ -891,14 +904,6 @@ async function copyUnsavedDraft() {
         @apply-tags="applyAiTags"
       />
 
-      <CollaborationPanel
-        v-if="isEdit && note?.id"
-        :note="note"
-        :selection="editorSelection"
-        :disabled="saving"
-        @collaboration-enabled="collaborationActivated = true"
-      />
-
       <!-- 标签 -->
       <div class="form-group">
         <div class="tags-input">
@@ -970,6 +975,16 @@ async function copyUnsavedDraft() {
           >
         </div>
       </template>
+      </div>
+      <aside v-if="isEdit && note?.id" id="note-editor-comments" class="editor__discussion" aria-label="笔记协作与评论">
+        <CollaborationPanel
+          :note="note"
+          :selection="editorSelection"
+          :disabled="saving"
+          @collaboration-enabled="collaborationActivated = true"
+        />
+      </aside>
+      </div>
 
       <!-- 底部操作 -->
       <div class="editor__footer">
@@ -987,11 +1002,13 @@ async function copyUnsavedDraft() {
           <button type="button" class="btn btn--secondary" @click="copyUnsavedDraft">复制当前草稿</button>
           <span v-if="draftActionMessage" role="status">{{ draftActionMessage }}</span>
         </div>
+        <div class="editor__footer-actions">
         <button type="button" class="btn btn--secondary" :disabled="saving || autosaveInFlight" @click="close">取消</button>
-        <button v-if="!collaborationReadOnly" type="button" class="btn btn--primary" :disabled="formDisabled || autosaveInFlight || autosaveStatus === 'conflict'" @click="handleSubmit">
+        <button v-if="!collaborationReadOnly" type="button" class="btn btn--primary" :aria-busy="saving" :disabled="formDisabled || autosaveInFlight || autosaveStatus === 'conflict'" @click="handleSubmit">
           <span v-if="saving" class="button-spinner" aria-hidden="true"></span>
           {{ saving ? '保存中' : (isEdit ? '保存' : '创建') }}
         </button>
+        </div>
       </div>
     </div>
   </div>
@@ -1011,12 +1028,15 @@ async function copyUnsavedDraft() {
 }
 
 .editor-content {
+  display: flex;
+  flex-direction: column;
   background: var(--bg-card);
-  border-radius: var(--radius-lg);
+  border-radius: 20px;
   width: 100%;
-  max-width: 960px;
-  max-height: 90vh;
-  overflow-y: auto;
+  max-width: 1180px;
+  height: min(840px, calc(100dvh - 48px));
+  max-height: calc(100dvh - 48px);
+  overflow: hidden;
   box-shadow: var(--shadow-lg);
   animation: scaleIn 0.2s var(--ease-bounce);
 }
@@ -1033,20 +1053,21 @@ async function copyUnsavedDraft() {
 }
 
 .editor__header {
-  position: sticky;
-  top: 0;
+  flex: 0 0 auto;
+  position: relative;
   z-index: 12;
   display: flex;
   align-items: center;
   justify-content: space-between;
-  padding: 20px 24px;
+  padding: 14px 24px;
   border-bottom: 1px solid var(--border-light);
   background: color-mix(in srgb, var(--bg-card) 92%, transparent);
   backdrop-filter: blur(16px);
 }
 
 .editor__title {
-  font-size: 18px;
+  margin: 0;
+  font-size: 16px;
   font-weight: 600;
   color: var(--text-primary);
 }
@@ -1066,7 +1087,9 @@ async function copyUnsavedDraft() {
   color: var(--text-muted);
   background: var(--bg-secondary);
   border: 1px solid var(--border-light);
-  border-radius: 999px;
+  min-height: 32px;
+  border-radius: 8px;
+  font-family: inherit;
   font-size: 11px;
   font-variant-numeric: tabular-nums;
   cursor: pointer;
@@ -1078,8 +1101,8 @@ async function copyUnsavedDraft() {
 }
 
 .editor__close {
-  width: 32px;
-  height: 32px;
+  width: 40px;
+  height: 40px;
   display: flex;
   align-items: center;
   justify-content: center;
@@ -1097,12 +1120,18 @@ async function copyUnsavedDraft() {
 
 .editor__type {
   display: flex;
-  gap: 12px;
-  padding: 20px 24px;
+  gap: 4px;
+  width: fit-content;
+  margin: 20px 24px 16px;
+  padding: 4px;
+  border-radius: 10px;
+  background: var(--bg-secondary);
 }
 
 .form-row {
   display: flex;
+  align-items: flex-end;
+  flex-wrap: wrap;
   gap: 12px;
   padding: 0 24px;
 }
@@ -1112,7 +1141,8 @@ async function copyUnsavedDraft() {
 }
 
 .form-group--grow {
-  flex: 1;
+  flex: 1 1 160px;
+  min-width: 0;
 }
 
 .form-label {
@@ -1124,13 +1154,16 @@ async function copyUnsavedDraft() {
 
 .type-option {
   position: relative;
-  flex: 1;
+  flex: 0 0 auto;
   display: flex;
-  flex-direction: column;
+  flex-direction: row;
+  gap: 7px;
   align-items: center;
-  padding: 16px;
-  background: var(--bg-secondary);
-  border-radius: var(--radius-md);
+  min-height: 36px;
+  padding: 6px 12px;
+  white-space: nowrap;
+  background: transparent;
+  border-radius: 7px;
   cursor: pointer;
   transition: all var(--transition-fast);
 }
@@ -1140,8 +1173,9 @@ async function copyUnsavedDraft() {
 }
 
 .type-option.is-active {
-  background: var(--accent-bg);
-  box-shadow: 0 0 0 2px var(--accent-color);
+  background: var(--bg-card);
+  box-shadow: 0 1px 4px rgba(0, 0, 0, 0.08);
+  color: var(--accent-color);
 }
 
 .type-option input {
@@ -1157,12 +1191,11 @@ async function copyUnsavedDraft() {
 }
 
 .type-option__icon {
-  font-size: 28px;
-  margin-bottom: 8px;
+  display: inline-flex;
 }
 
 .type-option__label {
-  font-size: 14px;
+  font-size: 13px;
   color: var(--text-primary);
 }
 
@@ -1173,12 +1206,15 @@ async function copyUnsavedDraft() {
 
 .input {
   width: 100%;
-  padding: 12px 16px;
+  padding: 10px 12px;
+  min-height: 42px;
+  min-width: 0;
+  font-family: inherit;
   font-size: 14px;
   color: var(--text-primary);
   background: var(--bg-secondary);
-  border: 2px solid transparent;
-  border-radius: var(--radius-md);
+  border: 1px solid var(--border-light);
+  border-radius: 10px;
   outline: none;
   transition: all var(--transition-fast);
 }
@@ -1414,12 +1450,13 @@ async function copyUnsavedDraft() {
 }
 
 .checkbox-label--status {
-  align-self: center;
+  align-self: flex-end;
   flex: 0 0 auto;
   margin-bottom: 16px;
   padding: 10px 12px;
   background: var(--bg-secondary);
-  border-radius: var(--radius-md);
+  min-height: 42px;
+  border-radius: 10px;
 }
 
 .checkbox-label__text {
@@ -1443,6 +1480,8 @@ async function copyUnsavedDraft() {
 .checkbox-custom {
   width: 20px;
   height: 20px;
+  flex-shrink: 0;
+  border: 1px solid var(--border-light);
   background: var(--bg-secondary);
   border-radius: var(--radius-xs);
   transition: all var(--transition-fast);
@@ -1465,18 +1504,18 @@ async function copyUnsavedDraft() {
 
 /* 底部 */
 .editor__footer {
-  position: sticky;
-  bottom: 0;
+  position: relative;
+  flex: 0 0 auto;
   z-index: 12;
   display: flex;
   flex-wrap: wrap;
   align-items: center;
   justify-content: flex-end;
   gap: 12px;
-  padding: 20px 24px;
+  padding: 12px 24px;
   border-top: 1px solid var(--border-light);
   background: var(--bg-card);
-  padding-bottom: max(20px, env(safe-area-inset-bottom));
+  padding-bottom: max(12px, env(safe-area-inset-bottom));
 }
 
 .editor__footer .btn { min-height: 44px; }
@@ -1487,7 +1526,7 @@ async function copyUnsavedDraft() {
   margin: 0 auto 0 0;
   align-self: center;
   color: var(--text-muted);
-  font-size: 14px;
+  font-size: 12px;
   line-height: 1.45;
 }
 
@@ -1514,9 +1553,11 @@ async function copyUnsavedDraft() {
   align-items: center;
   justify-content: center;
   gap: 7px;
-  padding: 10px 24px;
-  border: none;
-  border-radius: var(--radius-md);
+  min-height: 40px;
+  padding: 9px 18px;
+  border: 1px solid transparent;
+  border-radius: 10px;
+  font-family: inherit;
   font-size: 14px;
   font-weight: 500;
   cursor: pointer;
@@ -1533,7 +1574,8 @@ async function copyUnsavedDraft() {
 }
 
 .btn--secondary {
-  background: var(--bg-secondary);
+  background: var(--bg-card);
+  border-color: var(--border-light);
   color: var(--text-primary);
 }
 
@@ -1554,6 +1596,31 @@ async function copyUnsavedDraft() {
   to { transform: rotate(360deg); }
 }
 
+.editor__workspace { display: grid; flex: 1 1 auto; min-height: 0; overflow: hidden; }
+.editor__workspace.has-comments { grid-template-columns: minmax(0, 1fr) 320px; }
+.editor__writing { min-width: 0; overflow-y: auto; overscroll-behavior: contain; scrollbar-width: thin; padding-bottom: 8px; }
+.editor__discussion { display: flex; min-width: 0; min-height: 0; overflow: hidden; border-left: 1px solid var(--border-light); background: color-mix(in srgb, var(--bg-secondary) 35%, var(--bg-card)); }
+.editor__header-actions, .editor__footer-actions { display: flex; flex: 0 0 auto; align-items: center; gap: 8px; }
+.editor__footer-actions { margin-left: auto; }
+.editor__footer-actions .btn { min-width: 80px; }
+.editor__pane-toggle { display: none; align-items: center; justify-content: center; gap: 6px; min-height: 40px; padding: 0 12px; border: 1px solid var(--border-light); border-radius: 9px; color: var(--text-secondary); background: var(--bg-card); font: inherit; font-size: 13px; cursor: pointer; }
+.editor__pane-toggle[aria-pressed='true'] { color: var(--accent-color); background: var(--accent-bg); }
+.editor__writing .editor__title-input { padding: 2px 0 10px; font-size: 24px; font-weight: 650; line-height: 1.4; background: transparent; border: 0; border-bottom: 1px solid var(--border-light); border-radius: 0; }
+.editor__writing .editor__title-input:focus { background: transparent; border-color: var(--accent-color); box-shadow: none; }
+.editor__writing :deep(.block-editor) { background: var(--bg-card); border-radius: 12px; }
+.editor__writing :deep(.block-editor__surface) { min-height: 300px; padding: 22px 26px 42px; }
+.editor-content :is(button, input, select, textarea):focus-visible { outline: 2px solid var(--accent-color); outline-offset: 3px; }
+.editor-content .btn:disabled { cursor: not-allowed; opacity: .5; }
+.editor__writing .tags-input { min-height: 44px; padding: 5px 10px; border: 1px solid var(--border-light); border-radius: 10px; }
+.editor__writing .tag { padding: 4px 8px; border-radius: 6px; }
+
+@media (max-width: 900px) {
+  .editor__workspace.has-comments { grid-template-columns: minmax(0, 1fr); }
+  .editor__workspace:not(.is-comments) .editor__discussion, .editor__workspace.is-comments .editor__writing { display: none; }
+  .editor__discussion { border-left: 0; }
+  .editor__pane-toggle { display: inline-flex; }
+}
+
 @media (max-width: 560px) {
   .editor-modal {
     align-items: flex-end;
@@ -1561,14 +1628,27 @@ async function copyUnsavedDraft() {
   }
 
   .editor-content {
-    max-height: 94vh;
-    border-radius: 22px 22px 0 0;
+    height: calc(100dvh - 12px);
+    max-height: calc(100dvh - 12px);
+    border-radius: 16px 16px 0 0;
   }
+
+  .editor__header { padding: 10px 14px; }
+  .editor__title { font-size: 15px; }
+  .editor__note-id { padding-inline: 5px; font-size: 10px; }
+  .editor__heading { gap: 6px; }
+  .editor__type { margin: 16px 16px 14px; }
+  .editor__writing > .form-group, .form-row { padding-inline: 16px; }
+  .editor__writing .editor__title-input { font-size: 22px; }
+  .editor__writing :deep(.block-editor__surface) { padding-inline: 18px; }
+  .editor__footer { padding: 10px 16px max(10px, env(safe-area-inset-bottom)); gap: 8px; }
+  .editor__autosave { flex-basis: 100%; font-size: 11px; }
 
   .form-row {
     flex-direction: column;
     gap: 0;
   }
+  .form-group--grow { flex: auto; width: 100%; }
 
   .checkbox-label--status {
     align-self: stretch;
@@ -1596,6 +1676,9 @@ async function copyUnsavedDraft() {
 }
 
 @media (prefers-reduced-motion: reduce) {
+  .editor-content { animation: none; }
+  .button-spinner { animation: none; }
+  .editor-content :is(button, input, label) { transition: none; }
   .image-uploader__item img {
     transition: none;
   }

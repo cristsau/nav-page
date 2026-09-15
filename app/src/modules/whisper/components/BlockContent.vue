@@ -10,6 +10,7 @@ import TextAlign from '@tiptap/extension-text-align'
 import Underline from '@tiptap/extension-underline'
 import StarterKit from '@tiptap/starter-kit'
 import { EditorContent, useEditor } from '@tiptap/vue-3'
+import { createNoteCopyExtension } from '@/shared/utils/noteCopyDecorations'
 import {
   EMPTY_TIPTAP_DOCUMENT,
   plainTextToTiptapDocument,
@@ -18,8 +19,10 @@ import {
 
 const props = defineProps({
   document: { type: Object, default: null },
-  plainText: { type: String, default: '' }
+  plainText: { type: String, default: '' },
+  copyable: { type: Boolean, default: false }
 })
+const emit = defineEmits(['copy'])
 
 function content() {
   const safeDocument = sanitizeTiptapDocumentForClient(props.document)
@@ -36,14 +39,15 @@ const editor = useEditor({
     Underline,
     Highlight.configure({ multicolor: false }),
     Link.configure({
-      openOnClick: true,
+      openOnClick: !props.copyable,
       HTMLAttributes: { rel: 'noopener noreferrer nofollow', target: '_blank' }
     }),
     Image.configure({ inline: false, allowBase64: false }),
     TaskList,
     TaskItem.configure({ nested: true }),
     TableKit.configure({ table: { resizable: false } }),
-    TextAlign.configure({ types: ['heading', 'paragraph'] })
+    TextAlign.configure({ types: ['heading', 'paragraph'] }),
+    ...(props.copyable ? [createNoteCopyExtension((target) => emit('copy', target))] : [])
   ],
   editorProps: {
     attributes: {
@@ -91,4 +95,21 @@ onBeforeUnmount(() => editor.value?.destroy())
 :deep(.block-content__surface th),
 :deep(.block-content__surface td) { min-width: 80px; padding: 8px 10px; border: 1px solid var(--border-light); vertical-align: top; }
 :deep(.block-content__surface th) { background: var(--bg-secondary); font-weight: 650; }
+:deep(.note-copy-token) { border-radius: 4px; cursor: copy; transition: background .15s; }
+:deep(.note-copy-token:hover),
+:deep(.note-copy-token:focus-visible) { background: var(--accent-bg); color: var(--accent-color); outline: 1px solid var(--accent-color); outline-offset: 2px; }
+:deep(.note-copy-line) { display: inline-flex; align-items: center; justify-content: center; gap: 5px; min-width: 28px; min-height: 28px; margin-inline: 8px 0; padding: 3px 6px; vertical-align: middle; border: 1px solid var(--border-light); border-radius: 7px; background: var(--bg-card); color: var(--text-secondary); font: inherit; font-size: 12px; cursor: copy; opacity: 0; }
+:deep(.block-content__surface p:hover > .note-copy-line),
+:deep(.block-content__surface :focus-within > .note-copy-line),
+:deep(.note-copy-line:focus-visible),
+:deep(.note-copy-line.is-address-block),
+:deep(.block-content__surface h1:hover > .note-copy-line),
+:deep(.block-content__surface h2:hover > .note-copy-line),
+:deep(.block-content__surface h3:hover > .note-copy-line) { opacity: 1; }
+:deep(.note-copy-line:hover), :deep(.note-copy-line:focus-visible) { color: var(--accent-color); background: var(--accent-bg); outline: 2px solid var(--accent-color); outline-offset: 2px; }
+@media (hover: none) {
+  :deep(.note-copy-line) { opacity: 1; min-height: 44px; min-width: 44px; }
+  :deep(.note-copy-token) { text-decoration: underline dotted; text-underline-offset: 4px; }
+}
+@media (prefers-reduced-motion: reduce) { :deep(.note-copy-token) { transition: none; } }
 </style>

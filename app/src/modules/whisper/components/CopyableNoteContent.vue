@@ -55,7 +55,7 @@ function getTokenAriaLabel(line, label, segmentIndex) {
             :class="`is-${segment.kind}`"
             :title="`复制${segment.label}`"
             :aria-label="getTokenAriaLabel(line, segment.label, index)"
-            @click.stop="requestCopy(segment.value, segment.label)"
+            @click.stop="requestCopy(segment.copyValue || segment.value, segment.label)"
           >
             {{ segment.value }}
             <span class="copyable-token__hint" aria-hidden="true">
@@ -64,6 +64,11 @@ function getTokenAriaLabel(line, label, segmentIndex) {
           </button>
         </template>
       </span>
+
+      <button v-if="line.blockCopyTarget" type="button" class="copyable-block-action"
+        @click.stop="requestCopy(line.blockCopyTarget.value, line.blockCopyTarget.label)">
+        <Icon name="copy" :size="14" />复制完整地址
+      </button>
 
       <button
         v-if="line.copyTarget"
@@ -85,6 +90,7 @@ function getTokenAriaLabel(line, label, segmentIndex) {
   font: inherit;
   line-height: 1.8;
 }
+.copyable-block-action { display: inline-flex; align-items: center; gap: 5px; margin: 4px 0 4px 10px; min-height: 32px; padding: 4px 9px; font: inherit; font-size: 12px; color: var(--accent-color); background: var(--accent-bg); border: 1px solid var(--border-light); border-radius: 7px; cursor: copy; }
 
 .copyable-line {
   position: relative;
@@ -199,6 +205,7 @@ function getTokenAriaLabel(line, label, segmentIndex) {
 }
 
 @media (hover: none) {
+  .copyable-block-action { min-height: 44px; }
   .copyable-line.has-copy-target {
     display: flex;
     align-items: center;
