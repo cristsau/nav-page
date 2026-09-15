@@ -1,0 +1,68 @@
+name: Docker Compose installer acceptance
+on:
+  push:
+    branches: [codex/nav-compose-20260915]
+    paths: ['selfhost/**', 'scripts/New-ComposePackage.ps1', '.github/workflows/compose-install.yml', 'api/package*.json', 'api/scripts/*Isolation*', '.github/scripts/verify-api-audit-policy.mjs']
+  workflow_dispatch:
+permissions:
+  contents: read
+concurrency:
+  group: compose-installer-${{ github.ref }}
+  cancel-in-progress: false
+jobs:
+  isolated-install:
+    runs-on: ubuntu-latest
+    timeout-minutes: 35
+    env:
+      ONNXRUNTIME_NODE_INSTALL: skip
+    steps:
+      - uses: actions/checkout@v6
+      - uses: actions/setup-node@v6
+        with:
+          node-version: 24
+      - name: Audit source dependencies without exceptions
+        run: node .github/scripts/verify-api-audit-policy.mjs
+      - name: Package committed source and freeze official image manifests
+        shell: pwsh
+        run: |
+          $result = ./scripts/New-ComposePackage.ps1 -SourceRef $env:GITHUB_SHA | ConvertFrom-Json
+          $archive = $result.archive
+          $destination = Join-Path $env:RUNNER_TEMP 'nav-compose-install'
+          New-Item -ItemType Directory -Path $destination | Out-Null
+          tar -xzf $archive -C $destination
+          if ($LASTEXITCODE -ne 0) { throw 'Extraction failed' }
+          $package = (Get-ChildItem -LiteralPath $destination -Directory).FullName
+          "NAV_COMPOSE_PACKAGE=$package" >> $env:GITHUB_ENV
+          "NAV_COMPOSE_ARCHIVE=$archive" >> $env:GITHUB_ENV
+      - name: Installer unit, integrity and shell checks
+        run: |
+          set -euo pipefail
+          node --test selfhost/test/setup.test.mjs
+          bash -n "$NAV_COMPOSE_PACKAGE/install.sh" "$NAV_COMPOSE_PACKAGE/manage.sh"
+          shellcheck --severity=warning "$NAV_COMPOSE_PACKAGE/install.sh" "$NAV_COMPOSE_PACKAGE/manage.sh"
+      - name: Run the real installation wizard with disposable test credentials
+        run: |
+          set -euo pipefail
+          cd "$NAV_COMPOSE_PACKAGE"
+          printf '%s\n' ci-admin 'Synthetic-test-only-password-789!' 'Synthetic-test-only-password-789!' | bash install.sh
+          bash manage.sh local-ca
+      - name: Strict TLS login, CSRF, persistence, secret isolation and backup restore
+        run: node selfhost/test/acceptance.mjs
+      - name: Store exact source installation package only after acceptance
+        uses: actions/upload-artifact@v7
+        with:
+          name: domonav-compose-validated
+          path: |
+            ${{ env.NAV_COMPOSE_ARCHIVE }}
+            ${{ env.NAV_COMPOSE_ARCHIVE }}.sha256
+          if-no-files-found: error
+          retention-days: 14
+      - name: Scoped temporary-stack cleanup
+        if: always()
+        run: |
+          if [[ -n "${NAV_COMPOSE_PACKAGE:-}" && -f "$NAV_COMPOSE_PACKAGE/.env" ]]; then
+            cd "$NAV_COMPOSE_PACKAGE"
+            docker compose --env-file .env -f compose.yaml down
+          fi
+          # No configuration, credentials, backups, logs or volumes are uploaded.
+          # The hosted runner itself is disposed by GitHub after the job.

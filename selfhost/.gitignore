@@ -1,0 +1,11 @@
+.env
+config/
+config.init-*/
+source/
+backups/
+*.tar.gz
+*.zip
+*.crt
+image-lock.json
+package-info.json
+SHA256SUMS

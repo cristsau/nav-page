@@ -1,0 +1,17 @@
+**
+!source/
+!source/app/
+!source/app/**
+!source/api/
+!source/api/**
+!runtime.mjs
+!Dockerfile
+**/node_modules
+**/.env
+**/.env.*
+**/.git
+**/*.log
+**/*.pem
+**/*.key
+**/dist
+source/app/public/downloads

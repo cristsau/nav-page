@@ -3,13 +3,13 @@ import { existsSync, lstatSync, readFileSync, readdirSync, realpathSync, rmSync 
 import { createRequire } from 'node:module'
 import { dirname, join, resolve } from 'node:path'
 import { fileURLToPath, pathToFileURL } from 'node:url'
-import { embeddingException } from './embeddingIsolationContract.js'
+import { embeddingRuntime } from './embeddingIsolationContract.js'
 
 const root = resolve(dirname(fileURLToPath(import.meta.url)), '..')
 const require = createRequire(new URL('../package.json', import.meta.url))
 const readJson = (path) => JSON.parse(readFileSync(path, 'utf8'))
 export function verifyPinnedEmbeddingLock(lock) {
-  for (const [name, version] of Object.entries(embeddingException.versions)) {
+  for (const [name, version] of Object.entries(embeddingRuntime.versions)) {
     assert.equal(lock.packages?.[`node_modules/${name}`]?.version, version, `Embedding lock drift: ${name}`)
   }
 }
@@ -22,7 +22,7 @@ export function stripInstallTools() {
   assert.equal(process.env.ONNXRUNTIME_NODE_INSTALL, 'skip')
   assert.equal(realpathSync('/app/node_modules'), '/app/node_modules')
   verifyPinnedEmbeddingLock(readJson(join(root, 'package-lock.json')))
-  for (const [name, version] of Object.entries(embeddingException.versions)) {
+  for (const [name, version] of Object.entries(embeddingRuntime.versions)) {
     assert.equal(readJson(join(root, 'node_modules', name, 'package.json')).version, version, `Installed version drift: ${name}`)
   }
   const targets = ['/app/node_modules/adm-zip', '/app/node_modules/onnxruntime-node/script']
@@ -61,7 +61,7 @@ export async function verifyEmbeddingIsolation() {
     const result = await session.run({ x: new ort.Tensor('float32', Float32Array.from([1, 2, 3]), [3]) })
     assert.deepEqual(Array.from(result.y.data), [1, 2, 3])
   } finally { await session.release() }
-  return { isolation: embeddingException.isolation, zipCodePresent: false, installerPresent: false, gpuDownloadsPresent: false, transformersImport: true, nativeCpuInference: true }
+  return { isolation: embeddingRuntime.isolation, zipCodePresent: false, installerPresent: false, gpuDownloadsPresent: false, transformersImport: true, nativeCpuInference: true }
 }
 if (process.argv[1] && pathToFileURL(resolve(process.argv[1])).href === import.meta.url) {
   if (process.argv.includes('--strip-install-tools')) stripInstallTools()

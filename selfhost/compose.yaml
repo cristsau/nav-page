@@ -1,0 +1,122 @@
+# Run through install.sh/manage.sh; config is generated locally, never distributed.
+x-logging: &logging
+  driver: local
+  options:
+    max-size: "10m"
+    max-file: "3"
+services:
+  db:
+    image: ${NAV_POSTGRES_IMAGE:?Run install.sh first}
+    restart: unless-stopped
+    environment:
+      POSTGRES_DB: nav
+      POSTGRES_USER: nav
+      POSTGRES_PASSWORD_FILE: /run/secrets/db_password
+    secrets: [db_password]
+    volumes:
+      - database:/var/lib/postgresql/data
+    networks: [database]
+    healthcheck:
+      test: [CMD-SHELL, "pg_isready -U nav -d nav"]
+      interval: 5s
+      timeout: 5s
+      retries: 30
+    logging: *logging
+  web:
+    image: ${COMPOSE_PROJECT_NAME}-web:${NAV_PACKAGE_VERSION}
+    build:
+      context: .
+      target: web
+      args:
+        NODE_IMAGE: ${NAV_NODE_IMAGE}
+        CADDY_IMAGE: ${NAV_CADDY_IMAGE}
+        PUBLIC_ORIGIN: ${NAV_PUBLIC_APP_ORIGIN}
+        SOURCE_REVISION: ${NAV_SOURCE_REVISION}
+    restart: unless-stopped
+    ports:
+      - "${NAV_BIND_ADDRESS}:${NAV_HTTP_PORT}:80"
+      - "${NAV_BIND_ADDRESS}:${NAV_HTTPS_PORT}:443"
+    volumes:
+      - ./config/Caddyfile:/etc/caddy/Caddyfile:ro
+      - certificates:/data
+      - caddy_config:/config
+    networks: [edge]
+    read_only: true
+    tmpfs: [/tmp]
+    security_opt: [no-new-privileges:true]
+    cap_drop: [ALL]
+    cap_add: [NET_BIND_SERVICE, DAC_OVERRIDE]
+    healthcheck:
+      test: [CMD, wget, -q, -O, /dev/null, "http://127.0.0.1:8081/healthz"]
+      interval: 5s
+      timeout: 3s
+      retries: 20
+    logging: *logging
+  api:
+    image: ${COMPOSE_PROJECT_NAME}-api:${NAV_PACKAGE_VERSION}
+    build:
+      context: .
+      target: api
+      args:
+        NODE_IMAGE: ${NAV_NODE_IMAGE}
+        CADDY_IMAGE: ${NAV_CADDY_IMAGE}
+        PUBLIC_ORIGIN: ${NAV_PUBLIC_APP_ORIGIN}
+        SOURCE_REVISION: ${NAV_SOURCE_REVISION}
+    restart: unless-stopped
+    depends_on:
+      db:
+        condition: service_healthy
+      web:
+        condition: service_healthy
+        restart: true
+    env_file: [./config/api.env]
+    environment:
+      NODE_ENV: production
+      NAV_LOG_LEVEL: warn
+      NAV_PUBLIC_APP_ORIGIN: ${NAV_PUBLIC_APP_ORIGIN}
+      CORS_ORIGIN: ${NAV_PUBLIC_APP_ORIGIN}
+      ADMIN_USERNAME: ${NAV_ADMIN_USERNAME}
+      SESSION_COOKIE_SECURE: "true"
+      NAV_SESSION_COOKIE_SAME_SITE: lax
+      NAV_MANAGED_INTEGRATIONS_DIR: /data/integrations
+      NAV_FRONTEND_INDEX_PATH: /var/www/nav/index.html
+      NAV_AUTH_EMAIL_KEYS_FILE: /run/secrets/auth_email_keys
+      NAV_EMAIL_RUNTIME_ROLE: combined
+    secrets: [db_password, admin_password, rate_limit_key, auth_email_keys]
+    volumes:
+      - integrations:/data/integrations
+      - models:/var/cache/nav-models
+    networks: [edge, database]
+    read_only: true
+    tmpfs: [/tmp]
+    security_opt: [no-new-privileges:true]
+    cap_drop: [ALL]
+    # Host-owned 0600 Compose secrets may have a non-root numeric UID.
+    cap_add: [DAC_OVERRIDE]
+    stop_grace_period: 40s
+    healthcheck:
+      test: [CMD, node, -e, "fetch('http://127.0.0.1:3001/health').then(r=>process.exit(r.ok?0:1)).catch(()=>process.exit(1))"]
+      interval: 5s
+      timeout: 4s
+      start_period: 60s
+      retries: 30
+    logging: *logging
+secrets:
+  db_password:
+    file: ./config/secrets/db-password
+  admin_password:
+    file: ./config/secrets/admin-password
+  rate_limit_key:
+    file: ./config/secrets/rate-limit-key
+  auth_email_keys:
+    file: ./config/secrets/auth-email-keys
+networks:
+  edge: {}
+  database:
+    internal: true
+volumes:
+  database: {}
+  integrations: {}
+  models: {}
+  certificates: {}
+  caddy_config: {}

@@ -1,0 +1,47 @@
+{
+    admin off
+    auto_https disable_redirects
+}
+# Internal readiness only, not a published port.
+http://:8081 {
+    bind 127.0.0.1
+    respond /healthz "ok" 200
+}
+https://@@HOST@@ {
+    @@TLS@@
+    encode zstd gzip
+    root * /srv
+    header {
+        X-Content-Type-Options nosniff
+        Referrer-Policy strict-origin-when-cross-origin
+        X-Frame-Options SAMEORIGIN
+        -Server
+    }
+    @private path /.env* /.git* /source/* /config/* /node_modules/*
+    respond @private 404
+    @backend path /api/* /share/*
+    handle @backend {
+        reverse_proxy api:3001 {
+            # Do not pass untrusted client forwarding headers to the API.
+            header_up X-Forwarded-For {remote_host}
+            header_up X-Real-IP {remote_host}
+            header_up X-Forwarded-Proto https
+        }
+        header Cache-Control no-store
+    }
+    handle /assets/* {
+        header Cache-Control "public, max-age=31536000, immutable"
+        file_server
+    }
+    handle /downloads/* {
+        respond "Use the official Edge Add-ons store. Custom-domain extension support is not bundled." 404
+    }
+    handle {
+        header Cache-Control no-store
+        try_files {path} /index.html
+        file_server
+    }
+}
+http://@@HOST@@ {
+    redir https://@@PUBLIC_HOST@@{uri} permanent
+}
