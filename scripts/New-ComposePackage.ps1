@@ -1,5 +1,5 @@
 param(
-    [string]$SourceRef = 'origin/master',
+    [string]$SourceRef = 'HEAD',
     [string]$Version = '2026.09.15-compose.1'
 )
 $ErrorActionPreference = 'Stop'
@@ -7,6 +7,10 @@ if ($Version -notmatch '^[a-z0-9][a-z0-9.-]{0,60}$') { throw 'Invalid package ve
 $repo = (Resolve-Path -LiteralPath (Join-Path $PSScriptRoot '..')).Path
 $revision = (& git -C $repo rev-parse --verify "$SourceRef^{commit}").Trim()
 if ($LASTEXITCODE -ne 0 -or $revision -notmatch '^[a-f0-9]{40}$') { throw 'Source revision must resolve to a commit' }
+$lock = (& git -C $repo show "${revision}:api/package-lock.json" | Out-String | ConvertFrom-Json)
+if ($LASTEXITCODE -ne 0 -or $lock.packages.'node_modules/adm-zip'.version -ne '0.6.1') {
+    throw 'This installer requires the reviewed adm-zip 0.6.1 source commit; do not package the old expiring exception.'
+}
 $stamp = Get-Date -Format 'yyyyMMdd-HHmmss'
 $build = Join-Path $repo "dist/compose-$stamp"
 if (Test-Path -LiteralPath $build) { throw 'Output already exists; refusing overwrite' }
@@ -27,8 +31,11 @@ foreach ($file in Get-ChildItem -LiteralPath (Join-Path $package 'source') -File
     if ($relative -match '/(?:\.env(?:\..*)?|[^/]+\.(?:pem|key|p12|pfx|zip|crx))$' -or $relative -like 'source/app/public/downloads/*') { $excluded += $relative }
 }
 $files = @('compose.yaml','Dockerfile','.dockerignore','install.sh','manage.sh','setup.mjs','runtime.mjs','Caddyfile.template','README.md')
-foreach ($file in $files) { Copy-Item -LiteralPath (Join-Path $repo "selfhost/$file") -Destination (Join-Path $package $file) }
 $utf8 = New-Object Text.UTF8Encoding($false)
+foreach ($file in $files) {
+    $content = [IO.File]::ReadAllText((Join-Path $repo "selfhost/$file")).Replace("`r`n", "`n")
+    [IO.File]::WriteAllText((Join-Path $package $file), $content, $utf8)
+}
 # Freeze public official-image manifests. Anonymous registry bearer tokens are never printed or saved.
 function Get-PublicImagePin([string]$Repository, [string]$Tag) {
     $auth = Invoke-RestMethod -Uri "https://auth.docker.io/token?service=registry.docker.io&scope=repository:library/${Repository}:pull"
@@ -48,7 +55,7 @@ $images = [ordered]@{
     postgres = Get-PublicImagePin 'postgres' '16-alpine'
     caddy = Get-PublicImagePin 'caddy' '2-alpine'
 }
-[IO.File]::WriteAllText((Join-Path $package 'image-lock.json'), ($images | ConvertTo-Json) + "`n", $utf8)
+[IO.File]::WriteAllText((Join-Path $package 'image-lock.json'), ($images | ConvertTo-Json).Replace("`r`n", "`n") + "`n", $utf8)
 $info = [ordered]@{ version=$Version; sourceRevision=$revision; packagedAtUtc=[DateTime]::UtcNow.ToString('o'); platform='linux/amd64'; status='candidate-requires-compose-acceptance'; sourceSelection='committed allowlist; no working-tree application changes' }
 [IO.File]::WriteAllText((Join-Path $package 'package-info.json'), ($info | ConvertTo-Json) + "`n", $utf8)
 $allowed = @(Get-ChildItem -LiteralPath $package -File -Recurse -Force | ForEach-Object {

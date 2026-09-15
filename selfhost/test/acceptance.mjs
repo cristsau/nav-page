@@ -15,7 +15,7 @@ function request(path, { method = 'GET', body, origin = settings.origin, authent
   const data = body ? JSON.stringify(body) : undefined
   return new Promise((resolveResponse, reject) => {
     const req = https.request(new URL(path, settings.origin), {
-      ca, family: 4, method, headers: { Origin: origin, ...(authenticated && cookie ? { Cookie: cookie } : {}), ...(data ? { 'Content-Type': 'application/json', 'Content-Length': Buffer.byteLength(data) } : {}) }
+      ca, family: 4, agent: false, method, headers: { Origin: origin, ...(authenticated && cookie ? { Cookie: cookie } : {}), ...(data ? { 'Content-Type': 'application/json', 'Content-Length': Buffer.byteLength(data) } : {}) }
     }, res => {
       let text = ''
       res.on('data', chunk => { text += chunk })
@@ -51,6 +51,7 @@ try {
   const groupId = groupResponse.json().group.id
   const bookmark = await request('/api/bookmarks', { method: 'POST', body: { groupId, title: marker, url: 'https://example.com/compose-acceptance' } })
   assert.equal(bookmark.status, 201)
+  console.log('PASS authenticated group/bookmark creation; recreating the synthetic stack')
   dc(['up', '-d', '--force-recreate', '--wait', '--wait-timeout', '240'])
   await login()
   const groups = (await request('/api/groups')).json().groups

@@ -102,6 +102,10 @@ test('Docker build excludes mutable config and uses locked dependencies', () => 
   assert.match(read('Dockerfile'), /VITE_AUTH_MODE=backend/)
   assert.match(read('Dockerfile'), /npm ci --omit=dev/)
   assert.match(read('Dockerfile'), /--strip-install-tools/)
+  assert.equal(JSON.parse(read('source/api/package-lock.json')).packages['node_modules/adm-zip'].version, '0.6.1')
+  assert.ok(!read('install.sh').includes('\r'))
+  assert.ok(!read('manage.sh').includes('\r'))
+  assert.ok(!read('image-lock.json').includes('\r'))
 })
 test('compose isolation, persistence and bounded readiness contracts', () => {
   const compose = read('compose.yaml')
