@@ -76,7 +76,7 @@ bash manage.sh backup --allow-pause
 
 ## 开发者制作包
 
-在源码仓库 Windows PowerShell 执行：
+在安装包测试分支的源码仓库使用 PowerShell 7 执行（仅制包需要，Linux 安装不需要 PowerShell）：
 
 ```powershell
 .\scripts\New-ComposePackage.ps1 -SourceRef HEAD

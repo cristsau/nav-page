@@ -1,3 +1,4 @@
+#Requires -Version 7.0
 param(
     [string]$SourceRef = 'HEAD',
     [string]$Version = '2026.09.15-compose.1'
@@ -7,7 +8,7 @@ if ($Version -notmatch '^[a-z0-9][a-z0-9.-]{0,60}$') { throw 'Invalid package ve
 $repo = (Resolve-Path -LiteralPath (Join-Path $PSScriptRoot '..')).Path
 $revision = (& git -C $repo rev-parse --verify "$SourceRef^{commit}").Trim()
 if ($LASTEXITCODE -ne 0 -or $revision -notmatch '^[a-f0-9]{40}$') { throw 'Source revision must resolve to a commit' }
-$lock = (& git -C $repo show "${revision}:api/package-lock.json" | Out-String | ConvertFrom-Json)
+$lock = (& git -C $repo show "${revision}:api/package-lock.json" | Out-String | ConvertFrom-Json -AsHashtable)
 if ($LASTEXITCODE -ne 0 -or $lock.packages.'node_modules/adm-zip'.version -ne '0.6.1') {
     throw 'This installer requires the reviewed adm-zip 0.6.1 source commit; do not package the old expiring exception.'
 }
