@@ -2,71 +2,53 @@ import test from 'node:test'
 import assert from 'node:assert/strict'
 import { readFileSync } from 'node:fs'
 import { validateApiAudit } from '../../.github/scripts/verify-api-audit-policy.mjs'
-import { embeddingException } from '../scripts/embeddingIsolationContract.js'
-import { identityModel, stripInstallTools } from '../scripts/verifyEmbeddingIsolation.js'
+import { embeddingRuntime } from '../scripts/embeddingIsolationContract.js'
+import { identityModel, stripInstallTools, verifyPinnedEmbeddingLock } from '../scripts/verifyEmbeddingIsolation.js'
 
 const lock = JSON.parse(readFileSync(new URL('../package-lock.json', import.meta.url)))
 const controls = {
-  now: Date.parse(embeddingException.notBefore) + 1000,
   dockerfile: readFileSync(new URL('../Dockerfile', import.meta.url), 'utf8').replaceAll('\r\n', '\n'),
   workflow: readFileSync(new URL('../../.github/workflows/ci.yml', import.meta.url), 'utf8').replaceAll('\r\n', '\n')
 }
-function report() {
-  return {
-    auditReportVersion: 2, metadata: { vulnerabilities: { total: 3 } },
-    vulnerabilities: Object.fromEntries(Object.keys(embeddingException.versions).map((name) => [name, {
-      name, severity: 'moderate', nodes: [`node_modules/${name}`],
-      via: name === 'adm-zip' ? [{ url: `https://github.com/advisories/${embeddingException.advisory.toLowerCase()}` }]
-        : [name === 'onnxruntime-node' ? 'adm-zip' : 'onnxruntime-node']
-    }]))
+const cleanReport = () => ({ auditReportVersion: 2, metadata: { vulnerabilities: { total: 0 } }, vulnerabilities: {} })
+test('clean audit passes without a time-limited exception', () => {
+  for (const now of [0, Date.parse('2026-09-17T02:45:00Z'), Date.parse('2027-01-01T00:00:00Z')]) {
+    assert.deepEqual(validateApiAudit(cleanReport(), lock, { ...controls, now }), { status: 'PASS', exception: false })
   }
+  assert.equal(embeddingRuntime.versions['adm-zip'], '0.6.1')
+  assert.equal(Object.hasOwn(embeddingRuntime, 'expiresAt'), false)
+})
+for (const advisory of ['GHSA-vwc7-r8mq-g2x9', 'GHSA-f88m-g3jw-g9cj', 'GHSA-xxxx-yyyy-zzzz']) {
+  test('no exception remains for ' + advisory, () => {
+    const report = cleanReport()
+    report.metadata.vulnerabilities.total = 1
+    report.vulnerabilities['adm-zip'] = { name: 'adm-zip', severity: 'moderate', nodes: ['node_modules/adm-zip'], via: [{url: 'https://github.com/advisories/' + advisory}] }
+    assert.throws(() => validateApiAudit(report, lock, { ...controls, now: Date.parse('2026-09-10T03:00:00Z') }), /exceptions are retired/)
+  })
 }
-test('only the exact owner-approved advisory chain passes before expiry', () => {
-  const result = validateApiAudit(report(), lock, controls)
-  assert.equal(result.status, 'PASS_WITH_EXPIRING_EXCEPTION')
-  assert.equal(result.expiresAt, embeddingException.expiresAt)
-  assert.equal(result.affectedPackageEntries, 3)
-  assert.ok(Date.parse(embeddingException.expiresAt) - Date.parse(embeddingException.notBefore) <= 7 * 86400000)
-})
-for (const [label, now] of [
-  ['before authorization', Date.parse(embeddingException.notBefore) - 1],
-  ['at expiry', Date.parse(embeddingException.expiresAt)],
-  ['after expiry', Date.parse(embeddingException.expiresAt) + 1],
-  ['invalid time', NaN]
-]) test(`temporary exception rejects ${label}`, () => {
-  assert.throws(() => validateApiAudit(report(), lock, { ...controls, now }), /authorized window/)
-})
-test('a truly clean audit needs no exception, even after expiry', () => {
-  assert.deepEqual(validateApiAudit({ auditReportVersion: 2, metadata: { vulnerabilities: { total: 0 } }, vulnerabilities: {} }, lock,
-    { ...controls, now: Date.parse(embeddingException.expiresAt) }), { status: 'PASS', exception: false })
-})
 for (const [label, mutate] of [
-  ['new advisory', (r) => { r.vulnerabilities['adm-zip'].via.push({ url: 'https://github.com/advisories/GHSA-xxxx-yyyy-zzzz' }) }],
-  ['old blanket exception', (r) => { r.vulnerabilities['adm-zip'].via = [{ url: 'https://github.com/advisories/GHSA-f88m-g3jw-g9cj' }] }],
-  ['severity escalation', (r) => { r.vulnerabilities['adm-zip'].severity = 'high' }],
-  ['nested vulnerable copy', (r) => { r.vulnerabilities['adm-zip'].nodes.push('node_modules/other/node_modules/adm-zip') }],
-  ['unresolved cause', (r) => { r.vulnerabilities['adm-zip'].via = ['missing-package'] }],
-  ['cycle', (r) => { r.vulnerabilities['adm-zip'].via = ['onnxruntime-node'] }],
-  ['unknown package', (r) => { r.vulnerabilities.other = { name: 'other' }; r.metadata.vulnerabilities.total++ }],
-  ['report transport error', (r) => { r.error = { code: 'EAI_AGAIN' } }],
-  ['missing metadata', (r) => { delete r.metadata }],
-  ['false clean report', (r) => { r.vulnerabilities = {} }]
-]) test(`audit remains fail-closed for ${label}`, () => {
-  const changed = report(); mutate(changed)
-  assert.throws(() => validateApiAudit(changed, lock, controls))
+  ['transport error', r => { r.error = { code: 'EAI_AGAIN' } }],
+  ['missing metadata', r => { delete r.metadata }],
+  ['false clean report', r => { r.metadata.vulnerabilities.total = 1 }],
+  ['unsupported report', r => { r.auditReportVersion = 1 }],
+  ['missing entries', r => { delete r.vulnerabilities }]
+]) test('audit rejects ' + label, () => {
+  const report = cleanReport(); mutate(report)
+  assert.throws(() => validateApiAudit(report, lock, controls))
 })
-test('package version drift is rejected', () => {
+for (const version of ['0.6.0', '0.6.2']) test('runtime and clean audit reject lock drift to ' + version, () => {
   const changed = structuredClone(lock)
-  changed.packages['node_modules/adm-zip'].version = '0.6.1'
-  assert.throws(() => validateApiAudit(report(), changed, controls), /lock drift/)
+  changed.packages['node_modules/adm-zip'].version = version
+  assert.throws(() => verifyPinnedEmbeddingLock(changed), /lock drift/)
+  assert.throws(() => validateApiAudit(cleanReport(), changed, controls), /lock drift/)
 })
 for (const [label, field, guard] of [
   ['GPU skip', 'dockerfile', 'RUN ONNXRUNTIME_NODE_INSTALL=skip npm ci --omit=dev'],
   ['installer removal', 'dockerfile', '--strip-install-tools'],
   ['runner protection', 'workflow', 'ONNXRUNTIME_NODE_INSTALL: skip'],
   ['offline runtime test', 'workflow', '--network none --read-only --tmpfs /tmp']
-]) test(`exception rejects missing ${label} control`, () => {
-  assert.throws(() => validateApiAudit(report(), lock, { ...controls, [field]: controls[field].replace(guard, 'REMOVED') }))
+]) test('clean audit still requires ' + label, () => {
+  assert.throws(() => validateApiAudit(cleanReport(), lock, { ...controls, [field]: controls[field].replace(guard, 'REMOVED') }))
 })
 test('destructive stripping mode refuses the ordinary test checkout', () => {
   assert.throws(() => stripInstallTools())

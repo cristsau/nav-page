@@ -1,0 +1,9 @@
+{
+  "version": 1,
+  "allowUpload": false,
+  "allowLocalPrune": false,
+  "credentialsFile": "/etc/nav/dropbox-connection.json",
+  "stateDirectory": "/var/lib/nav-dropbox",
+  "backupRoot": "/var/backups/nav",
+  "ageRecipient": "REPLACE_WITH_DEDICATED_PUBLIC_RECIPIENT"
+}
