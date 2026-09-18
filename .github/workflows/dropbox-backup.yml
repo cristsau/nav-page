@@ -1,0 +1,32 @@
+name: Dropbox backup isolated acceptance
+on:
+  push:
+    branches: [codex/nav-dropbox-backup-20260918]
+    paths: ['scripts/dropbox/**', '.github/workflows/dropbox-backup.yml']
+  workflow_dispatch:
+permissions:
+  contents: read
+concurrency:
+  group: dropbox-backup-test-${{ github.ref }}
+  cancel-in-progress: false
+jobs:
+  isolated-backup:
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@v6
+      - uses: actions/setup-node@v6
+        with:
+          node-version: 24
+      - name: Install standard encryption and disposable PostgreSQL tools
+        run: |
+          set -euo pipefail
+          sudo apt-get update -qq
+          sudo apt-get install -y age
+          docker pull postgres:16-alpine
+      - name: Protocol, policy and failure-path tests
+        run: sudo "$(command -v node)" --test --test-concurrency=1 scripts/dropbox/oauth.test.mjs scripts/dropbox/backup.test.mjs scripts/dropbox/local-retention.test.mjs
+      - name: Real age and PostgreSQL isolated restore with synthetic data only
+        run: sudo env NAV_DROPBOX_DISPOSABLE_TEST=1 "$(command -v node)" --test scripts/dropbox/backup-linux.test.mjs
+      # No deployment step, external credentials, secrets, backup artifacts or key upload.
+      # The only network-backed storage is a mock. The hosted runner is disposable.
