@@ -1,4 +1,5 @@
 import test from 'node:test'
+import { sealFixture } from './snapshot-fixture.mjs'
 import assert from 'node:assert/strict'
 import { createHash } from 'node:crypto'
 import { mkdtemp, mkdir, writeFile, readFile, rm, lstat } from 'node:fs/promises'
@@ -210,6 +211,7 @@ test('canonical source verifier rejects corruption and unlisted members; never a
     const dump = Buffer.from('PGDMP-SYNTHETIC-NOT-A-RESTORABLE-DATABASE'), tree = Buffer.from('SYNTHETIC-TREE')
     await writeFile(join(snapshot, 'database/nav.dump'), dump, { mode: 0o600 }); await writeFile(join(snapshot, 'metadata/tree.tsv'), tree, { mode: 0o600 })
     await writeFile(join(snapshot, 'manifest.sha256'), `${sha(dump)}  ./database/nav.dump\n${sha(tree)}  ./metadata/tree.tsv\n`, { mode: 0o600 })
+    await sealFixture(snapshot)
     const inspected = await inspectSnapshot(root, snapshot)
     assert.ok(inspected.reservedBytes > dump.length); assert.equal(inspected.manifestHash.length, 64)
     await writeFile(join(snapshot, 'unexpected.txt'), 'synthetic', { mode: 0o600 })

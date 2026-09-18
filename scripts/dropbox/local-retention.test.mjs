@@ -1,6 +1,7 @@
 import test from 'node:test'
+import { sealFixture } from './snapshot-fixture.mjs'
 import assert from 'node:assert/strict'
-import { mkdtemp, mkdir, writeFile, readFile, readdir, rm, rmdir, symlink, utimes } from 'node:fs/promises'
+import { mkdtemp, mkdir, writeFile, readFile, readdir, rm, rmdir, symlink, utimes, chown, chmod, unlink } from 'node:fs/promises'
 import { join, dirname, resolve } from 'node:path'
 import { createHash } from 'node:crypto'
 import { tmpdir } from 'node:os'
@@ -20,6 +21,7 @@ async function fixture(run) {
       await writeFile(join(path, 'database/nav.dump'), 'SYNTHETIC-DUMP', { mode: 0o600 })
       await writeFile(join(path, 'metadata/tree.tsv'), 'SYNTHETIC-TREE', { mode: 0o600 })
       await writeFile(join(path, 'manifest.sha256'), `${sha('SYNTHETIC-DUMP')}  ./database/nav.dump\n${sha('SYNTHETIC-TREE')}  ./metadata/tree.tsv\n`, { mode: 0o600 })
+      await sealFixture(path)
       return path
     }
     await run({ root, dir, snapshot })
@@ -87,4 +89,29 @@ test('Linux: symlink member or snapshot cannot redirect cleanup outside backup r
   await symlink(outside, join(root, snapshotName(1), 'evil'))
   await assert.rejects(pruneLocalRetention(root, { enabled: true }), /unsafe_snapshot_member/)
   assert.equal((await readdir(root)).length, 4); assert.equal(await readFile(outside, 'utf8'), 'KEEP')
+}))
+
+test('Linux: canonical declared internal links and preserved non-root file owner are supported without following links', { skip: process.platform !== 'linux' }, () => fixture(async ({ root, snapshot }) => {
+  for (let n = 1; n <= 4; n++) {
+    const path = await snapshot(n)
+    await writeFile(join(path, 'metadata/owned.txt'), 'SYNTHETIC-OWNED', { mode: 0o644 })
+    await chown(join(path, 'metadata/owned.txt'), 1001, 1001)
+    await symlink('owned.txt', join(path, 'metadata/internal-link'))
+    await sealFixture(path)
+  }
+  assert.deepEqual((await pruneLocalRetention(root, { enabled: true })).removed, [snapshotName(1)])
+  assert.equal(await readFile(join(root, snapshotName(4), 'metadata/internal-link'), 'utf8'), 'SYNTHETIC-OWNED')
+}))
+
+test('Linux: declared link cannot escape snapshot; changed link or declared mode mismatch blocks pruning', { skip: process.platform !== 'linux' }, () => fixture(async ({ root, dir, snapshot }) => {
+  const path = await snapshot(1), linkPath = join(path, 'metadata/link')
+  await writeFile(join(dir, 'outside.txt'), 'KEEP', { mode: 0o600 })
+  await symlink(join(dir, 'outside.txt'), linkPath); await sealFixture(path)
+  await assert.rejects(planLocalRetention(root), /unsafe_snapshot_symlink/)
+  await unlink(linkPath); await symlink('../database/nav.dump', linkPath); await sealFixture(path)
+  await unlink(linkPath); await symlink('tree.tsv', linkPath)
+  await assert.rejects(planLocalRetention(root), /unsafe_snapshot_symlink/)
+  await unlink(linkPath); await sealFixture(path)
+  await chmod(join(path, 'database/nav.dump'), 0o644)
+  await assert.rejects(planLocalRetention(root), /snapshot_tree_mismatch/)
 }))

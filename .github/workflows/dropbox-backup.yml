@@ -1,7 +1,7 @@
 name: Dropbox backup isolated acceptance
 on:
   push:
-    branches: [codex/nav-dropbox-backup-20260918]
+    branches: [codex/nav-dropbox-backup-20260918, master]
     paths: ['scripts/dropbox/**', '.github/workflows/dropbox-backup.yml']
   workflow_dispatch:
 permissions:
@@ -28,5 +28,16 @@ jobs:
         run: sudo "$(command -v node)" --test --test-concurrency=1 scripts/dropbox/oauth.test.mjs scripts/dropbox/backup.test.mjs scripts/dropbox/local-retention.test.mjs
       - name: Real age and PostgreSQL isolated restore with synthetic data only
         run: sudo env NAV_DROPBOX_DISPOSABLE_TEST=1 "$(command -v node)" --test scripts/dropbox/backup-linux.test.mjs
-      # No deployment step, external credentials, secrets, backup artifacts or key upload.
+      - name: Package public operator source only
+        run: |
+          git archive --format=tar.gz --prefix=nav-dropbox-backup/ -o nav-dropbox-backup.tar.gz HEAD scripts/dropbox
+          sha256sum nav-dropbox-backup.tar.gz > nav-dropbox-backup.tar.gz.sha256
+      - uses: actions/upload-artifact@v4
+        with:
+          name: nav-dropbox-backup-source
+          path: |
+            nav-dropbox-backup.tar.gz
+            nav-dropbox-backup.tar.gz.sha256
+          retention-days: 14
+      # No deployment step, external credentials, secrets, backup data or key upload.
       # The only network-backed storage is a mock. The hosted runner is disposable.

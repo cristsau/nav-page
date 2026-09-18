@@ -112,9 +112,18 @@ export async function main(args) {
     if (!parameter) fail('snapshot_path_required')
     const snapshot = await inspectSnapshot(config.backupRoot, parameter)
     if (operation === 'plan') return { ...planUpload(ledger, await client.inventory(), snapshot.reservedBytes), source: snapshot, cloudWrite: false }
-    verifyEncryptionTools(config.ageRecipient)
+    const encryptionTools = { age: config.ageExecutable || '/usr/bin/age' }
+    if (resolve(encryptionTools.age) !== encryptionTools.age) fail('unsafe_age_executable')
+    let executablePath = encryptionTools.age
+    while (true) {
+      const s = await lstat(executablePath)
+      if (s.isSymbolicLink() || s.uid !== 0 || (s.mode & 0o022)) fail('unsafe_age_executable')
+      if (executablePath === '/') break
+      executablePath = dirname(executablePath)
+    }
+    verifyEncryptionTools(config.ageRecipient, encryptionTools)
     const result = await backupJob({ client, ledger, saveLedger: next => saveLedger(file, next), manifestHash: snapshot.manifestHash,
-      reservedBytes: snapshot.reservedBytes, archive: encryptedArchive(parameter, config.ageRecipient) })
+      reservedBytes: snapshot.reservedBytes, archive: encryptedArchive(parameter, config.ageRecipient, encryptionTools) })
     if (config.allowLocalPrune === true) {
       try { result.localRetention = await pruneLocalRetention(config.backupRoot, { enabled: true }) }
       catch { result.localRetention = { state: 'LOCAL_RETENTION_BLOCKED', attentionRequired: true } }

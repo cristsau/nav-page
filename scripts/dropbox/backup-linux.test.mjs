@@ -1,5 +1,6 @@
 // Disposable Linux acceptance ONLY. No Dropbox credentials or external file requests.
 import test from 'node:test'
+import { sealFixture } from './snapshot-fixture.mjs'
 import assert from 'node:assert/strict'
 import { spawn, spawnSync } from 'node:child_process'
 import { createReadStream, createWriteStream } from 'node:fs'
@@ -61,6 +62,7 @@ test('Linux: real age roundtrip, tamper rejection, real PG dump/restore, root CL
     const tree = 'f\t600\tdatabase/nav.dump\t\nf\t600\tmetadata/tree.tsv\t\n'
     await writeFile(join(snapshot, 'metadata/tree.tsv'), tree, { mode: 0o600 })
     await writeFile(join(snapshot, 'manifest.sha256'), `${sha(await readFile(dump))}  ./database/nav.dump\n${sha(tree)}  ./metadata/tree.tsv\n`, { mode: 0o600 })
+    await sealFixture(snapshot)
     const info = await inspectSnapshot(backups, snapshot)
     let ciphertext, remote, saved
     const mockCloud = {
