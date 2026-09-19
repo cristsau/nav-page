@@ -67,6 +67,27 @@ test('delete preview expires and recursive preflight has a strict size cap', asy
   for (let i = 0; i < 501; i++) items.set('id:c' + i, file('/Photos/' + i, 'id:c' + i))
   await assert.rejects(service.prepareDelete('id:folder'), code('INVALID_PROVIDER_RESPONSE'))
 })
+
+test('recursive ID listings may include the exact root without inflating descendants or blocking deletion', async () => {
+  const { service, client, items, mutations } = fixture(), rpc = client.rpc
+  client.rpc = async (route, arg) => {
+    const result = await rpc(route, arg)
+    return route === 'files/list_folder' ? { ...result, entries: [items.get('id:folder'), ...result.entries] } : result
+  }
+  const plan = await service.prepareDelete('id:folder')
+  assert.equal(plan.descendants, 1); assert.equal(plan.files, 1)
+  await service.deleteConfirmed('id:folder', plan.token)
+  assert.equal(mutations.length, 1)
+})
+
+test('a root-ID entry with a changed path or an unrelated entry at the root still fails closed', async () => {
+  for (const raw of [folder('/Elsewhere', 'id:folder'), folder('/Photos', 'id:imposter')]) {
+    const { service, client, mutations } = fixture(), rpc = client.rpc
+    client.rpc = async (route, arg) => route === 'files/list_folder' ? { entries: [raw], has_more: false } : rpc(route, arg)
+    await assert.rejects(service.prepareDelete('id:folder'), code('FILE_CHANGED'))
+    assert.equal(mutations.length, 0)
+  }
+})
 test('copy protects both ends and is strict no-overwrite', async () => {
   const { service, mutations } = fixture()
   await assert.rejects(service.copy('id:backup', '/copy'), code('BACKUP_PROTECTED'))

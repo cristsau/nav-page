@@ -272,6 +272,12 @@ export class DropboxFilesService {
         if (!Array.isArray(result.entries) || result.entries.length > 100 || typeof result.has_more !== 'boolean') deny('INVALID_PROVIDER_RESPONSE', 502)
         for (const raw of result.entries) {
           const child = metadata(raw)
+          // A recursive ID-based listing can include the queried folder itself.
+          // Ignore only that exact folder, never an unrelated or moved entry.
+          if (child.id === item.id) {
+            if (child.type !== 'folder' || child.path !== item.path) deny('FILE_CHANGED', 409)
+            continue
+          }
           if (!child.path.toLowerCase().startsWith(item.path.toLowerCase() + '/')) deny('FILE_CHANGED', 409)
           protectPath(child.path, guards, true); children.push(child)
         }
