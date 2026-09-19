@@ -11,6 +11,7 @@ const folder = (path = '/Apps/Backup', id = 'id:backup') => ({ '.tag': 'folder',
 const file = (path = '/notes.txt', more = {}) => ({ '.tag': 'file', id: 'id:file', name: path.split('/').pop(), path_display: path, rev: 'abcdef123', size: 5, server_modified: '2026-09-19T00:00:00Z', ...more })
 const code = expected => e => e.code === expected
 const json = body => new Response(JSON.stringify(body), { headers: { 'Content-Type': 'application/json' } })
+const concrete = value => { const { '.tag': _tag, ...rest } = value; return rest }
 function fixture({ anchor = folder(), item = file(), listing, data = 'hello' } = {}) {
   const calls = [], uploads = []
   const client = {
@@ -20,12 +21,12 @@ function fixture({ anchor = folder(), item = file(), listing, data = 'hello' } =
       if (route.includes('list_folder')) return listing || { entries: [item], has_more: false }
       if (route.includes('search')) return { matches: [{ metadata: { metadata: item } }], has_more: false }
       if (route === 'files/delete_v2') return { metadata: item }
-      if (route === 'files/create_folder_v2') return { metadata: folder(arg.path, 'id:new') }
+      if (route === 'files/create_folder_v2') return { metadata: concrete(folder(arg.path, 'id:new')) }
       if (route === 'files/move_v2') return { metadata: file(arg.to_path) }
       throw Error('Unexpected fixture route')
     },
     async download() { return new Response(data) },
-    async upload(path, bytes, rev) { uploads.push({ path, bytes, rev }); return file(path, { rev: 'abcdef124', size: bytes.length }) }
+    async upload(path, bytes, rev) { uploads.push({ path, bytes, rev }); return concrete(file(path, { rev: 'abcdef124', size: bytes.length })) }
   }
   return { service: new DropboxFilesService(cfg(), client), calls, uploads }
 }
@@ -54,6 +55,15 @@ test('metadata strips unknown fields and rejects unsafe inline types and officia
 test('connection is separate, exact-scope and owner-bound', () => {
   assert.equal(validateFilesConnection(cfg()).purpose, 'nav-files')
   for (const change of [{ purpose: 'backup' }, { accessType: 'app_folder' }, { ownerUserId: 'admin' }, { clientId: 'backupapp123' }, { scopes: [...FILE_SCOPES, 'sharing.write'] }, { scopes: FILE_SCOPES.slice(1) }]) assert.throws(() => validateFilesConnection({ ...cfg(), ...change }))
+})
+test('concrete endpoint metadata may omit tag, union responses still require it', async () => {
+  assert.equal(metadata(concrete(file()), 'file').type, 'file')
+  assert.equal(metadata(concrete(folder()), 'folder').type, 'folder')
+  assert.throws(() => metadata(concrete(file())), code('INVALID_PROVIDER_RESPONSE'))
+  assert.throws(() => metadata(folder(), 'file'), code('INVALID_PROVIDER_RESPONSE'))
+  const { service } = fixture()
+  assert.equal((await service.mkdir('/New')).type, 'folder')
+  assert.equal((await service.upload('/new.txt', Buffer.from('hello'))).type, 'file')
 })
 test('connection file loader handles missing, bounded size and hardlinks', async () => {
   const dir = await mkdtemp(join(tmpdir(), 'nav-files-test-'))
@@ -176,7 +186,7 @@ test('client upload uses ASCII-safe strict add or revision update', async () => 
 })
 test('download binds revision and validates range and receipt before returning stream', async () => {
   const raw = file(), meta = metadata(raw)
-  const { client, calls } = clientFixture({ response: () => new Response('ell', { status: 206, headers: { 'Dropbox-API-Result': JSON.stringify(raw), 'Content-Range': 'bytes 1-3/5', 'Content-Length': '3' } }) })
+  const { client, calls } = clientFixture({ response: () => new Response('ell', { status: 206, headers: { 'Dropbox-API-Result': JSON.stringify(concrete(raw)), 'Content-Range': 'bytes 1-3/5', 'Content-Length': '3' } }) })
   assert.equal(await (await client.download(meta, { range: 'bytes=1-3' })).text(), 'ell')
   assert.equal(JSON.parse(calls.at(-1).options.headers['Dropbox-API-Arg']).path, 'rev:abcdef123')
   for (const headers of [{ 'Content-Range': 'bytes 0-2/5' }, { 'Content-Length': '10' }, { 'Dropbox-API-Result': JSON.stringify(file('/other.txt')) }]) {

@@ -57,10 +57,12 @@ export function officialUrl(value) {
   } catch { /* no untrusted links */ }
   return null
 }
-export function metadata(value) {
-  if (!value || !['file', 'folder'].includes(value['.tag']) || typeof value.name !== 'string' || !value.name || value.name.length > 512 || /[\x00-\x1f\x7f/\\]/.test(value.name)) deny('INVALID_PROVIDER_RESPONSE', 502)
+export function metadata(value, expectedType = null) {
+  // Concrete FileMetadata/FolderMetadata omit .tag; only known endpoint types may supply it.
+  const type = value?.['.tag'] ?? expectedType
+  if (!value || !['file', 'folder'].includes(type) || (expectedType && type !== expectedType) || typeof value.name !== 'string' || !value.name || value.name.length > 512 || /[\x00-\x1f\x7f/\\]/.test(value.name)) deny('INVALID_PROVIDER_RESPONSE', 502)
   const result = { id: fileId(value.id), name: value.name, path: filePath(value.path_display || value.path_lower),
-    type: value['.tag'], kind: value['.tag'] === 'folder' ? 'folder' : kindOf(value.name), officialUrl: officialUrl(value.preview_url) }
+    type, kind: type === 'folder' ? 'folder' : kindOf(value.name), officialUrl: officialUrl(value.preview_url) }
   if (result.type === 'file') {
     if (!Number.isSafeInteger(value.size) || value.size < 0 || !Number.isFinite(Date.parse(value.server_modified))) deny('INVALID_PROVIDER_RESPONSE', 502)
     Object.assign(result, { size: value.size, rev: revision(value.rev), modified: value.server_modified, downloadable: value.is_downloadable !== false })
@@ -161,7 +163,7 @@ export class DropboxFilesClient {
       headers: { Authorization: `Bearer ${token}`, 'Dropbox-API-Arg': asciiJson({ path: 'rev:' + revision(meta.rev) }), ...(range ? { Range: range } : {}) } })
     if (![200, 206].includes(response.status)) { await response.body?.cancel().catch(() => {}); deny(response.status === 416 ? 'INVALID_RANGE' : 'PROVIDER_UNAVAILABLE', response.status === 416 ? 416 : 502) }
     let receipt
-    try { receipt = metadata(JSON.parse(response.headers.get('dropbox-api-result'))) } catch { await response.body?.cancel().catch(() => {}); deny('INVALID_PROVIDER_RESPONSE', 502) }
+    try { receipt = metadata(JSON.parse(response.headers.get('dropbox-api-result')), 'file') } catch { await response.body?.cancel().catch(() => {}); deny('INVALID_PROVIDER_RESPONSE', 502) }
     if (receipt.id !== meta.id || receipt.rev !== meta.rev || receipt.size !== meta.size || receipt.path !== meta.path || !response.body) { await response.body?.cancel().catch(() => {}); deny('FILE_CHANGED', 409) }
     const actualLength = response.headers.get('content-length')
     const expectedLength = expected ? expected.end - expected.start + 1 : meta.size
@@ -222,7 +224,7 @@ export class DropboxFilesService {
   }
   async mkdir(path) {
     const guards = await this.protection(); protectPath(path, guards, true)
-    return metadata((await this.client.rpc('files/create_folder_v2', { path: filePath(path), autorename: false })).metadata)
+    return metadata((await this.client.rpc('files/create_folder_v2', { path: filePath(path), autorename: false })).metadata, 'folder')
   }
   async move(id, destination) {
     const guards = await this.protection(), item = await this.get(id, true, guards)
@@ -242,7 +244,7 @@ export class DropboxFilesService {
   async upload(path, bytes) {
     const guards = await this.protection(); protectPath(path, guards, true)
     if (!Buffer.isBuffer(bytes) || bytes.length > UPLOAD_LIMIT) deny('UPLOAD_TOO_LARGE', 413)
-    return metadata(await this.client.upload(path, bytes))
+    return metadata(await this.client.upload(path, bytes), 'file')
   }
   async text(id) {
     const item = await this.get(id)
@@ -263,6 +265,6 @@ export class DropboxFilesService {
     if (item.rev !== revision(rev)) deny('FILE_CHANGED', 409)
     if (typeof content !== 'string' || content.includes('\0') || Buffer.byteLength(content) > TEXT_LIMIT) deny('TEXT_TOO_LARGE', 413)
     if (item.name.toLowerCase().endsWith('.json')) { try { JSON.parse(content) } catch { deny('INVALID_JSON') } }
-    return metadata(await this.client.upload(item.path, Buffer.from(content, 'utf8'), item.rev))
+    return metadata(await this.client.upload(item.path, Buffer.from(content, 'utf8'), item.rev), 'file')
   }
 }
