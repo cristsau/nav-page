@@ -93,6 +93,7 @@ export default async function systemIntegrationRoutes(fastify) {
     return {
       writable: state.writable, updatedAt: state.updatedAt,
       systemMail: systemMailState(state.mail), cloudBackup: state.cloudBackup,
+      dropboxBackup: state.dropboxBackup,
       mailboxRetired: true
     }
   })
