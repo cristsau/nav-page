@@ -124,7 +124,7 @@ try {
   }
   await page.locator('#drive-editor').fill('UNSAVED_FINAL'); await page.getByRole('button', { name: '关闭编辑', exact: true }).click(); await page.getByRole('button', { name: '放弃修改并关闭', exact: true }).click(); await page.waitForSelector('[role=dialog]', { state: 'detached' })
   checks.push('editor-layout-discard')
-  const input = page.getByLabel('选择上传文件')
+  const input = page.getByLabel('选择上传文件', { exact: true })
   await input.setInputFiles([{ name: 'fixture.txt', mimeType: 'text/plain', buffer: Buffer.from('synthetic') }, { name: 'large.bin', mimeType: 'application/octet-stream', buffer: Buffer.alloc(25 * 1024 * 1024, 42) }])
   await page.waitForFunction(() => [...document.querySelectorAll('.drive-transfer-title>span')].filter(x => x.textContent === '上传完成').length === 2)
   assert.equal(uploads, 2); assert.equal(chunkCount, 5); checks.push('multi-file-25MiB-chunked-upload')
