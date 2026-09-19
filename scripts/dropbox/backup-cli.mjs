@@ -9,6 +9,7 @@ import { DropboxClient } from './backup-client.mjs'
 import { inspectSnapshot, encryptedArchive, verifyEncryptionTools } from './backup-archive.mjs'
 import { backupJob } from './backup-job.mjs'
 import { planLocalRetention, pruneLocalRetention } from './local-retention.mjs'
+import { createBackupStatus } from './backup-status.mjs'
 import { BackupError, POLICY, planUpload, planRetention, validateLedger, fail, validId } from './backup-policy.mjs'
 
 async function privatePath(path, directory = false) {
@@ -56,10 +57,27 @@ async function canonicalLock() {
   } catch (e) { await handle.close(); throw e }
 }
 
+async function publishStatus(directory, report) {
+  await privatePath(directory, true)
+  const target = join(directory, 'dropbox-status.json')
+  try { await privatePath(target) } catch (error) { if (error.code !== 'ENOENT') throw error }
+  const content = JSON.stringify(report)
+  if (Buffer.byteLength(content) > 65_536) fail('status_report_size_limit')
+  const temp = join(directory, `.dropbox-status-${randomBytes(16).toString('hex')}.tmp`)
+  const handle = await open(temp, 'wx', 0o600)
+  try {
+    try { await handle.writeFile(content); await handle.sync() } finally { await handle.close() }
+    await rename(temp, target)
+    const dirHandle = await open(directory, 'r')
+    try { await dirHandle.sync() } finally { await dirHandle.close() }
+  } catch (error) { await unlink(temp).catch(() => {}); throw error }
+  return { state: 'STATUS_REPORT_PUBLISHED', generatedAt: report.generatedAt, cloudAccess: false }
+}
+
 export async function main(args) {
   if (process.platform !== 'linux' || process.getuid?.() !== 0) fail('linux_operator_root_required')
   const [operation, configPath, parameter] = args
-  if (!['init-local', 'plan', 'backup', 'list', 'download', 'retention-plan', 'local-retention-plan', 'prune-local'].includes(operation)
+  if (!['init-local', 'plan', 'backup', 'list', 'status', 'publish-status', 'download', 'retention-plan', 'local-retention-plan', 'prune-local'].includes(operation)
     || args.length > 3 || !configPath) fail('usage_operation_config_optional_snapshot_or_id')
   const config = await readPrivate(configPath, 16_384)
   if (config.version !== 1 || typeof config.credentialsFile !== 'string' || typeof config.stateDirectory !== 'string'
@@ -71,6 +89,18 @@ export async function main(args) {
     if (operation === 'local-retention-plan') return await planLocalRetention(config.backupRoot)
     if (operation === 'prune-local') return await pruneLocalRetention(config.backupRoot, { enabled: config.allowLocalPrune === true })
     const file = join(config.stateDirectory, 'ledger.json')
+    if (operation === 'status' || operation === 'publish-status') {
+      if (operation === 'publish-status' && !parameter) fail('status_output_directory_required')
+      let ledger = null, credentialsPresent = false, localPlan = null
+      try { ledger = validateLedger(await readPrivate(file, 2_000_000)) }
+      catch (error) { if (error.code !== 'ENOENT') throw error }
+      try { await privatePath(config.credentialsFile); credentialsPresent = true }
+      catch (error) { if (error.code !== 'ENOENT') throw error }
+      // Failed local verification is explicit; never expose paths or raw errors.
+      try { localPlan = await planLocalRetention(config.backupRoot) } catch { /* unavailable */ }
+      const report = createBackupStatus({ config, ledger, localPlan, credentialsPresent })
+      return operation === 'publish-status' ? await publishStatus(parameter, report) : report
+    }
     if (operation === 'init-local') {
       await saveLedger(file, { version: 1, points: [], pending: [] }, true)
       return { state: 'LOCAL_LEDGER_INITIALIZED', cloudAccess: false }

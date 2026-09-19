@@ -1,9 +1,17 @@
 # NAV Dropbox 备份候选：上线前必读
 
-归属：个人。当前只是管理员工具候选，不是已发布的网页功能或定时服务。
+归属：个人。包含管理员工具和只读网页状态候选；不是完整云备份服务。
 唯一验收状态仍看仓库 `CURRENT.md`。不得在生产上直接试跑测试文件。
 
 ## 范围与原理
+
+### 只读状态与备份记录
+
+- `status <config.json>`：仅本地检查，输出不含密钥、OAuth、账号邮箱、绝对路径、远端 ID/revision 的白名单报告。不会刷新 OAuth、访问 Dropbox、上传、清理或开启任务。
+- `publish-status <config.json> <integration-directory>`：在持有 canonical 备份锁期间，以 0600 原子替换目录中的 `dropbox-status.json`。目录及全部父级必须为 root 所有、无软链接且不可被其他用户写入，目标目录为 0700；目标文件如已存在也须满足私有文件校验。失败保留前一份报告，不能据旧报告声称当前成功。
+- API 仅在既有管理员 `GET /api/admin/integrations` 中返回 `dropboxBackup` 白名单；非管理员不能读取。它从 `NAV_MANAGED_INTEGRATIONS_DIR` 中读报告，不读 root 台账或 Dropbox 凭据、不执行主机命令。报告超过 30 分钟标注过期，缺失、损坏、异常尺寸、硬链接/软链接均不能作为正常状态。
+- “服务器清单已检查”“已上传”“下载已校验”“恢复已验证”分别展示。台账字节数不等于实时网盘用量；附件原件仍以 canonical 清单为准。`allowUpload` 不证明任务运行，服务器状态报告也不能证明独立离线钥匙已保存。
+- 本批没有网页立即备份/下载/恢复按钮，没有定时服务安装器，也不开放完整 Dropbox 网盘浏览。部署者应通过受控主机任务刷新报告；本候选不自动改现有备份任务，刷新网页也不会触发备份。
 
 - 保留现有 `scripts/nav-backup.sh` 的 PostgreSQL custom-format dump 和 canonical 快照。
   新工具只接受其直接子目录 `nav-<UTC>-<commit>`，先核对 manifest 中所有文件，再核对 canonical `metadata/tree.tsv` 的完整路径集合、类型、权限和链接目标。

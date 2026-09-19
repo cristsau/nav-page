@@ -4,7 +4,7 @@ import { sealFixture } from './snapshot-fixture.mjs'
 import assert from 'node:assert/strict'
 import { spawn, spawnSync } from 'node:child_process'
 import { createReadStream, createWriteStream } from 'node:fs'
-import { mkdtemp, mkdir, writeFile, readFile, rm, open } from 'node:fs/promises'
+import { mkdtemp, mkdir, writeFile, readFile, rm, open, stat, symlink, unlink } from 'node:fs/promises'
 import { pipeline } from 'node:stream/promises'
 import { join, resolve } from 'node:path'
 import { createHash, randomBytes } from 'node:crypto'
@@ -105,10 +105,34 @@ test('Linux: real age roundtrip, tamper rejection, real PG dump/restore, root CL
     const scopes = ['account_info.read', 'files.metadata.read', 'files.content.read', 'files.content.write']
     await writeFile(credentialsFile, JSON.stringify({ schema_version: 1, provider: 'dropbox', client_id: 'SyntheticApp123', refresh_token: 'SYNTHETIC', account_id: 'dbid:SYNTHETIC', scopes }), { mode: 0o600 })
     await writeFile(configFile, JSON.stringify({ version: 1, allowUpload: false, credentialsFile, stateDirectory: state, backupRoot: backups, ageRecipient: recipient }), { mode: 0o600 })
+    const beforeStatus = await main(['status', configFile])
+    assert.equal(beforeStatus.cloud.ledgerState, 'not_initialized')
+    assert.equal(beforeStatus.cloud.credentialsPresent, true)
+    assert.equal(beforeStatus.local.points.length, 1)
+    assert.equal(beforeStatus.local.state, 'checked')
+    assert.equal(beforeStatus.remoteInventoryChecked, false)
+    const reports = join(root, 'reports'); await mkdir(reports, { mode: 0o700 })
+    const reportFile = join(reports, 'dropbox-status.json')
+    assert.equal((await main(['publish-status', configFile, reports])).cloudAccess, false)
+    const published = await readFile(reportFile, 'utf8')
+    assert.equal((await stat(reportFile)).mode & 0o777, 0o600)
+    assert.ok(!published.includes('SYNTHETIC') && !published.includes(credentialsFile))
+    await unlink(reportFile)
+    await symlink(credentialsFile, reportFile)
+    await assert.rejects(main(['publish-status', configFile, reports]), /unsafe_private_path/)
+    assert.match(await readFile(credentialsFile, 'utf8'), /SYNTHETIC/)
+    await unlink(reportFile)
+    await main(['publish-status', configFile, reports])
     assert.equal((await main(['init-local', configFile])).cloudAccess, false)
     assert.equal((await main(['list', configFile])).points.length, 0)
     await assert.rejects(main(['init-local', configFile])) // no overwrite
     await assert.rejects(main(['backup', configFile, snapshot]), /upload_not_enabled/)
+    const reportBeforeFailure = await readFile(reportFile, 'utf8')
+    const ledgerFile = join(state, 'ledger.json'), ledgerBeforeFailure = await readFile(ledgerFile, 'utf8')
+    await writeFile(ledgerFile, '{}')
+    await assert.rejects(main(['publish-status', configFile, reports]), /invalid_ledger/)
+    assert.equal(await readFile(reportFile, 'utf8'), reportBeforeFailure)
+    await writeFile(ledgerFile, ledgerBeforeFailure)
     const lock = await open('/run/lock/nav-backup.lock', 'r+')
     try {
       assert.equal(spawnSync('/usr/bin/flock', ['-xn', '3'], { stdio: ['ignore', 'ignore', 'ignore', lock.fd] }).status, 0)

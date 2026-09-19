@@ -1,8 +1,8 @@
 name: Dropbox backup isolated acceptance
 on:
   push:
-    branches: [codex/nav-dropbox-backup-20260918, master]
-    paths: ['scripts/dropbox/**', '.github/workflows/dropbox-backup.yml']
+    branches: [codex/nav-dropbox-backup-20260918, codex/nav-dropbox-status-20260919, master]
+    paths: ['scripts/dropbox/**', 'api/src/lib/dropboxBackupStatus.js', 'api/test/dropboxBackupStatus.test.js', '.github/workflows/dropbox-backup.yml']
   workflow_dispatch:
 permissions:
   contents: read
@@ -25,7 +25,7 @@ jobs:
           sudo apt-get install -y age
           docker pull postgres:16-alpine
       - name: Protocol, policy and failure-path tests
-        run: sudo "$(command -v node)" --test --test-concurrency=1 scripts/dropbox/oauth.test.mjs scripts/dropbox/backup.test.mjs scripts/dropbox/local-retention.test.mjs
+        run: sudo "$(command -v node)" --test --test-concurrency=1 scripts/dropbox/oauth.test.mjs scripts/dropbox/backup.test.mjs scripts/dropbox/local-retention.test.mjs api/test/dropboxBackupStatus.test.js
       - name: Real age and PostgreSQL isolated restore with synthetic data only
         run: sudo env NAV_DROPBOX_DISPOSABLE_TEST=1 "$(command -v node)" --test scripts/dropbox/backup-linux.test.mjs
       - name: Package public operator source only

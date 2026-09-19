@@ -3,6 +3,7 @@ import { computed, nextTick, onMounted, reactive, ref, watch } from 'vue'
 import Icon from '@/shared/components/Icon.vue'
 import OauthIntegrationSettings from './OauthIntegrationSettings.vue'
 import SystemNotificationSettings from './SystemNotificationSettings.vue'
+import DropboxBackupSettings from './DropboxBackupSettings.vue'
 import { fetchManagedIntegrations, saveManagedCloudBackup, testManagedCloudBackup } from '@/shared/services/integrationApi'
 
 const loading = ref(true)
@@ -12,6 +13,7 @@ const warning = ref('')
 const error = ref('')
 const writable = ref(false)
 const systemMail = ref({})
+const dropboxBackup = ref(null)
 const updatedAt = ref(null)
 const savedCloudFingerprint = ref('')
 const errorNotice = ref(null)
@@ -74,6 +76,7 @@ function statusLabel(ok, yes = '已验证', no = '待验证') {
 }
 
 function applyState(state) {
+  dropboxBackup.value = state.dropboxBackup || null
   writable.value = state.writable === true
   updatedAt.value = state.updatedAt || null
   systemMail.value = state.systemMail || {}
@@ -184,11 +187,13 @@ onMounted(refresh)
 
     <SystemNotificationSettings :state="systemMail" :writable="writable" @saved="refresh" />
 
+    <DropboxBackupSettings :state="dropboxBackup" :loading="loading" @refresh="refresh" />
+
     <form class="integration-card" novalidate @submit.prevent="saveCloud">
       <header class="card-header">
         <div class="card-icon"><Icon name="cloud" :size="20" /></div>
         <div>
-          <h4>加密云备份</h4>
+          <h4>S3 兼容加密备份</h4>
           <p>支持 Cloudflare R2、Backblaze B2、Wasabi、MinIO 等 S3 兼容存储；上传前由 Restic 本地加密。</p>
         </div>
       </header>
