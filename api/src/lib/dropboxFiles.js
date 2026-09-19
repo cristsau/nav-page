@@ -2,6 +2,7 @@
 import { constants } from 'node:fs'
 import { lstat, open } from 'node:fs/promises'
 import { join } from 'node:path'
+import { createHash, randomBytes } from 'node:crypto'
 
 export const FILE_SCOPES = ['account_info.read', 'files.metadata.read', 'files.content.read', 'files.content.write']
 export const TEXT_LIMIT = 1024 * 1024
@@ -105,8 +106,8 @@ export async function loadFilesConnection(directory) {
     deny('INVALID_CONNECTION', 503)
   } finally { await handle?.close() }
 }
-async function boundedJson(response) {
-  if (!response.ok) {
+async function boundedJson(response, allowConflict = false) {
+  if (!response.ok && !(allowConflict && response.status === 409)) {
     await response.body?.cancel().catch(() => {})
     deny(response.status === 409 ? 'PROVIDER_CONFLICT' : response.status === 429 ? 'PROVIDER_RATE_LIMIT' : 'PROVIDER_UNAVAILABLE', response.status === 409 ? 409 : 502)
   }
@@ -145,7 +146,7 @@ export class DropboxFilesClient {
   }
   async rpc(route, arg) {
     if (!['files/get_metadata', 'files/list_folder', 'files/list_folder/continue', 'files/search_v2', 'files/search/continue_v2',
-      'files/create_folder_v2', 'files/move_v2', 'files/delete_v2'].includes(route)) deny('INVALID_OPERATION')
+      'files/create_folder_v2', 'files/move_v2', 'files/copy_v2', 'files/delete_v2', 'files/list_revisions'].includes(route)) deny('INVALID_OPERATION')
     const token = await this.#auth()
     return boundedJson(await this.#request('https://api.dropboxapi.com/2/' + route, { method: 'POST',
       headers: { Authorization: `Bearer ${token}`, 'Content-Type': 'application/json' }, body: JSON.stringify(arg) }))
@@ -155,6 +156,30 @@ export class DropboxFilesClient {
     return boundedJson(await this.#request('https://content.dropboxapi.com/2/files/upload', { method: 'POST',
       headers: { Authorization: `Bearer ${token}`, 'Content-Type': 'application/octet-stream',
         'Dropbox-API-Arg': asciiJson({ path: filePath(path), mode: rev ? { '.tag': 'update', update: revision(rev) } : { '.tag': 'add' }, autorename: false, strict_conflict: true }) }, body: bytes }))
+  }
+  async uploadSession(operation, arg, bytes = Buffer.alloc(0)) {
+    if (!['start', 'append_v2', 'finish'].includes(operation)) deny('INVALID_OPERATION')
+    const token = await this.#auth()
+    const response = await this.#request('https://content.dropboxapi.com/2/files/upload_session/' + operation, {
+      method: 'POST', headers: { Authorization: `Bearer ${token}`, 'Content-Type': 'application/octet-stream', 'Dropbox-API-Arg': asciiJson(arg) }, body: bytes
+    })
+    const result = await boundedJson(response, operation === 'append_v2')
+    if (response.status === 409) {
+      if (result?.error?.['.tag'] === 'incorrect_offset' && Number.isSafeInteger(result.error.correct_offset) && result.error.correct_offset >= 0) return { correctOffset: result.error.correct_offset }
+      deny('PROVIDER_CONFLICT', 409)
+    }
+    return result
+  }
+  async getMetadataIfExists(path) {
+    const token = await this.#auth()
+    const response = await this.#request('https://api.dropboxapi.com/2/files/get_metadata', { method: 'POST',
+      headers: { Authorization: `Bearer ${token}`, 'Content-Type': 'application/json' }, body: JSON.stringify({ path: filePath(path) }) })
+    const result = await boundedJson(response, true)
+    if (response.status === 409) {
+      if (result?.error?.['.tag'] === 'path' && result.error.path?.['.tag'] === 'not_found') return null
+      deny('PROVIDER_CONFLICT', 409)
+    }
+    return metadata(result)
   }
   async download(meta, { range, signal } = {}) {
     const expected = downloadRange(range, meta.size)
@@ -189,7 +214,7 @@ export function downloadRange(range, size) {
 }
 
 export class DropboxFilesService {
-  constructor(config, client = new DropboxFilesClient(config)) { this.config = validateFilesConnection(config); this.client = client }
+  constructor(config, client = new DropboxFilesClient(config)) { this.config = validateFilesConnection(config); this.client = client; this.deletePlans = new Map() }
   async protection() {
     const anchor = metadata(await this.client.rpc('files/get_metadata', { path: this.config.backupFolderId }))
     if (anchor.id !== this.config.backupFolderId || anchor.type !== 'folder') deny('BACKUP_PROTECTION_UNAVAILABLE', 503)
@@ -231,6 +256,62 @@ export class DropboxFilesService {
     protectPath(destination, guards, true)
     if (filePath(destination).toLowerCase().startsWith(item.path.toLowerCase() + '/')) deny('INVALID_DESTINATION')
     return metadata((await this.client.rpc('files/move_v2', { from_path: item.id, to_path: filePath(destination), autorename: false, allow_shared_folder: false, allow_ownership_transfer: false })).metadata)
+  }
+  async copy(id, destination) {
+    const guards = await this.protection(), item = await this.get(id, true, guards)
+    protectPath(destination, guards, true)
+    const target = filePath(destination).toLowerCase(), source = item.path.toLowerCase()
+    if (target === source || target.startsWith(source + '/')) deny('INVALID_DESTINATION')
+    return metadata((await this.client.rpc('files/copy_v2', { from_path: item.id, to_path: filePath(destination), autorename: false, allow_shared_folder: false })).metadata)
+  }
+  async deleteSnapshot(id) {
+    const guards = await this.protection(), item = await this.get(id, true, guards), children = []
+    if (item.type === 'folder') {
+      let result = await this.client.rpc('files/list_folder', { path: item.id, recursive: true, include_deleted: false, limit: 100 })
+      for (let page = 0; ; page++) {
+        if (!Array.isArray(result.entries) || result.entries.length > 100 || typeof result.has_more !== 'boolean') deny('INVALID_PROVIDER_RESPONSE', 502)
+        for (const raw of result.entries) {
+          const child = metadata(raw)
+          // A recursive ID-based listing can include the queried folder itself.
+          // Ignore only that exact folder, never an unrelated or moved entry.
+          if (child.id === item.id) {
+            if (child.type !== 'folder' || child.path !== item.path) deny('FILE_CHANGED', 409)
+            continue
+          }
+          if (!child.path.toLowerCase().startsWith(item.path.toLowerCase() + '/')) deny('FILE_CHANGED', 409)
+          protectPath(child.path, guards, true); children.push(child)
+        }
+        if (children.length > 500 || (result.has_more && page >= 4)) deny('FOLDER_TOO_LARGE', 413)
+        if (!result.has_more) break
+        if (typeof result.cursor !== 'string' || result.cursor.length > 16384) deny('INVALID_PROVIDER_RESPONSE', 502)
+        result = await this.client.rpc('files/list_folder/continue', { cursor: result.cursor })
+      }
+    }
+    const digest = createHash('sha256').update(JSON.stringify([item, ...children].map(x => [x.id, x.path, x.type, x.rev || '', x.size || 0]).sort((a, b) => a[0].localeCompare(b[0])))).digest('hex')
+    return { item, digest, descendants: children.length, files: [item, ...children].filter(x => x.type === 'file').length, bytes: [item, ...children].reduce((sum, x) => sum + (x.size || 0), 0) }
+  }
+  async prepareDelete(id) {
+    for (const [key, plan] of this.deletePlans) if (plan.until < Date.now() && plan.state !== 'running') this.deletePlans.delete(key)
+    if (this.deletePlans.size >= 100) deny('BUSY', 429)
+    const snapshot = await this.deleteSnapshot(id), token = randomBytes(24).toString('hex')
+    this.deletePlans.set(token, { ...snapshot, until: Date.now() + 10 * 60000, state: 'ready' })
+    return { token, item: snapshot.item, descendants: snapshot.descendants, files: snapshot.files, bytes: snapshot.bytes }
+  }
+  async deleteConfirmed(id, token) {
+    const plan = typeof token === 'string' ? this.deletePlans.get(token) : null
+    if (!plan || plan.until < Date.now() || plan.item.id !== fileId(id)) deny('DELETE_EXPIRED', 409)
+    if (plan.state === 'complete') return { deleted: true }
+    if (plan.state !== 'ready') deny('DELETE_REVIEW_REQUIRED', 409)
+    plan.state = 'running'
+    try {
+      const current = await this.deleteSnapshot(id)
+      if (current.digest !== plan.digest) deny('FILE_CHANGED', 409)
+      // Dropbox cannot transactionally lock an externally edited folder tree. Recheck immediately before mutation.
+      protectPath(current.item.path, await this.protection(), true)
+      const result = metadata((await this.client.rpc('files/delete_v2', { path: id, ...(current.item.type === 'file' ? { parent_rev: current.item.rev } : {}) })).metadata)
+      if (result.id !== id) deny('INVALID_PROVIDER_RESPONSE', 502)
+      plan.state = 'complete'; return { deleted: true }
+    } catch (error) { plan.state = 'review'; throw error }
   }
   async remove(id, rev, confirmation) {
     const item = await this.get(id, true)

@@ -3,6 +3,7 @@ import assert from 'node:assert/strict'
 import Fastify from 'fastify'
 import routes from '../src/routes/dropboxFiles.js'
 import { DropboxFilesError, UPLOAD_LIMIT } from '../src/lib/dropboxFiles.js'
+import { LARGE_UPLOAD_LIMIT, CHUNK_LIMIT, dropboxContentHash } from '../src/lib/dropboxFileUploads.js'
 
 const owner = '00000000-0000-4000-8000-000000000001'
 const headers = { 'x-test-role': 'admin', 'x-test-owner': owner }
@@ -24,14 +25,15 @@ test('all file routes require admin and exact bound owner, before any provider a
   let loads = 0
   const { app, request } = await harness({ load: () => { loads++; return { ownerUserId: owner } } })
   try {
-    for (const path of ['status', 'list', 'folder', 'move', 'delete', 'text/read', 'text/save', 'upload', 'content/id%3Atest']) {
+    const paths = ['status', 'list', 'folder', 'history', 'history/copy', 'move', 'copy', 'delete/preview', 'delete', 'text/read', 'text/save', 'upload', 'content/id%3Atest', 'content/id%3Atest?rev=abcdef123', 'upload/start', 'upload/status', 'upload/chunk', 'upload/finish', 'upload/cancel']
+    for (const path of paths) {
       const body = path === 'status' || path.startsWith('content/') ? undefined : {}
       for (const [h, expected] of [[{}, 401], [{ 'x-test-role': 'user' }, 403], [{ ...headers, 'x-test-owner': 'different' }, 403]]) {
         const r = await request(path, body, { headers: h }); assert.equal(r.statusCode, expected, path)
         assert.match(r.headers['cache-control'], /no-store/)
       }
     }
-    assert.equal(loads, 9)
+    assert.equal(loads, paths.length)
   } finally { await app.close() }
 })
 test('status contains capabilities only; missing connection is not reported connected', async () => {
@@ -40,7 +42,7 @@ test('status contains capabilities only; missing connection is not reported conn
     try {
       const r = await request('status'); assert.equal(r.statusCode, connection ? 200 : 503)
       assert.equal(r.body.includes('DO_NOT_EXPOSE'), false)
-      if (connection) assert.equal(r.json().uploadLimit, UPLOAD_LIMIT)
+      if (connection) assert.equal(r.json().uploadLimit, LARGE_UPLOAD_LIMIT)
     } finally { await app.close() }
   }
 })
@@ -126,4 +128,40 @@ test('large request buffers are limited before parsing and slots released after 
     assert.deepEqual((await Promise.all(pending)).sort(), [200, 200, 429])
     assert.equal((await request('text/save', { content: 'synthetic' })).statusCode, 200)
   } finally { release(); await app.close() }
+})
+test('chunk route is bounded, returns only opaque handles and invalidates sessions on credential rotation', async () => {
+  let connection = { ownerUserId: owner }, appended = 0, lastData
+  const { app, request } = await harness({ load: () => connection, service: {
+    protection: async () => ['/Backup'],
+    client: {
+      getMetadataIfExists: async () => null,
+      uploadSession: async (op, arg, data) => {
+        if (op === 'start') return { session_id: 'PRIVATE_SESSION' }
+        if (op === 'append_v2') { appended++; lastData = data; return null }
+        return { id: 'id:new', name: 'small.txt', path_display: '/small.txt', rev: 'abcdef123', size: 5, server_modified: '2026-09-19T00:00:00Z', content_hash: dropboxContentHash(lastData) }
+      }
+    }
+  } })
+  try {
+    const start = await request('upload/start', { path: '/small.txt', size: 5 })
+    assert.equal(start.statusCode, 200); assert.ok(!start.body.includes('PRIVATE_SESSION'))
+    const uploadId = start.json().uploadId, binary = { ...headers, 'content-type': 'application/octet-stream', 'x-upload-id': uploadId, 'x-upload-offset': '0' }
+    assert.equal((await request('upload/chunk', Buffer.alloc(CHUNK_LIMIT + 1), { headers: binary })).statusCode, 413); assert.equal(appended, 0)
+    assert.equal((await request('upload/chunk', Buffer.from('hello'), { headers: binary })).statusCode, 200)
+    const done = await request('upload/finish', { uploadId }); assert.equal(done.json().state, 'complete'); assert.equal(appended, 1)
+    assert.equal((await request('upload/status', { uploadId }, { headers: { ...headers, 'x-test-owner': 'different' } })).statusCode, 403)
+    connection = { ...connection, revision: 2 }
+    assert.equal((await request('upload/status', { uploadId })).json().code, 'UPLOAD_EXPIRED')
+  } finally { await app.close() }
+})
+test('simple delete forwards a preview token rather than requiring filename entry', async () => {
+  const { app, request } = await harness({ service: {
+    prepareDelete: async id => ({ token: 'OPAQUE_PREVIEW', item: { id }, descendants: 2 }),
+    deleteConfirmed: async (id, token) => { assert.equal(id, 'id:folder'); assert.equal(token, 'OPAQUE_PREVIEW'); return { deleted: true } },
+    remove: async () => { throw Error('Legacy delete should not run') }
+  } })
+  try {
+    const preview = await request('delete/preview', { id: 'id:folder' }); assert.equal(preview.statusCode, 200)
+    assert.equal((await request('delete', { id: 'id:folder', token: preview.json().token })).json().deleted, true)
+  } finally { await app.close() }
 })
