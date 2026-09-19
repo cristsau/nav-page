@@ -184,6 +184,21 @@ test('client upload uses ASCII-safe strict add or revision update', async () => 
   await client.upload('/中文.txt', Buffer.from('new'), 'abcdef123')
   arg = JSON.parse(calls.at(-1).options.headers['Dropbox-API-Arg']); assert.deepEqual(arg.mode, { '.tag': 'update', update: 'abcdef123' })
 })
+test('upload-session client uses fixed content endpoints and sanitized offset recovery', async () => {
+  const { client, calls } = clientFixture({ response: () => new Response(JSON.stringify({ error: { '.tag': 'incorrect_offset', correct_offset: 8 }, secret: 'PRIVATE' }), { status: 409 }) })
+  assert.deepEqual(await client.uploadSession('append_v2', { cursor: { session_id: 'TEST_ONLY', offset: 0 } }, Buffer.alloc(8)), { correctOffset: 8 })
+  assert.ok(calls.at(-1).url.endsWith('/files/upload_session/append_v2'))
+  await assert.rejects(client.uploadSession('https://evil.test', {}), code('INVALID_OPERATION'))
+  const bad = clientFixture({ response: () => new Response(JSON.stringify({ error: { '.tag': 'incorrect_offset', correct_offset: '8' } }), { status: 409 }) })
+  await assert.rejects(bad.client.uploadSession('append_v2', {}, Buffer.alloc(8)), code('PROVIDER_CONFLICT'))
+})
+test('target preflight treats only exact path-not-found as absent, never hides permission errors', async () => {
+  const absent = clientFixture({ response: () => new Response(JSON.stringify({ error: { '.tag': 'path', path: { '.tag': 'not_found' } } }), { status: 409 }) })
+  assert.equal(await absent.client.getMetadataIfExists('/new.txt'), null)
+  const denied = clientFixture({ response: () => new Response(JSON.stringify({ error: { '.tag': 'path', path: { '.tag': 'restricted_content' } } }), { status: 409 }) })
+  await assert.rejects(denied.client.getMetadataIfExists('/private'), code('PROVIDER_CONFLICT'))
+  assert.equal((await clientFixture().client.getMetadataIfExists('/notes.txt')).id, 'id:file')
+})
 test('download binds revision and validates range and receipt before returning stream', async () => {
   const raw = file(), meta = metadata(raw)
   const { client, calls } = clientFixture({ response: () => new Response('ell', { status: 206, headers: { 'Dropbox-API-Result': JSON.stringify(concrete(raw)), 'Content-Range': 'bytes 1-3/5', 'Content-Length': '3' } }) })
