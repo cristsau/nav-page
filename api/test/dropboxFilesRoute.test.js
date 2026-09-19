@@ -1,0 +1,129 @@
+import test from 'node:test'
+import assert from 'node:assert/strict'
+import Fastify from 'fastify'
+import routes from '../src/routes/dropboxFiles.js'
+import { DropboxFilesError, UPLOAD_LIMIT } from '../src/lib/dropboxFiles.js'
+
+const owner = '00000000-0000-4000-8000-000000000001'
+const headers = { 'x-test-role': 'admin', 'x-test-owner': owner }
+async function harness({ connection = { ownerUserId: owner }, service = {}, load } = {}) {
+  const app = Fastify({ logger: false }), calls = []
+  app.decorate('requireAdmin', async (request, reply) => {
+    const role = request.headers['x-test-role']
+    if (role !== 'admin') { reply.code(role ? 403 : 401); throw Error('Denied') }
+    request.currentUser = { id: request.headers['x-test-owner'], role }
+  })
+  app.register(routes, { prefix: '/api', loadConnection: load || (() => connection), createService: () => ({
+    list: async input => { calls.push(input); return { entries: [], cursor: 'SENSITIVE_PROVIDER_CURSOR', hasMore: true } },
+    ...service
+  }) })
+  await app.ready()
+  return { app, calls, request: (path, body, options = {}) => app.inject({ url: '/api/dropbox-files/' + path, method: body === undefined ? 'GET' : 'POST', headers, payload: body, ...options }) }
+}
+test('all file routes require admin and exact bound owner, before any provider access', async () => {
+  let loads = 0
+  const { app, request } = await harness({ load: () => { loads++; return { ownerUserId: owner } } })
+  try {
+    for (const path of ['status', 'list', 'folder', 'move', 'delete', 'text/read', 'text/save', 'upload', 'content/id%3Atest']) {
+      const body = path === 'status' || path.startsWith('content/') ? undefined : {}
+      for (const [h, expected] of [[{}, 401], [{ 'x-test-role': 'user' }, 403], [{ ...headers, 'x-test-owner': 'different' }, 403]]) {
+        const r = await request(path, body, { headers: h }); assert.equal(r.statusCode, expected, path)
+        assert.match(r.headers['cache-control'], /no-store/)
+      }
+    }
+    assert.equal(loads, 9)
+  } finally { await app.close() }
+})
+test('status contains capabilities only; missing connection is not reported connected', async () => {
+  for (const connection of [null, { ownerUserId: owner, refreshToken: 'DO_NOT_EXPOSE', accountEmail: 'DO_NOT_EXPOSE' }]) {
+    const { app, request } = await harness({ connection })
+    try {
+      const r = await request('status'); assert.equal(r.statusCode, connection ? 200 : 503)
+      assert.equal(r.body.includes('DO_NOT_EXPOSE'), false)
+      if (connection) assert.equal(r.json().uploadLimit, UPLOAD_LIMIT)
+    } finally { await app.close() }
+  }
+})
+test('pagination exposes opaque cursor bound to path/query and invalidated on connection change', async () => {
+  let connection = { ownerUserId: owner }
+  const { app, request, calls } = await harness({ load: () => connection })
+  try {
+    const r = await request('list', { path: '/Notes', query: 'readme' })
+    assert.equal(r.statusCode, 200); const cursor = r.json().cursor
+    assert.match(cursor, /^[a-f0-9]{48}$/); assert.ok(!r.body.includes('SENSITIVE_PROVIDER_CURSOR'))
+    assert.equal((await request('list', { path: '/Notes', query: 'readme', cursor })).statusCode, 200)
+    assert.equal(calls.at(-1).cursor, 'SENSITIVE_PROVIDER_CURSOR')
+    assert.equal((await request('list', { path: '/Different', query: 'readme', cursor })).statusCode, 409)
+    assert.equal((await request('list', { path: '/Notes', query: 'other', cursor })).statusCode, 409)
+    connection = { ...connection, revision: 2 }
+    assert.equal((await request('list', { path: '/Notes', query: 'readme', cursor })).statusCode, 409)
+  } finally { await app.close() }
+})
+test('provider failures and file contents are not reflected; conflict stays 409', async () => {
+  for (const [error, status] of [[new Error('SECRET_IN_PROVIDER_ERROR'), 502], [new DropboxFilesError('FILE_CHANGED', 409), 409]]) {
+    const { app, request } = await harness({ service: { save: async () => { throw error } } })
+    try {
+      const r = await request('text/save', { content: 'SECRET_TEXT' }); assert.equal(r.statusCode, status)
+      assert.ok(!r.body.includes('SECRET'))
+    } finally { await app.close() }
+  }
+})
+test('uploads require binary content and reject excessive bytes before service invocation', async () => {
+  let uploads = 0
+  const { app, request } = await harness({ service: { upload: async (path, bytes) => { uploads++; assert.equal(path, '/中文.txt'); assert.ok(Buffer.isBuffer(bytes)); return {} } } })
+  try {
+    assert.equal((await request('upload', {})).statusCode, 400)
+    const h = { ...headers, 'content-type': 'application/octet-stream', 'x-file-name': encodeURIComponent('/中文.txt') }
+    assert.equal((await request('upload', Buffer.from('hello'), { headers: h })).statusCode, 200)
+    assert.equal((await request('upload', Buffer.alloc(UPLOAD_LIMIT + 1), { headers: h })).statusCode, 413)
+    assert.equal(uploads, 1)
+  } finally { await app.close() }
+})
+test('content streams ranges without public links and forces active formats to download', async () => {
+  for (const [kind, name, type] of [['video', 'film.mp4', 'video/mp4'], ['file', 'unsafe.html', 'application/octet-stream']]) {
+    const { app, request } = await harness({ service: {
+      get: async () => ({ id: 'id:test', name, kind, type: 'file', downloadable: true }),
+      client: { download: async (_m, options) => { assert.equal(options.range, 'bytes=0-2'); return new Response('abc', { status: 206, headers: { 'content-range': 'bytes 0-2/5', 'content-length': '3' } }) } }
+    } })
+    try {
+      const r = await request('content/id%3Atest?inline=1', undefined, { headers: { ...headers, range: 'bytes=0-2' } })
+      assert.equal(r.statusCode, 206); assert.equal(r.body, 'abc'); assert.equal(r.headers['content-type'], type)
+      assert.match(r.headers['content-disposition'], kind === 'file' ? /^attachment;/ : /^inline;/)
+      assert.equal(r.headers['content-range'], 'bytes 0-2/5'); assert.equal(r.headers['x-content-type-options'], 'nosniff'); assert.match(r.headers['content-security-policy'], /sandbox/)
+    } finally { await app.close() }
+  }
+})
+test('parallel request limit is reserved after asynchronous config loading', async () => {
+  let resolve, entered = 0
+  const wait = new Promise(r => { resolve = r })
+  const { app, request } = await harness({ load: async () => { await Promise.resolve(); return { ownerUserId: owner } }, service: { list: async () => { entered++; await wait; return { entries: [], cursor: null, hasMore: false } } } })
+  try {
+    const requests = Array.from({ length: 8 }, () => request('list', {}).then(r => r.statusCode))
+    await new Promise(r => setTimeout(r, 30)); assert.equal(entered, 4); resolve()
+    const statuses = await Promise.all(requests)
+    assert.equal(statuses.filter(s => s === 200).length, 4); assert.equal(statuses.filter(s => s === 429).length, 4)
+    assert.equal((await request('status')).statusCode, 200)
+  } finally { resolve(); await app.close() }
+})
+test('two concurrent media streams maximum including pending metadata lookup', async () => {
+  let release, entered = 0
+  const wait = new Promise(r => { release = r })
+  const { app, request } = await harness({ service: { get: async () => { entered++; await wait; throw new DropboxFilesError('FILE_UNAVAILABLE', 415) } } })
+  try {
+    const requests = Array.from({ length: 3 }, () => request('content/id%3Atest').then(r => r.statusCode))
+    await new Promise(r => setTimeout(r, 30)); assert.equal(entered, 2); release()
+    assert.deepEqual((await Promise.all(requests)).sort(), [415, 415, 429])
+    assert.equal((await request('content/id%3Atest')).statusCode, 415)
+  } finally { release(); await app.close() }
+})
+test('large request buffers are limited before parsing and slots released after completion', async () => {
+  let release, entered = 0
+  const wait = new Promise(r => { release = r })
+  const { app, request } = await harness({ service: { save: async () => { entered++; await wait; return {} } } })
+  try {
+    const pending = Array.from({ length: 3 }, () => request('text/save', { content: 'synthetic' }).then(r => r.statusCode))
+    await new Promise(r => setTimeout(r, 30)); assert.equal(entered, 2); release()
+    assert.deepEqual((await Promise.all(pending)).sort(), [200, 200, 429])
+    assert.equal((await request('text/save', { content: 'synthetic' })).statusCode, 200)
+  } finally { release(); await app.close() }
+})

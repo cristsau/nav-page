@@ -6,6 +6,7 @@ import NotificationCenter from '@/shared/components/NotificationCenter.vue'
 import { useCommandPalette } from '@/shared/composables/useCommandPalette'
 import { useConfig } from '@/shared/composables/useConfig'
 import { useTheme } from '@/shared/composables/useTheme'
+import { useAuth } from '@/shared/composables/useAuth'
 import {
   isPrimaryNavigationActive,
   PRIMARY_NAV_ITEMS
@@ -15,9 +16,10 @@ const route = useRoute()
 const { getSiteName, isModuleEnabled } = useConfig()
 const { isDark, toggleTheme } = useTheme()
 const { openCommandPalette } = useCommandPalette()
+const { isAdmin } = useAuth()
 
 const navigationItems = computed(() => (
-  PRIMARY_NAV_ITEMS.filter((item) => !item.module || isModuleEnabled(item.module))
+  PRIMARY_NAV_ITEMS.filter((item) => (!item.adminOnly || isAdmin.value) && (!item.module || isModuleEnabled(item.module)))
 ))
 </script>
 

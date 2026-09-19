@@ -81,6 +81,9 @@ const iconPaths = {
   cloud: [
     ['path', { d: 'M17.5 19H6a4 4 0 0 1-.6-8A6.5 6.5 0 0 1 18 9.5a4.8 4.8 0 0 1-.5 9.5Z' }]
   ],
+  play: [
+    ['polygon', { points: '6 3 20 12 6 21 6 3' }]
+  ],
   close: [
     ['path', { d: 'M6 6l12 12M18 6 6 18' }]
   ],

@@ -3,6 +3,7 @@ import { computed, nextTick, onBeforeUnmount, onMounted, ref, watch } from 'vue'
 import { useRoute } from 'vue-router'
 import Icon from '@/shared/components/Icon.vue'
 import { useConfig } from '@/shared/composables/useConfig'
+import { useAuth } from '@/shared/composables/useAuth'
 import {
   isPrimaryNavigationActive,
   PRIMARY_NAV_ITEMS
@@ -11,8 +12,9 @@ import { resolveMobileDock } from '@/shared/navigation/mobileDock'
 
 const route = useRoute()
 const { isModuleEnabled } = useConfig()
+const { isAdmin } = useAuth()
 const navigationItems = computed(() => (
-  PRIMARY_NAV_ITEMS.filter((item) => !item.module || isModuleEnabled(item.module))
+  PRIMARY_NAV_ITEMS.filter((item) => (!item.adminOnly || isAdmin.value) && (!item.module || isModuleEnabled(item.module)))
 ))
 const dock = ref(null), viewportProbe = ref(null), layout = ref(null)
 let observer, frame = 0, settleTimer = 0, disposed = false
