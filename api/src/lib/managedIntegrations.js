@@ -5,6 +5,7 @@ import path from 'node:path'
 import process from 'node:process'
 import { config } from '../config.js'
 import { readOwnerSecretFile } from './ownerSecretFile.js'
+import { readDropboxBackupStatus } from './dropboxBackupStatus.js'
 
 const DOCUMENT_VERSION = 1
 const CONFIG_FILE_NAME = 'integrations.json'
@@ -879,6 +880,7 @@ export async function getManagedIntegrationsState(runtimeConfig = config) {
     )),
     mailAccountLimit: 1 + MAX_SECONDARY_MAIL_ACCOUNTS,
     cloudBackup: await cloudPublicState(document, runtimeConfig),
+    dropboxBackup: await readDropboxBackupStatus(runtimeConfig.managedIntegrationsDir),
     updatedAt: document.updatedAt
   }
 }
