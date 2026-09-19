@@ -24,6 +24,7 @@ import mediaRoutes from './routes/media.js'
 import navigationRoutes from './routes/navigation.js'
 import notificationsRoutes from './routes/notifications.js'
 import integrationRoutes from './routes/systemIntegrations.js'
+import dropboxFileRoutes from './routes/dropboxFiles.js'
 import noteAiRoutes from './routes/noteAi.js'
 import noteImagesRoutes from './routes/noteImages.js'
 import noteReminderRoutes from './routes/noteReminders.js'
@@ -110,6 +111,12 @@ export function createApp() {
           'req.body.bcc',
           'req.body.subject',
           'req.body.text',
+          'req.body.content',
+          'req.body.path',
+          'req.body.destination',
+          'req.body.confirmation',
+          'req.body.cursor',
+          'req.headers["x-file-name"]',
           'req.body.body',
           'req.body.instruction',
           'res.headers["set-cookie"]',
@@ -184,6 +191,7 @@ export function createApp() {
     app.all(`${prefix}/*`, mailboxRetiredResponse)
   }
   app.register(integrationRoutes, { prefix: '/api' })
+  app.register(dropboxFileRoutes, { prefix: '/api' })
   app.register(noteAiRoutes, { prefix: '/api' })
   app.register(noteImagesRoutes, { prefix: '/api' })
   app.register(noteReminderRoutes, { prefix: '/api' })

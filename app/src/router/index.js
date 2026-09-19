@@ -96,6 +96,12 @@ const routes = [
     meta: { title: '邮箱已下线' }
   },
   {
+    path: '/files',
+    name: 'Files',
+    component: () => import('@/modules/files/FilesView.vue'),
+    meta: { title: '文件库', adminOnly: true }
+  },
+  {
     path: '/assistant',
     name: 'Assistant',
     component: () => import('@/modules/assistant/AssistantView.vue'),
@@ -151,6 +157,8 @@ router.beforeEach(async (to) => {
   if (currentUser && to.path === '/auth') {
     return '/'
   }
+
+  if (to.meta.adminOnly && currentUser?.role !== 'admin') return '/'
 
   return true
 })

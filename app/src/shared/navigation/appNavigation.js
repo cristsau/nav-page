@@ -22,6 +22,14 @@ export const PRIMARY_NAV_ITEMS = Object.freeze([
     path: '/media'
   },
   {
+    id: 'files',
+    label: '文件库',
+    description: '个人 Dropbox 文件',
+    icon: 'cloud',
+    path: '/files',
+    adminOnly: true
+  },
+  {
     id: 'assistant',
     label: '助理',
     description: '带来源的个人资料助理',
