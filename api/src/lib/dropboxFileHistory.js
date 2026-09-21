@@ -27,11 +27,18 @@ export async function fileRevision(service, id, rev) {
 
 export async function recoverRevisionCopy(service, id, rev, destination) {
   const { item, current } = await fileRevision(service, id, rev)
+  return copyRevisionBytes(service, item, destination, async () => {
+    const fresh = await service.get(id, true)
+    if (fresh.path !== current.path || fresh.rev !== current.rev) deny('FILE_CHANGED', 409)
+  }, current.path)
+}
+
+export async function copyRevisionBytes(service, item, destination, revalidate, currentPath = item.path) {
   if (item.size > UPLOAD_LIMIT) deny('REVISION_COPY_TOO_LARGE', 413)
   destination = filePath(destination)
-  const parentPath = current.path.slice(0, current.path.lastIndexOf('/'))
+  const parentPath = currentPath.slice(0, currentPath.lastIndexOf('/'))
   // Only a new sibling, never overwrite the original or accept arbitrary destinations.
-  if (destination.slice(0, destination.lastIndexOf('/')) !== parentPath || destination.toLowerCase() === current.path.toLowerCase()) deny('INVALID_DESTINATION')
+  if (destination.slice(0, destination.lastIndexOf('/')) !== parentPath || destination.toLowerCase() === currentPath.toLowerCase()) deny('INVALID_DESTINATION')
   protectPath(destination, await service.protection(), true)
   const parent = parentPath ? await service.client.getMetadataIfExists(parentPath) : null
   if (parentPath && (!parent || parent.type !== 'folder')) deny('FILE_CHANGED', 409)
@@ -47,8 +54,7 @@ export async function recoverRevisionCopy(service, id, rev, destination) {
     }
     if (size !== item.size) deny('FILE_CHANGED', 409)
     bytes = Buffer.concat(chunks)
-    const fresh = await service.get(id, true)
-    if (fresh.path !== current.path || fresh.rev !== current.rev) deny('FILE_CHANGED', 409)
+    await revalidate()
     if (parent) {
       const freshParent = await service.get(parent.id, false)
       if (freshParent.path !== parentPath) deny('FILE_CHANGED', 409)

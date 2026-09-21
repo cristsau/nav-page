@@ -8,6 +8,35 @@ const cfg = { version: 1, purpose: 'nav-files', accessType: 'full_dropbox', owne
 const folder = (path, id) => ({ '.tag': 'folder', id, name: path.split('/').pop(), path_display: path })
 const file = (path = '/notes.txt', id = 'id:file', size = 5) => ({ '.tag': 'file', id, name: path.split('/').pop(), path_display: path, rev: 'abcdef123', size, server_modified: '2026-09-19T00:00:00Z' })
 const code = expected => error => error.code === expected
+test('refresh recovery lists only hash-bound jobs and never exposes provider session/hash internals', async () => {
+  const { uploads } = fixture(), digest = dropboxContentHash(Buffer.from('abc'))
+  const bound = await uploads.start('/resume.bin', 3, digest)
+  await uploads.start('/legacy.bin', 0)
+  const listed = await uploads.list()
+  assert.equal(listed.entries.length, 1); assert.equal(listed.entries[0].uploadId, bound.uploadId)
+  assert.equal(listed.entries[0].path, '/resume.bin'); assert.equal(listed.entries[0].contentHash, digest)
+  assert.ok(!JSON.stringify(listed).includes('PRIVATE_PROVIDER_SESSION'))
+  assert.equal((await uploads.reattach(bound.uploadId, 3, digest)).offset, 0)
+  await assert.rejects(uploads.reattach(bound.uploadId, 3, 'a'.repeat(64)), code('UPLOAD_FILE_MISMATCH'))
+  await assert.rejects(uploads.reattach(bound.uploadId, 4, digest), code('UPLOAD_FILE_MISMATCH'))
+})
+test('full-file identity prevents committing a same-sized changed suffix', async () => {
+  const { uploads, mutations } = fixture(), digest = dropboxContentHash(Buffer.from('abc'))
+  const { uploadId } = await uploads.start('/resume.bin', 3, digest)
+  await uploads.append(uploadId, 0, Buffer.from('xyz'))
+  await assert.rejects(uploads.finish(uploadId), code('UPLOAD_FILE_MISMATCH'))
+  assert.equal(mutations.length, 0)
+  await assert.rejects(uploads.start('/bad.bin', 1, 'bad'), code('INVALID_CONTENT_HASH'))
+})
+test('recovery rechecks parent and current protection; new process cannot claim resume', async () => {
+  const { uploads, service, items } = fixture(), digest = dropboxContentHash(Buffer.from('a'))
+  const { uploadId } = await uploads.start('/Photos/resume.bin', 1, digest)
+  items.set('id:backup', folder('/Photos', 'id:backup'))
+  assert.equal((await uploads.list()).entries.length, 0)
+  await assert.rejects(uploads.reattach(uploadId, 1, digest), code('BACKUP_PROTECTED'))
+  const restarted = new DropboxFileUploads(service)
+  assert.throws(() => restarted.status(uploadId), code('UPLOAD_EXPIRED'))
+})
 function fixture() {
   const items = new Map([['id:backup', folder('/Apps/Backup', 'id:backup')], ['id:file', file()], ['id:folder', folder('/Photos', 'id:folder')], ['id:child', file('/Photos/child.txt', 'id:child')]])
   const mutations = [], chunks = []; let appended = 0, failAppend = false, failFinish = false
