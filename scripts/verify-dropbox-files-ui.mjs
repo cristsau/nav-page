@@ -24,7 +24,7 @@ let entries = [...initial], conflict = false, disconnected = false, media, saves
 const uploadJobs = new Map()
 let chunkCount = 0, chunkDelay = 0, failDelete = false, contentRequests = 0
 let persistentUploads = false
-let offlineJobs = [], workerOnline = true, offlineStatusFail = false, offlineMutationFail = false
+let offlineJobs = [], workerOnline = true, offlineStatusFail = false, offlineMutationFail = false, mediaReady = false
 const checks = [], errors = [], external = [], actions = []
 let browser
 await mkdir(output, { recursive: true })
@@ -40,10 +40,20 @@ try {
       let result = {}
       if (op === 'status' && offlineStatusFail) return route.fulfill({ status: 503, json: { error: '合成状态读取失败' } })
       if (op === 'control' && offlineMutationFail) { offlineMutationFail = false; return route.fulfill({ status: 503, json: { error: '合成操作未确认' } }) }
-      if (op === 'status') result = { enabled: true, maxBytes: 6 * 1024 ** 3, workerOnline, uploadPersistence: 'encrypted_disk', entries: offlineJobs }
+      if (op === 'status') result = { enabled: true, maxBytes: 6 * 1024 ** 3, workerOnline, media: { bt: mediaReady, video: mediaReady }, uploadPersistence: 'encrypted_disk', entries: offlineJobs }
       else if (op === 'add') {
-        assert.equal(body.url, 'https://example.com/synthetic.mp4'); assert.equal(body.destination, '/synthetic.mp4')
-        offlineJobs.push({ id: 'a'.repeat(32), name: 'synthetic.mp4', destination: body.destination, state: 'queued', intent: 'run', downloaded: 0, size: null, uploaded: 0 })
+        if (body.kind === 'magnet') {
+          assert.equal(body.url, 'magnet:?xt=urn:btih:' + 'a'.repeat(40))
+          offlineJobs.push({ id: 'b'.repeat(32), kind: 'magnet', name: 'synthetic.mp4', destination: body.destination, state: 'selecting', intent: 'run', downloaded: 0, uploaded: 0, metadata: { files: [{ index: 1, path: 'folder/one.mp4', size: 1024 }, { index: 2, path: 'folder/two.mp4', size: 2048 }] } })
+        } else if (body.kind === 'video') {
+          assert.equal(body.sourceId, 'id:video'); assert.equal(body.sourceRev, 'abcdef123'); assert.ok(body.destination.endsWith('.compatible.mp4'))
+          offlineJobs.push({ id: 'c'.repeat(32), kind: 'video', name: 'compatible.mp4', destination: body.destination, state: 'downloading', stage: 'transcoding', intent: 'run', downloaded: 64, uploaded: 0 })
+        } else {
+          assert.equal(body.url, 'https://example.com/synthetic.mp4'); assert.equal(body.destination, '/synthetic.mp4')
+          offlineJobs.push({ id: 'a'.repeat(32), name: 'synthetic.mp4', destination: body.destination, state: 'queued', intent: 'run', downloaded: 0, size: null, uploaded: 0 })
+        }
+      } else if (op === 'select') {
+        assert.equal(body.selection, 2); const job = offlineJobs.find(j => j.id === body.id); job.state = 'downloading'; job.stage = 'bt_download'
       } else if (op === 'control') {
         const job = offlineJobs.find(j => j.id === body.id); assert.ok(job)
         job.state = body.command === 'pause' ? 'paused' : body.command === 'cancel' ? 'cancelled' : 'queued'; job.intent = body.command === 'resume' ? 'run' : body.command
@@ -427,6 +437,20 @@ try {
   workerOnline = false; await page.getByRole('button', { name: '刷新离线任务', exact: true }).click(); await page.getByText('等待下载节点连接', { exact: true }).waitFor()
   await page.getByRole('button', { name: '关闭弹窗', exact: true }).click(); await page.waitForSelector('[role=dialog]', { state: 'detached' })
   await page.setViewportSize({ width: 320, height: 900 }); checks.push('offline-create-pause-resume-confirm-cancel-cleanup-disconnected-layout')
+  await page.getByRole('button', { name: '离线下载', exact: true }).click()
+  await page.getByRole('button', { name: '磁力链接', exact: true }).click()
+  await page.locator('#offline-url').fill('magnet:?xt=urn:btih:' + 'a'.repeat(40)); await page.locator('#offline-name').fill('synthetic.mp4')
+  assert.equal(await page.getByRole('button', { name: '创建离线任务', exact: true }).isDisabled(), true)
+  mediaReady = true; workerOnline = true; await page.getByRole('button', { name: '刷新离线任务', exact: true }).click()
+  await page.getByRole('button', { name: '创建离线任务', exact: true }).click()
+  await page.getByText('请选择种子文件', { exact: true }).waitFor()
+  assert.equal(await page.getByRole('button', { name: '确认文件并开始下载', exact: true }).isDisabled(), true)
+  await page.getByLabel('选择要保存的文件').selectOption('2')
+  assert.ok(await page.evaluate(() => document.documentElement.scrollWidth <= innerWidth))
+  await page.getByRole('dialog').screenshot({ path: join(output, 'bt-selection-320.png') })
+  await page.getByRole('button', { name: '确认文件并开始下载', exact: true }).click(); await page.getByText('BT 下载中', { exact: true }).waitFor()
+  await page.getByRole('button', { name: '关闭弹窗', exact: true }).click(); await page.waitForSelector('[role=dialog]', { state: 'detached' })
+  checks.push('media-capability-gate-magnet-explicit-file-selection-320')
   // Generate a tiny, non-personal WebM in the browser, then test native decoding.
   media = Buffer.from(await page.evaluate(async () => {
     const canvas = document.createElement('canvas'); canvas.width = 320; canvas.height = 180
@@ -443,6 +467,14 @@ try {
   assert.ok(await page.locator('video').evaluate(v => v.readyState >= 2 && !v.error))
   assert.ok(await page.locator('.drive-footer > *').evaluateAll(elements => elements.every(e => e.scrollWidth <= e.clientWidth + 1)), 'media footer labels must not overflow buttons')
   await page.screenshot({ path: join(output, 'media-320.png'), fullPage: true }); await page.getByRole('button', { name: '关闭弹窗', exact: true }).click(); await page.waitForSelector('[role=dialog]', { state: 'detached' }); checks.push('native-video-decode-play')
+  await page.locator('.drive-file').filter({ hasText: '海边随拍.webm' }).click()
+  await page.getByRole('button', { name: '生成兼容视频副本', exact: true }).click()
+  await page.getByRole('button', { name: '创建离线任务', exact: true }).click()
+  await page.getByText('后台转码中', { exact: true }).waitFor()
+  assert.ok(await page.evaluate(() => document.documentElement.scrollWidth <= innerWidth))
+  await page.getByRole('dialog').screenshot({ path: join(output, 'video-task-320.png') })
+  await page.getByRole('button', { name: '关闭弹窗', exact: true }).click(); await page.waitForSelector('[role=dialog]', { state: 'detached' })
+  checks.push('video-copy-source-revision-preserved-background-stage-320')
   const lightBackground = await page.evaluate(() => getComputedStyle(document.body).backgroundColor)
   await page.evaluate(() => window.setTestTheme(true))
   await page.waitForFunction(light => getComputedStyle(document.body).backgroundColor !== light, lightBackground)

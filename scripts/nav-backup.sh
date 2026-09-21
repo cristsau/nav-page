@@ -316,6 +316,9 @@ source "$CONFIG_FILE"
 : "${NAV_RUNTIME_CONTAINERS:=nav-api;nav-postgres}"
 : "${NAV_REQUIRE_ALL_INPUTS:=true}"
 : "${NAV_ENABLE_IMAGE_OBJECT_BACKUP:=false}"
+: "${NAV_ENABLE_ATTACHMENT_ORIGINALS:=false}"
+: "${NAV_ATTACHMENT_HELPER:=}"
+: "${NAV_ATTACHMENT_NODE:=/usr/bin/node}"
 : "${NAV_IMAGE_RCLONE_CONFIG:=/etc/nav/imgbed-rclone.conf}"
 : "${NAV_IMAGE_RCLONE_REMOTE:=}"
 : "${NAV_ENABLE_OUTER_PROXY_BACKUP:=false}"
@@ -386,6 +389,11 @@ require_uint NAV_RESTIC_KEEP_MONTHLY "$NAV_RESTIC_KEEP_MONTHLY"
   && fatal "$EX_CONFIG" "--forget-cloud requires --cloud-upload and NAV_ENABLE_RESTIC_FORGET=true"
 
 CURRENT_STAGE="dependency checks"
+if is_true "$NAV_ENABLE_ATTACHMENT_ORIGINALS"; then
+  [[ -x "$NAV_ATTACHMENT_NODE" ]] || fatal "$EX_UNAVAILABLE" "node is required for attachment-original backup"
+  assert_safe_settings_file "$NAV_ATTACHMENT_NODE"
+  assert_safe_settings_file "$NAV_ATTACHMENT_HELPER"
+fi
 for command_name in stat realpath flock find sort sha256sum cp mv mktemp awk install xargs sed grep cmp readlink python3 wc; do
   command -v "$command_name" >/dev/null 2>&1 \
     || fatal "$EX_UNAVAILABLE" "required command is unavailable: $command_name"
@@ -763,6 +771,16 @@ if ! run_snapshot_sql \
 fi
 
 CURRENT_STAGE="PostgreSQL snapshot release"
+if is_true "$NAV_ENABLE_ATTACHMENT_ORIGINALS"; then
+  CURRENT_STAGE="attachment-original snapshot inventory"
+  run_snapshot_sql "SELECT COALESCE(json_agg(t), '[]'::json) FROM (
+    SELECT DISTINCT attachment->>'url' AS url, (attachment->>'size')::bigint AS size, attachment->>'mime' AS mime
+    FROM public.notes CROSS JOIN LATERAL jsonb_array_elements(COALESCE(attachments, '[]'::jsonb)) attachment
+    UNION SELECT url, size, mime FROM public.media_assets WHERE state <> 'deleted'
+  ) t;" > "$STAGING_DIR/attachments/originals-input.json" \
+    || fatal "$EX_SOFTWARE" "attachment-original inventory failed"
+fi
+CURRENT_STAGE="PostgreSQL snapshot release"
 finish_snapshot_holder
 
 CURRENT_STAGE="pg_restore catalog validation"
@@ -795,6 +813,14 @@ copy_path_list "extra" "$NAV_EXTRA_CONFIG_PATHS"
 safe_copy_path "$CONFIG_FILE" "extra"
 
 printf 'component\tstatus\tdetail\n' > "$STAGING_DIR/metadata/disaster-components.tsv"
+if is_true "$NAV_ENABLE_ATTACHMENT_ORIGINALS"; then
+  CURRENT_STAGE="bounded attachment-original capture"
+  "$NAV_ATTACHMENT_NODE" "$NAV_ATTACHMENT_HELPER" "$STAGING_DIR/attachments/originals-input.json" >/dev/null \
+    || fatal "$EX_SOFTWARE" "attachment-original capture failed; snapshot is incomplete"
+  printf 'attachment_originals\tcomplete\toriginals-manifest.json_and_bytes\n' >> "$STAGING_DIR/metadata/disaster-components.tsv"
+else
+  printf 'attachment_originals\tnot_configured\tset_NAV_ENABLE_ATTACHMENT_ORIGINALS\n' >> "$STAGING_DIR/metadata/disaster-components.tsv"
+fi
 
 if is_true "$NAV_ENABLE_OUTER_PROXY_BACKUP"; then
   CURRENT_STAGE="outer proxy configuration copy"

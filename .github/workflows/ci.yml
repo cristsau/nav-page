@@ -717,6 +717,9 @@ jobs:
       - name: Run ephemeral administrator lifecycle exercise
         run: npm run test:release-acceptance:integration --prefix api
 
+      - name: Verify transactional private task notifications with synthetic owner
+        run: node --test api/integration/dropboxTasksPostgres.integration.js
+
       - name: Run canonical backup PostgreSQL gate exercise
         run: |
           sudo env \
