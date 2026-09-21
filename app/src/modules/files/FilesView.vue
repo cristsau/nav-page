@@ -82,7 +82,7 @@ async function connect() {
     const result = await filesStatus(); if (!alive) return; status.value = result
     if (!transfers) transfers = new FileTransferQueue({ action: filesAction, chunk: uploadChunk, limit: result.uploadLimit, chunkSize: result.chunkSize,
       errorText: message, changed: next => { jobs.value = next } })
-    if (result.uploadResume === 'reselect_after_refresh_api_process') await recoverTransfers()
+    if (['reselect_after_refresh_api_process', 'reselect_after_restart_encrypted'].includes(result.uploadResume)) await recoverTransfers()
     await loadEntries()
   }
   catch (e) { if (alive) { status.value = null; entries.value = []; error.value = message(e) } }
@@ -315,7 +315,7 @@ onBeforeUnmount(() => { alive = false; loadSequence++; transfers?.dispose(); con
       <input ref="resumePicker" class="drive-hidden" type="file" aria-label="重新选择续传原文件" @change="reselectOriginal">
       <section v-if="jobs.length" class="drive-transfers" aria-label="上传队列">
         <header><strong>上传队列</strong><button class="drive-button drive-small" @click="transfers.clearFinished()">清理完成记录</button></header>
-        <p>最高 50 GB · 每块 8 MB。刷新后可重选原文件，核对完整内容后续传；服务器重启/连接变更或任务过期则需重传。文件正文不会缓存，手机后台可能暂停。</p>
+        <p>最高 50 GB · 每块 8 MB。刷新后重选原文件，核对完整内容后续传。<template v-if="status?.uploadResume === 'reselect_after_restart_encrypted'">进度已加密保存，服务器重启后也可续传；24 小时无活动会过期。</template><template v-else>当前进度仅在服务器内存中，服务器重启后需重传。</template>连接变更后旧任务不可继续；文件正文不会缓存，手机后台可能暂停。</p>
         <ul><li v-for="job in jobs" :key="job.id">
           <div class="drive-transfer-title"><strong :title="job.name">{{ job.name }}</strong><span>{{ job.pause && job.state === 'uploading' ? '正在暂停…' : job.cancel && ['uploading', 'checking'].includes(job.state) ? '正在取消…' : uploadStates[job.state] }}</span></div>
           <small class="drive-item-path">{{ job.path }}</small>

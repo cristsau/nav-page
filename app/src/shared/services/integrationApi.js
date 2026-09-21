@@ -4,6 +4,12 @@ export function fetchManagedIntegrations() {
   return request('/admin/integrations', { method: 'GET', cache: 'no-store' })
 }
 
+const backupRoot = '/admin/integrations/dropbox-backup'
+export const fetchDropboxBackupControl = () => request(backupRoot + '/status', { cache: 'no-store' })
+export const requestDropboxBackupJob = input => request(backupRoot + '/jobs', { method: 'POST', body: JSON.stringify(input) })
+export const saveDropboxBackupSchedule = input => request(backupRoot + '/schedule', { method: 'PUT', body: JSON.stringify(input) })
+export const dropboxCiphertextUrl = id => (import.meta.env?.VITE_API_BASE_URL || '/api') + backupRoot + '/ciphertext/' + encodeURIComponent(id)
+
 export function saveManagedMail(config) {
   return request('/admin/integrations/mail', {
     method: 'PUT',

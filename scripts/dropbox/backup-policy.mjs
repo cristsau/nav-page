@@ -31,6 +31,13 @@ export function validateLedger(ledger) {
       || !Number.isFinite(Date.parse(p.createdAt))) fail('invalid_pending_reservation')
     ids.add(p.id)
   }
+  if (ledger.pendingDeletes !== undefined) {
+    if (!Array.isArray(ledger.pendingDeletes) || ledger.pendingDeletes.length > 1) fail('invalid_pending_delete')
+    for (const p of ledger.pendingDeletes) {
+      const point = ledger.points.find(point => point.id === p?.id)
+      if (!point || p.remoteId !== point.remoteId || p.rev !== point.rev || !Number.isFinite(Date.parse(p.createdAt))) fail('invalid_pending_delete')
+    }
+  }
   return ledger
 }
 
@@ -48,28 +55,34 @@ export function inventoryBytes(files) {
   return total
 }
 
-export function planUpload(ledger, files, reservedBytes) {
+export function validateRepository(ledger, files) {
   validateLedger(ledger)
-  if (!uint(reservedBytes) || reservedBytes < 1 || reservedBytes > POLICY.maxUploadBytes) fail('invalid_upload_reservation')
   const used = inventoryBytes(files)
   // Any pending write means a previous job is unresolved. Never expire it by wall clock alone.
   if (ledger.pending.length) fail('pending_upload_requires_reconciliation')
+  if (ledger.pendingDeletes?.length) fail('pending_delete_requires_reconciliation')
   for (const p of ledger.points) {
     const f = files.find(f => f.id === p.remoteId)
     if (!f || f.path_lower !== artifactPath(p.id) || f.rev !== p.rev || f.size !== p.bytes
       || f.content_hash !== p.contentHash) fail('repository_changed_requires_reconciliation')
   }
   if (files.some(f => f.path_lower.startsWith(ROOT + '/') && !ledger.points.some(p => p.remoteId === f.id))) fail('unknown_backup_requires_reconciliation')
+  return used
+}
+export function planUpload(ledger, files, reservedBytes) {
+  if (!uint(reservedBytes) || reservedBytes < 1 || reservedBytes > POLICY.maxUploadBytes) fail('invalid_upload_reservation')
+  const used = validateRepository(ledger, files)
   if (ledger.points.length >= POLICY.maxPoints) fail('retention_review_required')
   if (used + reservedBytes > POLICY.budgetBytes) fail('backup_budget_exceeded')
   return { usedBytes: used, reservedBytes, remainingBytes: POLICY.budgetBytes - used - reservedBytes }
 }
 
-// Suggestions only. No delete API exists in this candidate. Keep at least two points,
+// Policy only. Keep at least two points,
 // and never suggest deleting the newest independently restore-verified point.
 export function planRetention(ledger) {
   validateLedger(ledger)
   if (ledger.pending.length) fail('pending_upload_requires_reconciliation')
+  if (ledger.pendingDeletes?.length) fail('pending_delete_requires_reconciliation')
   const points = [...ledger.points].sort((a, b) => Date.parse(b.createdAt) - Date.parse(a.createdAt) || a.id.localeCompare(b.id))
   const verified = points.filter(p => p.state === 'restore_verified').sort((a, b) => Date.parse(b.restoredAt) - Date.parse(a.restoredAt) || a.id.localeCompare(b.id))
   if (!verified.length) return { protectedIds: points.map(p => p.id), candidates: [], reason: 'no_verified_restore' }

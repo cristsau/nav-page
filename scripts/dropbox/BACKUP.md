@@ -11,7 +11,8 @@
 - `publish-status <config.json> <integration-directory>`：在持有 canonical 备份锁期间，以 0600 原子替换目录中的 `dropbox-status.json`。目录及全部父级必须为 root 所有、无软链接且不可被其他用户写入，目标目录为 0700；目标文件如已存在也须满足私有文件校验。失败保留前一份报告，不能据旧报告声称当前成功。
 - API 仅在既有管理员 `GET /api/admin/integrations` 中返回 `dropboxBackup` 白名单；非管理员不能读取。它从 `NAV_MANAGED_INTEGRATIONS_DIR` 中读报告，不读 root 台账或 Dropbox 凭据、不执行主机命令。报告超过 30 分钟标注过期，缺失、损坏、异常尺寸、硬链接/软链接均不能作为正常状态。
 - “服务器清单已检查”“已上传”“下载已校验”“恢复已验证”分别展示。台账字节数不等于实时网盘用量；附件原件仍以 canonical 清单为准。`allowUpload` 不证明任务运行，服务器状态报告也不能证明独立离线钥匙已保存。
-- 本批没有网页立即备份/下载/恢复按钮，没有定时服务安装器，也不开放完整 Dropbox 网盘浏览。部署者应通过受控主机任务刷新报告；本候选不自动改现有备份任务，刷新网页也不会触发备份。
+- 本备份模块尚无网页立即备份/下载/恢复按钮或定时服务安装器。独立 Full Dropbox 文件管理已由文件库模块提供，不复用本模块的 App Folder 凭据。部署者通过受控主机任务刷新报告；刷新网页不会触发备份。
+- 网页保留计划只展示台账估计：待轮换 ID、保护范围和暂停原因。新报告增加 `cloud.pruneConfigured/pendingDeletes/retention`，旧报告仍兼容，但缺少计划时明确未知；不把配置标志当作已运行的任务。
 
 - 保留现有 `scripts/nav-backup.sh` 的 PostgreSQL custom-format dump 和 canonical 快照。
   新工具只接受其直接子目录 `nav-<UTC>-<commit>`，先核对 manifest 中所有文件，再核对 canonical `metadata/tree.tsv` 的完整路径集合、类型、权限和链接目标。
@@ -32,8 +33,10 @@
 - 最多 **3 个已提交备份**；首版单次流式上传预留上限 **1,000,000,000 bytes**。
   预留包含 tar/age 开销，生成量超过预留则停止并留待对账，不越界提交。
 - 网络写入前必须先持久化 pending 全额预留；失败或结果不明后不按时间自动“释放”。有 pending 即阻止新上传，必须根据远端实际状态处理。
-- 超预算、已有三份、远端 revision/hash 变化或陌生备份出现时暂停，不先删除数据腾位置。
-- 云端 `retention-plan` 只生成建议，至少保护最近两份和最新一份独立恢复验收通过的备份。**没有云端删除命令**；云端滚动保留仍待单独安全实现和验收。
+- 超预算、远端 revision/hash 变化、陌生备份或未核对操作出现时暂停。默认已有三份也暂停；只有显式开启 `allowCloudPrune` 且已有有效恢复回执，才允许受控轮换。
+- `retention-plan` 仍只生成建议。新增 `prune-cloud` 持有 canonical 锁，普通清理保留至多三份；`backup` 在源快照和加密工具通过检查后，必要时先为下一份预留一格，再上传。始终保留最新两份和最近一份独立恢复验证成功的备份；如果三份均被保护则暂停，不为满足数量而删除恢复证明。
+- 新增 `pendingDeletes` 持久日志：每次调用删除前先落盘精确 ID/revision；云端再次核对后才移除台账记录。丢回执、保存失败或云端变化会保留阻断标记，后续上传/清理暂停，绝不自动重试或按时间清空。仅使用 App Folder 应用的普通 `delete_v2`，携带 `parent_rev`，不永久删除；可恢复时间由 Dropbox 账户保留规则决定，不承诺可撤销。
+- 生产自动清理和定时开关本轮未开启。用户指定开发优先，真实恢复演练与项目总验收最后进行；此顺序不阻止继续编写和合成测试管理功能。
 
 ### 服务器本地：只保留最新 3 份
 
@@ -72,19 +75,42 @@ node <agent> list /etc/nav/dropbox-backup.json
 node <agent> plan /etc/nav/dropbox-backup.json /var/backups/nav/nav-<UTC>-<commit>
 node <agent> backup /etc/nav/dropbox-backup.json /var/backups/nav/nav-<UTC>-<commit>
 node <agent> download /etc/nav/dropbox-backup.json <backup-id>
+node <agent> verify /etc/nav/dropbox-backup.json <backup-id>
 node <agent> retention-plan /etc/nav/dropbox-backup.json
 node <agent> local-retention-plan /etc/nav/dropbox-backup.json
 node <agent> prune-local /etc/nav/dropbox-backup.json
+node <agent> prune-cloud /etc/nav/dropbox-backup.json
 ```
 
 `init-local` 只新建台账且拒绝覆盖；`list`/`retention-plan` 不联网；`plan` 会读取专用 App Folder，但不上传。
 `backup` 还需受管配置显式允许；`download` 仅下载校验密文，检查本机剩余空间且不覆盖既有下载。
+`verify` 流式回读精确 revision，不在磁盘保存内容，核对大小、SHA-256、Dropbox 内容哈希后更新 download_verified；已有 restore_verified 不降级。
+
+## 网页操作执行器（开发候选，默认不安装、不开放）
+
+`control-host.mjs` 是 Linux/root 独立执行器；API 不获得备份 OAuth、私钥、口令、任意 shell 或主机路径。仅固定操作：创建 canonical 本地快照并加密上传/回读校验、指定备份 ID 校验、下载密文、保存每日时间。没有网页恢复、任意删除、命令或路径输入。原 Full Dropbox 文件库授权保持独立。
+
+- 持久任务：原子写入与 fsync，先保存 queued/running 再产生副作用；一次只执行一个任务。32 位随机请求 ID 幂等，近期终态回执至少保留 72 小时，最多 50 条。结果不明或重启时仍 running 的任务转 review，拒绝新任务，不自动重试或清空台账。管理员须同时核对 canonical 快照和云 ledger；没有网页“忽略错误再上传”按钮。
+- 每日计划：北京时间 HH:mm；修改计划后从次日开始，每日最多一次，停机多日不会补跑积压。持久 lastDay 与入队原子提交。关闭计划不杀正在执行任务；尚排队的定时任务在启动前再次核对开关。页面区别“配置开启”与“执行器当前安全条件满足”。
+- 开启计划同时需要 root 配置 allowSchedule/allowManual、备份 allowUpload、没有 pending 上传/删除，以及台账有效 restore_verified。用户已明确演练最后做，因此本批只开发，不开启实际计划或云轮换。
+- 浏览器下载是精确 revision 的密文流，受同一管理员会话和绑定 owner 限制；服务端完成哈希校验前扣住最后一个分块。错误/断线截断响应，浏览器不可收到声明长度的完整损坏文件。一次一个下载、最长 15 分钟、最大 1 GB，不生成临时 tar/密文副本。不会把下载成功视为业务恢复。
+- 控制平面仅 Unix socket，无 TCP/公网监听。单实例 `/run/lock/nav-dropbox-control.lock` 与 canonical 备份锁分开，复用 canonical 锁的实际云/本地操作仍串行。文件状态丢失或损坏直接拒绝，不能静默新建；仅显式 init 可第一次创建。
+
+受控部署准备（本批未执行）：
+
+1. 使用 `control-config.example.json` 确认真实路径，替换为已校验的不可变 release 路径，不能使用 `current` 等符号链接。确认 snapshotConfig 与 backupConfig 指向同一 canonical backupRoot；root 配置 0600、私有状态/报告/socket 目录 0700，父目录 root 拥有且不可被组/其他用户写入。allowManual/allowSchedule/allowDownload 初始全部 false。
+2. 核对 Node >=22、bash、flock、age、Docker 和 canonical 备份工具。不要重复运行 init：`node <release>/scripts/dropbox/control-host.mjs init /etc/nav/dropbox-control.json` 拒绝覆盖已有 control.json。系统服务模板需替换真实 Node 和不可变 release；不得把模板原样 enable。
+3. API 配置 `<managed-dir>/dropbox-backup-control.json` 只包含 version:1、ownerUserId 和固定 socketPath `/run/nav-dropbox-control/control.sock`，0600。API 容器只挂这个 0700 socket **目录**，不挂备份根、凭据、恢复钥匙或主机 Docker socket。当前 API/root 执行身份需匹配；非 root 安装不准靠 chmod 777 绕过，需另行设计 UID。
+4. runtime socket 目录需在 API 容器创建前存在；服务 `RuntimeDirectoryPreserve=yes` 保留目录 inode，避免重启后 Docker bind 指向旧目录。在最终 Linux 集成验收中验证进程/容器重启、flock、权限、socket 重新连接、损坏状态、断网/断线。当前 Dev60 合成测试不能替代这些。
+5. 发布时显式评估备份/上传任务元数据的备份排除，尤其短期上传会话密钥和状态；不要把新状态目录加入 canonical payload 导致循环备份。先保留配置/版本回退，再开放手动和密文下载。完整恢复演练通过后才单独开放计划/轮换。定时关闭或移除 API 的 controller 配置即可关闭入口，不删除云台账/备份/独立授权。
+
+任务记录就是页面反馈，目前不另发邮件或 Telegram。若任务 review/报告过期，要显示真实阻断，不以按钮提交或 HTTP 202 冒充备份成功。
 `local-retention-plan` 只校验并列出本地保留/清理对象；`prune-local` 需要 `allowLocalPrune: true`。本地操作同样持有 canonical 锁，不能与备份/恢复并发；不要同时启用旧 `nav-backup.sh --prune-local` 的另一套保留策略。
-没有 systemd/cron 安装器、生产恢复、云端自动删除、网页 UI、用户级备份或全盘 Dropbox 管理。
+`prune-cloud` 需要 `allowCloudPrune: true` 和有效恢复回执；默认配置仍关闭。此候选已有上述独立网页操作执行器和 systemd 模板，但没有自动安装器、生产恢复或用户级备份。真实恢复与自动计划/清理须另行验收后启用，文件库另见 `FILES.md`。
 
 ## 测试与发布门禁
 
-1. `node --test scripts/dropbox/backup.test.mjs`：18 组纯合成/假凭据测试。远程账号和文件 API 均为 mock。
+1. `node --test scripts/dropbox/backup.test.mjs scripts/dropbox/cloud-retention.test.mjs`：纯合成/假凭据测试，覆盖保留保护、容量/变化拒绝、删除前日志、失联不重试和回执核对。远程账号和文件 API 均为 mock。
 2. `backup-linux.test.mjs`：待批准的临时 Linux 环境中，使用一次性 age 密钥、两个无网络 PostgreSQL 16 容器，验证真实加解密、篡改拒绝、pg_dump/pg_restore 与行内容一致，以及 canonical 锁和 CLI 防覆盖。
    仅当 `NAV_DROPBOX_DISPOSABLE_TEST=1` 才运行。它仍不等于完整 NAV 业务恢复或真实 Dropbox 云恢复。
 3. `local-retention.test.mjs` 验证最新三份、损坏拒绝、边界保护及 Linux 合成目录的真实清理。`.github/workflows/dropbox-backup.yml` 仅用于已授权的独立测试分支及 Actions 临时环境。只读仓库权限、无账号秘密、无业务数据、无部署步骤、不上传备份或密钥。

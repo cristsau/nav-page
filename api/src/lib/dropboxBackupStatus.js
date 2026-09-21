@@ -36,14 +36,28 @@ export function sanitizeDropboxBackupStatus(input, now = Date.now()) {
       || input.remoteInventoryChecked !== false || input.independentCopyVerified !== null || input.scheduleEnabled !== null
       || Object.keys(LIMITS).some(key => input.limits?.[key] !== LIMITS[key])) return unavailable('invalid_report')
     const localPoints = points(local.points, true), cloudPoints = points(cloud.points, false)
+    const pendingDeletes = cloud.pendingDeletes ?? 0, pruneConfigured = cloud.pruneConfigured ?? false
+    if (!uint(pendingDeletes) || pendingDeletes > 1 || !bool(pruneConfigured)) return unavailable('invalid_report')
+    let retention = null
+    if (cloud.retention !== undefined) {
+      const r = cloud.retention, ids = new Set(cloudPoints.map(p => p.id)), seen = new Set()
+      if (!r || !['not_initialized', 'needs_reconciliation', 'no_verified_restore', 'protected_limit', 'ready', 'not_required'].includes(r.reason)) return unavailable('invalid_report')
+      for (const list of [r.protectedIds, r.eligibleIds]) {
+        if (!Array.isArray(list) || list.length > 100) return unavailable('invalid_report')
+        for (const id of list) { if (!ids.has(id) || seen.has(id)) return unavailable('invalid_report'); seen.add(id) }
+      }
+      if (['not_initialized', 'needs_reconciliation', 'no_verified_restore'].includes(r.reason) && r.eligibleIds.length) return unavailable('invalid_report')
+      retention = { reason: r.reason, protectedIds: [...r.protectedIds], eligibleIds: [...r.eligibleIds] }
+    }
     if (local.state === 'unavailable' && localPoints.length) return unavailable('invalid_report')
-    if (cloud.ledgerState === 'not_initialized' && (cloudPoints.length || cloud.pendingUploads || cloud.recordedBytes)) return unavailable('invalid_report')
+    if (cloud.ledgerState === 'not_initialized' && (cloudPoints.length || cloud.pendingUploads || pendingDeletes || cloud.recordedBytes)) return unavailable('invalid_report')
     if (cloudPoints.reduce((sum, p) => sum + p.bytes, 0) !== cloud.recordedBytes) return unavailable('invalid_report')
     return { state: age > MAX_AGE_MS ? 'stale' : 'available', limits: LIMITS, report: {
       generatedAt: new Date(input.generatedAt).toISOString(),
       local: { state: local.state, keepCount: 3, pruneConfigured: local.pruneConfigured, points: localPoints },
       cloud: { ledgerState: cloud.ledgerState, uploadConfigured: cloud.uploadConfigured, credentialsPresent: cloud.credentialsPresent,
-        recipientConfigured: cloud.recipientConfigured, recordedBytes: cloud.recordedBytes, pendingUploads: cloud.pendingUploads, points: cloudPoints },
+        recipientConfigured: cloud.recipientConfigured, recordedBytes: cloud.recordedBytes, pendingUploads: cloud.pendingUploads,
+        pendingDeletes, pruneConfigured, retention, points: cloudPoints },
       independentCopyVerified: null, scheduleEnabled: null, remoteInventoryChecked: false
     } }
   } catch { return unavailable('invalid_report') }

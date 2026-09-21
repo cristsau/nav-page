@@ -53,6 +53,7 @@ onBeforeUnmount(() => { alive = false; clearInterval(timer); emit('busy', false)
       <div class="target"><span>Dropbox 目录：{{ destination || '根目录' }}</span><button type="button" :disabled="busy" @click="choosing = !choosing">选择目录</button></div>
       <FolderPicker v-if="choosing" @choose="destination = $event; choosing = false" />
       <p class="intro">最多 {{ size(state.maxBytes) }} / 文件，单任务运行。暂停会保留暂存文件并阻塞后续任务；取消后才会清理。备份目录不可选。</p>
+      <p class="intro">{{ state.uploadPersistence === 'encrypted_disk' ? '上传进度已加密保存，服务重启后可从已确认位置继续；结果不明时暂停核对。' : '上传进度仅在当前服务进程保留；重启后可能需要从节点缓存重新上传。' }}</p>
       <button class="primary" :disabled="busy || !url || !name">创建离线任务</button>
     </form>
     <div v-if="state" class="queue-heading"><h3>任务列表 · {{ state.entries.length }}</h3><button :disabled="busy" @click="change('clear', {})">清理完成记录</button></div>

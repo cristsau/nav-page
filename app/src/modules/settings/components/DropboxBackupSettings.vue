@@ -1,6 +1,7 @@
 <script setup>
 import { computed, ref } from 'vue'
 import Icon from '@/shared/components/Icon.vue'
+import DropboxBackupActions from './DropboxBackupActions.vue'
 
 const props = defineProps({ state: { type: Object, default: null }, loading: Boolean })
 defineEmits(['refresh'])
@@ -25,6 +26,13 @@ const gates = computed(() => [
     text: '上传、下载校验和完整恢复是三个不同阶段。' }
 ])
 const stateLabels = { manifest_checked: '清单已检查', uploaded: '已上传', download_verified: '下载已校验', restore_verified: '恢复已验证' }
+const retentionText = computed(() => ({
+  not_initialized: '云端台账尚未初始化。', needs_reconciliation: '有操作结果尚未核对，保留全部备份并暂停轮换。',
+  no_verified_restore: '按当前安排，完整恢复演练留到最终验收；在此之前不自动清理云备份。',
+  protected_limit: '最新两份与最近一次恢复验证的备份都需保留，暂时无法安全腾出一个位置。',
+  ready: '下次备份前可轮换下列较旧备份；执行时仍会重新核对云端文件及容量。',
+  not_required: '目前无需清理；达到 3 份后才会评估下一次轮换。'
+}[report.value?.cloud.retention?.reason] || '服务器尚未提供保留计划，请勿根据旧记录手动清理。'))
 function date(value) { return value ? new Date(value).toLocaleString('zh-CN', { hour12: false }) : '尚无记录' }
 function bytes(value) {
   if (!Number.isFinite(value)) return '未知'
@@ -52,7 +60,7 @@ function bytes(value) {
       <Icon name="clock" :size="18" /><div><strong>{{ statusText }}</strong>
         <p v-if="state?.state === 'stale'">以下为旧记录，不代表当前状态；请检查服务器状态采集任务。</p>
         <p v-else-if="!report">等待服务器提供脱敏状态报告。未读取到记录不等于没有备份。</p>
-        <p v-else>此页面为只读记录。立即备份、定时备份和网页恢复入口尚未开放，不会因为刷新而上传或删除数据。</p>
+        <p v-else>以下记录由服务器提供；实际操作与运行状态见备份操作区。刷新不会上传或删除数据，网页不提供解密恢复。</p>
       </div>
     </div>
 
@@ -60,19 +68,31 @@ function bytes(value) {
       <div><dt>服务器本地</dt><dd>{{ report?.local.state === 'checked' ? report.local.points.length + ' 份' : '待检查' }}</dd>
         <span>保留最新 3 份 · {{ report ? (report.local.pruneConfigured ? '清理配置已开启' : '清理配置未开启') : '配置未知' }}</span></div>
       <div><dt>Dropbox 备份台账</dt><dd>{{ report?.cloud.ledgerState === 'valid' ? report.cloud.points.length + ' 份' : report ? '未初始化' : '未知' }}</dd>
-        <span>上限 3 份，达到上限即暂停</span></div>
+        <span>上限 3 份 · {{ report?.cloud.pruneConfigured ? '轮换配置已开启' : '自动轮换未开启' }}</span></div>
       <div><dt>台账记录的云端大小</dt><dd>{{ report?.cloud.ledgerState === 'valid' ? bytes(report.cloud.recordedBytes) : '未知' }} <small>/ 5 GB</small></dd>
         <span>非实时网盘用量，未知文件另计</span></div>
     </dl>
 
+    <DropboxBackupActions :points="report?.cloud.points || []" @updated="$emit('refresh')" />
+
     <p v-if="report?.cloud.pendingUploads" class="dropbox-warning" role="alert">有 {{ report.cloud.pendingUploads }} 次上传未完成核对，继续上传前需要处理。</p>
+    <p v-if="report?.cloud.pendingDeletes" class="dropbox-warning" role="alert">有清理结果尚未核对，已暂停后续云端写入，不会自动重试删除。</p>
+    <details class="dropbox-retention">
+      <summary>查看云备份保留计划 <span>只查看，不执行删除</span></summary>
+      <p>{{ retentionText }}</p>
+      <p>最多 3 份 / 5 GB；至少保留最新两份和最近一份恢复验证成功的备份。容量不足、未知文件或回执不明时暂停。</p>
+      <ul v-if="report?.cloud.retention?.eligibleIds?.length">
+        <li v-for="id in report.cloud.retention.eligibleIds" :key="id"><code>{{ id }}</code><span>下一次备份前的候选</span></li>
+      </ul>
+      <p class="dropbox-boundary">这是本地台账预估，不是实时网盘清单；查看计划和刷新记录不会上传或清理。</p>
+    </details>
     <details class="dropbox-readiness">
       <summary>查看启用条件 <span>为什么还不能自动备份？</span></summary>
       <ul><li v-for="gate in gates" :key="gate.title">
         <Icon :name="gate.ok ? 'circle-check' : 'clock'" :size="18" />
         <div><strong>{{ gate.title }} · {{ gate.ok ? '已记录' : '待验证' }}</strong><p>{{ gate.text }}</p></div>
       </li></ul>
-      <p class="dropbox-boundary">自动任务状态尚未接入报告；不会把“允许上传”当作“定时任务已开启”。</p>
+      <p class="dropbox-boundary">上方操作区单独查询执行器，自动任务是否运行以执行器实时状态为准，不以“允许上传”推断。</p>
     </details>
 
     <div class="dropbox-records">
@@ -105,6 +125,13 @@ function bytes(value) {
 .dropbox-intro .dropbox-eyebrow { font-size: 11px; letter-spacing: .08em; }
 .dropbox-refresh { display: inline-flex; align-items: center; gap: 7px; padding: 9px 12px; border: 1px solid var(--border-color, #dfe2ec); border-radius: 10px; background: transparent; color: inherit; font: inherit; font-size: 13px; cursor: pointer; white-space: nowrap; }
 .dropbox-refresh:disabled { opacity: .55; cursor: wait; }
+.dropbox-retention { margin-top: 18px; border: 1px solid var(--border-color, #dfe2ec); border-radius: 12px; padding: 14px 16px; }
+.dropbox-retention summary { cursor: pointer; font-size: 14px; line-height: 1.7; }
+.dropbox-retention summary span { display: inline-block; margin-left: 8px; font-size: 12px; color: var(--text-secondary, #626879); }
+.dropbox-retention p { color: var(--text-secondary, #626879); font-size: 13px; line-height: 1.7; margin: 10px 0 0; }
+.dropbox-retention ul { list-style: none; padding: 0; margin: 12px 0; }
+.dropbox-retention li { display: flex; flex-wrap: wrap; justify-content: space-between; gap: 6px; padding: 8px 0; font-size: 12px; }
+.dropbox-retention code { overflow-wrap: anywhere; }
 .dropbox-panel button:focus-visible, .dropbox-panel summary:focus-visible { outline: 2px solid var(--accent-color, #6264cf); outline-offset: 3px; }
 .dropbox-notice { display: flex; gap: 10px; align-items: flex-start; margin: 20px 0; padding: 14px 16px; background: var(--bg-secondary, #f2f3f9); border-radius: 12px; }
 .dropbox-notice > svg { flex-shrink: 0; margin-top: 2px; }

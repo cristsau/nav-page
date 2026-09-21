@@ -58,8 +58,8 @@ export class DropboxClient {
   constructor(credential, { fetchImpl = fetch } = {}) {
     validateCredential(credential); this.#credential = credential; this.#fetch = fetchImpl
   }
-  async #send(url, options) {
-    try { return await this.#fetch(url, { ...options, redirect: 'error', signal: AbortSignal.timeout(60_000) }) }
+  async #send(url, options, timeout = 60_000) {
+    try { return await this.#fetch(url, { ...options, redirect: 'error', signal: AbortSignal.timeout(timeout) }) }
     catch { fail('dropbox_network_error') }
   }
   async #refresh() {
@@ -146,12 +146,21 @@ export class DropboxClient {
       || typeof entry.id !== 'string' || !entry.id.startsWith('id:') || !/^[a-f0-9]{9,64}$/.test(entry.rev || '')) fail('upload_receipt_mismatch')
     return { ...result, remoteId: entry.id, rev: entry.rev }
   }
+  async deleteBackup(point) {
+    const path = artifactPath(point.id)
+    if (!/^id:[A-Za-z0-9_-]+$/.test(point.remoteId) || !/^[a-f0-9]{9,64}$/.test(point.rev) || !hash(point.contentHash)) fail('invalid_delete_target')
+    const result = await this.#rpc('files/delete_v2', { path: point.remoteId, parent_rev: point.rev })
+    const m = result?.metadata
+    if (m?.['.tag'] !== 'file' || m.id !== point.remoteId || m.rev !== point.rev || m.path_lower !== path
+      || m.size !== point.bytes || m.content_hash !== point.contentHash) fail('delete_receipt_requires_reconciliation')
+    return { deleted: true }
+  }
   async download(point, write) {
     artifactPath(point.id)
     await this.#refresh()
     const response = await this.#send(CONTENT + 'files/download', { method: 'POST', headers: {
       Authorization: `Bearer ${this.#token}`, 'Dropbox-API-Arg': JSON.stringify({ path: `rev:${point.rev}` })
-    } })
+    } }, 15 * 60_000)
     if (!response.ok) { await response.body?.cancel().catch(() => {}); fail(`dropbox_http_${response.status}`) }
     const reader = response.body?.getReader(); if (!reader) fail('invalid_download_response')
     try {

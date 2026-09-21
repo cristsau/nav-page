@@ -2,6 +2,7 @@
   "version": 1,
   "allowUpload": false,
   "allowLocalPrune": false,
+  "allowCloudPrune": false,
   "credentialsFile": "/etc/nav/dropbox-connection.json",
   "stateDirectory": "/var/lib/nav-dropbox",
   "backupRoot": "/var/backups/nav",

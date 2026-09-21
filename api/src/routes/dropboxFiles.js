@@ -3,10 +3,12 @@ import { Readable } from 'node:stream'
 import { config } from '../config.js'
 import { DropboxFilesError, DropboxFilesService, loadFilesConnection, filePath, contentType, UPLOAD_LIMIT } from '../lib/dropboxFiles.js'
 import { DropboxFileUploads, CHUNK_LIMIT, LARGE_UPLOAD_LIMIT } from '../lib/dropboxFileUploads.js'
+import { loadUploadStore } from '../lib/dropboxUploadStore.js'
 import { listFileHistory, fileRevision, recoverRevisionCopy } from '../lib/dropboxFileHistory.js'
 import { listDeletedFiles, deletedHistory, deletedRevision, recoverDeletedCopy } from '../lib/dropboxDeletedFiles.js'
 
 const messages = {
+  UPLOAD_STORE_UNAVAILABLE: '上传进度存储暂不可用，已停止上传；请检查服务器配置，不会重新覆盖文件。',
   UPLOAD_FILE_MISMATCH: '文件内容与原任务不一致，已停止续传；请选择原文件。',
   DELETED_FILE_CHANGED: '此记录已变化或不是可找回的文件，请刷新，或在 Dropbox 官方回收站处理。',
   REVISION_UNAVAILABLE: '该版本已不可用，请重新读取历史记录或在 Dropbox 官方页面查看。',
@@ -39,7 +41,10 @@ const messages = {
 export default async function dropboxFileRoutes(app, options = {}) {
   const load = options.loadConnection || (() => loadFilesConnection(config.managedIntegrationsDir))
   const create = options.createService || (connection => new DropboxFilesService(connection))
+  const openStore = options.loadUploadStore || (() => loadUploadStore(config.managedIntegrationsDir))
   let cached = null, uploads = null, fingerprint = '', active = 0, streams = 0, bufferedBodies = 0
+  let initializing = Promise.resolve()
+  app.addHook('onClose', async () => { await initializing.catch(() => {}); await uploads?.store?.close() })
   const cursors = new Map(), budgets = new Map()
   app.addContentTypeParser('application/octet-stream', { parseAs: 'buffer', bodyLimit: UPLOAD_LIMIT }, (_req, body, done) => done(null, body))
   async function reserveBody(request, reply) {
@@ -81,17 +86,26 @@ export default async function dropboxFileRoutes(app, options = {}) {
     if (++budget.count > (chunk ? 600 : 120) || active >= 4) throw new DropboxFilesError('BUSY', 429)
     budgets.set(id, budget)
     const next = createHash('sha256').update(JSON.stringify(connection)).digest('hex')
-    if (next !== fingerprint) { cached = create(connection); uploads = new DropboxFileUploads(cached); fingerprint = next; cursors.clear() }
-    return cached
+    const ready = initializing.then(async () => {
+      if (next === fingerprint) return { service: cached, manager: uploads }
+      if (active) throw new DropboxFilesError('BUSY', 429)
+      await uploads?.store?.close(); fingerprint = ''
+      const service = create(connection)
+      const manager = await DropboxFileUploads.restore(service, await openStore(), next)
+      cached = service; uploads = manager; fingerprint = next; cursors.clear()
+      return { service, manager }
+    })
+    initializing = ready.then(() => {}, () => {})
+    return ready
   }
   function endpoint(handler) {
     return async (request, reply) => {
       let acquired = false
       try {
-        const service = await context(request, reply)
+        const { service, manager } = await context(request, reply)
         if (active >= 4) throw new DropboxFilesError('BUSY', 429)
         active++; acquired = true
-        return await handler(request, reply, service)
+        return await handler(request, reply, service, manager)
       } catch (error) {
         if (!(error instanceof DropboxFilesError)) {
           // Preserve auth status but never reflect/log provider errors or file contents.
@@ -102,8 +116,8 @@ export default async function dropboxFileRoutes(app, options = {}) {
     }
   }
   const root = '/dropbox-files'
-  app.get(root + '/status', endpoint(async () => ({ connected: true, scope: 'full_dropbox', ownerOnly: true,
-    uploadLimit: LARGE_UPLOAD_LIMIT, chunkSize: CHUNK_LIMIT, uploadResume: 'reselect_after_refresh_api_process', deletedFiles: true, batchLimit: 50,
+  app.get(root + '/status', endpoint(async (_request, _reply, _service, manager) => ({ connected: true, scope: 'full_dropbox', ownerOnly: true,
+    uploadLimit: LARGE_UPLOAD_LIMIT, chunkSize: CHUNK_LIMIT, uploadResume: manager.store ? 'reselect_after_restart_encrypted' : 'reselect_after_refresh_api_process', deletedFiles: true, batchLimit: 50,
     textLimit: 1024 * 1024, backupProtection: 'checked_on_each_operation' })))
   app.post(root + '/list', { bodyLimit: 32768 }, endpoint(async (request, _reply, service) => {
     const path = filePath(request.body?.path || '', true), query = request.body?.query || ''
@@ -134,17 +148,17 @@ export default async function dropboxFileRoutes(app, options = {}) {
   app.post(root + '/delete', endpoint(async (request, _reply, service) => request.body?.token
     ? service.deleteConfirmed(request.body?.id, request.body.token)
     : service.remove(request.body?.id, request.body?.rev, request.body?.confirmation)))
-  app.post(root + '/upload/list', { bodyLimit: 8192 }, endpoint(async () => uploads.list()))
-  app.post(root + '/upload/reattach', { bodyLimit: 8192 }, endpoint(async request => uploads.reattach(request.body?.uploadId, request.body?.size, request.body?.contentHash)))
-  app.post(root + '/upload/start', { bodyLimit: 8192 }, endpoint(async request => uploads.start(request.body?.path, request.body?.size, request.body?.contentHash ?? null)))
-  app.post(root + '/upload/status', endpoint(async request => uploads.status(request.body?.uploadId)))
-  app.post(root + '/upload/chunk', { bodyLimit: CHUNK_LIMIT, onRequest: reserveBody }, endpoint(async request => {
+  app.post(root + '/upload/list', { bodyLimit: 8192 }, endpoint(async (_q, _r, _s, u) => u.list()))
+  app.post(root + '/upload/reattach', { bodyLimit: 8192 }, endpoint(async (request, _r, _s, u) => u.reattach(request.body?.uploadId, request.body?.size, request.body?.contentHash)))
+  app.post(root + '/upload/start', { bodyLimit: 8192 }, endpoint(async (request, _r, _s, u) => u.start(request.body?.path, request.body?.size, request.body?.contentHash ?? null)))
+  app.post(root + '/upload/status', endpoint(async (request, _r, _s, u) => u.status(request.body?.uploadId)))
+  app.post(root + '/upload/chunk', { bodyLimit: CHUNK_LIMIT, onRequest: reserveBody }, endpoint(async (request, _r, _s, u) => {
     const offset = request.headers['x-upload-offset']
     if (typeof offset !== 'string' || !/^\d{1,12}$/.test(offset)) throw new DropboxFilesError('INVALID_CHUNK')
-    return uploads.append(request.headers['x-upload-id'], Number(offset), request.body)
+    return u.append(request.headers['x-upload-id'], Number(offset), request.body)
   }))
-  app.post(root + '/upload/finish', endpoint(async request => uploads.finish(request.body?.uploadId)))
-  app.post(root + '/upload/cancel', endpoint(async request => uploads.cancel(request.body?.uploadId)))
+  app.post(root + '/upload/finish', endpoint(async (request, _r, _s, u) => u.finish(request.body?.uploadId)))
+  app.post(root + '/upload/cancel', endpoint(async (request, _r, _s, u) => u.cancel(request.body?.uploadId)))
   app.post(root + '/text/read', endpoint(async (request, _reply, service) => service.text(request.body?.id)))
   app.post(root + '/text/save', { bodyLimit: 7 * 1024 * 1024, onRequest: reserveBody }, endpoint(async (request, _reply, service) => ({ item: await service.save(request.body?.id, request.body?.rev, request.body?.content) })))
   app.post(root + '/upload', { bodyLimit: UPLOAD_LIMIT, onRequest: reserveBody }, endpoint(async (request, _reply, service) => {

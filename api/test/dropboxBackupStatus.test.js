@@ -30,6 +30,18 @@ test('download verification is not upgraded to restore verification', () => {
   const result = sanitizeDropboxBackupStatus(fixture({ ledger: { version: 1, points: [point], pending: [] } }), now)
   assert.equal(result.report.cloud.points[0].state, 'download_verified')
   assert.equal(result.report.cloud.recordedBytes, 123)
+  assert.equal(result.report.cloud.pruneConfigured, false)
+  assert.equal(result.report.cloud.retention.reason, 'no_verified_restore')
+})
+
+test('pending delete is displayed as blocked; retention lists cannot inject unknown IDs', () => {
+  const ledger = { version: 1, points: [point], pending: [], pendingDeletes: [{ id: point.id, remoteId: point.remoteId, rev: point.rev, createdAt: new Date(now).toISOString() }] }
+  const report = fixture({ ledger })
+  const result = sanitizeDropboxBackupStatus(report, now)
+  assert.equal(result.report.cloud.pendingDeletes, 1)
+  assert.equal(result.report.cloud.retention.reason, 'needs_reconciliation')
+  report.cloud.retention.eligibleIds.push('../../PRIVATE')
+  assert.equal(sanitizeDropboxBackupStatus(report, now).state, 'invalid_report')
 })
 test('stale and future-dated reports cannot be current success', () => {
   assert.equal(sanitizeDropboxBackupStatus(fixture(), now + 1_800_001).state, 'stale')
