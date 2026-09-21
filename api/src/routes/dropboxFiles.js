@@ -4,8 +4,11 @@ import { config } from '../config.js'
 import { DropboxFilesError, DropboxFilesService, loadFilesConnection, filePath, contentType, UPLOAD_LIMIT } from '../lib/dropboxFiles.js'
 import { DropboxFileUploads, CHUNK_LIMIT, LARGE_UPLOAD_LIMIT } from '../lib/dropboxFileUploads.js'
 import { listFileHistory, fileRevision, recoverRevisionCopy } from '../lib/dropboxFileHistory.js'
+import { listDeletedFiles, deletedHistory, deletedRevision, recoverDeletedCopy } from '../lib/dropboxDeletedFiles.js'
 
 const messages = {
+  UPLOAD_FILE_MISMATCH: '文件内容与原任务不一致，已停止续传；请选择原文件。',
+  DELETED_FILE_CHANGED: '此记录已变化或不是可找回的文件，请刷新，或在 Dropbox 官方回收站处理。',
   REVISION_UNAVAILABLE: '该版本已不可用，请重新读取历史记录或在 Dropbox 官方页面查看。',
   REVISION_COPY_TOO_LARGE: '内置版本另存上限为 20 MB。大文件请下载历史版本，或在 Dropbox 官方页面恢复。',
   NOT_CONNECTED: '文件库尚未连接。请先完成独立 Full Dropbox 应用授权。',
@@ -51,18 +54,18 @@ export default async function dropboxFileRoutes(app, options = {}) {
     }
     reply.raw.once('close', release); reply.raw.once('finish', release); request.raw.once('aborted', release)
   }
-  function cursorToken(value, owner, path, query) {
+  function cursorToken(value, owner, path, query, purpose = 'list') {
     const now = Date.now()
     for (const [key, item] of cursors) if (item.until < now) cursors.delete(key)
     if (cursors.size >= 200) cursors.delete(cursors.keys().next().value)
     const key = randomBytes(24).toString('hex')
-    cursors.set(key, { value, owner, path, query, until: now + 300000 })
+    cursors.set(key, { value, owner, path, query, purpose, until: now + 300000 })
     return key
   }
-  function takeCursor(key, owner, path, query) {
+  function takeCursor(key, owner, path, query, purpose = 'list') {
     if (!key) return null
     const item = cursors.get(key)
-    if (!item || item.until < Date.now() || item.owner !== owner || item.path !== path || item.query !== query) throw new DropboxFilesError('CURSOR_EXPIRED', 409)
+    if (!item || item.until < Date.now() || item.owner !== owner || item.path !== path || item.query !== query || item.purpose !== purpose) throw new DropboxFilesError('CURSOR_EXPIRED', 409)
     return item.value
   }
   async function context(request, reply) {
@@ -100,7 +103,7 @@ export default async function dropboxFileRoutes(app, options = {}) {
   }
   const root = '/dropbox-files'
   app.get(root + '/status', endpoint(async () => ({ connected: true, scope: 'full_dropbox', ownerOnly: true,
-    uploadLimit: LARGE_UPLOAD_LIMIT, chunkSize: CHUNK_LIMIT, uploadResume: 'current_page_and_api_process', batchLimit: 50,
+    uploadLimit: LARGE_UPLOAD_LIMIT, chunkSize: CHUNK_LIMIT, uploadResume: 'reselect_after_refresh_api_process', deletedFiles: true, batchLimit: 50,
     textLimit: 1024 * 1024, backupProtection: 'checked_on_each_operation' })))
   app.post(root + '/list', { bodyLimit: 32768 }, endpoint(async (request, _reply, service) => {
     const path = filePath(request.body?.path || '', true), query = request.body?.query || ''
@@ -109,6 +112,19 @@ export default async function dropboxFileRoutes(app, options = {}) {
     return { entries: result.entries, hasMore: result.hasMore,
       cursor: result.cursor ? cursorToken(result.cursor, request.currentUser.id, path, query) : null }
   }))
+  app.post(root + '/deleted/list', { bodyLimit: 8192 }, endpoint(async (request, _reply, service) => {
+    const path = filePath(request.body?.path || '', true)
+    const result = await listDeletedFiles(service, path, takeCursor(request.body?.cursor, request.currentUser.id, path, '', 'deleted-list'))
+    return { entries: result.entries, hasMore: result.hasMore, cursor: result.hasMore ? cursorToken(result.cursor, request.currentUser.id, path, '', 'deleted-list') : null }
+  }))
+  app.post(root + '/deleted/history', { bodyLimit: 8192 }, endpoint(async (request, _reply, service) => {
+    const history = await deletedHistory(service, request.body?.path)
+    return { ...history, entries: history.entries.map(item => ({ ...item,
+      downloadToken: cursorToken({ path: history.deleted.path, rev: item.rev, id: item.id }, request.currentUser.id, '', '', 'deleted-download') })) }
+  }))
+  app.post(root + '/deleted/copy', { bodyLimit: 8192, onRequest: reserveBody }, endpoint(async (request, _reply, service) => ({
+    item: await recoverDeletedCopy(service, request.body?.path, request.body?.rev, request.body?.destination)
+  })))
   app.post(root + '/folder', endpoint(async (request, _reply, service) => ({ item: await service.mkdir(request.body?.path) })))
   app.post(root + '/history', endpoint(async (request, _reply, service) => listFileHistory(service, request.body?.id)))
   app.post(root + '/history/copy', { bodyLimit: 8192, onRequest: reserveBody }, endpoint(async (request, _reply, service) => ({ item: await recoverRevisionCopy(service, request.body?.id, request.body?.rev, request.body?.destination) })))
@@ -118,7 +134,9 @@ export default async function dropboxFileRoutes(app, options = {}) {
   app.post(root + '/delete', endpoint(async (request, _reply, service) => request.body?.token
     ? service.deleteConfirmed(request.body?.id, request.body.token)
     : service.remove(request.body?.id, request.body?.rev, request.body?.confirmation)))
-  app.post(root + '/upload/start', { bodyLimit: 8192 }, endpoint(async request => uploads.start(request.body?.path, request.body?.size)))
+  app.post(root + '/upload/list', { bodyLimit: 8192 }, endpoint(async () => uploads.list()))
+  app.post(root + '/upload/reattach', { bodyLimit: 8192 }, endpoint(async request => uploads.reattach(request.body?.uploadId, request.body?.size, request.body?.contentHash)))
+  app.post(root + '/upload/start', { bodyLimit: 8192 }, endpoint(async request => uploads.start(request.body?.path, request.body?.size, request.body?.contentHash ?? null)))
   app.post(root + '/upload/status', endpoint(async request => uploads.status(request.body?.uploadId)))
   app.post(root + '/upload/chunk', { bodyLimit: CHUNK_LIMIT, onRequest: reserveBody }, endpoint(async request => {
     const offset = request.headers['x-upload-offset']
@@ -135,7 +153,7 @@ export default async function dropboxFileRoutes(app, options = {}) {
     try { path = decodeURIComponent(request.headers['x-file-name'] || '') } catch { throw new DropboxFilesError('INVALID_PATH') }
     return { item: await service.upload(path, request.body) }
   }))
-  app.get(root + '/content/:id', endpoint(async (request, reply, service) => {
+  const streamContent = endpoint(async (request, reply, service) => {
     if (streams >= 2) throw new DropboxFilesError('BUSY', 429)
     const controller = new AbortController()
     const timer = setTimeout(() => controller.abort(), 60 * 60 * 1000)
@@ -144,9 +162,15 @@ export default async function dropboxFileRoutes(app, options = {}) {
     const release = () => { if (!done) { done = true; streams--; clearTimeout(timer); controller.abort() } }
     reply.raw.once('close', release)
     try {
-      const item = request.query?.rev ? (await fileRevision(service, request.params.id, request.query.rev)).item : await service.get(request.params.id)
+      let item
+      if (request.params.token) {
+        const reference = takeCursor(request.params.token, request.currentUser.id, '', '', 'deleted-download')
+        if (!reference) throw new DropboxFilesError('CURSOR_EXPIRED', 409)
+        item = await deletedRevision(service, reference.path, reference.rev)
+        if (item.id !== reference.id) throw new DropboxFilesError('DELETED_FILE_CHANGED', 409)
+      } else item = request.query?.rev ? (await fileRevision(service, request.params.id, request.query.rev)).item : await service.get(request.params.id)
       if (item.type !== 'file' || !item.downloadable) throw new DropboxFilesError('FILE_UNAVAILABLE', 415)
-      const inline = request.query?.inline === '1' && ['image', 'video', 'audio', 'pdf'].includes(item.kind)
+      const inline = !request.params.token && request.query?.inline === '1' && ['image', 'video', 'audio', 'pdf'].includes(item.kind)
       const response = await service.client.download(item, { range: request.headers.range, signal: controller.signal })
       reply.code(response.status).type(inline ? contentType(item.name) : 'application/octet-stream')
       reply.header('Content-Disposition', `${inline ? 'inline' : 'attachment'}; filename*=UTF-8''${encodeURIComponent(item.name).replace(/['()*]/g, c => '%' + c.charCodeAt(0).toString(16))}`)
@@ -170,5 +194,7 @@ export default async function dropboxFileRoutes(app, options = {}) {
       stream.once('end', release); stream.once('close', release)
       return reply.send(stream)
     } catch (error) { release(); throw error }
-  }))
+  })
+  app.get(root + '/content/:id', streamContent)
+  app.get(root + '/deleted/content/:token', streamContent)
 }

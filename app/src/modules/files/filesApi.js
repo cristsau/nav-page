@@ -7,6 +7,7 @@ export const uploadFile = (path, file) => apiRequest(root + '/upload', { method:
   headers: { 'Content-Type': 'application/octet-stream', 'X-File-Name': encodeURIComponent(path) } })
 export const uploadChunk = (uploadId, offset, bytes) => apiRequest(root + '/upload/chunk', { method: 'POST', body: bytes,
   headers: { 'Content-Type': 'application/octet-stream', 'X-Upload-Id': uploadId, 'X-Upload-Offset': String(offset) } })
+export const deletedContentUrl = token => `${import.meta.env.VITE_API_BASE_URL || '/api'}${root}/deleted/content/${encodeURIComponent(token)}`
 export function contentUrl(id, inline = false, rev = null) {
   const params = new URLSearchParams()
   if (inline) params.set('inline', '1')

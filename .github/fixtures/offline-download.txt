@@ -1,0 +1,4 @@
+DOMO NAV synthetic offline-download acceptance fixture.
+This file contains no personal data, credentials, or executable content.
+The isolated acceptance task downloads this exact committed file and verifies
+the bytes after uploading it to a generated Dropbox test directory.

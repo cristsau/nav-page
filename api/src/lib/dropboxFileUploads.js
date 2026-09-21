@@ -11,8 +11,8 @@ function blockHashes(bytes) {
 }
 export function dropboxContentHash(bytes) { return createHash('sha256').update(Buffer.concat(blockHashes(bytes))).digest('hex') }
 
-// Opaque handles and hash state live only in this API process. No file bodies on disk,
-// no provider session IDs in the browser, and no cross-restart resume claim.
+// Refresh recovery lists owner-bound jobs from this API process. No browser/disk
+// file cache or provider session IDs; a full content hash binds reselected files.
 export class DropboxFileUploads {
   constructor(service) { this.service = service; this.jobs = new Map(); this.starting = 0 }
   sweep() { for (const [id, job] of this.jobs) if (job.until < Date.now() && !job.busy) this.jobs.delete(id) }
@@ -30,8 +30,26 @@ export class DropboxFileUploads {
       if (parent.type !== 'folder' || parent.path !== job.parent) deny('FILE_CHANGED', 409)
     }
   }
-  async start(path, size) {
+  async list() {
     this.sweep()
+    const guards = await this.service.protection(), entries = []
+    for (const [id, job] of this.jobs) {
+      if (!job.contentHash) continue // Older clients did not establish file identity.
+      try { protectPath(job.path, guards, true) } catch (error) { if (error.code === 'BACKUP_PROTECTED') continue; throw error }
+      entries.push({ ...this.view(id, job), path: job.path, contentHash: job.contentHash, expiresAt: job.until })
+    }
+    return { entries, persistence: 'api_process', limit: 32 }
+  }
+  async reattach(id, size, contentHash) {
+    const job = this.job(id)
+    if (job.busy) deny('BUSY', 429)
+    if (!job.contentHash || size !== job.size || contentHash !== job.contentHash) deny('UPLOAD_FILE_MISMATCH', 409)
+    await this.guard(job)
+    return this.view(id, job)
+  }
+  async start(path, size, contentHash = null) {
+    this.sweep()
+    if (contentHash !== null && (typeof contentHash !== 'string' || !/^[a-f0-9]{64}$/.test(contentHash))) deny('INVALID_CONTENT_HASH')
     if (this.jobs.size + this.starting >= 32) {
       for (const [id, job] of this.jobs) if (job.state === 'complete' && !job.busy) { this.jobs.delete(id); break }
     }
@@ -52,7 +70,7 @@ export class DropboxFileUploads {
       const result = await this.service.client.uploadSession('start', { close: false })
       if (typeof result?.session_id !== 'string' || !/^[\x21-\x7e]{1,512}$/.test(result.session_id)) deny('INVALID_PROVIDER_RESPONSE', 502)
       const id = randomBytes(24).toString('hex')
-      const job = { path, parent, parentId, size, offset: 0, sessionId: result.session_id, state: 'uploading', busy: false, until: Date.now() + TTL, hash: createHash('sha256'), pending: null, last: null }
+      const job = { path, parent, parentId, size, contentHash, offset: 0, sessionId: result.session_id, state: 'uploading', busy: false, until: Date.now() + TTL, hash: createHash('sha256'), pending: null, last: null }
       this.jobs.set(id, job); return this.view(id, job)
     } finally { this.starting-- }
   }
@@ -90,8 +108,9 @@ export class DropboxFileUploads {
     job.busy = true
     try {
       await this.guard(job)
-      job.state = 'committing'
       const expected = job.hash.copy().digest('hex')
+      if (job.contentHash && job.contentHash !== expected) deny('UPLOAD_FILE_MISMATCH', 409)
+      job.state = 'committing'
       const raw = await this.service.client.uploadSession('finish', { cursor: { session_id: job.sessionId, offset: job.offset },
         commit: { path: job.path, mode: { '.tag': 'add' }, autorename: false, strict_conflict: true } })
       const item = metadata(raw, 'file')

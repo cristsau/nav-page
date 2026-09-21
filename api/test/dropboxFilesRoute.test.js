@@ -25,9 +25,9 @@ test('all file routes require admin and exact bound owner, before any provider a
   let loads = 0
   const { app, request } = await harness({ load: () => { loads++; return { ownerUserId: owner } } })
   try {
-    const paths = ['status', 'list', 'folder', 'history', 'history/copy', 'move', 'copy', 'delete/preview', 'delete', 'text/read', 'text/save', 'upload', 'content/id%3Atest', 'content/id%3Atest?rev=abcdef123', 'upload/start', 'upload/status', 'upload/chunk', 'upload/finish', 'upload/cancel']
+    const paths = ['status', 'list', 'folder', 'history', 'history/copy', 'move', 'copy', 'delete/preview', 'delete', 'text/read', 'text/save', 'upload', 'content/id%3Atest', 'content/id%3Atest?rev=abcdef123', 'upload/start', 'upload/status', 'upload/chunk', 'upload/finish', 'upload/cancel', 'upload/list', 'upload/reattach', 'deleted/list', 'deleted/history', 'deleted/copy', 'deleted/content/test']
     for (const path of paths) {
-      const body = path === 'status' || path.startsWith('content/') ? undefined : {}
+      const body = path === 'status' || path.startsWith('content/') || path.startsWith('deleted/content/') ? undefined : {}
       for (const [h, expected] of [[{}, 401], [{ 'x-test-role': 'user' }, 403], [{ ...headers, 'x-test-owner': 'different' }, 403]]) {
         const r = await request(path, body, { headers: h }); assert.equal(r.statusCode, expected, path)
         assert.match(r.headers['cache-control'], /no-store/)
@@ -163,5 +163,86 @@ test('simple delete forwards a preview token rather than requiring filename entr
   try {
     const preview = await request('delete/preview', { id: 'id:folder' }); assert.equal(preview.statusCode, 200)
     assert.equal((await request('delete', { id: 'id:folder', token: preview.json().token })).json().deleted, true)
+  } finally { await app.close() }
+})
+
+function deletedService() {
+  const state = { id: 'id:gone', protected: false, downloads: 0, calls: [] }
+  return { state, service: {
+    protection: async () => state.protected ? ['/gone.txt'] : ['/Backup'],
+    client: {
+      async rpc(route, arg) {
+        state.calls.push({ route, arg })
+        if (route === 'files/list_folder' || route === 'files/list_folder/continue') return { entries: [{ '.tag': 'deleted', path_display: '/gone.txt', name: 'gone.txt' }], has_more: true, cursor: 'PRIVATE_DELETED_CURSOR' }
+        if (route === 'files/get_metadata') return { '.tag': 'deleted', path_display: arg.path, name: arg.path.split('/').pop() }
+        if (route === 'files/list_revisions') return { is_deleted: true, entries: [{ id: state.id, name: 'gone.txt', path_display: '/gone.txt', size: 5, rev: 'abcdef123', server_modified: '2026-09-19T00:00:00Z' }] }
+        throw Error('Unexpected provider operation')
+      },
+      async download(item, options) {
+        state.downloads++; assert.equal(item.id, state.id); assert.equal(item.rev, 'abcdef123'); assert.equal(options.range, 'bytes=0-2')
+        return new Response('abc', { status: 206, headers: { 'content-length': '3', 'content-range': 'bytes 0-2/5' } })
+      }
+    }
+  } }
+}
+
+test('deleted cursors are opaque and isolated by purpose, directory and connection', async () => {
+  let connection = { ownerUserId: owner }
+  const { service, state } = deletedService(), { app, request } = await harness({ service, load: () => connection })
+  try {
+    const first = await request('deleted/list', { path: '' }); assert.equal(first.statusCode, 200)
+    const cursor = first.json().cursor; assert.match(cursor, /^[a-f0-9]{48}$/); assert.ok(!first.body.includes('PRIVATE_DELETED_CURSOR'))
+    assert.equal((await request('deleted/list', { path: '', cursor })).statusCode, 200)
+    assert.deepEqual(state.calls.at(-1), { route: 'files/list_folder/continue', arg: { cursor: 'PRIVATE_DELETED_CURSOR' } })
+    assert.equal((await request('deleted/list', { path: '/Other', cursor })).statusCode, 409)
+    assert.equal((await request('list', { path: '', cursor })).statusCode, 409)
+    const list = await request('list', { path: '' })
+    assert.equal((await request('deleted/list', { path: '', cursor: list.json().cursor })).statusCode, 409)
+    assert.equal((await request('deleted/content/' + cursor)).statusCode, 409)
+    connection = { ...connection, revision: 2 }
+    assert.equal((await request('deleted/list', { path: '', cursor })).statusCode, 409)
+    assert.equal(state.downloads, 0)
+  } finally { await app.close() }
+})
+
+test('deleted download tokens require same owner, lineage, protection and connection and remain attachment-only', async () => {
+  let connection = { ownerUserId: owner }
+  const { service, state } = deletedService(), { app, request } = await harness({ service, load: () => connection })
+  try {
+    const history = await request('deleted/history', { path: '/gone.txt' }); assert.equal(history.statusCode, 200)
+    const token = history.json().entries[0].downloadToken; assert.match(token, /^[a-f0-9]{48}$/)
+    const path = 'deleted/content/' + token + '?inline=1'
+    assert.equal((await request(path, undefined, { headers: { ...headers, 'x-test-owner': 'other' } })).statusCode, 403)
+    const download = await request(path, undefined, { headers: { ...headers, range: 'bytes=0-2' } })
+    assert.equal(download.statusCode, 206); assert.equal(download.body, 'abc'); assert.equal(state.downloads, 1)
+    assert.match(download.headers['cache-control'], /private, no-store/); assert.match(download.headers['content-disposition'], /^attachment;/)
+    assert.equal(download.headers['content-type'], 'application/octet-stream'); assert.equal(download.headers['x-content-type-options'], 'nosniff')
+    assert.match(download.headers['content-security-policy'], /sandbox/)
+    assert.equal((await request('deleted/list', { cursor: token })).statusCode, 409)
+    state.id = 'id:replacement'
+    assert.equal((await request(path)).json().code, 'DELETED_FILE_CHANGED')
+    state.id = 'id:gone'; state.protected = true
+    assert.equal((await request(path)).json().code, 'BACKUP_PROTECTED')
+    state.protected = false; connection = { ...connection, revision: 2 }
+    assert.equal((await request(path)).json().code, 'CURSOR_EXPIRED'); assert.equal(state.downloads, 1)
+  } finally { await app.close() }
+})
+
+test('refresh upload route binds full identity and clears handles on credential rotation', async () => {
+  let connection = { ownerUserId: owner }
+  const { app, request } = await harness({ load: () => connection, service: {
+    protection: async () => ['/Backup'], client: { getMetadataIfExists: async () => null, uploadSession: async () => ({ session_id: 'PRIVATE_PROVIDER_SESSION' }) }
+  } })
+  try {
+    const contentHash = dropboxContentHash(Buffer.from('hello'))
+    assert.equal((await request('upload/start', { path: '/small.txt', size: 5, contentHash: 'bad' })).statusCode, 400)
+    const start = await request('upload/start', { path: '/small.txt', size: 5, contentHash }); assert.equal(start.statusCode, 200)
+    const uploadId = start.json().uploadId, list = await request('upload/list', {})
+    assert.equal(list.json().entries.length, 1); assert.equal(list.json().entries[0].contentHash, contentHash); assert.ok(!list.body.includes('PRIVATE_PROVIDER_SESSION'))
+    assert.equal((await request('upload/reattach', { uploadId, size: 5, contentHash: '0'.repeat(64) })).json().code, 'UPLOAD_FILE_MISMATCH')
+    assert.equal((await request('upload/reattach', { uploadId, size: 5, contentHash })).json().offset, 0)
+    connection = { ...connection, revision: 2 }
+    assert.equal((await request('upload/list', {})).json().entries.length, 0)
+    assert.equal((await request('upload/reattach', { uploadId, size: 5, contentHash })).json().code, 'UPLOAD_EXPIRED')
   } finally { await app.close() }
 })

@@ -25,6 +25,7 @@ import navigationRoutes from './routes/navigation.js'
 import notificationsRoutes from './routes/notifications.js'
 import integrationRoutes from './routes/systemIntegrations.js'
 import dropboxFileRoutes from './routes/dropboxFiles.js'
+import offlineDownloadRoutes from './routes/offlineDownloads.js'
 import noteAiRoutes from './routes/noteAi.js'
 import noteImagesRoutes from './routes/noteImages.js'
 import noteReminderRoutes from './routes/noteReminders.js'
@@ -117,6 +118,9 @@ export function createApp() {
           'req.body.confirmation',
           'req.body.cursor',
           'req.body.uploadId',
+          'req.body.contentHash',
+          'req.body.url',
+          'req.params.token',
           'req.body.token',
           'req.headers["x-file-name"]',
           'req.headers["x-upload-id"]',
@@ -195,6 +199,7 @@ export function createApp() {
   }
   app.register(integrationRoutes, { prefix: '/api' })
   app.register(dropboxFileRoutes, { prefix: '/api' })
+  app.register(offlineDownloadRoutes, { prefix: '/api' })
   app.register(noteAiRoutes, { prefix: '/api' })
   app.register(noteImagesRoutes, { prefix: '/api' })
   app.register(noteReminderRoutes, { prefix: '/api' })

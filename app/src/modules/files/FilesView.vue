@@ -7,6 +7,8 @@ import { registerReloadGuard } from '@/shared/services/reloadGuards'
 import { contentUrl, filesAction, filesStatus, uploadChunk } from './filesApi'
 import { FileTransferQueue } from './fileTransfers'
 import FolderPicker from './FolderPicker.vue'
+import DeletedFiles from './DeletedFiles.vue'
+import OfflineDownloads from './OfflineDownloads.vue'
 import { planFolderUpload } from './folderUploads'
 import { fileFilters, fileSorts, fileTypeLabel, presentFiles, hasFileDrag, droppedFiles } from './filePresentation'
 
@@ -19,20 +21,21 @@ const lastBatchMode = ref('')
 const filter = ref('all'), sort = ref('name-asc'), layout = ref('list'), dropActive = ref(false), surface = ref(null)
 const pendingDrop = ref([]), dropDirectory = ref(''), copied = ref('')
 const folderPicker = ref(null), folderPlan = ref(null), folderAttempted = ref(false)
+const resumePicker = ref(null), resumeId = ref(null), recoveryError = ref('')
 const history = ref(null), historyChoice = ref(null), recoveryName = ref(''), recoveryAttempted = ref(false)
 const dropBytes = computed(() => pendingDrop.value.reduce((sum, file) => sum + file.size, 0))
 const selectable = computed(() => sorted.value.filter(item => item.mutable !== false))
 const chosen = computed(() => entries.value.filter(item => checked.value.includes(item.id) && item.mutable !== false))
 const excludedFolders = computed(() => batchItems.value.filter(item => item.type === 'folder').map(item => item.path))
-const pendingUploads = computed(() => jobs.value.some(job => ['queued', 'uploading', 'paused', 'error'].includes(job.state)))
+const pendingUploads = computed(() => jobs.value.some(job => ['queued', 'checking', 'uploading', 'paused', 'error'].includes(job.state)))
 let transfers = null
-const uploadStates = { queued: '等待上传', uploading: '上传中', paused: '已暂停', error: '等待重试', complete: '上传完成', cancelled: '已取消', review: '请核对云端结果' }
+const uploadStates = { queued: '等待上传', checking: '核对文件内容', awaiting_file: '等待重选原文件', uploading: '上传中', paused: '已暂停', error: '等待重试', complete: '上传完成', cancelled: '已取消', review: '请核对云端结果' }
 let alive = true, loadSequence = 0
 const dirty = computed(() => dialog.value === 'edit' && content.value !== original.value)
 const byteLength = computed(() => new TextEncoder().encode(content.value).length)
 const crumbs = computed(() => [{ name: '全部文件', path: '' }, ...path.value.split('/').filter(Boolean).map((name, index, parts) => ({ name, path: '/' + parts.slice(0, index + 1).join('/') }))])
 const sorted = computed(() => presentFiles(entries.value, filter.value, sort.value))
-const titles = computed(() => ({ preview: selected.value?.name, history: '历史版本', directory: '确认上传文件夹', details: '文件详情', drop: '确认上传', edit: '编辑文本', manage: '管理文件', rename: '重命名', move: '移动到文件夹', copy: '复制到文件夹', delete: '确认删除', results: '操作结果', folder: '新建文件夹' }[dialog.value] || '文件'))
+const titles = computed(() => ({ offline: '离线下载', deleted: '回收站', preview: selected.value?.name, history: '历史版本', directory: '确认上传文件夹', details: '文件详情', drop: '确认上传', edit: '编辑文本', manage: '管理文件', rename: '重命名', move: '移动到文件夹', copy: '复制到文件夹', delete: '确认删除', results: '操作结果', folder: '新建文件夹' }[dialog.value] || '文件'))
 const iconName = item => item.type === 'folder' ? 'folder' : item.kind === 'image' ? 'image' : ['video', 'audio'].includes(item.kind) ? 'play' : 'note'
 const official = computed(() => {
   try { const u = new URL(selected.value?.officialUrl); return u.origin === 'https://www.dropbox.com' && !u.username && !u.password ? u.href : null } catch { return null }
@@ -79,10 +82,20 @@ async function connect() {
     const result = await filesStatus(); if (!alive) return; status.value = result
     if (!transfers) transfers = new FileTransferQueue({ action: filesAction, chunk: uploadChunk, limit: result.uploadLimit, chunkSize: result.chunkSize,
       errorText: message, changed: next => { jobs.value = next } })
+    if (result.uploadResume === 'reselect_after_refresh_api_process') await recoverTransfers()
     await loadEntries()
   }
   catch (e) { if (alive) { status.value = null; entries.value = []; error.value = message(e) } }
   finally { if (alive) loading.value = false }
+}
+async function recoverTransfers() {
+  recoveryError.value = ''
+  try { await transfers.recover() } catch (e) { if (alive) recoveryError.value = `上传任务读取未完成：${message(e)}` }
+}
+function selectOriginal(id) { resumeId.value = id; resumePicker.value.click() }
+async function reselectOriginal(event) {
+  const file = event.target.files?.[0], id = resumeId.value; event.target.value = ''; resumeId.value = null
+  if (file && id) await transfers.reselect(id, file)
 }
 function navigate(next) {
   if (loading.value || working.value) return
@@ -291,15 +304,29 @@ onBeforeUnmount(() => { alive = false; loadSequence++; transfers?.dispose(); con
       <div v-if="status" class="drive-view-options">
         <label>类型<select :value="filter" :disabled="working || loading" aria-label="文件类型筛选" @change="changeFilter($event.target.value)"><option v-for="[key, label] in fileFilters" :key="key" :value="key">{{ label }}</option></select></label>
         <label>排序<select v-model="sort" :disabled="working || loading" aria-label="文件排序"><option v-for="[key, label] in fileSorts" :key="key" :value="key">{{ label }}</option></select></label>
+        <button v-if="status.deletedFiles" class="drive-button drive-small" :disabled="working || loading" @click="open('deleted')">回收站</button>
+        <button class="drive-button drive-small" :disabled="working || loading" @click="open('offline')">离线下载</button>
         <div class="drive-view-switch" role="group" aria-label="显示方式"><button class="drive-button drive-small" :aria-pressed="layout === 'list'" @click="layout = 'list'">列表</button><button class="drive-button drive-small" :aria-pressed="layout === 'grid'" @click="layout = 'grid'">网格</button></div>
         <p>排序与筛选仅针对已加载项目<span v-if="cursor">，可继续加载更多</span>。<span class="drive-drop-hint">可拖入文件，确认后上传到当前目录。</span></p>
       </div>
       <div v-if="error" class="drive-feedback drive-error" role="alert"><Icon name="alert" :size="18" /><span>{{ error }}</span></div>
       <p v-if="notice" class="drive-feedback" role="status">{{ notice }}</p>
+      <p v-if="recoveryError" class="drive-feedback drive-error" role="alert">{{ recoveryError }} <button class="drive-button drive-small" @click="recoverTransfers">重试读取任务</button></p>
+      <input ref="resumePicker" class="drive-hidden" type="file" aria-label="重新选择续传原文件" @change="reselectOriginal">
       <section v-if="jobs.length" class="drive-transfers" aria-label="上传队列">
         <header><strong>上传队列</strong><button class="drive-button drive-small" @click="transfers.clearFinished()">清理完成记录</button></header>
-        <p>单文件最高 50 GB · 每块 8 MB · 暂停/继续在本页有效。关闭或刷新页面、服务器重启后需重新选择上传；手机切到后台可能暂停。</p>
-        <ul><li v-for="job in jobs" :key="job.id"><div class="drive-transfer-title"><strong :title="job.name">{{ job.name }}</strong><span>{{ job.pause && job.state === 'uploading' ? '正在暂停…' : job.cancel && job.state === 'uploading' ? '正在取消…' : uploadStates[job.state] }}</span></div><progress :value="job.offset" :max="job.size || 1" :aria-label="`${job.name} 上传进度`" /><div class="drive-transfer-meta"><span>{{ bytes(job.offset) }} / {{ bytes(job.size) }}<template v-if="job.state === 'uploading' && job.rate"> · {{ bytes(job.rate) }}/s · 约 {{ Math.ceil((job.size - job.offset) / job.rate) }} 秒</template></span><div><button v-if="['queued', 'uploading'].includes(job.state)" class="drive-button drive-small" :disabled="job.pause || job.cancel" @click="transfers.pause(job.id)">暂停</button><button v-if="['paused', 'error'].includes(job.state)" class="drive-button drive-small" @click="transfers.resume(job.id)">{{ job.state === 'error' ? '重试' : '继续' }}</button><button v-if="['queued', 'uploading', 'paused', 'error'].includes(job.state)" class="drive-button drive-small" :disabled="job.cancel" @click="transfers.cancel(job.id)">取消上传</button></div></div><p v-if="job.error" role="alert">{{ job.error }}</p></li></ul>
+        <p>最高 50 GB · 每块 8 MB。刷新后可重选原文件，核对完整内容后续传；服务器重启/连接变更或任务过期则需重传。文件正文不会缓存，手机后台可能暂停。</p>
+        <ul><li v-for="job in jobs" :key="job.id">
+          <div class="drive-transfer-title"><strong :title="job.name">{{ job.name }}</strong><span>{{ job.pause && job.state === 'uploading' ? '正在暂停…' : job.cancel && ['uploading', 'checking'].includes(job.state) ? '正在取消…' : uploadStates[job.state] }}</span></div>
+          <small class="drive-item-path">{{ job.path }}</small>
+          <progress :value="job.state === 'checking' ? job.hashOffset : job.offset" :max="job.size || 1" :aria-label="`${job.name} ${job.state === 'checking' ? '核对' : '上传'}进度`" />
+          <div class="drive-transfer-meta"><span>{{ bytes(job.state === 'checking' ? job.hashOffset : job.offset) }} / {{ bytes(job.size) }}<template v-if="job.state === 'uploading' && job.rate"> · {{ bytes(job.rate) }}/s · 约 {{ Math.ceil((job.size - job.offset) / job.rate) }} 秒</template></span><div>
+            <button v-if="['queued', 'checking', 'uploading'].includes(job.state)" class="drive-button drive-small" :disabled="job.pause || job.cancel" @click="transfers.pause(job.id)">暂停</button>
+            <button v-if="job.state === 'awaiting_file'" class="drive-button drive-small" @click="selectOriginal(job.id)">重选原文件</button>
+            <button v-if="['paused', 'error'].includes(job.state)" class="drive-button drive-small" @click="transfers.resume(job.id)">{{ job.state === 'error' ? '重试' : '继续' }}</button>
+            <button v-if="['queued', 'checking', 'awaiting_file', 'uploading', 'paused', 'error'].includes(job.state)" class="drive-button drive-small" :disabled="job.cancel" @click="transfers.cancel(job.id)">取消上传</button>
+          </div></div><p v-if="job.error" role="alert">{{ job.error }}</p>
+        </li></ul>
         <button class="drive-button drive-small" :disabled="loading || working" @click="loadEntries()">刷新查看已上传文件</button>
       </section>
       <div v-if="status" class="drive-selection-toggle"><button class="drive-button drive-small" :disabled="working || loading" @click="selection = !selection; checked = []">{{ selection ? '结束选择' : '选择文件' }}</button><span v-if="selection">仅选择已显示项目，一次最多 50 项</span></div>
@@ -328,7 +355,9 @@ onBeforeUnmount(() => { alive = false; loadSequence++; transfers?.dispose(); con
         <p v-if="selected" class="drive-item-path">{{ selected.path }}</p>
         <p v-if="dialogError" class="drive-feedback drive-error" role="alert">{{ dialogError }}</p>
         <div v-if="working" class="drive-inline-status" role="status"><span class="drive-spinner" />正在处理，请稍候…</div>
-        <template v-if="dialog === 'directory'">
+        <DeletedFiles v-if="dialog === 'deleted'" :directory="path" @busy="working = $event" @recovered="notice = '已找回新副本，请刷新目录查看。'" />
+        <OfflineDownloads v-if="dialog === 'offline'" :directory="path" @busy="working = $event" />
+        <template v-else-if="dialog === 'directory'">
           <p class="drive-detail">将 {{ pendingDrop.length }} 个文件（{{ bytes(dropBytes) }}）按原层级上传到：</p>
           <p class="drive-drop-target">{{ dropDirectory }}/{{ folderPlan.root }}</p>
           <p class="drive-detail">先创建 {{ folderPlan.directories.length }} 个目录，再加入上传队列。同名目录会停止，不合并、不覆盖；不上传空文件夹。此批最多 50 个文件、50 个目录、10 层子目录。移动端不支持目录选择时请使用“上传文件”。</p>

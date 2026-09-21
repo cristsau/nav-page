@@ -1,5 +1,6 @@
 // Actual Vue view + synthetic API/media. No production or personal cloud access.
 import assert from 'node:assert/strict'
+import { dropboxContentHash } from '../api/src/lib/dropboxFileUploads.js'
 import { createRequire } from 'node:module'
 import { join, resolve } from 'node:path'
 import { pathToFileURL } from 'node:url'
@@ -21,6 +22,7 @@ const initial = [item('folder', '旅行手记', 'folder'), item('protected', 'Ap
 let entries = [...initial], conflict = false, disconnected = false, media, saves = 0, uploads = 0
 const uploadJobs = new Map()
 let chunkCount = 0, chunkDelay = 0, failDelete = false, contentRequests = 0
+let offlineJobs = [], workerOnline = true
 const checks = [], errors = [], external = [], actions = []
 let browser
 await mkdir(output, { recursive: true })
@@ -31,10 +33,24 @@ try {
   await page.route('**/*', async route => {
     const request = route.request(), url = new URL(request.url())
     if (url.hostname !== '127.0.0.1') { external.push(url.origin); return route.abort() }
+    if (url.pathname.startsWith('/api/offline-downloads/')) {
+      const op = url.pathname.split('/').pop(), body = request.postDataJSON()
+      let result = {}
+      if (op === 'status') result = { enabled: true, maxBytes: 6 * 1024 ** 3, workerOnline, entries: offlineJobs }
+      else if (op === 'add') {
+        assert.equal(body.url, 'https://example.com/synthetic.mp4'); assert.equal(body.destination, '/synthetic.mp4')
+        offlineJobs.push({ id: 'a'.repeat(32), name: 'synthetic.mp4', destination: body.destination, state: 'queued', intent: 'run', downloaded: 0, size: null, uploaded: 0 })
+      } else if (op === 'control') {
+        const job = offlineJobs.find(j => j.id === body.id); assert.ok(job)
+        job.state = body.command === 'pause' ? 'paused' : body.command === 'cancel' ? 'cancelled' : 'queued'; job.intent = body.command === 'resume' ? 'run' : body.command
+      } else if (op === 'clear') offlineJobs = offlineJobs.filter(j => j.state !== 'cancelled')
+      else throw Error('Unexpected offline fixture operation')
+      return route.fulfill({ status: 200, contentType: 'application/json', body: JSON.stringify(result), headers: { 'Cache-Control': 'no-store' } })
+    }
     if (!url.pathname.startsWith('/api/dropbox-files/')) return route.continue()
     const action = url.pathname.slice('/api/dropbox-files/'.length)
     const send = (body, status = 200) => route.fulfill({ status, contentType: 'application/json', body: JSON.stringify(body), headers: { 'Cache-Control': 'no-store' } })
-    if (action === 'status') return disconnected ? send({ code: 'NOT_CONNECTED' }, 503) : send({ connected: true, textLimit: 1048576, uploadLimit: 50 * 1024 ** 3, chunkSize: 8 * 1024 * 1024 })
+    if (action === 'status') return disconnected ? send({ code: 'NOT_CONNECTED' }, 503) : send({ connected: true, textLimit: 1048576, uploadLimit: 50 * 1024 ** 3, chunkSize: 8 * 1024 * 1024, uploadResume: 'reselect_after_refresh_api_process', deletedFiles: true })
     if (action.startsWith('content/')) {
       contentRequests++
       if (action.endsWith('id%3Avideo') && media) {
@@ -53,10 +69,15 @@ try {
     const body = request.postDataJSON(); actions.push({ action, body })
     if (action === 'history') return send({ current: initial[2], entries: [initial[2], { ...initial[2], rev: 'abcdef122' }], limit: 20, recoveryLimit: 20 * 1024 * 1024 })
     if (action === 'history/copy') return send({ item: { ...initial[2], path: body.destination, id: 'id:recovered' } })
-    if (action === 'upload/start') { const job = { uploadId: String(++uploads), offset: 0, size: body.size, chunkSize: 8 * 1024 * 1024, state: 'uploading' }; uploadJobs.set(job.uploadId, job); return send({ ...job }) }
+    if (action === 'deleted/list') return send({ entries: body.cursor ? [{ path: '/other.txt', name: 'other.txt' }] : [{ path: '/lost.txt', name: 'lost.txt' }], hasMore: !body.cursor, cursor: body.cursor ? null : 'trash-next' })
+    if (action === 'deleted/history') return send({ deleted: { path: body.path, name: body.path.slice(1) }, entries: [{ ...item('lost', 'lost.txt', 'text'), downloadToken: 'synthetic-download' }], recoveryLimit: 20 * 1024 * 1024 })
+    if (action === 'deleted/copy') { assert.notEqual(body.destination, body.path); return send({ item: item('found', body.destination.slice(1), 'text') }) }
+    if (action === 'upload/list') return send({ entries: [...uploadJobs.values()] })
+    if (action === 'upload/reattach') { const job = uploadJobs.get(body.uploadId); assert.equal(body.contentHash, job.contentHash); return send({ ...job }) }
+    if (action === 'upload/start') { const job = { uploadId: (++uploads).toString(16).padStart(48, '0'), path: body.path, contentHash: body.contentHash, offset: 0, size: body.size, chunkSize: 8 * 1024 * 1024, state: 'uploading' }; uploadJobs.set(job.uploadId, job); return send({ ...job }) }
     if (action === 'upload/status') return send({ ...uploadJobs.get(body.uploadId) })
     if (action === 'upload/finish') { const job = uploadJobs.get(body.uploadId); assert.equal(job.offset, job.size); job.state = 'complete'; return send({ ...job, item: {} }) }
-    if (action === 'upload/cancel') return send({ state: 'cancelled' })
+    if (action === 'upload/cancel') { uploadJobs.delete(body.uploadId); return send({ state: 'cancelled' }) }
     if (action === 'list') {
       if (body.cursor) return send({ entries: [item('more', '归档.txt', 'text')], hasMore: false })
       return send({ entries: body.query ? entries.filter(i => i.name.includes(body.query)) : body.path ? [] : entries, hasMore: !body.query && !body.path, cursor: 'OPAQUE_TEST_CURSOR' })
@@ -277,6 +298,61 @@ try {
   await page.getByRole('button', { name: '确认另存新文件', exact: true }).click(); await page.waitForSelector('[role=dialog]', { state: 'detached' })
   const recovery = actions.find(a => a.action === 'history/copy'); assert.equal(recovery.body.rev, 'abcdef122'); assert.notEqual(recovery.body.destination, initial[2].path)
   checks.push('history-download-revision-and-confirm-new-copy')
+  await page.getByRole('button', { name: '回收站', exact: true }).click()
+  await page.getByRole('list', { name: '已删除记录', exact: true }).getByText('lost.txt', { exact: true }).waitFor()
+  await page.getByRole('button', { name: '继续加载记录', exact: true }).click()
+  await page.getByRole('list', { name: '已删除记录', exact: true }).getByText('other.txt', { exact: true }).waitFor()
+  await page.getByRole('button', { name: '查看可用版本', exact: true }).first().click()
+  assert.match(await page.getByRole('link', { name: '下载版本', exact: true }).getAttribute('href'), /deleted\/content\/synthetic-download$/)
+  await page.getByRole('button', { name: '找回副本', exact: true }).click()
+  assert.equal(await page.locator('#deleted-copy-name').inputValue(), 'lost-找回.txt')
+  assert.ok(await page.getByRole('dialog').evaluate(el => el.scrollWidth <= el.clientWidth + 1))
+  await page.screenshot({ path: join(output, 'deleted-320.png'), fullPage: true })
+  await page.getByRole('button', { name: '确认找回新副本', exact: true }).click()
+  await page.getByText('已找回为同目录的新副本，未覆盖其他文件。', { exact: true }).waitFor()
+  assert.ok(actions.some(a => a.action === 'deleted/copy' && a.body.destination === '/lost-找回.txt'))
+  await page.getByRole('button', { name: '关闭弹窗', exact: true }).click(); await page.waitForSelector('[role=dialog]', { state: 'detached' })
+  checks.push('deleted-list-pagination-version-download-new-copy-320')
+  // A generated interrupted job survives a browser reload, not an API restart.
+  const resumeBytes = Buffer.alloc(9 * 1024 * 1024, 23)
+  uploadJobs.set('f'.repeat(48), { uploadId: 'f'.repeat(48), path: '/resume.bin', size: resumeBytes.length, offset: 8 * 1024 * 1024, chunkSize: 8 * 1024 * 1024, contentHash: dropboxContentHash(resumeBytes), state: 'uploading' })
+  await page.reload(); await page.locator('.drive-transfers li').filter({ hasText: 'resume.bin' }).getByText('等待重选原文件', { exact: true }).waitFor()
+  const resumedRow = page.locator('.drive-transfers li').filter({ hasText: 'resume.bin' })
+  await resumedRow.getByRole('button', { name: '重选原文件', exact: true }).click()
+  await page.getByLabel('重新选择续传原文件', { exact: true }).setInputFiles({ name: 'resume.bin', mimeType: 'application/octet-stream', buffer: Buffer.alloc(resumeBytes.length, 24) })
+  await resumedRow.getByText('内容不一致，未继续上传。请选择原文件。', { exact: true }).waitFor()
+  await resumedRow.getByRole('button', { name: '重选原文件', exact: true }).click()
+  await page.getByLabel('重新选择续传原文件', { exact: true }).setInputFiles({ name: 'resume.bin', mimeType: 'application/octet-stream', buffer: resumeBytes })
+  await resumedRow.getByText('已暂停', { exact: true }).waitFor()
+  await page.screenshot({ path: join(output, 'resume-320.png'), fullPage: true })
+  const chunksBeforeResume = chunkCount
+  await resumedRow.getByRole('button', { name: '继续', exact: true }).click()
+  await resumedRow.getByText('上传完成', { exact: true }).waitFor()
+  assert.equal(chunkCount, chunksBeforeResume + 1)
+  assert.equal(await page.evaluate(() => localStorage.length + sessionStorage.length), 0)
+  checks.push('reload-reselect-reject-changed-content-resume-offset-no-browser-storage')
+  await page.getByRole('button', { name: '离线下载', exact: true }).click()
+  await page.locator('#offline-url').fill('https://example.com/synthetic.mp4'); await page.locator('#offline-name').focus()
+  assert.equal(await page.locator('#offline-name').inputValue(), 'synthetic.mp4')
+  await page.getByRole('button', { name: '创建离线任务', exact: true }).click()
+  const offlineList = page.getByRole('list', { name: '离线下载任务', exact: true })
+  await offlineList.getByText('synthetic.mp4', { exact: true }).waitFor()
+  assert.equal(await page.locator('#offline-url').inputValue(), '')
+  await offlineList.getByRole('button', { name: '暂停', exact: true }).click(); await offlineList.getByText('已暂停', { exact: true }).waitFor()
+  await offlineList.getByRole('button', { name: '继续', exact: true }).click(); await offlineList.getByText('排队中', { exact: true }).waitFor()
+  for (const width of [320, 1440]) {
+    await page.setViewportSize({ width, height: 900 })
+    assert.ok(await page.getByRole('dialog').evaluate(el => el.scrollWidth <= el.clientWidth + 1))
+    await page.screenshot({ path: join(output, `offline-${width}.png`), fullPage: true })
+  }
+  await offlineList.getByRole('button', { name: '取消任务', exact: true }).click()
+  assert.equal(offlineJobs[0].state, 'queued')
+  await offlineList.getByRole('button', { name: '确认取消', exact: true }).click(); await offlineList.getByText('已取消', { exact: true }).waitFor()
+  await page.getByRole('dialog').getByRole('button', { name: '清理完成记录', exact: true }).click()
+  await page.getByText('还没有任务。下载完成并校验后自动清理服务器暂存文件，不删除 Dropbox 中的文件。', { exact: true }).waitFor()
+  workerOnline = false; await page.getByRole('button', { name: '刷新离线任务', exact: true }).click(); await page.getByText('等待下载节点连接', { exact: true }).waitFor()
+  await page.getByRole('button', { name: '关闭弹窗', exact: true }).click(); await page.waitForSelector('[role=dialog]', { state: 'detached' })
+  await page.setViewportSize({ width: 320, height: 900 }); checks.push('offline-create-pause-resume-confirm-cancel-cleanup-disconnected-layout')
   // Generate a tiny, non-personal WebM in the browser, then test native decoding.
   media = Buffer.from(await page.evaluate(async () => {
     const canvas = document.createElement('canvas'); canvas.width = 320; canvas.height = 180
