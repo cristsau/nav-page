@@ -531,6 +531,9 @@ export const config = {
   managedIntegrationsDir: String(
     process.env.NAV_MANAGED_INTEGRATIONS_DIR || ''
   ).trim(),
+  uploadProgressDir: String(
+    process.env.NAV_UPLOAD_PROGRESS_DIR || process.env.NAV_MANAGED_INTEGRATIONS_DIR || ''
+  ).trim(),
   allowPrivateIntegrationEndpoints: process.env.NAV_ALLOW_PRIVATE_INTEGRATION_ENDPOINTS === 'true',
   aiPriceCatalogJson: String(
     process.env.NAV_AI_PRICE_CATALOG_JSON || ''

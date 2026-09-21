@@ -17,7 +17,7 @@ const errors = {
 export default async function offlineDownloadRoutes(app, options = {}) {
   const loadConfig = options.loadConfig || (() => loadOfflineConfig(config.managedIntegrationsDir))
   const loadConnection = options.loadConnection || (() => loadFilesConnection(config.managedIntegrationsDir))
-  const openStore = options.loadUploadStore || (() => loadUploadStore(config.managedIntegrationsDir, 'offline'))
+  const openStore = options.loadUploadStore || (() => loadUploadStore(config.uploadProgressDir, 'offline'))
   let cached, cachedId = '', active = 0, bodies = 0, requests = 0, window = 0
   let initializing = Promise.resolve()
   app.addHook('onClose', async () => { await initializing.catch(() => {}); await cached?.uploads?.store?.close() })

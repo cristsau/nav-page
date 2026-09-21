@@ -41,7 +41,7 @@ const messages = {
 export default async function dropboxFileRoutes(app, options = {}) {
   const load = options.loadConnection || (() => loadFilesConnection(config.managedIntegrationsDir))
   const create = options.createService || (connection => new DropboxFilesService(connection))
-  const openStore = options.loadUploadStore || (() => loadUploadStore(config.managedIntegrationsDir))
+  const openStore = options.loadUploadStore || (() => loadUploadStore(config.uploadProgressDir))
   let cached = null, uploads = null, fingerprint = '', active = 0, streams = 0, bufferedBodies = 0
   let initializing = Promise.resolve()
   app.addHook('onClose', async () => { await initializing.catch(() => {}); await uploads?.store?.close() })
