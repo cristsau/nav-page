@@ -7,14 +7,14 @@ import { LARGE_UPLOAD_LIMIT, CHUNK_LIMIT, dropboxContentHash } from '../src/lib/
 
 const owner = '00000000-0000-4000-8000-000000000001'
 const headers = { 'x-test-role': 'admin', 'x-test-owner': owner }
-async function harness({ connection = { ownerUserId: owner }, service = {}, load } = {}) {
+async function harness({ connection = { ownerUserId: owner }, service = {}, load, openStore = async () => null } = {}) {
   const app = Fastify({ logger: false }), calls = []
   app.decorate('requireAdmin', async (request, reply) => {
     const role = request.headers['x-test-role']
     if (role !== 'admin') { reply.code(role ? 403 : 401); throw Error('Denied') }
     request.currentUser = { id: request.headers['x-test-owner'], role }
   })
-  app.register(routes, { prefix: '/api', loadConnection: load || (() => connection), createService: () => ({
+  app.register(routes, { prefix: '/api', loadConnection: load || (() => connection), loadUploadStore: openStore, createService: () => ({
     list: async input => { calls.push(input); return { entries: [], cursor: 'SENSITIVE_PROVIDER_CURSOR', hasMore: true } },
     ...service
   }) })
@@ -45,6 +45,26 @@ test('status contains capabilities only; missing connection is not reported conn
       if (connection) assert.equal(r.json().uploadLimit, LARGE_UPLOAD_LIMIT)
     } finally { await app.close() }
   }
+})
+
+test('concurrent requests initialize exactly one persisted writer and report its capability', async () => {
+  let opens = 0, closes = 0
+  const store = { load: async () => [], close: async () => { closes++ } }
+  const { app, request } = await harness({ openStore: async () => { opens++; await new Promise(r => setTimeout(r, 10)); return store } })
+  try {
+    const replies = await Promise.all([request('status'), request('status')])
+    for (const r of replies) { assert.equal(r.statusCode, 200); assert.equal(r.json().uploadResume, 'reselect_after_restart_encrypted') }
+    assert.equal(opens, 1)
+  } finally { await app.close() }
+  assert.equal(closes, 1)
+})
+
+test('failed state loader cannot expose secrets or silently downgrade to volatile upload mode', async () => {
+  const { app, request } = await harness({ openStore: async () => { throw new DropboxFilesError('UPLOAD_STORE_UNAVAILABLE', 503) } })
+  try {
+    const r = await request('status'); assert.equal(r.statusCode, 503)
+    assert.equal(r.json().code, 'UPLOAD_STORE_UNAVAILABLE'); assert.equal(r.json().connected, undefined)
+  } finally { await app.close() }
 })
 test('pagination exposes opaque cursor bound to path/query and invalidated on connection change', async () => {
   let connection = { ownerUserId: owner }

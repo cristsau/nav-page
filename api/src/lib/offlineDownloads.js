@@ -69,12 +69,17 @@ export class EncryptedOfflineStore {
 }
 export class OfflineDownloads {
   constructor({ store, service, uploads, identity, maxBytes = OFFLINE_LIMIT }) {
-    Object.assign(this, { store, service, uploads, identity, maxBytes }); this.serial = Promise.resolve(); this.lastSeen = 0
+    Object.assign(this, { store, service, uploads, identity, maxBytes }); this.serial = Promise.resolve(); this.lastSeen = 0; this.failed = false
+  }
+  async save(data) {
+    try { await this.store.write(data) }
+    catch (error) { this.failed = true; throw error }
   }
   async transaction(fn) {
     const run = this.serial.then(async () => {
+      if (this.failed) deny('OFFLINE_STATE_INVALID', 503)
       const data = await this.store.read(), result = await fn(data)
-      await this.store.write(data); return result
+      await this.save(data); return result
     })
     this.serial = run.catch(() => {}); return run
   }
@@ -85,6 +90,7 @@ export class OfflineDownloads {
   async status() {
     const data = await this.store.read()
     return { enabled: true, maxBytes: this.maxBytes, queueLimit: 10, workerOnline: Date.now() - this.lastSeen < 45000,
+      uploadPersistence: this.uploads.store ? 'encrypted_disk' : 'api_process',
       entries: data.jobs.filter(j => j.identity === this.identity).map(j => this.view(j)).reverse() }
   }
   async add(input) {
@@ -156,21 +162,30 @@ export class OfflineDownloads {
       if (operation === 'start') {
         if (!Number.isSafeInteger(input.size) || input.size < 0 || input.size > this.maxBytes || !/^[a-f0-9]{64}$/.test(input.contentHash)) deny('INVALID_UPLOAD')
         if (job.uploadId) {
-          try { return await this.uploads.reattach(job.uploadId, input.size, input.contentHash) }
+          try {
+            const remote = await this.uploads.reattach(job.uploadId, input.size, input.contentHash)
+            // Provider metadata may be ahead of queue metadata if acknowledgement
+            // persistence was interrupted. Use the durable provider cursor.
+            job.uploaded = remote.offset; job.size = input.size
+            job.state = remote.state === 'uploading' ? 'uploading' : 'review'
+            if (job.state === 'review') job.error = 'COMMIT_RESULT_UNKNOWN'
+            job.updatedAt = new Date().toISOString()
+            return remote
+          }
           catch (e) { if (e.code !== 'UPLOAD_EXPIRED') throw e; job.uploadId = null }
         }
         const remote = await this.uploads.start(job.destination, input.size, input.contentHash)
-        job.uploadId = remote.uploadId; job.state = 'uploading'; job.size = input.size; return remote
+        job.uploadId = remote.uploadId; job.state = 'uploading'; job.size = input.size; job.uploaded = 0; return remote
       }
       if (!job.uploadId) deny('UPLOAD_EXPIRED', 409)
       if (operation === 'chunk') { const remote = await this.uploads.append(job.uploadId, input.offset, bytes); job.uploaded = remote.offset; return remote }
       if (operation === 'finish') {
         // Durable uncertainty marker before a possibly committing external call.
-        job.state = 'committing'; await this.store.write(data)
+        job.state = 'committing'; await this.save(data)
         try {
           const remote = await this.uploads.finish(job.uploadId)
           job.state = 'complete'; job.uploaded = job.size; job.url = null; job.uploadId = null; return { state: 'complete' }
-        } catch (e) { job.state = 'review'; job.error = 'COMMIT_RESULT_UNKNOWN'; await this.store.write(data); throw e }
+        } catch (e) { job.state = 'review'; job.error = 'COMMIT_RESULT_UNKNOWN'; await this.save(data); throw e }
       }
       deny('OFFLINE_COMMAND_INVALID')
     })

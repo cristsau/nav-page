@@ -1,0 +1,13 @@
+{
+  "version": 1,
+  "ownerUserId": "00000000-0000-4000-8000-000000000000",
+  "stateDirectory": "/var/lib/nav-dropbox-control",
+  "socketDirectory": "/run/nav-dropbox-control",
+  "statusDirectory": "/etc/nav/managed-integrations",
+  "backupConfig": "/etc/nav/dropbox-backup.json",
+  "snapshotConfig": "/etc/nav/nav-backup.env",
+  "snapshotScript": "/opt/nav-stack/REPLACE_WITH_RELEASE/scripts/nav-backup.sh",
+  "allowManual": false,
+  "allowSchedule": false,
+  "allowDownload": false
+}

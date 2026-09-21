@@ -24,6 +24,7 @@ import mediaRoutes from './routes/media.js'
 import navigationRoutes from './routes/navigation.js'
 import notificationsRoutes from './routes/notifications.js'
 import integrationRoutes from './routes/systemIntegrations.js'
+import backupControlRoutes from './routes/dropboxBackupControl.js'
 import dropboxFileRoutes from './routes/dropboxFiles.js'
 import offlineDownloadRoutes from './routes/offlineDownloads.js'
 import noteAiRoutes from './routes/noteAi.js'
@@ -198,6 +199,7 @@ export function createApp() {
     app.all(`${prefix}/*`, mailboxRetiredResponse)
   }
   app.register(integrationRoutes, { prefix: '/api' })
+  app.register(backupControlRoutes, { prefix: '/api' })
   app.register(dropboxFileRoutes, { prefix: '/api' })
   app.register(offlineDownloadRoutes, { prefix: '/api' })
   app.register(noteAiRoutes, { prefix: '/api' })

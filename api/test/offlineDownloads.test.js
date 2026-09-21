@@ -85,6 +85,38 @@ test('state write failure blocks download commit and does not report success', a
   const { manager, setFail, finishes } = fixture(), job = await add(manager); await manager.claim()
   await manager.transfer(job.id, 'start', { size: 0, contentHash: hash }); setFail()
   await assert.rejects(manager.transfer(job.id, 'finish', {})); assert.equal(finishes(), 0)
+  await assert.rejects(manager.claim(), { code: 'OFFLINE_STATE_INVALID' })
+})
+
+test('reattach reconciles queue state with durable upload cursor and preserves unknown commit review', async () => {
+  const { manager, uploads, store } = fixture(), job = await add(manager); await manager.claim()
+  await manager.transfer(job.id, 'start', { size: 3, contentHash: hash })
+  await manager.progress(job.id, { state: 'error', error: 'NETWORK_FAILED' })
+  await manager.control(job.id, 'resume'); await manager.claim()
+  uploads.reattach = async () => ({ state: 'uploading', offset: 2 })
+  await manager.transfer(job.id, 'start', { size: 3, contentHash: hash })
+  assert.equal((await store.read()).jobs[0].uploaded, 2)
+  assert.equal((await store.read()).jobs[0].state, 'uploading')
+  uploads.reattach = async () => ({ state: 'review', offset: 3 })
+  await manager.transfer(job.id, 'start', { size: 3, contentHash: hash })
+  assert.equal((await manager.status()).entries[0].state, 'review')
+  await manager.progress(job.id, { state: 'error', error: 'NETWORK_FAILED' })
+  assert.equal((await manager.status()).entries[0].state, 'review')
+  await assert.rejects(manager.transfer(job.id, 'finish', {}), { code: 'OFFLINE_PAUSED' })
+})
+
+test('concurrent route initialization opens one manager and closes its upload lease', async () => {
+  const app = Fastify({ logger: false }); let created = 0, closed = 0
+  const { manager } = fixture(); manager.uploads.store = { close: async () => { closed++ } }
+  app.decorate('requireAdmin', async req => { req.currentUser = { id: owner } })
+  await app.register(routes, { loadConfig: () => ({ workerKey: key, maxBytes: OFFLINE_LIMIT }), loadConnection: () => ({ ownerUserId: owner }),
+    createService: () => ({}), createManager: async () => { created++; await new Promise(r => setTimeout(r, 20)); return manager } })
+  try {
+    const results = await Promise.all(Array.from({ length: 3 }, () => app.inject('/offline-downloads/status')))
+    assert.ok(results.every(r => r.statusCode === 200)); assert.equal(created, 1)
+    assert.ok(results.every(r => r.json().uploadPersistence === 'encrypted_disk'))
+  } finally { await app.close() }
+  assert.equal(closed, 1)
 })
 test('encrypted state persists, hides URLs, rejects tampering and key changes', async () => {
   const dir = await mkdtemp(join(tmpdir(), 'nav-offline-')); await chmod(dir, 0o700)

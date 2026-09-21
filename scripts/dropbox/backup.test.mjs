@@ -233,10 +233,13 @@ test('missing archive executables and invalid recipient cannot produce a complet
   await assert.rejects(async () => { for await (const _ of encryptedArchive('/synthetic', 'age1' + 'q'.repeat(58), { tar: 'nav-fixture-no-tar', age: 'nav-fixture-no-age' })) {} }, /archive_encryption_failed/)
 })
 
-test('candidate defaults disable upload; no timer or delete API and Windows cannot run production CLI', async () => {
+test('candidate defaults disable upload and cloud cleanup; no permanent delete API and Windows cannot run production CLI', async () => {
   const config = JSON.parse(await readFile(new URL('./backup-config.example.json', import.meta.url), 'utf8'))
   assert.equal(config.allowUpload, false)
+  assert.equal(config.allowCloudPrune, false)
   const client = await readFile(new URL('./backup-client.mjs', import.meta.url), 'utf8')
-  assert.doesNotMatch(client, /files\/delete|files\/move|files\/copy|files\/permanently_delete/)
+  assert.doesNotMatch(client, /files\/move|files\/copy|files\/permanently_delete/)
+  assert.match(client, /files\/delete_v2/)
+  assert.match(client, /parent_rev: point\.rev/)
   if (process.platform !== 'linux') await assert.rejects(main(['backup', 'ignored']), /linux_operator_root_required/)
 })

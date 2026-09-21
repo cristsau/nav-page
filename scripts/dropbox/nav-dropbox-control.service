@@ -1,0 +1,27 @@
+[Unit]
+Description=DOMO NAV private Dropbox backup controller
+After=network-online.target docker.service
+Wants=network-online.target
+
+[Service]
+Type=simple
+User=root
+Group=root
+UMask=0077
+RuntimeDirectory=nav-dropbox-control
+RuntimeDirectoryMode=0700
+RuntimeDirectoryPreserve=yes
+StateDirectory=nav-dropbox-control
+StateDirectoryMode=0700
+# Replace with the verified IMMUTABLE release and actual Node >=22 executable.
+ExecStart=/usr/bin/node /opt/nav-stack/REPLACE_WITH_RELEASE/scripts/dropbox/control-host.mjs serve /etc/nav/dropbox-control.json
+Restart=on-failure
+RestartSec=15
+KillMode=control-group
+TimeoutStopSec=30
+NoNewPrivileges=true
+PrivateTmp=true
+ProtectHome=true
+
+[Install]
+WantedBy=multi-user.target

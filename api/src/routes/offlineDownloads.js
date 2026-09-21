@@ -2,9 +2,11 @@ import { timingSafeEqual } from 'node:crypto'
 import { config } from '../config.js'
 import { DropboxFilesError, DropboxFilesService, loadFilesConnection, deny } from '../lib/dropboxFiles.js'
 import { DropboxFileUploads, CHUNK_LIMIT } from '../lib/dropboxFileUploads.js'
+import { loadUploadStore } from '../lib/dropboxUploadStore.js'
 import { OfflineDownloads, EncryptedOfflineStore, loadOfflineConfig, connectionIdentity } from '../lib/offlineDownloads.js'
 
 const errors = {
+  UPLOAD_STORE_UNAVAILABLE: '离线上传进度存储暂不可用，已暂停操作；请联系管理员核对，不会覆盖文件。',
   OFFLINE_DISABLED: '离线下载尚未启用。', OFFLINE_QUEUE_FULL: '最多 10 个未完成任务，请先处理或清理已完成记录。',
   INVALID_DOWNLOAD_URL: '请填写 HTTP/HTTPS 文件直链；暂不支持磁力、种子、登录凭据或非标准端口。',
   OFFLINE_REVIEW_REQUIRED: '上传结果需要人工核对，不能重复提交或取消已完成文件。', OFFLINE_STATE_INVALID: '任务状态不可用，已暂停操作，请联系管理员。',
@@ -15,7 +17,10 @@ const errors = {
 export default async function offlineDownloadRoutes(app, options = {}) {
   const loadConfig = options.loadConfig || (() => loadOfflineConfig(config.managedIntegrationsDir))
   const loadConnection = options.loadConnection || (() => loadFilesConnection(config.managedIntegrationsDir))
+  const openStore = options.loadUploadStore || (() => loadUploadStore(config.managedIntegrationsDir, 'offline'))
   let cached, cachedId = '', active = 0, bodies = 0, requests = 0, window = 0
+  let initializing = Promise.resolve()
+  app.addHook('onClose', async () => { await initializing.catch(() => {}); await cached?.uploads?.store?.close() })
   app.addContentTypeParser('application/octet-stream', { parseAs: 'buffer', bodyLimit: CHUNK_LIMIT }, (_req, body, done) => done(null, body))
   const root = '/offline-downloads'
   async function context(request, worker) {
@@ -30,13 +35,19 @@ export default async function offlineDownloadRoutes(app, options = {}) {
     const connection = await loadConnection()
     if (!connection || (!worker && request.currentUser.id !== connection.ownerUserId)) deny('OWNER_REQUIRED', 403)
     const id = connectionIdentity({ connection, settings })
-    if (id !== cachedId) {
+    const ready = initializing.then(async () => {
+      if (id === cachedId) return cached
+      if (active) deny('BUSY', 429)
+      await cached?.uploads?.store?.close(); cachedId = ''
       const service = options.createService ? options.createService(connection) : new DropboxFilesService(connection)
-      cached = options.createManager ? options.createManager(service) : new OfflineDownloads({ service, uploads: new DropboxFileUploads(service),
+      cached = options.createManager ? await options.createManager(service) : new OfflineDownloads({ service,
+        uploads: await DropboxFileUploads.restore(service, await openStore(), id),
         store: new EncryptedOfflineStore(config.managedIntegrationsDir, settings.workerKey), identity: connectionIdentity(connection), maxBytes: settings.maxBytes })
       cachedId = id
-    }
-    return cached
+      return cached
+    })
+    initializing = ready.then(() => {}, () => {})
+    return ready
   }
   function endpoint(worker, fn) {
     return async (req, reply) => {

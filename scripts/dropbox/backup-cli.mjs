@@ -10,9 +10,10 @@ import { inspectSnapshot, encryptedArchive, verifyEncryptionTools } from './back
 import { backupJob } from './backup-job.mjs'
 import { planLocalRetention, pruneLocalRetention } from './local-retention.mjs'
 import { createBackupStatus } from './backup-status.mjs'
+import { planCloudRetention, pruneCloudRetention } from './cloud-retention.mjs'
 import { BackupError, POLICY, planUpload, planRetention, validateLedger, fail, validId } from './backup-policy.mjs'
 
-async function privatePath(path, directory = false) {
+export async function privatePath(path, directory = false) {
   if (resolve(path) !== path || path === '/') fail('unsafe_private_path')
   let current = path
   while (true) {
@@ -23,7 +24,7 @@ async function privatePath(path, directory = false) {
     current = dirname(current)
   }
 }
-async function readPrivate(path, limit) {
+export async function readPrivate(path, limit) {
   await privatePath(path)
   if ((await lstat(path)).size > limit) fail('private_file_size_limit')
   try { return JSON.parse(await readFile(path, 'utf8')) } catch { fail('invalid_private_json') }
@@ -74,11 +75,29 @@ async function publishStatus(directory, report) {
   return { state: 'STATUS_REPORT_PUBLISHED', generatedAt: report.generatedAt, cloudAccess: false }
 }
 
+// Host-only read path. Streams ciphertext and verifies the recorded revision;
+// never decrypts or accepts a caller-selected filesystem path.
+export async function readBackupCiphertext(configPath, id, consume) {
+  if (process.platform !== 'linux' || process.getuid?.() !== 0) fail('linux_operator_root_required')
+  if (!validId(id)) fail('invalid_backup_id')
+  const config = await readPrivate(configPath, 16_384)
+  await privatePath(config.stateDirectory, true)
+  const lock = await canonicalLock()
+  try {
+    const ledger = validateLedger(await readPrivate(join(config.stateDirectory, 'ledger.json'), 2_000_000))
+    const point = ledger.points.find(p => p.id === id)
+    if (!point || point.bytes > POLICY.maxUploadBytes) fail('unknown_or_oversize_backup')
+    const client = new DropboxClient(await readPrivate(config.credentialsFile, 32_768))
+    return await consume(point, write => client.download(point, write))
+  } finally { await lock.close() }
+}
+
 export async function main(args) {
   if (process.platform !== 'linux' || process.getuid?.() !== 0) fail('linux_operator_root_required')
   const [operation, configPath, parameter] = args
-  if (!['init-local', 'plan', 'backup', 'list', 'status', 'publish-status', 'download', 'retention-plan', 'local-retention-plan', 'prune-local'].includes(operation)
+  if (!['init-local', 'plan', 'backup', 'list', 'status', 'publish-status', 'download', 'verify', 'retention-plan', 'local-retention-plan', 'prune-local', 'prune-cloud'].includes(operation)
     || args.length > 3 || !configPath) fail('usage_operation_config_optional_snapshot_or_id')
+  if (operation === 'prune-cloud' && parameter) fail('prune_cloud_does_not_accept_a_target')
   const config = await readPrivate(configPath, 16_384)
   if (config.version !== 1 || typeof config.credentialsFile !== 'string' || typeof config.stateDirectory !== 'string'
     || typeof config.backupRoot !== 'string') fail('invalid_configuration')
@@ -105,11 +124,24 @@ export async function main(args) {
       await saveLedger(file, { version: 1, points: [], pending: [] }, true)
       return { state: 'LOCAL_LEDGER_INITIALIZED', cloudAccess: false }
     }
-    const ledger = validateLedger(await readPrivate(file, 2_000_000))
+    let ledger = validateLedger(await readPrivate(file, 2_000_000))
     if (operation === 'retention-plan') return planRetention(ledger)
-    if (operation === 'list') return { points: ledger.points.map(({ id, bytes, state, createdAt }) => ({ id, bytes, state, createdAt })), unresolvedUploads: ledger.pending.length, limits: POLICY }
+    if (operation === 'list') return { points: ledger.points.map(({ id, bytes, state, createdAt }) => ({ id, bytes, state, createdAt })), unresolvedUploads: ledger.pending.length, unresolvedDeletes: ledger.pendingDeletes?.length || 0, limits: POLICY }
     if (operation === 'backup' && config.allowUpload !== true) fail('upload_not_enabled')
     const client = new DropboxClient(await readPrivate(config.credentialsFile, 32_768))
+    if (operation === 'verify') {
+      if (!validId(parameter)) fail('invalid_backup_id')
+      const point = ledger.points.find(p => p.id === parameter)
+      if (!point || point.bytes > POLICY.maxUploadBytes) fail('unknown_or_oversize_backup')
+      await client.download(point, async () => {})
+      if (point.state !== 'restore_verified') point.state = 'download_verified'
+      await saveLedger(file, ledger)
+      return { state: 'CIPHERTEXT_VERIFIED', id: point.id, restoreVerified: false }
+    }
+    if (operation === 'prune-cloud') {
+      const pruned = await pruneCloudRetention({ client, ledger, saveLedger: next => saveLedger(file, next), enabled: config.allowCloudPrune === true })
+      return pruned.result
+    }
     if (operation === 'download') {
       if (!validId(parameter)) fail('invalid_backup_id')
       const point = ledger.points.find(p => p.id === parameter)
@@ -141,7 +173,12 @@ export async function main(args) {
     }
     if (!parameter) fail('snapshot_path_required')
     const snapshot = await inspectSnapshot(config.backupRoot, parameter)
-    if (operation === 'plan') return { ...planUpload(ledger, await client.inventory(), snapshot.reservedBytes), source: snapshot, cloudWrite: false }
+    if (operation === 'plan') {
+      const files = await client.inventory()
+      const rotation = config.allowCloudPrune === true && ledger.points.length >= POLICY.maxPoints
+      return { ...(rotation ? planCloudRetention(ledger, files, { reserveBytes: snapshot.reservedBytes }) : planUpload(ledger, files, snapshot.reservedBytes)),
+        requiresCleanup: rotation, source: snapshot, cloudWrite: false }
+    }
     const encryptionTools = { age: config.ageExecutable || '/usr/bin/age' }
     if (resolve(encryptionTools.age) !== encryptionTools.age) fail('unsafe_age_executable')
     let executablePath = encryptionTools.age
@@ -152,6 +189,12 @@ export async function main(args) {
       executablePath = dirname(executablePath)
     }
     verifyEncryptionTools(config.ageRecipient, encryptionTools)
+    // Validate the source/encryption tool before preparing capacity. Never rotate
+    // merely to hide an over-budget, changed or unresolved repository.
+    if (config.allowCloudPrune === true && ledger.points.length >= POLICY.maxPoints) {
+      const pruned = await pruneCloudRetention({ client, ledger, saveLedger: next => saveLedger(file, next), enabled: true, reserveBytes: snapshot.reservedBytes })
+      ledger = pruned.ledger
+    }
     const result = await backupJob({ client, ledger, saveLedger: next => saveLedger(file, next), manifestHash: snapshot.manifestHash,
       reservedBytes: snapshot.reservedBytes, archive: encryptedArchive(parameter, config.ageRecipient, encryptionTools) })
     if (config.allowLocalPrune === true) {

@@ -22,6 +22,7 @@ const initial = [item('folder', '旅行手记', 'folder'), item('protected', 'Ap
 let entries = [...initial], conflict = false, disconnected = false, media, saves = 0, uploads = 0
 const uploadJobs = new Map()
 let chunkCount = 0, chunkDelay = 0, failDelete = false, contentRequests = 0
+let persistentUploads = false
 let offlineJobs = [], workerOnline = true
 const checks = [], errors = [], external = [], actions = []
 let browser
@@ -50,7 +51,7 @@ try {
     if (!url.pathname.startsWith('/api/dropbox-files/')) return route.continue()
     const action = url.pathname.slice('/api/dropbox-files/'.length)
     const send = (body, status = 200) => route.fulfill({ status, contentType: 'application/json', body: JSON.stringify(body), headers: { 'Cache-Control': 'no-store' } })
-    if (action === 'status') return disconnected ? send({ code: 'NOT_CONNECTED' }, 503) : send({ connected: true, textLimit: 1048576, uploadLimit: 50 * 1024 ** 3, chunkSize: 8 * 1024 * 1024, uploadResume: 'reselect_after_refresh_api_process', deletedFiles: true })
+    if (action === 'status') return disconnected ? send({ code: 'NOT_CONNECTED' }, 503) : send({ connected: true, textLimit: 1048576, uploadLimit: 50 * 1024 ** 3, chunkSize: 8 * 1024 * 1024, uploadResume: persistentUploads ? 'reselect_after_restart_encrypted' : 'reselect_after_refresh_api_process', deletedFiles: true })
     if (action.startsWith('content/')) {
       contentRequests++
       if (action.endsWith('id%3Avideo') && media) {
@@ -313,10 +314,13 @@ try {
   assert.ok(actions.some(a => a.action === 'deleted/copy' && a.body.destination === '/lost-找回.txt'))
   await page.getByRole('button', { name: '关闭弹窗', exact: true }).click(); await page.waitForSelector('[role=dialog]', { state: 'detached' })
   checks.push('deleted-list-pagination-version-download-new-copy-320')
-  // A generated interrupted job survives a browser reload, not an API restart.
+  // Synthetic persisted capability; real process restart is covered by API tests.
+  persistentUploads = true
   const resumeBytes = Buffer.alloc(9 * 1024 * 1024, 23)
   uploadJobs.set('f'.repeat(48), { uploadId: 'f'.repeat(48), path: '/resume.bin', size: resumeBytes.length, offset: 8 * 1024 * 1024, chunkSize: 8 * 1024 * 1024, contentHash: dropboxContentHash(resumeBytes), state: 'uploading' })
   await page.reload(); await page.locator('.drive-transfers li').filter({ hasText: 'resume.bin' }).getByText('等待重选原文件', { exact: true }).waitFor()
+  assert.match(await page.locator('.drive-transfers').innerText(), /进度已加密保存，服务器重启后也可续传/)
+  checks.push('encrypted-restart-capability-is-distinct-from-memory-mode')
   const resumedRow = page.locator('.drive-transfers li').filter({ hasText: 'resume.bin' })
   await resumedRow.getByRole('button', { name: '重选原文件', exact: true }).click()
   await page.getByLabel('重新选择续传原文件', { exact: true }).setInputFiles({ name: 'resume.bin', mimeType: 'application/octet-stream', buffer: Buffer.alloc(resumeBytes.length, 24) })
