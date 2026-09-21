@@ -3,9 +3,13 @@ import { constants } from 'node:fs'
 import { lstat, open, rename, unlink } from 'node:fs/promises'
 import { join } from 'node:path'
 import { filePath, protectPath, deny } from './dropboxFiles.js'
+import { magnetSource, torrentInput, selectTorrentFile } from './offlineMediaPolicy.js'
 
 export const OFFLINE_LIMIT = 6 * 1024 ** 3
 const terminal = new Set(['complete', 'cancelled', 'error', 'review'])
+const STORE_BYTES = 28 * 1024 * 1024
+function mediaPolicy(fn) { try { return fn() } catch (e) { deny(/^[A-Z_]{1,64}$/.test(e.message) ? e.message : 'INVALID_TORRENT') } }
+function publicTorrent(value) { return { files: value.files, total: value.total, infoHash: value.infoHash } }
 export function downloadUrl(value) {
   if (typeof value !== 'string' || value.length > 8192 || /[\x00-\x20\x7f]/.test(value)) deny('INVALID_DOWNLOAD_URL')
   let url
@@ -42,7 +46,7 @@ export class EncryptedOfflineStore {
   constructor(directory, key) { this.path = join(directory, 'offline-jobs.json'); this.key = createHash('sha256').update('nav-offline-state-v1\0' + key).digest() }
   async read() {
     try {
-      const raw = await readPrivateJson(this.path)
+      const raw = await readPrivateJson(this.path, STORE_BYTES)
       if (raw.version !== 1 || !/^[a-f0-9]{24}$/.test(raw.iv) || !/^[a-f0-9]{32}$/.test(raw.tag) || typeof raw.data !== 'string') deny('OFFLINE_STATE_INVALID', 503)
       const decipher = createDecipheriv('aes-256-gcm', this.key, Buffer.from(raw.iv, 'hex'))
       decipher.setAAD(Buffer.from('nav-offline-state-v1')); decipher.setAuthTag(Buffer.from(raw.tag, 'hex'))
@@ -53,9 +57,9 @@ export class EncryptedOfflineStore {
   }
   async write(value) {
     // Refuse replacing links or a damaged existing state file.
-    try { await readPrivateJson(this.path) } catch (e) { if (e.code !== 'ENOENT') throw e }
+    try { await readPrivateJson(this.path, STORE_BYTES) } catch (e) { if (e.code !== 'ENOENT') throw e }
     const plain = Buffer.from(JSON.stringify(value)), iv = randomBytes(12)
-    if (plain.length > 150000) deny('OFFLINE_QUEUE_FULL', 409)
+    if (plain.length > 20 * 1024 * 1024) { plain.fill(0); deny('OFFLINE_QUEUE_FULL', 409) }
     const cipher = createCipheriv('aes-256-gcm', this.key, iv); cipher.setAAD(Buffer.from('nav-offline-state-v1'))
     const data = Buffer.concat([cipher.update(plain), cipher.final()]); plain.fill(0)
     const body = JSON.stringify({ version: 1, iv: iv.toString('hex'), tag: cipher.getAuthTag().toString('hex'), data: data.toString('base64') })
@@ -69,7 +73,7 @@ export class EncryptedOfflineStore {
 }
 export class OfflineDownloads {
   constructor({ store, service, uploads, identity, maxBytes = OFFLINE_LIMIT }) {
-    Object.assign(this, { store, service, uploads, identity, maxBytes }); this.serial = Promise.resolve(); this.lastSeen = 0; this.failed = false
+    Object.assign(this, { store, service, uploads, identity, maxBytes }); this.serial = Promise.resolve(); this.lastSeen = 0; this.failed = false; this.media = { bt: false, video: false }
   }
   async save(data) {
     try { await this.store.write(data) }
@@ -84,17 +88,36 @@ export class OfflineDownloads {
     this.serial = run.catch(() => {}); return run
   }
   view(job) {
-    return { id: job.id, name: job.name, destination: job.destination, state: job.state, intent: job.intent,
-      downloaded: job.downloaded, size: job.size, uploaded: job.uploaded, createdAt: job.createdAt, updatedAt: job.updatedAt, error: job.error || '' }
+    return { id: job.id, name: job.name, destination: job.destination, state: job.state, intent: job.intent, kind: job.kind || 'http',
+      stage: job.stage || '', sourceSize: job.sourceSize || null, metadata: job.state === 'selecting' ? job.metadata : undefined,
+      downloaded: job.downloaded, size: job.size, uploaded: job.uploaded, createdAt: job.createdAt, updatedAt: job.updatedAt, error: job.error || '',
+      cleanupPending: ['complete', 'cancelled'].includes(job.state) && !job.cleaned }
   }
   async status() {
     const data = await this.store.read()
     return { enabled: true, maxBytes: this.maxBytes, queueLimit: 10, workerOnline: Date.now() - this.lastSeen < 45000,
+      media: Date.now() - this.lastSeen < 45000 ? this.media : { bt: false, video: false },
       uploadPersistence: this.uploads.store ? 'encrypted_disk' : 'api_process',
       entries: data.jobs.filter(j => j.identity === this.identity).map(j => this.view(j)).reverse() }
   }
   async add(input) {
-    const url = downloadUrl(input.url), destination = filePath(input.destination), name = destination.split('/').pop()
+    const kind = input.kind || 'http'
+    if (!['http', 'magnet', 'torrent', 'video'].includes(kind)) deny('INVALID_DOWNLOAD_URL')
+    if (kind !== 'http' && (Date.now() - this.lastSeen >= 45000 || !this.media[kind === 'video' ? 'video' : 'bt'])) deny('MEDIA_WORKER_UNAVAILABLE', 409)
+    let url = null, torrent, selection, sourceId, sourceRev, sourceSize, metadata
+    if (kind === 'http') url = downloadUrl(input.url)
+    if (kind === 'magnet') url = mediaPolicy(() => magnetSource(input.url)).uri
+    if (kind === 'torrent') {
+      const parsed = mediaPolicy(() => torrentInput(input.torrent)); torrent = parsed.torrent; metadata = publicTorrent(parsed)
+      if (input.selection != null) selection = mediaPolicy(() => selectTorrentFile(parsed, input.selection)).index
+    }
+    if (kind === 'video') {
+      const item = await this.service.get(input.sourceId)
+      if (item.kind !== 'video' || !item.downloadable || item.rev !== input.sourceRev || item.size < 1 || item.size > this.maxBytes) deny('TRANSCODE_INPUT_LIMIT')
+      sourceId = item.id; sourceRev = item.rev; sourceSize = item.size
+    }
+    const destination = filePath(input.destination), name = destination.split('/').pop()
+    if (kind === 'video' && !/\.mp4$/i.test(name)) deny('INVALID_DESTINATION')
     if (name.length > 255) deny('INVALID_DESTINATION')
     protectPath(destination, await this.service.protection(), true)
     const parent = destination.slice(0, destination.lastIndexOf('/'))
@@ -103,7 +126,8 @@ export class OfflineDownloads {
     return this.transaction(data => {
       if (data.jobs.filter(j => !terminal.has(j.state)).length >= 10 || data.jobs.length >= 50) deny('OFFLINE_QUEUE_FULL', 409)
       if (data.jobs.some(j => j.destination.toLowerCase() === destination.toLowerCase() && !terminal.has(j.state))) deny('TARGET_EXISTS', 409)
-      const job = { id: randomBytes(16).toString('hex'), identity: this.identity, url, name, destination, state: 'queued', intent: 'run',
+      const job = { id: randomBytes(16).toString('hex'), identity: this.identity, kind, url, torrent, metadata, selection, sourceId, sourceRev, sourceSize,
+        name, destination, state: 'queued', intent: 'run',
         downloaded: 0, size: null, uploaded: 0, createdAt: new Date().toISOString(), updatedAt: new Date().toISOString() }
       data.jobs.push(job); return this.view(job)
     })
@@ -118,25 +142,61 @@ export class OfflineDownloads {
       const job = this.job(data, id)
       if (['committing', 'complete', 'cancelled', 'review'].includes(job.state)) deny('OFFLINE_REVIEW_REQUIRED', 409)
       if (command === 'pause') { job.intent = 'pause'; if (job.state === 'queued') job.state = 'paused' }
-      else if (command === 'cancel') { job.intent = 'cancel'; if (['queued', 'paused', 'error'].includes(job.state)) { job.state = 'cancelled'; job.url = null; if (!job.claimed) job.cleaned = true } }
+      else if (command === 'cancel') { job.intent = 'cancel'; if (['queued', 'paused', 'error', 'selecting'].includes(job.state)) { job.state = 'cancelled'; job.url = null; job.torrent = null; if (!job.claimed) job.cleaned = true } }
       else if (command === 'resume' && ['paused', 'error'].includes(job.state)) { job.intent = 'run'; job.state = 'queued'; job.error = '' }
       else deny('OFFLINE_COMMAND_INVALID')
       job.updatedAt = new Date().toISOString(); return this.view(job)
     })
   }
-  async clear() { return this.transaction(data => { data.jobs = data.jobs.filter(j => j.identity !== this.identity || !['complete', 'cancelled'].includes(j.state) || !j.cleaned); return { cleared: true } }) }
-  async claim() {
+  async clear() {
+    return this.transaction(data => {
+      const before = data.jobs.length
+      data.jobs = data.jobs.filter(j => j.identity !== this.identity || !['complete', 'cancelled'].includes(j.state) || !j.cleaned)
+      return { cleared: true, removed: before - data.jobs.length,
+        pendingCleanup: data.jobs.filter(j => j.identity === this.identity && ['complete', 'cancelled'].includes(j.state) && !j.cleaned).length }
+    })
+  }
+  async select(id, selection) {
+    return this.transaction(data => {
+      const job = this.job(data, id)
+      if (job.state !== 'selecting' || job.intent !== 'run' || !job.metadata) deny('OFFLINE_COMMAND_INVALID', 409)
+      job.selection = mediaPolicy(() => selectTorrentFile(job.metadata, selection)).index
+      job.state = 'queued'; job.updatedAt = new Date().toISOString(); return this.view(job)
+    })
+  }
+  async source(id, offset, length) {
+    // Worker can read only the current claimed video/revision, never an arbitrary ID.
+    return this.transaction(async data => {
+      const job = this.job(data, id)
+      if (job.kind !== 'video' || !job.claimed || job.intent !== 'run' || job.state !== 'downloading') deny('OFFLINE_PAUSED', 409)
+      if (!Number.isSafeInteger(offset) || !Number.isSafeInteger(length) || offset < 0 || length < 1 || length > 8 * 1024 * 1024 || offset + length > job.sourceSize) deny('INVALID_RANGE', 416)
+      const item = await this.service.get(job.sourceId)
+      if (item.rev !== job.sourceRev || item.size !== job.sourceSize) deny('FILE_CHANGED', 409)
+      const response = await this.service.client.download(item, { range: `bytes=${offset}-${offset + length - 1}`, signal: AbortSignal.timeout(60000) })
+      const reader = response.body.getReader(), chunks = []; let size = 0
+      try {
+        while (true) { const value = await reader.read(); if (value.done) break; size += value.value.length; if (size > length) deny('INVALID_PROVIDER_RESPONSE', 502); chunks.push(value.value) }
+        if (size !== length) deny('INVALID_PROVIDER_RESPONSE', 502)
+        return Buffer.concat(chunks)
+      } finally { await reader.cancel().catch(() => {}); reader.releaseLock() }
+    })
+  }
+  async claim(capabilities = {}) {
     this.lastSeen = Date.now()
+    this.media = { bt: capabilities.bt === true, video: capabilities.video === true }
     return this.transaction(async data => {
       // One active job; a restarted worker receives the same identity, never a second job.
       let job = data.jobs.find(j => j.identity === this.identity && ['downloading', 'uploading', 'committing'].includes(j.state))
       if (job?.state === 'committing') { job.state = 'review'; job.error = 'COMMIT_RESULT_UNKNOWN'; return { job: null } }
+      if (!job && data.jobs.some(j => j.identity === this.identity && j.claimed && !j.cleaned && j.state !== 'queued')) return { job: null }
       job ||= data.jobs.find(j => j.identity === this.identity && j.state === 'queued')
       if (!job) return { job: null }
+      if (['magnet', 'torrent', 'video'].includes(job.kind) && !this.media[job.kind === 'video' ? 'video' : 'bt']) return { job: null }
       protectPath(job.destination, await this.service.protection(), true)
       if (job.state === 'queued') job.state = 'downloading'
       job.claimed = true
-      return { job: { id: job.id, url: job.url, state: job.state, intent: job.intent, maxBytes: this.maxBytes } }
+      return { job: { id: job.id, kind: job.kind || 'http', url: job.url, torrent: job.torrent, selection: job.selection,
+        sourceSize: job.sourceSize, state: job.state, intent: job.intent, maxBytes: this.maxBytes } }
     })
   }
   async progress(id, input) {
@@ -145,10 +205,20 @@ export class OfflineDownloads {
       const job = this.job(data, id)
       if (terminal.has(job.state)) { if (input.cleaned === true && ['complete', 'cancelled'].includes(job.state)) job.cleaned = true; return this.view(job) }
       if (job.state === 'committing') return this.view(job)
+      if (['metadata', 'bt_download', 'source_download', 'inspecting', 'transcoding', 'verifying'].includes(input.stage)) job.stage = input.stage
+      if (input.state === 'selecting' && job.state === 'downloading' && ['magnet', 'torrent'].includes(job.kind) && job.intent === 'run') {
+        const m = input.metadata
+        if (!m || !/^[a-f0-9]{40}$/.test(m.infoHash) || !Number.isSafeInteger(m.total) || m.total < 0 || m.total > this.maxBytes
+          || !Array.isArray(m.files) || !m.files.length || m.files.length > 100
+          || m.files.some((f, i) => f.index !== i + 1 || !Number.isSafeInteger(f.size) || f.size < 0 || typeof f.path !== 'string' || f.path.length > 1024 || /[\x00-\x1f\\:]/.test(f.path) || f.path.split('/').some(p => !p || p === '.' || p === '..'))
+          || m.files.reduce((n, f) => n + f.size, 0) !== m.total) deny('INVALID_TORRENT')
+        if (job.kind === 'magnet' && m.infoHash !== mediaPolicy(() => magnetSource(job.url)).infoHash) deny('INVALID_TORRENT')
+        job.metadata = publicTorrent(m); job.state = 'selecting'
+      }
       if (Number.isSafeInteger(input.downloaded) && input.downloaded >= 0 && input.downloaded <= this.maxBytes) job.downloaded = input.downloaded
       if (Number.isSafeInteger(input.size) && input.size >= 0 && input.size <= this.maxBytes) job.size = input.size
       if (input.state === 'paused' && job.intent === 'pause') job.state = 'paused'
-      if (input.state === 'cancelled' && job.intent === 'cancel') { job.state = 'cancelled'; job.url = null }
+      if (input.state === 'cancelled' && job.intent === 'cancel') { job.state = 'cancelled'; job.url = null; job.torrent = null }
       if (input.state === 'error') { job.state = 'error'; job.error = /^[A-Z_]{1,64}$/.test(input.error) ? input.error : 'DOWNLOAD_FAILED' }
       job.updatedAt = new Date().toISOString(); return this.view(job)
     })
@@ -184,7 +254,7 @@ export class OfflineDownloads {
         job.state = 'committing'; await this.save(data)
         try {
           const remote = await this.uploads.finish(job.uploadId)
-          job.state = 'complete'; job.uploaded = job.size; job.url = null; job.uploadId = null; return { state: 'complete' }
+          job.state = 'complete'; job.uploaded = job.size; job.url = null; job.torrent = null; job.metadata = null; job.uploadId = null; return { state: 'complete' }
         } catch (e) { job.state = 'review'; job.error = 'COMMIT_RESULT_UNKNOWN'; await this.save(data); throw e }
       }
       deny('OFFLINE_COMMAND_INVALID')

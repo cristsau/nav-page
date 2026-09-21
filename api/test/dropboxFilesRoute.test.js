@@ -25,7 +25,7 @@ test('all file routes require admin and exact bound owner, before any provider a
   let loads = 0
   const { app, request } = await harness({ load: () => { loads++; return { ownerUserId: owner } } })
   try {
-    const paths = ['status', 'list', 'folder', 'history', 'history/copy', 'move', 'copy', 'delete/preview', 'delete', 'text/read', 'text/save', 'upload', 'content/id%3Atest', 'content/id%3Atest?rev=abcdef123', 'upload/start', 'upload/status', 'upload/chunk', 'upload/finish', 'upload/cancel', 'upload/list', 'upload/reattach', 'deleted/list', 'deleted/history', 'deleted/copy', 'deleted/content/test']
+    const paths = ['status', 'list', 'item', 'folder', 'history', 'history/copy', 'move', 'copy', 'delete/preview', 'delete', 'text/read', 'text/save', 'upload', 'content/id%3Atest', 'content/id%3Atest?rev=abcdef123', 'upload/start', 'upload/status', 'upload/chunk', 'upload/finish', 'upload/cancel', 'upload/list', 'upload/reattach', 'upload/dismiss', 'deleted/list', 'deleted/history', 'deleted/copy', 'deleted/content/test']
     for (const path of paths) {
       const body = path === 'status' || path.startsWith('content/') || path.startsWith('deleted/content/') ? undefined : {}
       for (const [h, expected] of [[{}, 401], [{ 'x-test-role': 'user' }, 403], [{ ...headers, 'x-test-owner': 'different' }, 403]]) {

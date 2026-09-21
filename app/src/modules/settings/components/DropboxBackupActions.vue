@@ -7,11 +7,16 @@ import { fetchDropboxBackupControl, requestDropboxBackupJob, saveDropboxBackupSc
 const props = defineProps({ points: { type: Array, default: () => [] } })
 const emit = defineEmits(['updated'])
 const state = ref(null), loading = ref(false), saving = ref(false), error = ref(''), notice = ref('')
+const lastChecked = ref(null)
 const dialog = ref(''), pointId = ref(''), draftTime = ref('03:45'), draftEnabled = ref(false), pending = ref(null), expanded = ref(false)
 let timer, disposed = false
 const ready = computed(() => state.value?.connected === true)
 const blocked = computed(() => !ready.value || state.value.busy || state.value.reviewRequired || saving.value || !!pending.value)
 const jobs = computed(() => (state.value?.jobs || []).slice(0, expanded.value ? 50 : 5))
+const taskSummary = computed(() => {
+  const all = state.value?.jobs || []
+  return { active: all.filter(job => ['queued', 'running'].includes(job.state)).length, attention: all.filter(job => ['failed', 'review'].includes(job.state)).length }
+})
 const states = { queued: '排队中', running: '执行中', succeeded: '已完成', failed: '未完成', review: '需人工核对' }
 const stages = { queued: '等待执行器', snapshot: '创建本地快照', upload: '加密上传并回读校验', verify: '回读并校验密文', completed: '已校验，不代表恢复验收', stopped: '已停止' }
 const errors = { INTERRUPTED_REVIEW_REQUIRED: '执行器中断，先核对结果再继续', BACKUP_REVIEW_REQUIRED: '备份未完整确认，不会自动重复执行',
@@ -23,7 +28,7 @@ async function refresh({ preserveError = false } = {}) {
   try {
     const oldBusy = state.value?.busy, next = await fetchDropboxBackupControl()
     if (disposed) return
-    state.value = next; if (!preserveError) error.value = ''
+    state.value = next; lastChecked.value = new Date(); if (!preserveError) error.value = ''
     if (pending.value && next.jobs?.some(j => j.id === pending.value.id)) {
       pending.value = null; dialog.value = ''; notice.value = '请求已在任务记录中确认，不会重复创建。'
     }
@@ -61,16 +66,16 @@ onBeforeUnmount(() => { disposed = true; clearTimeout(timer) })
 </script>
 
 <template>
-  <section class="backup-actions" aria-labelledby="backup-actions-title" :aria-busy="saving">
-    <header><div><h5 id="backup-actions-title">备份操作</h5><p>手动执行与自动计划分开管理，恢复私钥始终不进入网页。</p></div>
-      <button class="backup-button" :disabled="loading" @click="refresh"><Icon name="refresh" :size="15" />{{ loading ? '读取中' : '刷新任务' }}</button></header>
+  <section class="backup-actions" aria-labelledby="backup-actions-title" :aria-busy="saving || loading">
+    <header><div><h5 id="backup-actions-title">备份操作 <span v-if="ready" class="backup-connected"><i />执行器已连接</span></h5><p>手动备份与自动计划分开管理；恢复钥匙和口令不进入网页。</p></div>
+      <button class="backup-button" :disabled="loading || saving" @click="refresh"><Icon name="refresh" :size="15" :class="{ 'backup-spinning': loading }" />{{ loading ? '读取中' : '刷新任务' }}</button></header>
     <p v-if="!ready && !error" class="backup-tip">执行器尚未接通。安装并授权后才能操作；下方备份记录仍可独立查看。</p>
-    <p v-if="error" class="backup-alert" role="alert">{{ error }}</p>
+    <p v-if="error && !dialog" class="backup-alert" role="alert">{{ error }}</p>
     <p v-if="notice" class="backup-tip" role="status">{{ notice }}</p>
     <p v-if="pending" class="backup-alert">请求结果待确认。请刷新核对；如需重新发送，将沿用同一请求编号。<button class="backup-button" :disabled="saving || !ready" @click="dialog = pending.kind">查看待确认请求</button></p>
     <p v-if="state?.reviewRequired" class="backup-alert">有任务中断或结果不明，已暂停新的备份。管理员需先核对台账，不会自动重试。</p>
     <div class="backup-toolbar">
-      <button class="backup-button backup-primary" :disabled="blocked || !state?.capabilities.backup" @click="open('backup')"><Icon name="upload" :size="17" />立即备份</button>
+      <button class="backup-button backup-primary" :disabled="blocked || !state?.capabilities.backup" @click="open('backup')"><Icon :name="state?.busy ? 'clock' : 'upload'" :size="17" />{{ state?.busy ? '任务执行中' : '立即备份' }}</button>
       <button class="backup-button" :disabled="!ready || saving || !!pending" @click="open('schedule')"><Icon name="clock" :size="17" />定时设置</button>
       <span v-if="ready" class="backup-schedule-status">{{ state.schedule.active ? `每天 ${state.schedule.time}（北京时间）` : state.schedule.enabled ? '已配置，但安全条件未满足，暂停执行' : '自动备份未开启' }}</span>
     </div>
@@ -80,12 +85,13 @@ onBeforeUnmount(() => { disposed = true; clearTimeout(timer) })
         <button class="backup-button" :disabled="blocked || !state?.capabilities.verify" @click="open('verify', point.id)">校验</button>
         <button class="backup-button" :disabled="blocked || !state?.capabilities.download" @click="open('download', point.id)">下载</button></li></ul>
     </details>
-    <div v-if="ready" class="backup-jobs"><h6>最近任务 <span>{{ state.jobs.length }} 条 · 最多保留 50 条近期记录</span></h6>
+    <div v-if="ready" class="backup-jobs"><h6>最近任务 <span>{{ taskSummary.active }} 项进行中 · {{ taskSummary.attention }} 项待处理 · 共 {{ state.jobs.length }} 条</span></h6>
       <p v-if="!jobs.length" class="backup-tip">还没有通过此入口发起任务。</p>
       <ol v-else><li v-for="job in jobs" :key="job.id"><div class="backup-job-main"><strong>{{ job.kind === 'backup' ? '加密备份' : '密文校验' }}</strong><span :class="['backup-badge', job.state]">{{ states[job.state] }}</span></div>
         <p>{{ errors[job.code] || stages[job.stage] }}</p><small>{{ when(job.createdAt) }} · {{ job.source === 'schedule' ? '定时' : '手动' }}</small></li></ol>
       <button v-if="state.jobs.length > 5" class="backup-button" @click="expanded = !expanded">{{ expanded ? '收起' : '查看全部近期任务' }}</button>
     </div>
+    <p v-if="lastChecked" class="backup-last-checked">执行器查询于 {{ lastChecked.toLocaleTimeString('zh-CN', { hour12: false }) }} · {{ ready ? '最多保留 50 条近期任务' : '当前状态未确认，请重新读取' }}</p>
     <Modal :show="!!dialog" :title="({ backup: '立即加密备份', verify: '校验云端密文', download: '下载加密备份', schedule: '定时备份' })[dialog]" width="480px" :close-disabled="saving" @close="close">
       <div class="backup-confirm">
         <template v-if="dialog === 'backup'"><p>创建 NAV 本地快照，加密上传到专用 Dropbox 文件夹，再回读校验。</p><p>上限 3 份 / 5 GB。容量不足或状态不明时停止；只有已开放并满足保护条件的轮换才会执行。不恢复、不覆盖业务数据。</p></template>
@@ -109,6 +115,9 @@ onBeforeUnmount(() => { disposed = true; clearTimeout(timer) })
 .backup-actions header,.backup-toolbar,.backup-job-main,.backup-dialog-footer { display:flex; align-items:center; gap:10px; flex-wrap:wrap; }
 .backup-actions header { justify-content:space-between; align-items:flex-start; }
 .backup-actions h5,.backup-actions h6 { font-size:14px; margin:0 0 6px; }
+.backup-actions h5 { display:flex;gap:10px;align-items:center;flex-wrap:wrap; }.backup-connected { display:inline-flex;gap:5px;align-items:center;font-size:10px;font-weight:400;color:var(--text-secondary); }.backup-connected i { width:5px;height:5px;border-radius:50%;background:var(--accent-color); }
+.backup-actions .backup-last-checked { font-size:10px;color:var(--text-muted);margin:14px 0 0; }
+.backup-spinning { animation:backup-spin .8s linear infinite; }@keyframes backup-spin { to {transform:rotate(360deg)} }@media(prefers-reduced-motion:reduce){.backup-spinning{animation:none}}
 .backup-actions p,.backup-confirm p { font-size:13px; line-height:1.7; color:var(--text-secondary); margin:8px 0; }
 .backup-button { display:inline-flex; align-items:center; justify-content:center; gap:6px; min-height:38px; border:1px solid var(--border-color); border-radius:9px; padding:8px 12px; background:var(--bg-primary); color:var(--text-primary); font:inherit; font-size:13px; text-decoration:none; cursor:pointer; }
 .backup-primary { background:var(--accent-color); color:#fff; border-color:var(--accent-color); }

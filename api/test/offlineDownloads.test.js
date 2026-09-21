@@ -56,8 +56,11 @@ test('unclaimed cancelled tasks can be cleared; claimed cancellation waits for w
   const { manager } = fixture(), one = await add(manager)
   await manager.control(one.id, 'cancel'); await manager.clear(); assert.equal((await manager.status()).entries.length, 0)
   const two = await add(manager); await manager.claim(); await manager.control(two.id, 'cancel'); await manager.progress(two.id, { state: 'cancelled' })
-  await manager.clear(); assert.equal((await manager.status()).entries.length, 1)
-  await manager.progress(two.id, { cleaned: true }); await manager.clear(); assert.equal((await manager.status()).entries.length, 0)
+  assert.deepEqual(await manager.clear(), { cleared: true, removed: 0, pendingCleanup: 1 })
+  assert.equal((await manager.status()).entries[0].cleanupPending, true)
+  await manager.progress(two.id, { cleaned: true })
+  assert.deepEqual(await manager.clear(), { cleared: true, removed: 1, pendingCleanup: 0 })
+  assert.equal((await manager.status()).entries.length, 0)
 })
 test('upload uses exact queued destination, durable commit marker and explicit cleanup acknowledgement', async () => {
   const { manager, calls, store } = fixture(), job = await add(manager); await manager.claim()

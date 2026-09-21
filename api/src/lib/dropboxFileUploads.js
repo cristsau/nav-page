@@ -88,6 +88,23 @@ export class DropboxFileUploads {
     await this.guard(job)
     return this.view(id, job)
   }
+  async dismiss(ids) {
+    if (this.failed || this.store?.failed) deny('UPLOAD_STORE_UNAVAILABLE', 503)
+    if (!Array.isArray(ids) || !ids.length || ids.length > 32 || new Set(ids).size !== ids.length
+      || ids.some(id => typeof id !== 'string' || !/^[a-f0-9]{48}$/.test(id))) deny('INVALID_UPLOAD')
+    // Validate the entire selection before deleting metadata. Never call Dropbox.
+    const selected = ids.map(id => [id, this.jobs.get(id)])
+    for (const [id, job] of selected) {
+      if (this.foreignJobs.has(id)) deny('UPLOAD_EXPIRED', 409)
+      if (job?.busy) deny('BUSY', 429)
+      if (job && job.state !== 'complete') deny('UPLOAD_REVIEW_REQUIRED', 409)
+    }
+    for (const [, job] of selected) if (job) job.busy = true
+    try {
+      for (const [id, job] of selected) if (job) await this.remove(id)
+      return { cleared: ids }
+    } finally { for (const [, job] of selected) if (job) job.busy = false }
+  }
   async start(path, size, contentHash = null) {
     await this.sweep()
     if (contentHash !== null && (typeof contentHash !== 'string' || !/^[a-f0-9]{64}$/.test(contentHash))) deny('INVALID_CONTENT_HASH')

@@ -25,14 +25,14 @@ jobs:
           sudo apt-get install -y age
           docker pull postgres:16-alpine
       - name: Protocol, policy and failure-path tests
-        run: sudo "$(command -v node)" --test --test-concurrency=1 scripts/dropbox/oauth.test.mjs scripts/dropbox/backup.test.mjs scripts/dropbox/local-retention.test.mjs scripts/dropbox/cloud-retention.test.mjs scripts/dropbox/control.test.mjs api/test/dropboxBackupStatus.test.js
+        run: sudo "$(command -v node)" --test --test-concurrency=1 scripts/dropbox/oauth.test.mjs scripts/dropbox/backup.test.mjs scripts/dropbox/local-retention.test.mjs scripts/dropbox/cloud-retention.test.mjs scripts/dropbox/control.test.mjs scripts/dropbox/image-originals.test.mjs api/test/dropboxBackupStatus.test.js
       - name: Real age and PostgreSQL isolated restore with synthetic data only
         run: sudo env NAV_DROPBOX_DISPOSABLE_TEST=1 "$(command -v node)" --test scripts/dropbox/backup-linux.test.mjs
       - name: Private Linux controller and encrypted upload store initialization
         run: sudo env NAV_DROPBOX_DISPOSABLE_TEST=1 "$(command -v node)" --test scripts/dropbox/control-linux.test.mjs
       - name: Package public operator source only
         run: |
-          git archive --format=tar.gz --prefix=nav-dropbox-backup/ -o nav-dropbox-backup.tar.gz HEAD scripts/dropbox
+          git archive --format=tar.gz --prefix=nav-dropbox-backup/ -o nav-dropbox-backup.tar.gz HEAD scripts/dropbox scripts/offline/safe-download.mjs
           sha256sum nav-dropbox-backup.tar.gz > nav-dropbox-backup.tar.gz.sha256
       - uses: actions/upload-artifact@v4
         with:

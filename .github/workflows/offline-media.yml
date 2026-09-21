@@ -1,0 +1,41 @@
+name: Isolated offline media
+on:
+  push:
+    branches: ['codex/**', master]
+    paths: ['scripts/offline/**', 'api/src/lib/offlineMediaPolicy.js', 'api/src/lib/offlineDownloads.js', 'api/test/offlineMedia*.test.js', '.github/workflows/offline-media.yml']
+  workflow_dispatch:
+permissions:
+  contents: read
+jobs:
+  media-isolation:
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@v6
+      - uses: actions/setup-node@v6
+        with:
+          node-version: 24
+      - name: Build credential-free constrained tools
+        run: docker build -f scripts/offline/Dockerfile.media --build-arg NAV_RELEASE_SHA=${{ github.sha }} -t nav-media:test .
+      - name: Real FFmpeg, malformed input, process cancellation in networkless runtime
+        run: >-
+          docker run --rm --network none --user 65532:65532 --read-only --cap-drop ALL
+          --security-opt no-new-privileges --memory 384m --cpus .6 --pids-limit 64
+          --tmpfs /tmp:rw,noexec,nosuid,size=64m,mode=1777
+          --tmpfs /var/lib/nav-media:rw,noexec,nosuid,size=4g,mode=700,uid=65532,gid=65532
+          -e NAV_MEDIA_DISPOSABLE_TEST=1 --entrypoint node nav-media:test --test scripts/offline/media-linux.test.mjs
+      - name: Real BT fixture and container network denial
+        run: sudo env GITHUB_ACTIONS=true "$(command -v node)" scripts/offline/media-bt-acceptance.mjs
+      - name: Export exact tested media image
+        if: github.ref == 'refs/heads/master'
+        run: |
+          docker save nav-media:test | gzip -1 > nav-media-image.tar.gz
+          sha256sum nav-media-image.tar.gz > nav-media-image.tar.gz.sha256
+      - uses: actions/upload-artifact@v4
+        if: github.ref == 'refs/heads/master'
+        with:
+          name: nav-media-image
+          path: |
+            nav-media-image.tar.gz
+            nav-media-image.tar.gz.sha256
+          retention-days: 7

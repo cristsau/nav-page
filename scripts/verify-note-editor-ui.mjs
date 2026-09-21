@@ -26,6 +26,7 @@ try {
     if (url.pathname === '/api/auth/session') body = { user: null }
     if (url.pathname === '/api/auth/oauth/config') body = { providers: { google: { enabled: false }, wechat: { enabled: false } } }
     if (url.pathname.includes('settings')) body = { value: null }
+    if (url.pathname === '/api/dropbox-files/list') body = { entries: [{ id: 'id:note_file', type: 'file', name: '个人示例文件.pdf', path: '/个人示例文件.pdf', mutable: true }, { id: 'id:protected', type: 'folder', name: '备份保护目录', path: '/Apps', mutable: false }], cursor: null, hasMore: false }
     if (/\/collaboration\/notes\/synthetic-ui$/.test(url.pathname)) {
       if (detailFailure) return route.fulfill({ status: 503, contentType: 'application/json', body: JSON.stringify({ error: '示例加载失败，请重试' }) })
       body = { members: [], comments }
@@ -45,6 +46,7 @@ try {
   page.on('pageerror', (error) => errors.push(error.message))
   page.setDefaultTimeout(15000)
   await page.goto(`${origin}/auth`, { waitUntil: 'networkidle' })
+  await page.waitForFunction(() => Boolean(document.querySelector('#app')?.__vue_app__))
   const mountHarness = async () => {
     const resources = performance.getEntriesByType('resource').map((item) => item.name)
     const { createApp, ref, h, nextTick } = await import(resources.find((url) => /\/vue\.js\?/.test(url)))
@@ -206,12 +208,26 @@ try {
   await page.getByRole('button', { name: '复制完整地址', exact: true }).click()
   await page.screenshot({ path: join(output, 'smart-copy-mobile.png') })
   pass('mobile-preview-copy-button-and-feedback-reachable')
+  await page.evaluate(() => smartHarness.open('editor'))
+  await page.getByRole('button', { name: '从 Dropbox 插入文件', exact: true }).click()
+  await page.getByRole('region', { name: '选择 Dropbox 文件', exact: true }).waitFor()
+  assert.equal(await page.getByRole('button', { name: /备份保护目录/ }).isDisabled(), true)
+  await page.waitForFunction(() => document.activeElement?.getAttribute('aria-label') === '搜索 Dropbox 文件')
+  const cloudPickerBox = await page.getByRole('region', { name: '选择 Dropbox 文件', exact: true }).boundingBox()
+  assert.ok(cloudPickerBox.y >= 0 && cloudPickerBox.y + cloudPickerBox.height < 760, 'file picker is scrolled into view above the fixed footer')
+  assert.equal(await page.evaluate(() => document.documentElement.scrollWidth > innerWidth + 1), false)
+  await page.screenshot({ path: join(output, 'note-dropbox-picker-320.png') })
+  await page.getByRole('button', { name: /个人示例文件.pdf/ }).click()
+  const privateLink = page.locator('.tiptap a').filter({ hasText: '个人示例文件.pdf' })
+  await privateLink.waitFor(); assert.equal(await privateLink.getAttribute('href'), origin + '/files?item=id%3Anote_file')
+  pass('note-cloud-picker-protected-folder-private-reference-mobile')
   const touchContext = await browser.newContext({ viewport: { width: 390, height: 844 }, isMobile: true, hasTouch: true, reducedMotion: 'reduce', serviceWorkers: 'block' })
   await touchContext.route('**/*', handleRoute)
   await touchContext.routeWebSocket('**/*', (socket) => socket.close())
   const touch = await touchContext.newPage()
   touch.on('pageerror', (error) => errors.push(error.message))
   await touch.goto(`${origin}/auth`, { waitUntil: 'networkidle' })
+  await touch.waitForFunction(() => Boolean(document.querySelector('#app')?.__vue_app__))
   await touch.evaluate(mountHarness)
   await touch.evaluate(() => smartHarness.open('preview'))
   const touchAddress = touch.getByRole('button', { name: '复制完整地址', exact: true })

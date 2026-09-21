@@ -234,6 +234,15 @@ function insertText(text) {
   editor.value?.chain().focus().insertContent(content).run()
 }
 
+function insertLink(text, url) {
+  const href = sanitizeHttpUrl(url)
+  if (!href || props.disabled || typeof text !== 'string' || !text) return false
+  return editor.value?.chain().focus().insertContent([
+    { type: 'text', text: text.slice(0, 255), marks: [{ type: 'link', attrs: { href, target: '_blank', rel: 'noopener noreferrer' } }] },
+    { type: 'text', text: ' ' }
+  ]).run() || false
+}
+
 function replaceText(text) {
   editor.value?.commands.setContent(plainTextToTiptapDocument(text))
 }
@@ -254,6 +263,7 @@ defineExpose({
   insertImage,
   removeImage,
   insertText,
+  insertLink,
   replaceText
 })
 

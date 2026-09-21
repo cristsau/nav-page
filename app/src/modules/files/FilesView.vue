@@ -1,6 +1,6 @@
 <script setup>
-import { computed, onBeforeUnmount, onMounted, ref } from 'vue'
-import { onBeforeRouteLeave } from 'vue-router'
+import { computed, onBeforeUnmount, onMounted, ref, watch } from 'vue'
+import { onBeforeRouteLeave, useRoute } from 'vue-router'
 import Icon from '@/shared/components/Icon.vue'
 import Modal from '@/shared/components/Modal.vue'
 import { registerReloadGuard } from '@/shared/services/reloadGuards'
@@ -9,10 +9,12 @@ import { FileTransferQueue } from './fileTransfers'
 import FolderPicker from './FolderPicker.vue'
 import DeletedFiles from './DeletedFiles.vue'
 import OfflineDownloads from './OfflineDownloads.vue'
+import UploadTasks from './UploadTasks.vue'
 import { planFolderUpload } from './folderUploads'
 import { fileFilters, fileSorts, fileTypeLabel, presentFiles, hasFileDrag, droppedFiles } from './filePresentation'
 
 const status = ref(null), entries = ref([]), path = ref(''), search = ref(''), query = ref('')
+const route = useRoute()
 const loading = ref(false), working = ref(false), error = ref(''), notice = ref(''), cursor = ref(null)
 const dialog = ref(''), selected = ref(null), value = ref(''), dialogError = ref(''), mediaFailed = ref(false)
 const content = ref(''), original = ref(''), textRev = ref(''), discard = ref(false), picker = ref(null)
@@ -22,6 +24,14 @@ const filter = ref('all'), sort = ref('name-asc'), layout = ref('list'), dropAct
 const pendingDrop = ref([]), dropDirectory = ref(''), copied = ref('')
 const folderPicker = ref(null), folderPlan = ref(null), folderAttempted = ref(false)
 const resumePicker = ref(null), resumeId = ref(null), recoveryError = ref('')
+const clearingUploads = ref(false)
+async function clearFinishedUploads() {
+  if (clearingUploads.value || !transfers) return
+  clearingUploads.value = true; error.value = ''; notice.value = ''
+  try { const count = await transfers.clearFinished(); if (alive) notice.value = `已清理 ${count || 0} 条完成记录，Dropbox 文件保持不变。` }
+  catch (e) { if (alive) error.value = message(e) }
+  finally { clearingUploads.value = false }
+}
 const history = ref(null), historyChoice = ref(null), recoveryName = ref(''), recoveryAttempted = ref(false)
 const dropBytes = computed(() => pendingDrop.value.reduce((sum, file) => sum + file.size, 0))
 const selectable = computed(() => sorted.value.filter(item => item.mutable !== false))
@@ -29,7 +39,6 @@ const chosen = computed(() => entries.value.filter(item => checked.value.include
 const excludedFolders = computed(() => batchItems.value.filter(item => item.type === 'folder').map(item => item.path))
 const pendingUploads = computed(() => jobs.value.some(job => ['queued', 'checking', 'uploading', 'paused', 'error'].includes(job.state)))
 let transfers = null
-const uploadStates = { queued: '等待上传', checking: '核对文件内容', awaiting_file: '等待重选原文件', uploading: '上传中', paused: '已暂停', error: '等待重试', complete: '上传完成', cancelled: '已取消', review: '请核对云端结果' }
 let alive = true, loadSequence = 0
 const dirty = computed(() => dialog.value === 'edit' && content.value !== original.value)
 const byteLength = computed(() => new TextEncoder().encode(content.value).length)
@@ -84,10 +93,21 @@ async function connect() {
       errorText: message, changed: next => { jobs.value = next } })
     if (['reselect_after_refresh_api_process', 'reselect_after_restart_encrypted'].includes(result.uploadResume)) await recoverTransfers()
     await loadEntries()
+    if (alive) await openReference()
   }
   catch (e) { if (alive) { status.value = null; entries.value = []; error.value = message(e) } }
   finally { if (alive) loading.value = false }
 }
+let referenceSequence = 0
+async function openReference() {
+  const turn = ++referenceSequence
+  if (working.value || dialog.value === 'edit') { notice.value = '请先完成或关闭当前操作，再打开文件引用或任务。'; return }
+  if (typeof route.query.item === 'string') {
+    try { const result = await filesAction('item', { id: route.query.item }); if (alive && turn === referenceSequence) openItem(result.item) }
+    catch (e) { if (alive && turn === referenceSequence) error.value = `文件引用无法打开：${message(e)}` }
+  } else if (route.query.view === 'offline') open('offline')
+}
+watch(() => [route.query.item, route.query.view], () => { if (status.value) void openReference() })
 async function recoverTransfers() {
   recoveryError.value = ''
   try { await transfers.recover() } catch (e) { if (alive) recoveryError.value = `上传任务读取未完成：${message(e)}` }
@@ -313,22 +333,9 @@ onBeforeUnmount(() => { alive = false; loadSequence++; transfers?.dispose(); con
       <p v-if="notice" class="drive-feedback" role="status">{{ notice }}</p>
       <p v-if="recoveryError" class="drive-feedback drive-error" role="alert">{{ recoveryError }} <button class="drive-button drive-small" @click="recoverTransfers">重试读取任务</button></p>
       <input ref="resumePicker" class="drive-hidden" type="file" aria-label="重新选择续传原文件" @change="reselectOriginal">
-      <section v-if="jobs.length" class="drive-transfers" aria-label="上传队列">
-        <header><strong>上传队列</strong><button class="drive-button drive-small" @click="transfers.clearFinished()">清理完成记录</button></header>
-        <p>最高 50 GB · 每块 8 MB。刷新后重选原文件，核对完整内容后续传。<template v-if="status?.uploadResume === 'reselect_after_restart_encrypted'">进度已加密保存，服务器重启后也可续传；24 小时无活动会过期。</template><template v-else>当前进度仅在服务器内存中，服务器重启后需重传。</template>连接变更后旧任务不可继续；文件正文不会缓存，手机后台可能暂停。</p>
-        <ul><li v-for="job in jobs" :key="job.id">
-          <div class="drive-transfer-title"><strong :title="job.name">{{ job.name }}</strong><span>{{ job.pause && job.state === 'uploading' ? '正在暂停…' : job.cancel && ['uploading', 'checking'].includes(job.state) ? '正在取消…' : uploadStates[job.state] }}</span></div>
-          <small class="drive-item-path">{{ job.path }}</small>
-          <progress :value="job.state === 'checking' ? job.hashOffset : job.offset" :max="job.size || 1" :aria-label="`${job.name} ${job.state === 'checking' ? '核对' : '上传'}进度`" />
-          <div class="drive-transfer-meta"><span>{{ bytes(job.state === 'checking' ? job.hashOffset : job.offset) }} / {{ bytes(job.size) }}<template v-if="job.state === 'uploading' && job.rate"> · {{ bytes(job.rate) }}/s · 约 {{ Math.ceil((job.size - job.offset) / job.rate) }} 秒</template></span><div>
-            <button v-if="['queued', 'checking', 'uploading'].includes(job.state)" class="drive-button drive-small" :disabled="job.pause || job.cancel" @click="transfers.pause(job.id)">暂停</button>
-            <button v-if="job.state === 'awaiting_file'" class="drive-button drive-small" @click="selectOriginal(job.id)">重选原文件</button>
-            <button v-if="['paused', 'error'].includes(job.state)" class="drive-button drive-small" @click="transfers.resume(job.id)">{{ job.state === 'error' ? '重试' : '继续' }}</button>
-            <button v-if="['queued', 'checking', 'awaiting_file', 'uploading', 'paused', 'error'].includes(job.state)" class="drive-button drive-small" :disabled="job.cancel" @click="transfers.cancel(job.id)">取消上传</button>
-          </div></div><p v-if="job.error" role="alert">{{ job.error }}</p>
-        </li></ul>
-        <button class="drive-button drive-small" :disabled="loading || working" @click="loadEntries()">刷新查看已上传文件</button>
-      </section>
+      <UploadTasks v-if="jobs.length" :jobs="jobs" :persistence="status?.uploadResume" :busy="loading || working" :clearing="clearingUploads"
+        @pause="transfers.pause($event)" @resume="transfers.resume($event)" @reselect="selectOriginal" @cancel="transfers.cancel($event)"
+        @clear="clearFinishedUploads" @refresh="loadEntries()" />
       <div v-if="status" class="drive-selection-toggle"><button class="drive-button drive-small" :disabled="working || loading" @click="selection = !selection; checked = []">{{ selection ? '结束选择' : '选择文件' }}</button><span v-if="selection">仅选择已显示项目，一次最多 50 项</span></div>
       <div v-if="selection" class="drive-batch-bar" aria-label="批量文件操作"><button class="drive-button drive-small" :disabled="loading || working" @click="toggleAll">{{ checked.length ? '取消选择' : '选择已显示（最多50项）' }}</button><strong>已选 {{ checked.length }} 项</strong><div><button class="drive-button drive-small" :disabled="!chosen.length || working" @click="open('move')">移动</button><button class="drive-button drive-small" :disabled="!chosen.length || working" @click="open('copy')">复制</button><button class="drive-button drive-small drive-danger" :disabled="!chosen.length || working" @click="open('delete')">删除</button></div></div>
       <div v-if="!status && !loading" class="drive-empty"><Icon name="cloud" :size="36" /><h2>连接你的个人文件库</h2><p>文件管理使用独立的 Full Dropbox 授权，不会复用备份凭据。</p><button class="drive-button" type="button" @click="connect">重新检查连接</button></div>
@@ -350,13 +357,13 @@ onBeforeUnmount(() => { alive = false; loadSequence++; transfers?.dispose(); con
     </section>
     <p class="drive-footnote">文件不保存到浏览器离线缓存。视频使用浏览器原生播放；不兼容的编码可下载或在 Dropbox 打开。</p>
 
-    <Modal :show="Boolean(dialog)" :title="titles" :width="['preview', 'edit'].includes(dialog) ? '880px' : '520px'" :close-disabled="working" @close="close()">
+    <Modal :show="Boolean(dialog)" :title="titles" :width="['preview', 'edit'].includes(dialog) ? '880px' : dialog === 'offline' ? '720px' : '520px'" :close-disabled="working" @close="close()">
       <div class="drive-dialog">
         <p v-if="selected" class="drive-item-path">{{ selected.path }}</p>
         <p v-if="dialogError" class="drive-feedback drive-error" role="alert">{{ dialogError }}</p>
         <div v-if="working" class="drive-inline-status" role="status"><span class="drive-spinner" />正在处理，请稍候…</div>
         <DeletedFiles v-if="dialog === 'deleted'" :directory="path" @busy="working = $event" @recovered="notice = '已找回新副本，请刷新目录查看。'" />
-        <OfflineDownloads v-if="dialog === 'offline'" :directory="path" @busy="working = $event" />
+        <OfflineDownloads v-else-if="dialog === 'offline'" :directory="path" :video="selected?.kind === 'video' ? selected : null" @busy="working = $event" />
         <template v-else-if="dialog === 'directory'">
           <p class="drive-detail">将 {{ pendingDrop.length }} 个文件（{{ bytes(dropBytes) }}）按原层级上传到：</p>
           <p class="drive-drop-target">{{ dropDirectory }}/{{ folderPlan.root }}</p>
@@ -377,6 +384,7 @@ onBeforeUnmount(() => { alive = false; loadSequence++; transfers?.dispose(); con
         </template>
         <template v-else-if="dialog === 'drop'"><p class="drive-detail">将 {{ pendingDrop.length }} 个文件（{{ bytes(dropBytes) }}）上传到：</p><p class="drive-drop-target">{{ dropDirectory || '全部文件（根目录）' }}</p><ul class="drive-operation-items"><li v-for="(file, index) in pendingDrop" :key="index"><Icon name="note" :size="18" /><span><strong>{{ file.name }}</strong><small>{{ bytes(file.size) }}</small></span></li></ul><p class="drive-detail">确认后才加入上传队列；同名文件不会覆盖。取消或关闭弹窗不会上传。</p></template>
         <template v-else-if="dialog === 'preview'">
+          <p v-if="selected.kind === 'video' && selected.downloadable" class="drive-detail">无法播放此编码？<button class="drive-button drive-small" :disabled="working" @click="open('offline', selected)">生成兼容视频副本</button></p>
           <div v-if="!mediaFailed && ['image', 'video', 'audio'].includes(selected.kind) && selected.downloadable" class="drive-preview">
             <img v-if="selected.kind === 'image'" :src="contentUrl(selected.id, true)" :alt="selected.name" @error="mediaFailed = true">
             <video v-else-if="selected.kind === 'video'" :src="contentUrl(selected.id, true)" controls playsinline preload="metadata" @error="mediaFailed = true" />
@@ -407,8 +415,8 @@ onBeforeUnmount(() => { alive = false; loadSequence++; transfers?.dispose(); con
 .drive-dialog{color:var(--text-primary);font-family:var(--font-family,sans-serif)}.drive-item-path{font-size:12px;color:var(--text-muted);overflow-wrap:anywhere;margin:0 0 16px}.drive-preview{display:flex;align-items:center;justify-content:center;min-height:180px;background:var(--bg-secondary);border-radius:12px;overflow:hidden}.drive-preview img{max-width:100%;max-height:55dvh;object-fit:contain}.drive-preview video{width:100%;max-height:55dvh;background:#16181b}.drive-preview audio{width:min(100%,460px);margin:30px 12px}.drive-detail{font-size:12px;color:var(--text-secondary);line-height:1.8;overflow-wrap:anywhere}.drive-manage{display:grid;grid-template-columns:1fr 1fr;gap:12px}.drive-manage p{grid-column:1/-1;margin:0}.drive-form{display:grid;gap:12px}.drive-form label,.drive-field-label{font-size:13px;font-weight:550}.drive-field-label{display:flex;justify-content:space-between;gap:12px;margin-bottom:10px}.drive-field-label span{font-weight:400;color:var(--text-muted);font-size:12px}.drive-form input{width:100%;box-sizing:border-box;min-height:44px;border:1px solid var(--border-color);border-radius:9px;background:var(--bg-primary);color:var(--text-primary);font:inherit;font-size:14px;padding:10px 12px}.drive-editor{box-sizing:border-box;display:block;width:100%;height:45dvh;min-height:200px;resize:vertical;background:var(--bg-primary);color:var(--text-primary);border:1px solid var(--border-color);border-radius:10px;padding:16px;font:13px/1.8 ui-monospace,Consolas,monospace;tab-size:2}.drive-dialog .drive-feedback{margin:0 0 16px}.drive-footer{width:100%;display:flex;justify-content:flex-end;gap:8px;flex-wrap:wrap}.drive-discard{background:var(--bg-secondary);padding:14px;border-radius:10px;font-size:13px;line-height:1.7}.drive-discard p{margin:0 0 12px}.drive-discard button{margin-right:8px;margin-bottom:4px}.drive-inline-status{display:flex;align-items:center;gap:8px;font-size:12px;color:var(--text-secondary);padding:0 0 12px}.drive-spinner{width:15px;height:15px;display:inline-block;border:2px solid var(--border-color);border-top-color:var(--accent-color);border-radius:50%;animation:drive-spin .8s linear infinite;flex-shrink:0}@keyframes drive-spin{to{transform:rotate(360deg)}}
 @media(max-width:720px){.drive-page{padding:24px 14px 36px}.drive-heading{align-items:flex-start;gap:14px;flex-direction:column}.drive-heading h1{font-size:26px}.drive-toolbar{flex-wrap:wrap;padding:14px;gap:12px}.drive-search{flex-basis:100%}.drive-actions{width:100%}.drive-actions>.drive-button{flex:1}.drive-protection{flex-wrap:wrap;font-size:11px}.drive-protection a{margin-left:25px}.drive-location{padding:9px 12px}.drive-table-head{display:none}.drive-list>li{grid-template-columns:minmax(0,1fr) 38px;padding:0 14px;gap:8px;min-height:74px}.drive-desktop-meta{display:none}.drive-file-label .drive-mobile-meta{display:block}.drive-file-label strong{font-size:13px}.drive-file{gap:10px}.drive-file-icon{width:34px;height:40px}.drive-feedback{margin:10px 12px;padding:10px 12px}.drive-list-footer{padding:14px}.drive-empty{padding:36px 16px}.drive-footer{justify-content:stretch}.drive-footer>.drive-button{flex:1 0 auto;max-width:100%;white-space:normal}.drive-location nav button{max-width:170px}.drive-editor{padding:12px;font-size:14px}.drive-preview{min-height:120px}.drive-field-label{flex-wrap:wrap}}
 @media(prefers-reduced-motion:reduce){.drive-spinner{animation:none}}
-.drive-selection-toggle{display:flex;align-items:center;gap:10px;padding:8px 20px 14px;font-size:11px;color:var(--text-muted)}.drive-batch-bar{display:flex;align-items:center;gap:10px;flex-wrap:wrap;padding:10px 20px;background:var(--accent-bg);font-size:12px;border-block:1px solid var(--border-color)}.drive-batch-bar>div{display:flex;gap:6px;margin-left:auto}.drive-selecting.drive-table-head,.drive-list>li.drive-selecting{grid-template-columns:26px minmax(0,1fr) 100px 116px 44px}.drive-checkbox{display:grid;place-items:center;min-height:44px;cursor:pointer}.drive-checkbox input{width:18px;height:18px;margin:0;accent-color:var(--accent-color)}.drive-row-checked{background:var(--accent-bg)}.drive-operation-items{list-style:none;padding:0;margin:12px 0;max-height:210px;overflow:auto}.drive-operation-items li{display:flex;gap:10px;align-items:flex-start;padding:10px 0;border-bottom:1px solid var(--border-light);font-size:13px}.drive-operation-items svg{flex-shrink:0;margin-top:2px}.drive-operation-items span{min-width:0;overflow-wrap:anywhere}.drive-operation-items strong{font-weight:550;display:block}.drive-operation-items small{display:block;color:var(--text-secondary);font-size:12px;margin-top:4px;line-height:1.7}.drive-transfers{margin:12px 20px;padding:14px;border:1px solid var(--border-color);border-radius:12px;font-size:12px;background:var(--bg-primary)}.drive-transfers header,.drive-transfer-title,.drive-transfer-meta{display:flex;align-items:center;justify-content:space-between;gap:12px}.drive-transfers p{font-size:11px;color:var(--text-muted);line-height:1.8;margin:8px 0;overflow-wrap:anywhere}.drive-transfers ul{list-style:none;padding:0;margin:0;max-height:320px;overflow:auto}.drive-transfers li{padding:12px 0;border-top:1px solid var(--border-light)}.drive-transfer-title strong{overflow:hidden;text-overflow:ellipsis;white-space:nowrap;min-width:0;font-weight:550}.drive-transfer-title>span{white-space:nowrap;color:var(--text-secondary);font-size:11px}.drive-transfers progress{display:block;width:100%;height:5px;accent-color:var(--accent-color);margin:12px 0}.drive-transfer-meta{flex-wrap:wrap;font-size:11px;color:var(--text-secondary)}.drive-transfer-meta>div{display:flex;gap:6px}.drive-transfers [role=alert]{color:var(--danger-color,#ad3333)}
-@media(max-width:720px){.drive-list>li.drive-selecting{grid-template-columns:24px minmax(0,1fr) 38px;gap:6px}.drive-selecting .drive-file-icon{display:none}.drive-selection-toggle{padding:6px 14px 12px;flex-wrap:wrap}.drive-transfers{margin:10px 12px;padding:12px}.drive-batch-bar{position:fixed;z-index:80;bottom:calc(var(--mobile-dock-height,78px) + env(safe-area-inset-bottom,0px) + 14px);left:14px;right:14px;padding:10px 12px;border:1px solid var(--border-color);border-radius:14px;background:var(--bg-card);box-shadow:0 8px 32px #0002}.drive-batch-bar>button{max-width:100%;font-size:11px}.drive-batch-bar>div{margin-left:0;flex:1;justify-content:flex-end}.drive-page:has(.drive-batch-bar){padding-bottom:150px}.drive-transfer-meta>div{flex-wrap:wrap}}
+.drive-selection-toggle{display:flex;align-items:center;gap:10px;padding:8px 20px 14px;font-size:11px;color:var(--text-muted)}.drive-batch-bar{display:flex;align-items:center;gap:10px;flex-wrap:wrap;padding:10px 20px;background:var(--accent-bg);font-size:12px;border-block:1px solid var(--border-color)}.drive-batch-bar>div{display:flex;gap:6px;margin-left:auto}.drive-selecting.drive-table-head,.drive-list>li.drive-selecting{grid-template-columns:26px minmax(0,1fr) 100px 116px 44px}.drive-checkbox{display:grid;place-items:center;min-height:44px;cursor:pointer}.drive-checkbox input{width:18px;height:18px;margin:0;accent-color:var(--accent-color)}.drive-row-checked{background:var(--accent-bg)}.drive-operation-items{list-style:none;padding:0;margin:12px 0;max-height:210px;overflow:auto}.drive-operation-items li{display:flex;gap:10px;align-items:flex-start;padding:10px 0;border-bottom:1px solid var(--border-light);font-size:13px}.drive-operation-items svg{flex-shrink:0;margin-top:2px}.drive-operation-items span{min-width:0;overflow-wrap:anywhere}.drive-operation-items strong{font-weight:550;display:block}.drive-operation-items small{display:block;color:var(--text-secondary);font-size:12px;margin-top:4px;line-height:1.7}
+@media(max-width:720px){.drive-list>li.drive-selecting{grid-template-columns:24px minmax(0,1fr) 38px;gap:6px}.drive-selecting .drive-file-icon{display:none}.drive-selection-toggle{padding:6px 14px 12px;flex-wrap:wrap}.drive-batch-bar{position:fixed;z-index:80;bottom:calc(var(--mobile-dock-height,78px) + env(safe-area-inset-bottom,0px) + 14px);left:14px;right:14px;padding:10px 12px;border:1px solid var(--border-color);border-radius:14px;background:var(--bg-card);box-shadow:0 8px 32px #0002}.drive-batch-bar>button{max-width:100%;font-size:11px}.drive-batch-bar>div{margin-left:0;flex:1;justify-content:flex-end}.drive-page:has(.drive-batch-bar){padding-bottom:150px}}
 .drive-view-options{display:flex;align-items:center;gap:12px;flex-wrap:wrap;padding:8px 20px 12px}.drive-view-options label{display:flex;align-items:center;gap:7px;font-size:11px;color:var(--text-muted);min-width:0}.drive-view-options select{font:inherit;font-size:12px;color:var(--text-primary);background:var(--bg-primary);border:1px solid var(--border-color);border-radius:9px;min-height:38px;padding:6px 9px;max-width:100%}.drive-view-options select:focus-visible{outline:2px solid var(--accent-color);outline-offset:2px}.drive-view-options p{margin:0;flex-basis:100%;font-size:11px;color:var(--text-muted);line-height:1.8}.drive-view-switch{display:flex;gap:4px;margin-left:auto}.drive-view-switch [aria-pressed=true]{color:var(--accent-color);background:var(--accent-bg);border-color:var(--accent-color)}
 .drive-list.drive-grid{display:grid;grid-template-columns:repeat(auto-fill,minmax(180px,1fr));gap:12px;padding:14px 20px}.drive-grid>li,.drive-grid>li.drive-selecting{position:relative;display:flex;flex-direction:column;align-items:stretch;gap:0;padding:16px 12px 12px;border:1px solid var(--border-color);border-radius:12px;min-width:0;background:var(--bg-primary)}.drive-grid>li.drive-row-checked{border-color:var(--accent-color);background:var(--accent-bg)}.drive-grid .drive-file{flex-direction:column;align-items:flex-start;padding:0 0 10px;min-height:122px;gap:12px}.drive-grid .drive-file-label{width:100%}.drive-grid .drive-file-label strong{white-space:normal;overflow-wrap:anywhere;display:-webkit-box;-webkit-line-clamp:2;-webkit-box-orient:vertical;line-height:1.5;min-height:3em}.drive-grid .drive-file-label .drive-mobile-meta{display:block}.drive-grid .drive-desktop-meta{display:none}.drive-grid .drive-file>svg{position:absolute;right:18px;top:27px;color:var(--text-muted)}.drive-grid>li>.drive-button{align-self:flex-end;min-width:44px;min-height:40px}.drive-grid .drive-checkbox{position:absolute;right:10px;top:6px;min-width:38px;z-index:1}.drive-grid .drive-selecting .drive-file-icon{display:grid}.drive-grid .drive-selecting .drive-file>svg{top:auto;bottom:24px;left:16px}
 .drive-details-heading{display:flex;gap:12px;align-items:center;margin-bottom:20px}.drive-details-heading strong{font-size:16px;font-weight:550;overflow-wrap:anywhere;min-width:0}.drive-details{display:grid;grid-template-columns:74px minmax(0,1fr);margin:0;font-size:13px;line-height:1.8}.drive-details dt,.drive-details dd{padding:10px 0;border-top:1px solid var(--border-light);margin:0;overflow-wrap:anywhere;white-space:pre-wrap;user-select:text}.drive-details dt{color:var(--text-muted);font-size:12px}.drive-details dd small{display:block;color:var(--text-muted);font-size:11px}.drive-details dd button{margin:4px 0 0 8px;vertical-align:middle}.drive-surface{position:relative}.drive-drop-active{outline:2px solid var(--accent-color);outline-offset:3px}.drive-drop-overlay{position:absolute;inset:0;z-index:5;display:flex;flex-direction:column;align-items:center;justify-content:center;gap:14px;background:color-mix(in srgb,var(--bg-card) 96%,transparent);pointer-events:none;text-align:center;padding:28px;color:var(--accent-color)}.drive-drop-overlay span{overflow-wrap:anywhere;font-size:13px;color:var(--text-secondary)}.drive-drop-target{overflow-wrap:anywhere;padding:12px;background:var(--bg-secondary);border-radius:10px;font-size:13px}

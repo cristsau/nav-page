@@ -5,6 +5,7 @@ import { createHash } from 'node:crypto'
 import { resolve, join } from 'node:path'
 import { pathToFileURL } from 'node:url'
 import { downloadResponse } from './safe-download.mjs'
+import { MediaClient } from './media-client.mjs'
 
 const BLOCK = 4 * 1024 * 1024, CHUNK = 8 * 1024 * 1024, RESERVE = 2 * 1024 ** 3
 const wait = ms => new Promise(r => setTimeout(r, ms))
@@ -45,15 +46,18 @@ export async function apiCall(c, operation, input, bytes) {
   } catch { throw Error('CONTROL_NETWORK_FAILED') }
   const reader = response.body.getReader(), chunks = []; let length = 0
   try {
-    while (true) { const chunk = await reader.read(); if (chunk.done) break; length += chunk.value.length; if (length > 32768) throw Error('CONTROL_RESPONSE_INVALID'); chunks.push(chunk.value) }
+    const limit = operation === 'source' && response.ok ? CHUNK : operation === 'claim' ? 1500000 : 131072
+    while (true) { const chunk = await reader.read(); if (chunk.done) break; length += chunk.value.length; if (length > limit) throw Error('CONTROL_RESPONSE_INVALID'); chunks.push(chunk.value) }
+    if (operation === 'source' && response.ok) { if (length !== input.length) throw Error('CONTROL_RESPONSE_INVALID'); return Buffer.concat(chunks) }
     const value = JSON.parse(Buffer.concat(chunks).toString())
     if (!response.ok) throw Error(/^[A-Z_]{1,64}$/.test(value.code) ? value.code : 'CONTROL_REQUEST_FAILED')
     return value
   } finally { await reader.cancel().catch(() => {}); reader.releaseLock() }
 }
 export class DownloadWorker {
-  constructor(config, call = apiCall, deps = {}) { this.config = config; this.call = (op, input, bytes) => call(config, op, input, bytes); this.stopping = false; this.download = deps.download || downloadResponse; this.disk = deps.disk || statfs }
+  constructor(config, call = apiCall, deps = {}) { this.config = config; this.call = (op, input, bytes) => call(config, op, input, bytes); this.stopping = false; this.download = deps.download || downloadResponse; this.disk = deps.disk || statfs; this.media = deps.media || (config.mediaDirectory ? new MediaClient(config.mediaDirectory) : null) }
   file(id) { if (!safeId(id)) throw Error('INVALID_JOB'); return join(this.config.directory, id + '.part') }
+  dataFile(meta) { if (meta.media && !this.media) throw Error('MEDIA_WORKER_UNAVAILABLE'); return meta.media ? this.media.file(meta.id) : this.file(meta.id) }
   async save(meta) { await atomic(join(this.config.directory, 'current.json'), meta) }
   async previous() {
     const path = join(this.config.directory, 'current.json')
@@ -62,8 +66,9 @@ export class DownloadWorker {
   }
   async clean(meta) {
     // Only generated job files inside the dedicated private directory; never cloud files.
-    const file = this.file(meta.id)
-    try { await privateFile(file, 6 * 1024 ** 3); await unlink(file) } catch (e) { if (e.code !== 'ENOENT') throw e }
+    const file = this.dataFile(meta)
+    if (meta.media) { if (!this.media) throw Error('MEDIA_WORKER_UNAVAILABLE'); await this.media.clean(meta.id) }
+    else try { await privateFile(file, 6 * 1024 ** 3); await unlink(file) } catch (e) { if (e.code !== 'ENOENT') throw e }
     // Keep the receipt until the API acknowledges cleanup; lost responses remain retryable.
     await this.call('progress', { id: meta.id, cleaned: true })
     const current = join(this.config.directory, 'current.json'); await privateFile(current); await unlink(current)
@@ -76,15 +81,15 @@ export class DownloadWorker {
       catch (e) {
         // An acknowledged task may have been cleared before a crash removed its receipt.
         if (e.message !== 'OFFLINE_JOB_MISSING') throw e
-        try { await lstat(this.file(meta.id)); throw Error('LOCAL_TASK_REQUIRES_REVIEW') } catch (missing) { if (missing.code !== 'ENOENT') throw missing }
+        try { await lstat(this.dataFile(meta)); throw Error('LOCAL_TASK_REQUIRES_REVIEW') } catch (missing) { if (missing.code !== 'ENOENT') throw missing }
         const receipt = join(this.config.directory, 'current.json'); await privateFile(receipt); await unlink(receipt); meta = null
       }
       if (meta) {
       if (['complete', 'cancelled'].includes(status.state)) { await this.clean(meta); meta = null }
-      else if (['paused', 'error', 'review'].includes(status.state)) return
+      else if (['paused', 'error', 'review', 'selecting'].includes(status.state)) return
       }
     }
-    const { job } = await this.call('claim', {})
+    const { job } = await this.call('claim', await this.media?.capabilities() || {})
     if (!job) return
     if (!safeId(job.id) || job.maxBytes !== 6 * 1024 ** 3) throw Error('INVALID_JOB')
     if (meta && meta.id !== job.id) throw Error('LOCAL_TASK_REQUIRES_REVIEW')
@@ -100,7 +105,33 @@ export class DownloadWorker {
     }
     const timer = setInterval(heartbeat, 5000)
     try {
-      const path = this.file(job.id)
+      if (['magnet', 'torrent', 'video'].includes(job.kind)) { meta.media = true; await this.save(meta) }
+      const path = this.dataFile(meta)
+      if (!meta.downloaded && ['magnet', 'torrent', 'video'].includes(job.kind)) {
+        if (!this.media) throw Error('MEDIA_WORKER_UNAVAILABLE')
+        meta.media = true; await this.save(meta)
+        let local
+        try { local = await privateFile(path, job.maxBytes) } catch (e) { if (e.code !== 'ENOENT') throw e }
+        if (local && Number.isSafeInteger(meta.mediaSize)) {
+          if (!Number.isSafeInteger(meta.mediaSize) || local.size !== meta.mediaSize) throw Error('MEDIA_RESULT_REQUIRES_REVIEW')
+          meta.size = local.size
+        } else {
+          const result = await this.media.run(job, { signal: controller.signal,
+            source: (offset, length) => this.call('source', { id: job.id, offset, length }),
+            progress: async value => {
+              const disk = await this.disk(this.config.directory)
+              if (disk.bavail * disk.bsize < RESERVE) throw Error('DOWNLOAD_DISK_LIMIT')
+              if (value.downloaded != null) downloaded = value.downloaded
+              const status = await this.call('progress', { id: job.id, ...value }); intent = status.intent
+              if (intent !== 'run' || this.stopping) controller.abort()
+            } })
+          if (result.files) { await this.call('progress', { id: job.id, state: 'selecting', metadata: result }); return }
+          meta.mediaSize = result.size; await this.save(meta)
+          if (result.path !== path) throw Error('MEDIA_RESULT_INVALID')
+          meta.size = result.size
+        }
+        meta.downloaded = true; await this.save(meta)
+      }
       if (!meta.downloaded) {
         let offset = 0
         try { offset = (await privateFile(path, job.maxBytes)).size } catch (e) { if (e.code !== 'ENOENT') throw e }
@@ -167,7 +198,8 @@ export async function main(configPath) {
   await privateFile(configPath)
   const config = JSON.parse(await readFile(configPath, 'utf8'))
   if (config.version !== 1 || !/^https:\/\/nav\.(?:cristsau\.cn|skrskr\.net)\/api\/offline-downloads$/.test(config.apiBase)
-    || !/^[a-f0-9]{64}$/.test(config.workerKey) || config.directory !== '/var/lib/nav-offline') throw Error('INVALID_WORKER_CONFIG')
+    || !/^[a-f0-9]{64}$/.test(config.workerKey) || config.directory !== '/var/lib/nav-offline'
+    || (config.mediaDirectory && config.mediaDirectory !== '/var/lib/nav-media')) throw Error('INVALID_WORKER_CONFIG')
   await mkdir(config.directory, { mode: 0o700, recursive: true })
   const directory = await lstat(config.directory)
   if (!directory.isDirectory() || directory.isSymbolicLink() || directory.uid !== process.getuid() || (directory.mode & 0o077)) throw Error('UNSAFE_LOCAL_DIRECTORY')
