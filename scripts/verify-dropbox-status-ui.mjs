@@ -19,6 +19,7 @@ const initial = sanitizeDropboxBackupStatus(report)
 const html = `<!doctype html><html lang="zh-CN"><head><meta name="viewport" content="width=device-width,initial-scale=1"></head>
 <body><div id="test"></div><script type="module">
 import { createApp, h, ref, nextTick } from 'vue';
+import {$isDark} from '/src/shared/composables/useTheme.js'; window.setTestTheme = async dark => {$isDark.value = dark; await nextTick()};
 import Panel from '/src/modules/settings/components/DropboxBackupSettings.vue';
 import '/src/styles/reset.css'; import '/src/styles/variables.css'; import '/src/styles/ios.css';
 const state = ref(${JSON.stringify(initial)}); const loading = ref(false); window.refreshCount = 0;
@@ -95,6 +96,10 @@ try {
     ...(i === 2 ? { restoreReceiptHash: 'd'.repeat(64), restoredAt: '2026-09-20T00:00:00Z' } : {}) }))
   const retentionState = sanitizeDropboxBackupStatus(createBackupStatus({ config: {}, ledger: { version: 1, points: cloudPoints, pending: [] } }))
   await page.evaluate(value => window.setBackupState(value), retentionState)
+  assert.equal(await page.getByRole('progressbar', { name: '已登记的备份预算使用率' }).count(), 1)
+  assert.match(await page.locator('.dropbox-latest').innerText(), /最近云备份/)
+  assert.match(await page.locator('.dropbox-readiness').textContent(), /由本人保管/)
+  checks.push('budget-meter-last-cloud-record-and-neutral-owner-key-status')
   await page.locator('.dropbox-retention summary').click()
   assert.equal(await page.locator('.dropbox-retention li').count(), 1)
   assert.match(await page.locator('.dropbox-retention').innerText(), /下一次备份前的候选/)
@@ -127,7 +132,7 @@ try {
   await page.getByRole('button', { name: '立即备份', exact: true }).click()
   await page.getByRole('button', { name: '确认执行', exact: true }).click()
   await page.waitForFunction(() => document.querySelector('.backup-jobs')?.textContent.includes('排队中'))
-  assert.equal(posts.length, 1); assert.equal(await page.getByRole('button', { name: '立即备份', exact: true }).isDisabled(), true)
+  assert.equal(posts.length, 1); assert.equal(await page.getByRole('button', { name: '任务执行中', exact: true }).isDisabled(), true)
   control.jobs[0].state = 'succeeded'; control.jobs[0].stage = 'completed'; control.busy = false
   await page.getByRole('button', { name: '刷新任务', exact: true }).click()
   await page.waitForFunction(() => document.querySelector('.backup-jobs')?.textContent.includes('已完成'))
@@ -168,10 +173,14 @@ try {
   await page.waitForFunction(() => document.querySelector('.backup-actions')?.textContent.includes('不会自动重试'))
   assert.equal(await page.getByRole('button', { name: '立即备份', exact: true }).isDisabled(), true)
   checks.push('responsive-actions-and-unknown-result-block')
-  await page.evaluate(value => { document.documentElement.setAttribute('data-theme', 'dark'); return window.setBackupState(value) }, initial)
+  const lightBackground = await page.evaluate(() => getComputedStyle(document.body).backgroundColor)
+  await page.evaluate(async value => { await window.setTestTheme(true); await window.setBackupState(value) }, initial)
+  await page.waitForFunction(light => getComputedStyle(document.body).backgroundColor !== light, lightBackground)
+  assert.notEqual(await page.evaluate(() => getComputedStyle(document.body).backgroundColor), lightBackground, 'dark theme must change computed colors')
   await page.setViewportSize({ width: 1440, height: 1000 })
   await page.getByRole('button', { name: '服务器', exact: true }).click()
-  await page.screenshot({ path: join(output, 'status-dark.png'), fullPage: true })
+  await page.screenshot({ path: join(output, 'status-dark.png'), fullPage: true, animations: 'disabled' })
+  checks.push('dark-theme-computed-colors')
   assert.deepEqual(errors, [])
   assert.deepEqual(externalRequests, [])
   checks.push('no-page-errors-or-external-requests')

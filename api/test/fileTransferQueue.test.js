@@ -13,6 +13,7 @@ function harness() {
       calls.push({ action, body })
       if (action === 'upload/start') { const s = { uploadId: (++seq).toString(16).padStart(48, '0'), path: body.path, contentHash: body.contentHash, offset: 0, size: body.size, chunkSize: 4, state: 'uploading' }; remote.set(s.uploadId, s); return { ...s } }
       if (action === 'upload/list') return { entries: [...remote.values()] }
+      if (action === 'upload/dismiss') { for (const id of body.ids) remote.delete(id); return { cleared: body.ids } }
       const state = remote.get(body.uploadId)
       if (action === 'upload/status' || action === 'upload/reattach') return { ...state }
       if (action === 'upload/finish') { state.state = 'complete'; return { ...state } }
@@ -91,7 +92,17 @@ test('multi-file queue slices bodies, retains destinations, completes in order a
   assert.deepEqual(queue.jobs.map(j => j.state), ['complete', 'complete'])
   assert.deepEqual(calls.filter(c => c.action === 'chunk').map(c => c.size), [4, 4, 1, 2])
   assert.deepEqual(calls.filter(c => c.action === 'upload/start').map(c => c.body.path), ['/Movies/a.txt', '/Movies/b.txt'])
-  assert.ok(queue.jobs.every(j => j.file === null)); queue.clearFinished(); assert.equal(queue.jobs.length, 0)
+  assert.ok(queue.jobs.every(j => j.file === null)); await queue.clearFinished(); assert.equal(queue.jobs.length, 0)
+  await queue.recover(); assert.equal(queue.jobs.length, 0)
+})
+
+test('failed completed-record cleanup preserves visible tasks and never dismisses uncertain work', async () => {
+  const { queue } = harness()
+  queue.add([file('done.txt', 1)], ''); await settle(queue)
+  queue.jobs.push({ id: 2, state: 'review', uploadId: 'f'.repeat(48) })
+  queue.action = async (action, body) => { assert.equal(action, 'upload/dismiss'); assert.equal(body.ids.length, 1); throw Error('offline') }
+  await assert.rejects(queue.clearFinished()); assert.equal(queue.jobs.length, 2)
+  assert.equal(queue.clearing, false)
 })
 test('pause waits for the in-flight chunk, then resumes without duplicating accepted bytes', async () => {
   const { queue, calls } = harness(), original = queue.chunk

@@ -86,7 +86,22 @@ export class FileTransferQueue {
     if (!['uploading', 'checking'].includes(job.state)) job.state = 'queued'
     this.emit(); void this.run()
   }
-  clearFinished() { this.jobs = this.jobs.filter(j => !['complete', 'cancelled', 'review'].includes(j.state)); this.emit() }
+  async clearFinished() {
+    if (this.clearing) return
+    const selected = this.jobs.filter(j => ['complete', 'cancelled'].includes(j.state))
+    const ids = [...new Set(selected.filter(j => j.state === 'complete' && j.uploadId).map(j => j.uploadId))]
+    this.clearing = true
+    try {
+      // Keep all visible records on failure; repeating an acknowledged deletion is safe.
+      for (let index = 0; index < ids.length; index += 32) {
+        const batch = ids.slice(index, index + 32), result = await this.action('upload/dismiss', { ids: batch })
+        if (!Array.isArray(result?.cleared) || result.cleared.length !== batch.length || batch.some(id => !result.cleared.includes(id))) throw Error('INVALID_UPLOAD_RECEIPT')
+      }
+      const selectedIds = new Set(selected.map(j => j.id))
+      this.jobs = this.jobs.filter(j => !selectedIds.has(j.id) || !['complete', 'cancelled'].includes(j.state)); this.emit()
+      return selected.length
+    } finally { this.clearing = false }
+  }
   async run() {
     if (this.running || this.closed) return
     this.running = true

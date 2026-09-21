@@ -6,6 +6,12 @@ import { loadUploadStore } from '../lib/dropboxUploadStore.js'
 import { OfflineDownloads, EncryptedOfflineStore, loadOfflineConfig, connectionIdentity } from '../lib/offlineDownloads.js'
 
 const errors = {
+  MEDIA_WORKER_UNAVAILABLE: '媒体节点尚未就绪，不能创建 BT 或转码任务；请稍后刷新。',
+  INVALID_TORRENT: '种子格式或文件目录不符合要求。', PRIVATE_TORRENT_UNSUPPORTED: '暂不支持私有 PT 种子。',
+  UNSUPPORTED_TORRENT: '请使用公开的 v1 种子，暂不支持 v2-only 或含链接的种子。',
+  INVALID_MAGNET: '磁力链接格式不正确。', UNSUPPORTED_MAGNET: '请使用含 40 位十六进制 btih 的 v1 磁力链接。',
+  DOWNLOAD_TOO_LARGE: '整个种子的文件总量不能超过 6 GiB。', TRANSCODE_INPUT_LIMIT: '请选择不超过 6 GiB 的视频，且文件版本未变化。',
+  FILE_CHANGED: '源文件已变化，已停止，请重新创建任务。',
   UPLOAD_STORE_UNAVAILABLE: '离线上传进度存储暂不可用，已暂停操作；请联系管理员核对，不会覆盖文件。',
   OFFLINE_DISABLED: '离线下载尚未启用。', OFFLINE_QUEUE_FULL: '最多 10 个未完成任务，请先处理或清理已完成记录。',
   INVALID_DOWNLOAD_URL: '请填写 HTTP/HTTPS 文件直链；暂不支持磁力、种子、登录凭据或非标准端口。',
@@ -75,11 +81,13 @@ export default async function offlineDownloadRoutes(app, options = {}) {
     reply.raw.once('close', release); reply.raw.once('finish', release); req.raw.once('aborted', release)
   }
   app.get(root + '/status', endpoint(false, manager => manager.status()))
-  app.post(root + '/add', { bodyLimit: 16384 }, endpoint(false, (manager, req) => manager.add(req.body || {})))
+  app.post(root + '/add', { bodyLimit: 1500000, onRequest: reserve }, endpoint(false, (manager, req) => manager.add(req.body || {})))
+  app.post(root + '/select', { bodyLimit: 4096 }, endpoint(false, (manager, req) => manager.select(req.body?.id, req.body?.selection)))
   app.post(root + '/control', { bodyLimit: 4096 }, endpoint(false, (manager, req) => manager.control(req.body?.id, req.body?.command)))
   app.post(root + '/clear', { bodyLimit: 4096 }, endpoint(false, manager => manager.clear()))
-  app.post(root + '/worker/claim', { bodyLimit: 4096 }, endpoint(true, manager => manager.claim()))
-  app.post(root + '/worker/progress', { bodyLimit: 4096 }, endpoint(true, (manager, req) => manager.progress(req.body?.id, req.body || {})))
+  app.post(root + '/worker/claim', { bodyLimit: 4096 }, endpoint(true, (manager, req) => manager.claim(req.body || {})))
+  app.post(root + '/worker/progress', { bodyLimit: 131072 }, endpoint(true, (manager, req) => manager.progress(req.body?.id, req.body || {})))
+  app.post(root + '/worker/source', { bodyLimit: 4096 }, endpoint(true, (manager, req) => manager.source(req.body?.id, req.body?.offset, req.body?.length)))
   for (const operation of ['start', 'finish']) app.post(root + '/worker/' + operation, { bodyLimit: 4096 }, endpoint(true, (manager, req) => manager.transfer(req.body?.id, operation, req.body || {})))
   app.post(root + '/worker/chunk', { bodyLimit: CHUNK_LIMIT, onRequest: reserve }, endpoint(true, (manager, req) => {
     const offset = req.headers['x-upload-offset'], id = req.headers['x-offline-job']

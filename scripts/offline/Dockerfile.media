@@ -1,0 +1,11 @@
+FROM node:24-bookworm-slim@sha256:a9f5f7c91a432850b2a8a7797adf5eadb6c733ceed61167806cee7ea7fbc29df
+ARG NAV_RELEASE_SHA=development
+LABEL org.opencontainers.image.revision=$NAV_RELEASE_SHA
+RUN apt-get update && apt-get install -y --no-install-recommends aria2 ffmpeg iptables util-linux ca-certificates \
+    && rm -rf /var/lib/apt/lists/*
+WORKDIR /opt/nav
+COPY scripts/offline ./scripts/offline
+COPY api/src/lib/offlineMediaPolicy.js ./api/src/lib/offlineMediaPolicy.js
+RUN printf '{"type":"module"}\n' > package.json && chmod 0555 scripts/offline/media-entrypoint.sh
+ENTRYPOINT ["/opt/nav/scripts/offline/media-entrypoint.sh"]
+CMD ["bt"]

@@ -15,6 +15,8 @@ import Icon from '@/shared/components/Icon.vue'
 import NoteAiPanel from './NoteAiPanel.vue'
 import CollaborationPanel from './CollaborationPanel.vue'
 import BlockEditor from './BlockEditor.vue'
+import NoteFilePicker from '@/modules/files/NoteFilePicker.vue'
+import { noteFileReference } from '@/modules/files/noteFileReference'
 import { resolveNoteSaveState } from '../utils/noteSaveState'
 import { registerReloadGuard } from '@/shared/services/reloadGuards'
 import {
@@ -79,6 +81,17 @@ const editorPane = ref('writing')
 let editorTrigger = null
 const imageInputRef = ref(null)
 const blockEditorRef = ref(null)
+const cloudPickerOpen = ref(false)
+const cloudReferenceMessage = ref('')
+watch(() => [props.show, props.note?.id], () => { cloudPickerOpen.value = false; cloudReferenceMessage.value = '' })
+function insertCloudReference(item) {
+  if (!props.show || formDisabled.value) return
+  try {
+    const reference = noteFileReference(item, window.location.origin)
+    if (!blockEditorRef.value?.insertLink(reference.text, reference.href)) throw Error('EDITOR_UNAVAILABLE')
+    cloudPickerOpen.value = false; cloudReferenceMessage.value = '已插入私有文件引用。原文件仍在 Dropbox，访问时会再次验证权限。'
+  } catch { cloudReferenceMessage.value = '文件引用未插入，请重试。' }
+}
 const uploadingImage = ref(false)
 const imageMessage = ref('')
 const imageMessageType = ref('')
@@ -824,6 +837,9 @@ async function copyUnsavedDraft() {
           @collaboration-status="collaborationStatus = $event"
         />
         <div class="editor__counter">{{ contentCount }} 字</div>
+        <button v-if="shouldUseBackendNotes() && !collaborationReadOnly" type="button" class="btn btn--secondary" :disabled="formDisabled" :aria-expanded="cloudPickerOpen" @click="cloudPickerOpen = !cloudPickerOpen"><Icon name="cloud" :size="16" />从 Dropbox 插入文件</button>
+        <NoteFilePicker v-if="cloudPickerOpen" :key="note?.id || 'new'" :disabled="formDisabled" @choose="insertCloudReference" @close="cloudPickerOpen = false" />
+        <p v-if="cloudReferenceMessage" class="editor__counter" role="status">{{ cloudReferenceMessage }}</p>
       </div>
 
       <section class="form-group image-uploader" aria-labelledby="note-images-title">

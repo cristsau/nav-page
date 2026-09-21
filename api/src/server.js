@@ -17,6 +17,7 @@ import { startSecurityEventRetention } from './lib/securityEventRetention.js'
 import { startNoteReminderGeneration } from './lib/noteReminderScheduler.js'
 import { startSearchEmbeddingScheduler } from './lib/searchEmbeddingScheduler.js'
 import { startWebPushScheduler } from './lib/webPushScheduler.js'
+import { startDropboxTaskNotifications } from './lib/dropboxTaskNotifications.js'
 import { configureSystemMailRuntime, stopSystemMailRuntime } from './lib/systemMailRuntime.js'
 import { enforceMailboxRetirement } from './lib/mailboxRetirement.js'
 import { applyManagedIntegrationsToRuntime } from './lib/managedIntegrations.js'
@@ -50,6 +51,7 @@ async function main() {
   let stopBookmarkHealthScheduler = async () => {}
   let stopSearchEmbeddingScheduler = async () => {}
   let stopWebPushScheduler = async () => {}
+  let stopDropboxNotifications = async () => {}
   let stopReleaseAcceptanceRecovery = async () => {}
   let closing = false
 
@@ -80,6 +82,7 @@ async function main() {
       stopBookmarkHealthScheduler(),
       stopSearchEmbeddingScheduler(),
       stopWebPushScheduler(),
+      stopDropboxNotifications(),
       stopSystemMailRuntime(),
       stopReleaseAcceptanceRecovery(),
       stopCollaborationWebSocket()
@@ -224,6 +227,7 @@ async function main() {
       })
     })
 
+    stopDropboxNotifications = startDropboxTaskNotifications({ logger: app.log })
     stopWebPushScheduler = startWebPushScheduler({
       enabled: config.webPushEnabled && config.webPushSchedulerEnabled,
       policy: {
@@ -263,6 +267,7 @@ async function main() {
       stopBookmarkHealthScheduler(),
       stopSearchEmbeddingScheduler(),
       stopWebPushScheduler(),
+      stopDropboxNotifications(),
       stopSystemMailRuntime(),
       stopReleaseAcceptanceRecovery(),
       stopCollaborationWebSocket()

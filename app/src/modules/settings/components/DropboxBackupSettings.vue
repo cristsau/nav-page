@@ -13,18 +13,20 @@ const statusText = computed(() => {
   if (props.loading) return '正在读取'
   if (props.state?.state === 'stale') return '记录已过期'
   if (!fresh.value) return props.state?.state === 'invalid_report' ? '状态需检查' : '状态尚未接通'
-  return report.value?.cloud.uploadConfigured ? '仅已允许上传' : '云上传未开启'
+  return report.value?.cloud.uploadConfigured ? '手动上传已开放' : '云上传未开启'
 })
 const gates = computed(() => [
   { title: '服务器连接配置', ok: fresh.value && report.value?.cloud.credentialsPresent,
     text: '仅检查凭据文件是否就位，不代表 Dropbox 连接已验证。' },
   { title: '加密公钥', ok: fresh.value && report.value?.cloud.recipientConfigured,
     text: '服务器只需要公钥；恢复私钥和口令不进入网页。' },
-  { title: '独立恢复钥匙副本', ok: false,
+  { title: '独立恢复钥匙副本', ok: false, label: '由本人保管',
     text: '需在独立个人设备保存并核对，当前状态报告不能代替本人确认。' },
-  { title: '完整恢复演练', ok: fresh.value && report.value?.cloud.points.some(p => p.state === 'restore_verified'),
-    text: '上传、下载校验和完整恢复是三个不同阶段。' }
+  { title: '完整恢复演练', ok: fresh.value && report.value?.cloud.points.some(p => p.state === 'restore_verified'), label: '最终验收时进行',
+    text: '上传、下载校验和完整恢复是三个不同阶段，暂未演练不表示备份上传失败。' }
 ])
+const budgetPercent = computed(() => report.value?.cloud.ledgerState === 'valid' ? Math.min(100, Math.max(0, report.value.cloud.recordedBytes / 5e9 * 100)) : 0)
+const newestCloud = computed(() => [...(report.value?.cloud.points || [])].sort((a, b) => Date.parse(b.createdAt) - Date.parse(a.createdAt))[0])
 const stateLabels = { manifest_checked: '清单已检查', uploaded: '已上传', download_verified: '下载已校验', restore_verified: '恢复已验证' }
 const retentionText = computed(() => ({
   not_initialized: '云端台账尚未初始化。', needs_reconciliation: '有操作结果尚未核对，保留全部备份并暂停轮换。',
@@ -70,8 +72,10 @@ function bytes(value) {
       <div><dt>Dropbox 备份台账</dt><dd>{{ report?.cloud.ledgerState === 'valid' ? report.cloud.points.length + ' 份' : report ? '未初始化' : '未知' }}</dd>
         <span>上限 3 份 · {{ report?.cloud.pruneConfigured ? '轮换配置已开启' : '自动轮换未开启' }}</span></div>
       <div><dt>台账记录的云端大小</dt><dd>{{ report?.cloud.ledgerState === 'valid' ? bytes(report.cloud.recordedBytes) : '未知' }} <small>/ 5 GB</small></dd>
+        <progress v-if="report?.cloud.ledgerState === 'valid'" :value="budgetPercent" max="100" aria-label="已登记的备份预算使用率" />
         <span>非实时网盘用量，未知文件另计</span></div>
     </dl>
+    <p v-if="newestCloud" class="dropbox-latest"><Icon name="cloud" :size="14" /><span>最近云备份 <strong>{{ date(newestCloud.createdAt) }}</strong> · {{ stateLabels[newestCloud.state] || '状态待核对' }}<template v-if="!fresh">（旧记录）</template></span></p>
 
     <DropboxBackupActions :points="report?.cloud.points || []" @updated="$emit('refresh')" />
 
@@ -90,7 +94,7 @@ function bytes(value) {
       <summary>查看启用条件 <span>为什么还不能自动备份？</span></summary>
       <ul><li v-for="gate in gates" :key="gate.title">
         <Icon :name="gate.ok ? 'circle-check' : 'clock'" :size="18" />
-        <div><strong>{{ gate.title }} · {{ gate.ok ? '已记录' : '待验证' }}</strong><p>{{ gate.text }}</p></div>
+        <div><strong>{{ gate.title }} · {{ gate.ok ? '已记录' : gate.label || '待验证' }}</strong><p>{{ gate.text }}</p></div>
       </li></ul>
       <p class="dropbox-boundary">上方操作区单独查询执行器，自动任务是否运行以执行器实时状态为准，不以“允许上传”推断。</p>
     </details>
@@ -142,6 +146,9 @@ function bytes(value) {
 .dropbox-metrics dd { margin: 8px 0; font-weight: 650; font-size: 22px; line-height: 1.5; }
 .dropbox-metrics small { font-size: 12px; font-weight: 400; color: var(--text-secondary, #626879); }
 .dropbox-metrics span { font-size: 11px; line-height: 1.6; color: var(--text-secondary, #626879); }
+.dropbox-metrics progress { display:block;width:100%;height:4px;margin:0 0 9px;accent-color:var(--accent-color); }
+.dropbox-latest { display:flex;align-items:flex-start;gap:7px;font-size:11px;line-height:1.7;color:var(--text-secondary);margin:14px 0 0; }
+.dropbox-latest svg { flex-shrink:0;margin-top:2px; }.dropbox-latest strong { font-weight:500;color:var(--text-primary); }
 .dropbox-warning { font-size: 13px; border-left: 3px solid #bd8540; padding: 10px 12px; }
 .dropbox-readiness { border-bottom: 1px solid var(--border-color, #dfe2ec); padding: 18px 0; margin-bottom: 20px; }
 .dropbox-readiness summary { cursor: pointer; font-size: 13px; padding: 3px 0; }
@@ -171,6 +178,7 @@ function bytes(value) {
   .dropbox-metrics > div { display: grid; grid-template-columns: 1fr auto; gap: 6px; align-items: center; padding: 12px; }
   .dropbox-metrics dd { margin: 0; font-size: 19px; }
   .dropbox-metrics span { grid-column: 1 / -1; }
+  .dropbox-metrics progress { grid-column:1 / -1;margin:2px 0; }
   .dropbox-readiness summary span { display: block; margin: 6px 0 0 16px; }
   .dropbox-record-list li { grid-template-columns: 20px minmax(0, 1fr) auto; gap: 8px; }
   .dropbox-stage { grid-column: 2 / -1; justify-self: start; }

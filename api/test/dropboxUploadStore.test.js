@@ -90,6 +90,35 @@ test('cancellation removes metadata durably, never calls provider delete', async
   assert.equal((await (await f.restart()).list()).entries.length, 0)
   assert.deepEqual(f.counts(), { finished: 0, appendCalls: 0 })
 })
+
+test('dismissal removes only finished metadata across restart and is idempotent', async t => {
+  const f = await setup(t), { uploadId } = await f.manager.start('/done', 0, dropboxContentHash(Buffer.alloc(0)))
+  await f.manager.finish(uploadId)
+  assert.deepEqual(await f.manager.dismiss([uploadId]), { cleared: [uploadId] })
+  const next = await f.restart()
+  assert.equal((await next.list()).entries.length, 0)
+  assert.deepEqual(await next.dismiss([uploadId]), { cleared: [uploadId] })
+  assert.deepEqual(f.counts(), { finished: 1, appendCalls: 0 })
+})
+
+test('dismissal validates the entire selection before removing any metadata', async t => {
+  const f = await setup(t), done = await f.manager.start('/done', 0, dropboxContentHash(Buffer.alloc(0)))
+  await f.manager.finish(done.uploadId)
+  const active = await f.manager.start('/active', 1, dropboxContentHash(Buffer.from('a')))
+  await assert.rejects(f.manager.dismiss([done.uploadId, active.uploadId]), e => e.code === 'UPLOAD_REVIEW_REQUIRED')
+  assert.equal((await f.manager.list()).entries.length, 2)
+  for (const ids of [[], [done.uploadId, done.uploadId], ['../x'], Array(33).fill(done.uploadId)]) {
+    await assert.rejects(f.manager.dismiss(ids), e => e.code === 'INVALID_UPLOAD')
+  }
+  f.manager.jobs.get(done.uploadId).busy = true
+  await assert.rejects(f.manager.dismiss([done.uploadId]), e => e.code === 'BUSY')
+  f.manager.jobs.get(done.uploadId).busy = false
+  f.loseFinish(); await f.manager.append(active.uploadId, 0, Buffer.from('a'))
+  await assert.rejects(f.manager.finish(active.uploadId))
+  const next = await f.restart()
+  await assert.rejects(next.dismiss([done.uploadId, active.uploadId]), e => e.code === 'UPLOAD_REVIEW_REQUIRED')
+  assert.equal((await next.list()).entries.length, 2)
+})
 test('another connection cannot see or resume previous owner jobs', async t => {
   const f = await setup(t), { uploadId } = await f.manager.start('/private-name', 1, 'c'.repeat(64))
   await f.store().close()
