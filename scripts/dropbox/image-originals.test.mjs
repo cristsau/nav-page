@@ -32,3 +32,33 @@ test('original-byte manifest is produced only after complete verified bounded fi
     } finally { await rm(directory, { recursive: true, force: true }) }
   }
 })
+
+test('provider representation preserves source metadata while verifying actual response length and hash', async () => {
+  for (const mode of ['different', 'chunked', 'declared-truncated', 'oversize']) {
+    const directory = await mkdtemp(join(await realpath(tmpdir()), 'nav-originals-')); await chmod(directory, 0o700)
+    try {
+      const output = mode === 'oversize' ? Buffer.alloc(11 * 1024 ** 2) : bytes
+      const run = () => capture([{ ...row, size: 1000 }], directory, {
+        fetch: async () => { const r = Readable.from([output]); r.headers = mode === 'chunked' ? {} : { 'content-length': String(mode === 'declared-truncated' ? 1000 : output.length) }; return r },
+        disk: async () => ({ bavail: 4 * 1024 ** 3, bsize: 1 })
+      })
+      if (['different', 'chunked'].includes(mode)) {
+        const result = await run(); assert.equal(result.bytes, bytes.length)
+        const m = JSON.parse(await readFile(join(directory, 'originals-manifest.json')))
+        assert.equal(m.version, 2); assert.equal(m.byteIdentity, 'imagebed_response'); assert.equal(m.metadataSizeMismatchCount, 1)
+        assert.equal(m.entries[0].sourceSize, 1000); assert.equal(m.entries[0].size, bytes.length)
+      } else { await assert.rejects(run()); await assert.rejects(readFile(join(directory, 'originals-manifest.json')), { code: 'ENOENT' }) }
+    } finally { await rm(directory, { recursive: true, force: true }) }
+  }
+})
+
+test('response headers allow transformed or chunked representations but reject oversize and invalid declared lengths', async () => {
+  for (const length of [String(bytes.length), undefined, '0', '-1', '123invalid', String(11 * 1024 ** 2)]) {
+    const connect = (_url, _options, done) => {
+      const req = new EventEmitter(); req.end = () => { const r = Readable.from([bytes]); r.statusCode = 200; r.headers = { 'content-type': 'image/png', ...(length === undefined ? {} : { 'content-length': length }) }; done(r) }; return req
+    }
+    const promise = responseFor({ ...row, size: 1000 }, async () => ['1.1.1.1'], connect)
+    if (length === undefined || length === String(bytes.length)) (await promise).destroy()
+    else await assert.rejects(promise, /RESPONSE_INVALID/)
+  }
+})

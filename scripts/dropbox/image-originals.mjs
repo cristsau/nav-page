@@ -1,4 +1,5 @@
-// Bounded original-byte capture for a consistent NAV database snapshot.
+// Bounded image-bed response capture for a consistent NAV database snapshot.
+// The provider representation may differ from the original upload metadata.
 // No credentials, arbitrary origins, redirects, local addresses or executable content.
 import { createHash } from 'node:crypto'
 import { request } from 'node:https'
@@ -39,7 +40,8 @@ export async function responseFor(row, resolver = resolve4, connect = request) {
     const req = connect(url, { agent: false, family: 4, autoSelectFamily: false, signal: AbortSignal.timeout(60000),
       lookup: (_name, options, callback) => options.all ? callback(null, [{ address: addresses[0], family: 4 }]) : callback(null, addresses[0], 4),
       headers: { 'Accept-Encoding': 'identity', 'User-Agent': 'DOMO-NAV-Original-Backup/1' } }, response => {
-      if (response.statusCode !== 200 || Number(response.headers['content-length']) !== row.size
+      const length = response.headers['content-length']
+      if (response.statusCode !== 200 || (length !== undefined && (!/^[1-9][0-9]*$/.test(length) || Number(length) > FILE_LIMIT))
         || response.headers['content-type']?.split(';')[0].trim().toLowerCase() !== row.mime
         || ![undefined, 'identity'].includes(response.headers['content-encoding'])) { response.destroy(); reject(Error('ATTACHMENT_RESPONSE_INVALID')); return }
       accept(response)
@@ -52,27 +54,34 @@ export async function capture(rows, directory, { fetch = responseFor, disk = sta
   const actual = await realpath(directory), samePath = process.platform === 'win32' ? resolve(directory).toLowerCase() === actual.toLowerCase() : resolve(directory) === actual
   if (!s.isDirectory() || s.isSymbolicLink() || !samePath
     || (process.platform !== 'win32' && (s.uid !== process.getuid() || (s.mode & 0o077)))) fail('ATTACHMENT_DIRECTORY_INVALID')
-  const free = await disk(directory), bytes = entries.reduce((n, row) => n + row.size, 0)
-  if (free.bavail * free.bsize < bytes + RESERVE) fail('ATTACHMENT_DISK_LIMIT')
+  // DB size is the upload input size, not an immutable provider content length.
+  // Reserve the full bounded capture budget; preserve metadata separately.
+  const free = await disk(directory)
+  if (free.bavail * free.bsize < LIMIT + RESERVE) fail('ATTACHMENT_DISK_LIMIT')
   const originals = join(directory, 'originals'); await mkdir(originals, { mode: 0o700 }) // new snapshot only, never overwrite
-  const manifest = []
+  const manifest = []; let bytes = 0
   for (const row of entries) {
     const response = await fetch(row), fd = await open(join(originals, row.file), 'wx', 0o600), hash = createHash('sha256')
     let size = 0, header = Buffer.alloc(0)
     try {
       for await (const chunk of response) {
         size += chunk.length
-        if (size > row.size) fail('ATTACHMENT_SIZE_CHANGED')
+        if (size > FILE_LIMIT || bytes + size > LIMIT) fail('ATTACHMENT_BUDGET_EXCEEDED')
         if (header.length < 12) header = Buffer.concat([header, chunk.subarray(0, 12 - header.length)])
         hash.update(chunk); let offset = 0
         while (offset < chunk.length) { const { bytesWritten } = await fd.write(chunk, offset, chunk.length - offset); if (!bytesWritten) fail('ATTACHMENT_DISK_LIMIT'); offset += bytesWritten }
       }
-      if (size !== row.size || !imageSignature(header, row.mime)) fail('ATTACHMENT_CONTENT_INVALID')
-      await fd.sync(); manifest.push({ ...row, file: 'originals/' + row.file, sha256: hash.digest('hex') })
+      const declared = response.headers?.['content-length']
+      if (size < 1 || (declared !== undefined && size !== Number(declared)) || !imageSignature(header, row.mime)) fail('ATTACHMENT_CONTENT_INVALID')
+      await fd.sync(); bytes += size
+      manifest.push({ ...row, sourceSize: row.size, size, sizeMatchesSourceMetadata: size === row.size,
+        file: 'originals/' + row.file, sha256: hash.digest('hex') })
     } finally { response.destroy(); await fd.close() }
   }
   const fd = await open(join(directory, 'originals-manifest.json'), 'wx', 0o600)
-  try { await fd.writeFile(JSON.stringify({ version: 1, state: 'complete', count: manifest.length, bytes, entries: manifest })); await fd.sync() } finally { await fd.close() }
+  try { await fd.writeFile(JSON.stringify({ version: 2, state: 'complete', byteIdentity: 'imagebed_response',
+    metadataSizeMismatchCount: manifest.filter(e => !e.sizeMatchesSourceMetadata).length,
+    count: manifest.length, bytes, entries: manifest })); await fd.sync() } finally { await fd.close() }
   return { count: manifest.length, bytes }
 }
 export async function main(input) {
