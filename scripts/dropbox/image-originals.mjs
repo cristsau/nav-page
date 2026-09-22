@@ -4,7 +4,7 @@
 import { createHash } from 'node:crypto'
 import { request } from 'node:https'
 import { resolve4 } from 'node:dns/promises'
-import { open, lstat, realpath, readFile, mkdir, statfs } from 'node:fs/promises'
+import { open, lstat, realpath, readFile, mkdir, statfs, rename } from 'node:fs/promises'
 import { join, resolve, dirname } from 'node:path'
 import { pathToFileURL } from 'node:url'
 import { publicAddress } from '../offline/safe-download.mjs'
@@ -42,7 +42,7 @@ export async function responseFor(row, resolver = resolve4, connect = request) {
       headers: { 'Accept-Encoding': 'identity', 'User-Agent': 'DOMO-NAV-Original-Backup/1' } }, response => {
       const length = response.headers['content-length']
       if (response.statusCode !== 200 || (length !== undefined && (!/^[1-9][0-9]*$/.test(length) || Number(length) > FILE_LIMIT))
-        || response.headers['content-type']?.split(';')[0].trim().toLowerCase() !== row.mime
+        || !Object.hasOwn(types, response.headers['content-type']?.split(';')[0].trim().toLowerCase())
         || ![undefined, 'identity'].includes(response.headers['content-encoding'])) { response.destroy(); reject(Error('ATTACHMENT_RESPONSE_INVALID')); return }
       accept(response)
     })
@@ -62,7 +62,7 @@ export async function capture(rows, directory, { fetch = responseFor, disk = sta
   const manifest = []; let bytes = 0
   for (const row of entries) {
     const response = await fetch(row), fd = await open(join(originals, row.file), 'wx', 0o600), hash = createHash('sha256')
-    let size = 0, header = Buffer.alloc(0)
+    let size = 0, header = Buffer.alloc(0), captured
     try {
       for await (const chunk of response) {
         size += chunk.length
@@ -72,15 +72,24 @@ export async function capture(rows, directory, { fetch = responseFor, disk = sta
         while (offset < chunk.length) { const { bytesWritten } = await fd.write(chunk, offset, chunk.length - offset); if (!bytesWritten) fail('ATTACHMENT_DISK_LIMIT'); offset += bytesWritten }
       }
       const declared = response.headers?.['content-length']
-      if (size < 1 || (declared !== undefined && size !== Number(declared)) || !imageSignature(header, row.mime)) fail('ATTACHMENT_CONTENT_INVALID')
+      const mime = Object.keys(types).find(type => imageSignature(header, type))
+      if (size < 1 || (declared !== undefined && size !== Number(declared)) || !mime) fail('ATTACHMENT_CONTENT_INVALID')
+      const responseMime = response.headers?.['content-type']?.split(';')[0].trim().toLowerCase() || null
       await fd.sync(); bytes += size
-      manifest.push({ ...row, sourceSize: row.size, size, sizeMatchesSourceMetadata: size === row.size,
-        file: 'originals/' + row.file, sha256: hash.digest('hex') })
+      captured = { ...row, sourceSize: row.size, size, sizeMatchesSourceMetadata: size === row.size,
+        sourceMime: row.mime, responseMime, mime, mimeMatchesSourceMetadata: mime === row.mime,
+        responseMimeMatchesContent: responseMime === null ? null : responseMime === mime,
+        file: 'originals/' + row.file.replace(/\.[a-z]+$/, '.' + types[mime]), sha256: hash.digest('hex') }
     } finally { response.destroy(); await fd.close() }
+    // A private fresh snapshot plus deduplicated URL hashes prevents collisions.
+    if (captured.file !== 'originals/' + row.file) await rename(join(originals, row.file), join(directory, captured.file))
+    manifest.push(captured)
   }
   const fd = await open(join(directory, 'originals-manifest.json'), 'wx', 0o600)
   try { await fd.writeFile(JSON.stringify({ version: 2, state: 'complete', byteIdentity: 'imagebed_response',
     metadataSizeMismatchCount: manifest.filter(e => !e.sizeMatchesSourceMetadata).length,
+    metadataMimeMismatchCount: manifest.filter(e => !e.mimeMatchesSourceMetadata).length,
+    responseMimeMismatchCount: manifest.filter(e => e.responseMimeMatchesContent === false).length,
     count: manifest.length, bytes, entries: manifest })); await fd.sync() } finally { await fd.close() }
   return { count: manifest.length, bytes }
 }

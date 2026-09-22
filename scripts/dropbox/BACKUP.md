@@ -53,7 +53,7 @@
 
 开启 `NAV_ENABLE_ATTACHMENT_ORIGINALS` 后，`image-originals.mjs` 从一致性数据库快照中提取笔记/图库引用，仅抓取允许图床的当前文件响应。每个文件最多 10 MiB，总计最多 128 MiB，预留 2 GiB 磁盘；仍校验公共 DNS 固定地址、禁止重定向、MIME、图片签名、实际字节数与 SHA-256。
 
-数据库 `size` 是上传输入大小，不一定等于图床当前表示。版本 2 的 `originals-manifest.json` 将历史 `sourceSize` 和实收 `size` 分开，`metadataSizeMismatchCount` 明确记录差异；HTTP 声明长度存在时必须匹配实际流，chunked 响应仍受大小和内容校验。`byteIdentity: imagebed_response` 表示备份的是当前图床文件，不能声称与最初上传文件逐字节相同。失败不发布完整清单，不修改数据库元数据。完整恢复证明仍须最后的隔离恢复演练。
+数据库 `size` 是上传输入大小，不一定等于图床当前表示。版本 2 的 `originals-manifest.json` 将历史 `sourceSize/sourceMime`、HTTP `responseMime` 与实收 `size/mime` 分开，明确记录大小、历史类型和响应类型的差异计数。HTTP 声明长度存在时必须匹配实际流，chunked 响应仍受大小和内容校验。响应头只能为允许的四种图片类型，实收内容也必须具有 JPEG/PNG/GIF/WebP 签名；存储扩展名按实际类型确定，标作 PNG 的 HTML 等仍拒绝。`byteIdentity: imagebed_response` 表示备份的是当前图床文件，不能声称与最初上传文件逐字节相同。失败不发布完整清单，不修改数据库元数据。完整恢复证明仍须最后的隔离恢复演练。
 
 上传内容以选中的 canonical 快照及其 `metadata/disaster-components.tsv` 为准。
 数据库中的附件/图片链接不是文件本体；默认未开启原件备份时，绝不能把本次称为“所有附件/图片可恢复”。
