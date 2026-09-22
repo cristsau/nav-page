@@ -62,3 +62,22 @@ test('response headers allow transformed or chunked representations but reject o
     else await assert.rejects(promise, /RESPONSE_INVALID/)
   }
 })
+
+test('known raster format changes keep honest metadata and correct stored extension; HTML never becomes an image', async () => {
+  for (const mode of ['mislabeled-jpeg', 'declared-jpeg', 'html']) {
+    const directory = await mkdtemp(join(await realpath(tmpdir()), 'nav-originals-')); await chmod(directory, 0o700)
+    const output = mode === 'html' ? Buffer.from('<html>bad') : Buffer.from('ffd8ffe000104a4649460001', 'hex')
+    try {
+      const run = () => capture([row], directory, { fetch: async () => {
+        const r = Readable.from([output]); r.headers = { 'content-length': String(output.length), 'content-type': mode === 'declared-jpeg' ? 'image/jpeg' : 'image/png' }; return r
+      }, disk: async () => ({ bavail: 4 * 1024 ** 3, bsize: 1 }) })
+      if (mode === 'html') { await assert.rejects(run(), /CONTENT_INVALID/); await assert.rejects(readFile(join(directory, 'originals-manifest.json')), { code: 'ENOENT' }) }
+      else {
+        await run(); const m = JSON.parse(await readFile(join(directory, 'originals-manifest.json'))), e = m.entries[0]
+        assert.equal(e.mime, 'image/jpeg'); assert.equal(e.sourceMime, 'image/png'); assert.match(e.file, /\.jpg$/)
+        assert.equal(m.metadataMimeMismatchCount, 1); assert.equal(m.responseMimeMismatchCount, mode === 'mislabeled-jpeg' ? 1 : 0)
+        assert.deepEqual(await readFile(join(directory, e.file)), output)
+      }
+    } finally { await rm(directory, { recursive: true, force: true }) }
+  }
+})
