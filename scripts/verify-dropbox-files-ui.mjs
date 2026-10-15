@@ -17,15 +17,21 @@ import Files from '/src/modules/files/FilesView.vue'; import '/src/styles/reset.
 const router=createRouter({history:createMemoryHistory(),routes:[{path:'/files',component:Files},{path:'/settings',component:{template:'<div>Settings fixture</div>'}}]});
 window.testRouter=router; await router.push('/files'); await router.isReady(); createApp({render:()=>h(RouterView)}).use(router).mount('#test');window.filesMounted=true;
 </script><style>body{margin:0;background:var(--bg-secondary);font-family:system-ui,sans-serif}#test{max-width:1200px;margin:32px auto;padding:0 24px}@media(max-width:640px){#test{margin:16px auto;padding:0 12px}}</style></body></html>`
-const server = await createServer({ root: appRoot, configFile: join(appRoot, 'vite.config.js'), server: { host: '127.0.0.1', port: 4187, strictPort: true }, plugins: [{ name: 'files-harness', configureServer(vite) { vite.middlewares.use('/__files-test', async (_req, res) => { res.setHeader('Content-Type', 'text/html; charset=utf-8'); res.end(await vite.transformIndexHtml('/__files-test', html)) }) } }] })
+const server = await createServer({ root: appRoot, cacheDir: resolve(output, '../vite-cache'), configFile: join(appRoot, 'vite.config.js'), server: { host: '127.0.0.1', port: 4187, strictPort: true }, plugins: [{ name: 'files-harness', configureServer(vite) { vite.middlewares.use('/__files-test', async (_req, res) => { res.setHeader('Content-Type', 'text/html; charset=utf-8'); res.end(await vite.transformIndexHtml('/__files-test', html)) }) } }] })
 const item = (id, name, kind, extra = {}) => ({ id: 'id:' + id, name, path: '/' + name, type: kind === 'folder' ? 'folder' : 'file', kind, ...(kind === 'folder' ? {} : { size: 64, rev: 'abcdef123', modified: '2026-09-19T00:00:00Z', downloadable: true }), mutable: true, officialUrl: 'https://www.dropbox.com/home/' + encodeURIComponent(name), ...extra })
 const initial = [item('folder', '旅行手记', 'folder'), item('protected', 'Apps', 'folder', { mutable: false }), item('text', '周末旅行计划.md', 'text'), item('video', '海边随拍.webm', 'video'), item('image', '旅行照片.png', 'image'), item('office', '行程安排.xlsx', 'office')]
 let entries = [...initial], conflict = false, disconnected = false, media, saves = 0, uploads = 0
 const uploadJobs = new Map()
-let chunkCount = 0, chunkDelay = 0, failDelete = false, contentRequests = 0
-let persistentUploads = false
+let chunkCount = 0, chunkDelay = 0, failDelete = false, contentRequests = 0, mediaFail = false, listFail = false
+let persistentUploads = false, listDelay = 0
 let offlineJobs = [], workerOnline = true, offlineStatusFail = false, offlineMutationFail = false, mediaReady = false
-const checks = [], errors = [], external = [], actions = []
+const checks = [], errors = [], external = [], actions = [], offlineActions = []
+// One second of silent PCM, generated locally; no personal or remote audio fixture.
+const audioFixture = Buffer.alloc(44 + 16000)
+audioFixture.write('RIFF', 0); audioFixture.writeUInt32LE(audioFixture.length - 8, 4); audioFixture.write('WAVEfmt ', 8)
+audioFixture.writeUInt32LE(16, 16); audioFixture.writeUInt16LE(1, 20); audioFixture.writeUInt16LE(1, 22)
+audioFixture.writeUInt32LE(8000, 24); audioFixture.writeUInt32LE(16000, 28); audioFixture.writeUInt16LE(2, 32); audioFixture.writeUInt16LE(16, 34)
+audioFixture.write('data', 36); audioFixture.writeUInt32LE(16000, 40)
 let browser
 await mkdir(output, { recursive: true })
 try {
@@ -37,6 +43,7 @@ try {
     if (url.hostname !== '127.0.0.1') { external.push(url.origin); return route.abort() }
     if (url.pathname.startsWith('/api/offline-downloads/')) {
       const op = url.pathname.split('/').pop(), body = request.postDataJSON()
+      if (op !== 'status') offlineActions.push(op)
       let result = {}
       if (op === 'status' && offlineStatusFail) return route.fulfill({ status: 503, json: { error: '合成状态读取失败' } })
       if (op === 'control' && offlineMutationFail) { offlineMutationFail = false; return route.fulfill({ status: 503, json: { error: '合成操作未确认' } }) }
@@ -67,6 +74,8 @@ try {
     if (action === 'status') return disconnected ? send({ code: 'NOT_CONNECTED' }, 503) : send({ connected: true, textLimit: 1048576, uploadLimit: 50 * 1024 ** 3, chunkSize: 8 * 1024 * 1024, uploadResume: persistentUploads ? 'reselect_after_restart_encrypted' : 'reselect_after_refresh_api_process', deletedFiles: true })
     if (action.startsWith('content/')) {
       contentRequests++
+      if (mediaFail) return route.fulfill({ status: 503, contentType: 'application/json', body: '{"error":"synthetic preview unavailable"}' })
+      if (action.endsWith('id%3Aaudio')) return route.fulfill({ status: 200, contentType: 'audio/wav', body: audioFixture })
       if (action.endsWith('id%3Avideo') && media) {
         const range = request.headers().range, match = range?.match(/^bytes=(\d+)-(\d*)$/)
         const start = match ? Number(match[1]) : 0, end = match?.[2] ? Math.min(Number(match[2]), media.length - 1) : media.length - 1
@@ -95,6 +104,8 @@ try {
     if (action === 'upload/finish') { const job = uploadJobs.get(body.uploadId); assert.equal(job.offset, job.size); job.state = 'complete'; return send({ ...job, item: {} }) }
     if (action === 'upload/cancel') { uploadJobs.delete(body.uploadId); return send({ state: 'cancelled' }) }
     if (action === 'list') {
+      if (listDelay) await new Promise(resolve => setTimeout(resolve, listDelay))
+      if (listFail) return send({ error: '合成目录读取失败' }, 503)
       if (body.cursor) return send({ entries: [item('more', '归档.txt', 'text')], hasMore: false })
       return send({ entries: body.query ? entries.filter(i => i.name.includes(body.query)) : body.path ? [] : entries, hasMore: !body.query && !body.path, cursor: 'OPAQUE_TEST_CURSOR' })
     }
@@ -113,7 +124,7 @@ try {
   })
   await page.goto('http://127.0.0.1:4187/__files-test'); await page.waitForSelector('.drive-list li')
   await page.evaluate(() => window.testRouter.push('/files?item=id%3Aimage'))
-  await page.locator('.drive-preview img').waitFor()
+  await page.locator('.media-preview img').waitFor()
   await page.getByRole('button', { name: '关闭弹窗', exact: true }).click()
   await page.evaluate(() => window.testRouter.push('/files'))
   checks.push('private-note-reference-opens-authenticated-preview')
@@ -128,7 +139,13 @@ try {
     checks.push('layout-' + width)
   }
   await page.setViewportSize({ width: 1440, height: 1000 })
-  await page.getByRole('button', { name: '加载更多', exact: true }).click(); await page.waitForFunction(() => document.querySelectorAll('.drive-list li').length === 7)
+  listFail = true
+  await page.getByRole('button', { name: '加载更多', exact: true }).click(); await page.getByRole('button', { name: '重试读取文件', exact: true }).waitFor()
+  assert.equal(await page.locator('.drive-list li').count(), 6, 'failed pagination keeps loaded files')
+  listFail = false
+  await page.getByRole('button', { name: '重试读取文件', exact: true }).click(); await page.waitForFunction(() => document.querySelectorAll('.drive-list li').length === 7)
+  assert.equal(actions.filter(a => a.action === 'list').at(-1).body.cursor, 'OPAQUE_TEST_CURSOR')
+  checks.push('failed-pagination-retries-same-cursor-and-preserves-loaded-files')
   await page.getByRole('textbox', { name: '搜索文件名' }).fill('旅行计划'); await page.getByRole('button', { name: '搜索', exact: true }).click()
   await page.waitForFunction(() => document.querySelectorAll('.drive-list li').length === 1)
   await page.getByRole('button', { name: '清除搜索', exact: true }).click(); await page.waitForFunction(() => document.querySelectorAll('.drive-list li').length === 6)
@@ -360,9 +377,29 @@ try {
   uploadJobs.set('e'.repeat(48), { uploadId: 'e'.repeat(48), path: '/cancel-me.bin', size: 9, offset: 0, chunkSize: 8 * 1024 * 1024, contentHash: 'b'.repeat(64), state: 'uploading' })
   await page.reload(); await page.locator('.drive-transfers li').filter({ hasText: 'uncertain.bin' }).waitFor()
   const uploadsPanel = page.getByRole('region', { name: '上传队列', exact: true })
+  await page.emulateMedia({ reducedMotion: 'no-preference' })
+  assert.notEqual(await page.locator('.transfer-collapse').evaluate(el => getComputedStyle(el).transitionDuration), '0s')
   await page.getByRole('button', { name: '收起上传队列', exact: true }).click()
-  assert.equal(await uploadsPanel.locator('ul').isVisible(), false)
+  await page.waitForFunction(() => document.querySelector('.transfer-collapse').getBoundingClientRect().height < 1)
+  assert.equal(await page.locator('.transfer-collapse').evaluate(el => el.inert && el.getAttribute('aria-hidden') === 'true'), true)
+  assert.equal(await page.getByRole('searchbox', { name: '搜索上传任务', exact: true }).count(), 0, 'collapsed task inputs leave the accessible tree')
   await page.getByRole('button', { name: '展开上传队列', exact: true }).click()
+  await page.getByRole('searchbox', { name: '搜索上传任务', exact: true }).waitFor()
+  await page.emulateMedia({ reducedMotion: 'reduce' })
+  assert.equal(await page.locator('.transfer-collapse').evaluate(el => getComputedStyle(el).transitionDuration), '0s')
+  checks.push('animated-queue-collapse-inert-keyboard-and-reduced-motion')
+  const searchWritesBefore = actions.filter(a => !['list', 'item', 'upload/list'].includes(a.action)).length
+  const uploadTaskSearch = page.getByRole('searchbox', { name: '搜索上传任务', exact: true })
+  await uploadTaskSearch.fill('UNCERTAIN')
+  assert.equal(await uploadsPanel.locator('li').count(), 1)
+  assert.match(await uploadsPanel.locator('li').innerText(), /uncertain.bin/)
+  assert.equal(await uploadsPanel.getByRole('button', { name: '清理完成记录', exact: true }).isDisabled(), true)
+  await uploadTaskSearch.fill('no-such-task')
+  await uploadsPanel.getByText('没有匹配的任务，可清空搜索或切换分类。', { exact: true }).waitFor()
+  await page.getByRole('button', { name: '清空搜索上传任务', exact: true }).click()
+  assert.equal(await uploadTaskSearch.evaluate(el => el === document.activeElement), true)
+  assert.equal(actions.filter(a => !['list', 'item', 'upload/list'].includes(a.action)).length, searchWritesBefore)
+  checks.push('upload-task-search-literal-no-writes-focus-and-hidden-cleanup-guard')
   await page.getByRole('group', { name: '上传任务筛选' }).getByRole('button', { name: /^待处理/ }).click()
   assert.equal(await uploadsPanel.locator('li').count(), 2)
   const cancelUploadRow = uploadsPanel.locator('li').filter({ hasText: 'cancel-me.bin' })
@@ -373,16 +410,23 @@ try {
   await cancelUploadRow.getByRole('button', { name: '取消上传', exact: true }).click()
   await cancelUploadRow.getByRole('button', { name: '确认取消上传' }).click()
   await page.waitForFunction(() => document.querySelectorAll('.transfer-list>li').length === 1)
+  assert.equal(await uploadsPanel.getByRole('button', { name: '清理完成记录', exact: true }).isDisabled(), true)
+  await page.getByRole('group', { name: '上传任务筛选' }).getByRole('button', { name: /^全部/ }).click()
   await uploadsPanel.getByRole('button', { name: '清理完成记录', exact: true }).click()
+  await page.getByText(/已清理.*条完成记录/).waitFor()
   assert.equal(await uploadsPanel.locator('li').count(), 1)
   assert.match(await uploadsPanel.innerText(), /请核对云端结果/)
-  await page.getByText(/已清理.*条完成记录/).waitFor()
   await page.reload(); await page.locator('.drive-transfers li').filter({ hasText: 'uncertain.bin' }).waitFor()
   assert.equal(await page.locator('.drive-transfers li').count(), 1)
   checks.push('completed-upload-records-stay-cleared-after-reload')
   for (const width of [1440, 390, 320]) {
     await page.setViewportSize({ width, height: 900 })
     assert.ok(await page.evaluate(() => document.documentElement.scrollWidth <= innerWidth), 'task panel overflow ' + width)
+    if (width < 720) {
+      // Device-metrics changes can precede the CSS/layout frame; assert the settled viewport.
+      await page.waitForFunction(expected => innerWidth === expected && [...document.querySelectorAll('.transfer-filters button')].every(button => button.getBoundingClientRect().height >= 44), width, { timeout: 3000 })
+      assert.equal(await page.locator('.transfer-filters').evaluate(el => getComputedStyle(el).gridTemplateColumns.split(' ').length), 2)
+    }
     await page.screenshot({ path: join(output, 'tasks-' + width + '.png'), fullPage: true })
   }
   checks.push('task-counts-filter-collapse-cancel-confirm-and-review-preserved')
@@ -407,7 +451,7 @@ try {
   await page.getByText('状态暂不可用', { exact: true }).waitFor()
   assert.equal(await offlineList.getByRole('button', { name: '暂停', exact: true }).isDisabled(), true)
   offlineStatusFail = false
-  await page.getByRole('button', { name: '刷新离线任务', exact: true }).click()
+  await page.getByRole('button', { name: '重试读取状态', exact: true }).click()
   await page.getByText('下载节点在线', { exact: true }).waitFor()
   await offlineList.getByRole('button', { name: '暂停', exact: true }).click(); await offlineList.getByText('已暂停', { exact: true }).waitFor()
   await offlineList.getByRole('button', { name: '继续', exact: true }).click(); await offlineList.getByText('排队中', { exact: true }).waitFor()
@@ -417,6 +461,9 @@ try {
   assert.equal(await offlineList.locator('li').count(), 0)
   await offlineFilters.getByRole('button', { name: /^全部/ }).click()
   assert.equal(await offlineList.getByRole('progressbar').count(), 2)
+  assert.equal(await offlineList.locator('progress:not([value])').count(), 2)
+  assert.match(await offlineList.innerText(), /大小待获取/)
+  checks.push('unknown-transfer-size-is-indeterminate-not-zero-percent')
   await page.getByRole('button', { name: '新建离线任务', exact: true }).click()
   assert.equal(await page.locator('#offline-url').isVisible(), true)
   await page.getByRole('button', { name: '新建离线任务', exact: true }).click()
@@ -466,15 +513,127 @@ try {
   await page.locator('video').evaluate(async v => { v.muted = true; await v.play() }); await page.waitForFunction(() => document.querySelector('video')?.currentTime > 0)
   assert.ok(await page.locator('video').evaluate(v => v.readyState >= 2 && !v.error))
   assert.ok(await page.locator('.drive-footer > *').evaluateAll(elements => elements.every(e => e.scrollWidth <= e.clientWidth + 1)), 'media footer labels must not overflow buttons')
-  await page.screenshot({ path: join(output, 'media-320.png'), fullPage: true }); await page.getByRole('button', { name: '关闭弹窗', exact: true }).click(); await page.waitForSelector('[role=dialog]', { state: 'detached' }); checks.push('native-video-decode-play')
+  await page.screenshot({ path: join(output, 'media-320.png'), fullPage: true })
+  await page.locator('video').evaluate(v => { window.lastPreview = v })
+  await page.getByRole('button', { name: '关闭弹窗', exact: true }).click(); await page.waitForSelector('[role=dialog]', { state: 'detached' })
+  assert.equal(await page.evaluate(() => !window.lastPreview.isConnected && window.lastPreview.paused && !window.lastPreview.hasAttribute('src')), true)
+  checks.push('native-video-decode-play-and-close-releases-media')
+
+  mediaFail = true
+  await page.locator('.drive-file').filter({ hasText: '海边随拍.webm' }).click()
+  await page.getByText('暂时无法预览', { exact: true }).waitFor()
+  const failedReadCount = contentRequests, writesBeforePreviewRetry = actions.filter(a => !['list', 'item', 'upload/list'].includes(a.action)).length
+  await page.waitForTimeout(300); assert.equal(contentRequests, failedReadCount, 'no automatic retry loop')
+  await page.getByRole('button', { name: '重新加载预览', exact: true }).focus()
+  await page.getByRole('dialog').screenshot({ path: join(output, 'media-error-320.png') })
+  mediaFail = false
+  await page.keyboard.press('Enter')
+  await page.waitForFunction(() => document.querySelector('video')?.readyState >= 1)
+  assert.equal(await page.locator('video').evaluate(v => v.paused && !v.autoplay), true)
+  assert.equal(actions.filter(a => !['list', 'item', 'upload/list'].includes(a.action)).length, writesBeforePreviewRetry)
+  await page.locator('video').evaluate(v => { window.previousPreview = v; v.dispatchEvent(new Event('waiting')) })
+  await page.getByText('正在缓冲', { exact: true }).waitFor()
+  await page.getByText('加载较慢，可以稍候或重新加载', { exact: true }).waitFor({ timeout: 16000 })
+  await page.getByRole('button', { name: '重新加载预览', exact: true }).click()
+  await page.waitForFunction(() => document.querySelector('video')?.readyState >= 1)
+  await page.evaluate(() => window.previousPreview.dispatchEvent(new Event('error')))
+  assert.equal(await page.locator('.media-preview').getAttribute('data-phase'), 'ready', 'old media errors do not overwrite new preview')
+  await page.keyboard.press('Escape'); await page.waitForSelector('[role=dialog]', { state: 'detached' })
+  checks.push('media-keyboard-retry-slow-buffering-no-autoplay-no-write-or-stale-event')
+
+  await page.locator('.drive-file').filter({ hasText: '旅行照片.png' }).click()
+  await page.waitForFunction(() => document.querySelector('.media-preview')?.dataset.phase === 'ready')
+  await page.keyboard.press('Escape'); await page.waitForSelector('[role=dialog]', { state: 'detached' })
+  checks.push('image-preview-loads-through-same-protected-url')
+  entries.push(item('audio', '合成音频.wav', 'audio'))
+  await page.getByRole('button', { name: '刷新文件列表', exact: true }).click()
+  await page.locator('.drive-file').filter({ hasText: '合成音频.wav' }).click()
+  await page.waitForFunction(() => document.querySelector('audio')?.readyState >= 1)
+  assert.equal(await page.locator('audio').evaluate(a => a.paused && !a.autoplay), true)
+  await page.locator('audio').evaluate(async a => { window.lastAudio = a; a.muted = true; await a.play() })
+  await page.waitForFunction(() => document.querySelector('audio')?.currentTime > 0)
+  await page.keyboard.press('Escape'); await page.waitForSelector('[role=dialog]', { state: 'detached' })
+  assert.equal(await page.evaluate(() => window.lastAudio.paused && !window.lastAudio.hasAttribute('src') && !window.lastAudio.isConnected), true)
+  mediaFail = true
+  await page.locator('.drive-file').filter({ hasText: '合成音频.wav' }).click()
+  await page.getByText('暂时无法预览', { exact: true }).waitFor()
+  await page.getByRole('dialog').screenshot({ path: join(output, 'audio-error-320.png') })
+  assert.ok(await page.locator('.media-error').evaluate(el => el.scrollHeight <= el.clientHeight + 1), 'audio failure text must fit')
+  mediaFail = false
+  await page.getByRole('button', { name: '重新加载预览', exact: true }).click()
+  await page.waitForFunction(() => document.querySelector('audio')?.readyState >= 1)
+  await page.keyboard.press('Escape'); await page.waitForSelector('[role=dialog]', { state: 'detached' })
+  checks.push('synthetic-audio-play-close-release-and-failure-retry-320')
+  const loadedMediaNames = await page.locator('.drive-list li[data-kind="image"], .drive-list li[data-kind="video"], .drive-list li[data-kind="audio"]').locator('.drive-file-label strong').allTextContents()
+  assert.equal(loadedMediaNames.length, 3)
+  await page.locator('.drive-file').filter({ hasText: loadedMediaNames[0] }).click()
+  const pager = page.getByRole('group', { name: '媒体连续预览', exact: true })
+  assert.equal(await pager.getByRole('button', { name: '上一项', exact: true }).isDisabled(), true)
+  const navigationRequests = actions.length
+  for (let index = 0; index < loadedMediaNames.length; index++) {
+    await page.waitForFunction(() => document.querySelector('.media-preview')?.dataset.phase === 'ready')
+    assert.equal(await page.getByRole('dialog').getByRole('heading').innerText(), loadedMediaNames[index])
+    assert.match(await pager.innerText(), new RegExp(`${index + 1} / 3`))
+    assert.equal(await page.locator('video,audio').evaluateAll(media => media.every(m => m.paused && !m.autoplay)), true)
+    await page.locator('.media-stage img,.media-stage video,.media-stage audio').evaluate(el => { window.switchedMedia = el })
+    if (index < loadedMediaNames.length - 1) {
+      await pager.focus(); await page.keyboard.press('ArrowRight')
+      assert.equal(await page.evaluate(() => !window.switchedMedia.isConnected && !window.switchedMedia.hasAttribute('src')), true)
+    }
+  }
+  assert.equal(await pager.getByRole('button', { name: '下一项', exact: true }).isDisabled(), true)
+  await pager.focus(); await page.keyboard.press('ArrowRight')
+  assert.equal(await page.getByRole('dialog').getByRole('heading').innerText(), loadedMediaNames.at(-1))
+  await pager.getByRole('button', { name: '上一项', exact: true }).click()
+  assert.equal(await page.getByRole('dialog').getByRole('heading').innerText(), loadedMediaNames[1])
+  assert.equal(actions.length, navigationRequests, 'navigation does not paginate, read metadata or write')
+  for (const width of [320, 390, 1440]) {
+    await page.setViewportSize({ width, height: 900 })
+    assert.ok(await page.getByRole('dialog').evaluate(el => el.scrollWidth <= el.clientWidth + 1))
+    await page.getByRole('dialog').screenshot({ path: join(output, `continuous-preview-${width}.png`) })
+  }
+  await page.keyboard.press('Escape'); await page.waitForSelector('[role=dialog]', { state: 'detached' })
+  await page.setViewportSize({ width: 320, height: 900 })
+  await page.locator('.drive-file').filter({ hasText: '海边随拍.webm' }).click()
+  await page.locator('video').focus(); await page.keyboard.press('ArrowLeft')
+  assert.equal(await page.getByRole('dialog').getByRole('heading').innerText(), '海边随拍.webm', 'native video arrow keys must not navigate files')
+  await page.keyboard.press('Escape'); await page.waitForSelector('[role=dialog]', { state: 'detached' })
+  checks.push('continuous-media-loaded-order-boundaries-keyboard-no-prefetch-or-autoplay-release-and-layout')
   await page.locator('.drive-file').filter({ hasText: '海边随拍.webm' }).click()
   await page.getByRole('button', { name: '生成兼容视频副本', exact: true }).click()
   await page.getByRole('button', { name: '创建离线任务', exact: true }).click()
   await page.getByText('后台转码中', { exact: true }).waitFor()
+  const videoTask = page.locator('.offline-jobs li').filter({ hasText: 'compatible.mp4' })
+  assert.match(await videoTask.innerText(), /等待兼容副本/)
+  assert.equal(await videoTask.locator('progress').nth(1).getAttribute('value'), null)
   assert.ok(await page.evaluate(() => document.documentElement.scrollWidth <= innerWidth))
   await page.getByRole('dialog').screenshot({ path: join(output, 'video-task-320.png') })
   await page.getByRole('button', { name: '关闭弹窗', exact: true }).click(); await page.waitForSelector('[role=dialog]', { state: 'detached' })
   checks.push('video-copy-source-revision-preserved-background-stage-320')
+  offlineJobs = [{ id: '9'.repeat(32), name: 'finished.mp4', destination: '/Media/finished.mp4', state: 'complete', size: 64, downloaded: 64, uploaded: 64 }]
+  await page.getByRole('button', { name: '离线下载', exact: true }).click()
+  await page.getByRole('button', { name: '打开所在文件夹', exact: true }).waitFor()
+  const offlineWritesBefore = offlineActions.length
+  const offlineSearch = page.getByRole('searchbox', { name: '搜索离线任务', exact: true })
+  await offlineSearch.fill('/MEDIA')
+  assert.equal(await page.locator('.offline-jobs li').count(), 1)
+  assert.equal(await page.getByRole('dialog').getByRole('button', { name: '清理完成记录', exact: true }).isDisabled(), true)
+  await page.getByRole('group', { name: '离线任务筛选' }).getByRole('button', { name: /^待处理/ }).click()
+  await page.getByText('没有匹配的任务', { exact: true }).waitFor()
+  await page.getByRole('group', { name: '离线任务筛选' }).getByRole('button', { name: /^全部/ }).click()
+  await page.getByRole('dialog').screenshot({ path: join(output, 'offline-search-320.png') })
+  await page.getByRole('button', { name: '清空搜索离线任务', exact: true }).click()
+  assert.equal(await offlineSearch.evaluate(el => el === document.activeElement), true)
+  assert.equal(offlineActions.length, offlineWritesBefore, 'search never repeats an offline mutation')
+  assert.equal(await page.getByRole('dialog').getByRole('button', { name: '清理完成记录', exact: true }).isDisabled(), false)
+  checks.push('offline-task-search-path-status-empty-focus-no-write-and-hidden-cleanup-guard')
+  await page.getByRole('button', { name: '打开所在文件夹', exact: true }).click()
+  await page.waitForSelector('[role=dialog]', { state: 'detached' })
+  await page.getByRole('button', { name: 'Media', exact: true }).waitFor()
+  await page.waitForFunction(() => document.querySelector('.drive-surface')?.getAttribute('aria-busy') === 'false')
+  assert.equal(actions.filter(a => a.action === 'list').at(-1).body.path, '/Media')
+  await page.getByRole('button', { name: '全部文件', exact: true }).click(); await page.waitForSelector('.drive-list li')
+  checks.push('completed-task-opens-target-folder-inside-nav')
   const lightBackground = await page.evaluate(() => getComputedStyle(document.body).backgroundColor)
   await page.evaluate(() => window.setTestTheme(true))
   await page.waitForFunction(light => getComputedStyle(document.body).backgroundColor !== light, lightBackground)
@@ -486,6 +645,38 @@ try {
   const darkDialog = await page.getByRole('dialog').boundingBox(); assert.ok(darkDialog.x >= 0 && darkDialog.x + darkDialog.width <= 321)
   await page.getByRole('dialog').screenshot({ path: join(output, 'offline-dialog-dark-320.png'), animations: 'disabled' })
   await page.getByRole('button', { name: '关闭弹窗', exact: true }).click(); await page.waitForSelector('[role=dialog]', { state: 'detached' }); checks.push('dark-colors-and-dialog-layout')
+  listDelay = 900
+  await page.getByRole('button', { name: '刷新文件列表', exact: true }).click()
+  await page.getByRole('status', { name: '正在读取文件', exact: true }).waitFor()
+  assert.equal(await page.locator('.drive-skeleton-row').count(), 4)
+  assert.equal(await page.locator('.drive-skeleton-rows').evaluate(el => getComputedStyle(el).animationName), 'none')
+  await page.screenshot({ path: join(output, 'loading-reduced-320.png'), fullPage: true })
+  await page.locator('.drive-loading-skeleton').waitFor({ state: 'detached' })
+  listDelay = 0
+  await page.emulateMedia({ reducedMotion: 'no-preference' })
+  await page.getByRole('button', { name: '新建文件夹', exact: true }).click()
+  await page.getByRole('dialog').waitFor()
+  await page.getByRole('dialog').evaluate(el => new Promise(resolve => requestAnimationFrame(() => requestAnimationFrame(resolve))))
+  // Inspect authored animation even after the short opening animation settles.
+  const motion = await page.getByRole('dialog').evaluate(el => {
+    const overlay = el.closest('.modal-overlay'); overlay.classList.add('modal-enter-active')
+    const style = getComputedStyle(el), result = { name: style.animationName, duration: style.animationDuration }
+    overlay.classList.remove('modal-enter-active'); return result
+  })
+  assert.equal(motion.name, 'nav-drive-dialog-in'); assert.equal(motion.duration, '0.18s')
+  await page.keyboard.press('Escape'); await page.getByRole('dialog').waitFor({ state: 'detached' })
+  assert.equal(await page.getByRole('button', { name: '新建文件夹', exact: true }).evaluate(el => el === document.activeElement), true)
+  await page.emulateMedia({ reducedMotion: 'reduce' })
+  await page.getByRole('button', { name: '新建文件夹', exact: true }).click()
+  assert.equal(await page.getByRole('dialog').evaluate(el => getComputedStyle(el).animationName), 'none')
+  await page.keyboard.press('Escape'); await page.getByRole('dialog').waitFor({ state: 'detached' })
+  checks.push('loading-skeleton-bounded-animation-modal-focus-and-reduced-motion')
+  if (await page.getByRole('button', { name: '关闭操作提示', exact: true }).count()) {
+    const beforeDismiss = actions.length
+    await page.getByRole('button', { name: '关闭操作提示', exact: true }).click()
+    assert.equal(actions.length, beforeDismiss)
+    assert.equal(await page.locator('.drive-notice').count(), 0)
+  }
   disconnected = true; await page.getByRole('button', { name: '刷新文件列表', exact: true }).click(); await page.waitForFunction(() => document.querySelector('.drive-feedback.drive-error')?.textContent.includes('尚未接通'))
   assert.equal(await page.getByRole('button', { name: '上传文件', exact: true }).isDisabled(), true); checks.push('not-connected-fail-closed')
   assert.deepEqual(errors, []); assert.deepEqual(external, [])

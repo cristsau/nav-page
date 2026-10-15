@@ -3,12 +3,14 @@ import { computed, nextTick, onBeforeUnmount, onMounted, ref } from 'vue'
 import Icon from '@/shared/components/Icon.vue'
 import { apiRequest } from '@/shared/services/apiClient'
 import FolderPicker from './FolderPicker.vue'
-import { taskFilters, taskCounts, taskGroup, taskProgress, transferBytes as size } from './taskPresentation'
+import { taskFilters, taskCounts, taskGroup, offlineTransferStages, taskGuidance, taskParentDirectory, transferBytes as size, visibleTasks } from './taskPresentation'
+import TaskSearch from './TaskSearch.vue'
 const props = defineProps({ directory: { type: String, default: '' }, video: { type: Object, default: null } })
-const emit = defineEmits(['busy'])
+const emit = defineEmits(['busy', 'open-folder'])
 const state = ref(null), url = ref(''), name = ref(''), destination = ref(props.directory), choosing = ref(false)
 const busy = ref(false), refreshing = ref(false), error = ref(''), refreshError = ref(''), notice = ref(''), cancelId = ref('')
 const filter = ref('all'), composer = ref(true), lastChecked = ref(null), pending = ref(''), queueHeading = ref(null)
+const query = ref('')
 const kind = ref(props.video ? 'video' : 'http'), torrent = ref(''), torrentName = ref(''), selections = ref({})
 if (props.video) name.value = props.video.name.replace(/\.[^.]+$/, '') + '.compatible.mp4'
 let alive = true, timer, sequence = 0
@@ -17,7 +19,9 @@ const stages = { metadata: '读取种子目录', bt_download: 'BT 下载中', so
 const reasons = { DOWNLOAD_TOO_LARGE: '文件超过节点单文件上限', DOWNLOAD_DISK_LIMIT: '服务器剩余空间不足，已停止', UNSAFE_DOWNLOAD_HOST: '目标地址不符合公网下载安全要求', DOWNLOAD_NOT_DIRECT_FILE: '不是可直接下载的文件，或服务器未提供大小', DOWNLOAD_HTTP_FAILED: '来源链接失效或拒绝下载', DOWNLOAD_RANGE_CHANGED: '来源文件发生变化，请更换链接', TARGET_EXISTS: 'Dropbox 已有同名项目，请核对', COMMIT_RESULT_UNKNOWN: '请先到目标目录核对，不能盲目重传' }
 const entries = computed(() => state.value?.entries || [])
 const counts = computed(() => taskCounts(entries.value))
-const visible = computed(() => entries.value.filter(job => filter.value === 'all' || taskGroup(job) === filter.value))
+const visible = computed(() => visibleTasks(entries.value, filter.value, query.value))
+const narrowed = computed(() => !!query.value.trim() || filter.value !== 'all')
+function searchTasks(value) { query.value = value; cancelId.value = '' }
 const unavailable = computed(() => busy.value || !state.value?.enabled || !!refreshError.value)
 const mediaUnavailable = computed(() => kind.value !== 'http' && !state.value?.media?.[kind.value === 'video' ? 'video' : 'bt'])
 const hasSource = computed(() => kind.value === 'video' ? !!props.video : kind.value === 'torrent' ? !!torrent.value : !!url.value)
@@ -64,7 +68,7 @@ async function add() {
   if (!name.value || /[\x00-\x1f\x7f/\\]/.test(name.value) || name.value !== name.value.trim() || ['.', '..'].includes(name.value)) { error.value = '请输入不含斜杠和首尾空格的文件名。'; return }
   if (await change('add', { kind: kind.value, url: url.value, torrent: torrent.value || undefined,
     ...(kind.value === 'video' ? { sourceId: props.video.id, sourceRev: props.video.rev } : {}), destination: destination.value + '/' + name.value })) {
-    url.value = ''; name.value = ''; torrent.value = ''; torrentName.value = ''; filter.value = 'all'; composer.value = false; notice.value = ['magnet', 'torrent'].includes(kind.value) ? '正在读取种子目录，请稍后在任务中选择需要下载的文件。' : '任务已提交。可以关闭网页，下载节点会继续处理。'
+    url.value = ''; name.value = ''; torrent.value = ''; torrentName.value = ''; filter.value = 'all'; query.value = ''; composer.value = false; notice.value = ['magnet', 'torrent'].includes(kind.value) ? '正在读取种子目录，请稍后在任务中选择需要下载的文件。' : '任务已提交。可以关闭网页，下载节点会继续处理。'
     await nextTick(); queueHeading.value?.focus()
   }
 }
@@ -91,7 +95,7 @@ onBeforeUnmount(() => { alive = false; clearTimeout(timer); emit('busy', false) 
 <template>
   <section class="offline-panel" aria-label="离线下载管理">
     <div class="connection"><div><span class="connection-mark"><Icon name="cloud" :size="20" /></span><span><strong>{{ connection }}</strong><small>{{ refreshError ? '下方保留上次结果，刷新成功后再操作' : lastChecked ? '更新于 ' + lastChecked.toLocaleTimeString('zh-CN', { hour12: false }) + ' · 可关闭网页' : '正在读取任务与连接状态' }}</small></span></div><button :disabled="busy || refreshing" aria-label="刷新离线任务" @click="refresh"><Icon name="refresh" :size="16" :class="{ spinning: refreshing }" /></button></div>
-    <p v-if="refreshError" class="feedback error" role="alert">{{ refreshError }}<span>保留的任务状态不代表当前进度。</span></p>
+    <div v-if="refreshError" class="feedback error" role="alert"><span>{{ refreshError }}</span><span>保留的任务状态不代表当前进度。</span><button type="button" :disabled="busy || refreshing" @click="refresh">{{ refreshing ? '正在重试…' : '重试读取状态' }}</button></div>
     <p v-if="error" class="feedback error" role="alert">{{ error }}</p><p v-if="notice" class="feedback" role="status"><Icon name="check" :size="16" />{{ notice }}</p>
     <div v-if="state?.enabled" class="composer">
       <button class="composer-toggle" :aria-expanded="composer" aria-controls="offline-create-form" @click="composer = !composer"><span><Icon name="plus" :size="17" />新建离线任务</span><Icon name="chevron-down" :size="16" :class="{ expanded: composer }" /></button>
@@ -109,22 +113,25 @@ onBeforeUnmount(() => { alive = false; clearTimeout(timer); emit('busy', false) 
         <div class="create-footer"><span>{{ size(state.maxBytes) }} / 文件 · 同时运行 1 项</span><button class="primary" :disabled="unavailable || mediaUnavailable || !hasSource || !name"><Icon :name="pending === 'add' ? 'refresh' : 'plus'" :size="15" :class="{ spinning: pending === 'add' }" />{{ pending === 'add' ? '提交中…' : '创建离线任务' }}</button></div>
       </form>
     </div>
-    <div v-if="state" class="queue-heading"><h3 ref="queueHeading" tabindex="-1">任务列表 <span>{{ entries.length }}</span></h3><button :disabled="unavailable || !counts.finished" @click="change('clear', {})">{{ pending === 'clear' ? '清理中…' : '清理完成记录' }}</button></div>
+    <div v-if="state" class="queue-heading"><h3 ref="queueHeading" tabindex="-1">任务列表 <span>{{ entries.length }}</span></h3><button :disabled="unavailable || !counts.finished || narrowed" @click="change('clear', {})">{{ pending === 'clear' ? '清理中…' : '清理完成记录' }}</button></div>
+    <TaskSearch v-if="entries.length || query" :model-value="query" label="搜索离线任务" :visible="visible.length" :total="entries.length" @update:model-value="searchTasks" />
+    <p v-if="narrowed" class="intro">清空搜索并选择“全部”后才能清理完成记录，避免误清理隐藏任务。</p>
     <div v-if="entries.length" class="queue-filters" role="group" aria-label="离线任务筛选"><button v-for="[key, title] in taskFilters" :key="key" :aria-pressed="filter === key" @click="filter = key; cancelId = ''">{{ title }} <span>{{ counts[key] }}</span></button></div>
-    <div v-if="state && !visible.length" class="queue-empty"><Icon :name="entries.length ? 'search' : 'download'" :size="28" /><strong>{{ entries.length ? '此分类暂无任务' : '还没有下载任务' }}</strong><p>{{ entries.length ? '切换分类查看其他任务；筛选不会暂停下载。' : '添加直链后，这里会显示下载、上传和校验进度。' }}</p></div>
+    <div v-if="state && !visible.length" class="queue-empty"><Icon :name="entries.length ? 'search' : 'download'" :size="28" /><strong>{{ query.trim() ? '没有匹配的任务' : entries.length ? '此分类暂无任务' : '还没有下载任务' }}</strong><p>{{ entries.length || query ? '清空搜索或切换分类查看其他任务；筛选不会暂停下载。' : '添加直链后，这里会显示下载、上传和校验进度。' }}</p></div>
     <ul v-if="state" class="offline-jobs" aria-label="离线下载任务"><li v-for="job in visible" :key="job.id">
       <div class="job-heading"><strong>{{ job.name }}</strong><span class="job-badge" :data-tone="taskGroup(job)">{{ label(job) }}</span></div>
       <small class="job-destination">{{ job.destination }}</small>
       <div v-if="job.state === 'selecting'" class="torrent-selection"><label :for="'select-' + job.id">选择要保存的文件</label><select :id="'select-' + job.id" v-model="selections[job.id]" :disabled="unavailable"><option :value="undefined" disabled>请选择，不会自动下载全部文件</option><option v-for="file in job.metadata?.files || []" :key="file.index" :value="file.index">{{ file.path }} · {{ size(file.size) }}</option></select><button class="primary" :disabled="unavailable || !selections[job.id]" @click="change('select', { id: job.id, selection: selections[job.id] })">确认文件并开始下载</button></div>
       <p v-if="job.kind === 'video' && job.state === 'downloading' && ['inspecting', 'transcoding', 'verifying'].includes(job.stage)" class="feedback" role="status">{{ stages[job.stage] }}。后台运行，不必保持网页打开；处理完成后再上传副本。</p>
       <div class="job-stages" aria-label="任务传输阶段">
-        <div><span><Icon name="download" :size="13" />下载到节点 <b>{{ taskProgress(job.downloaded, job.size, job.state === 'complete') }}%</b></span><progress :value="taskProgress(job.downloaded, job.size, job.state === 'complete')" max="100" :aria-label="job.name + ' 下载进度'" /></div>
-        <div><span><Icon name="upload" :size="13" />上传到网盘 <b>{{ taskProgress(job.uploaded, job.size, job.state === 'complete') }}%</b></span><progress :value="taskProgress(job.uploaded, job.size, job.state === 'complete')" max="100" :aria-label="job.name + ' 上传进度'" /></div>
+        <div v-for="stage in offlineTransferStages(job)" :key="stage.key"><span><Icon :name="stage.key" :size="13" />{{ stage.label }} <b>{{ stage.text }}</b></span><progress :value="stage.progress ?? undefined" max="100" :aria-label="job.name + ' ' + stage.label" :aria-valuetext="stage.text" /></div>
       </div>
-      <small>已下载 {{ size(job.downloaded) }} / {{ size(job.size) }} · 已上传 {{ size(job.uploaded) }}</small>
+      <small>已读取 {{ size(job.downloaded) }} / {{ size(job.kind === 'video' ? job.sourceSize : job.size) }} · 已上传 {{ size(job.uploaded) }}</small>
+      <p v-if="taskGuidance(job)" class="job-guidance">{{ taskGuidance(job) }}</p>
       <p v-if="job.error" class="feedback error">{{ reasons[job.error] || '任务未完成，可检查链接或节点状态后重试。' }}</p>
       <p v-if="job.cleanupPending" class="feedback">任务已结束，等待下载节点清理缓存；云端文件不会被删除。</p>
       <div class="actions">
+        <button v-if="['complete', 'review'].includes(job.state) && taskParentDirectory(job.destination) !== null" :disabled="busy" @click="emit('open-folder', taskParentDirectory(job.destination))"><Icon name="folder" :size="15" />{{ job.state === 'review' ? '打开目录核对' : '打开所在文件夹' }}</button>
         <button v-if="['queued', 'downloading', 'uploading'].includes(job.state)" :disabled="unavailable || job.intent !== 'run'" @click="control(job.id, 'pause')">{{ pending === job.id + ':pause' ? '暂停中…' : '暂停' }}</button>
         <button v-if="['paused', 'error'].includes(job.state)" class="resume" :disabled="unavailable" @click="control(job.id, 'resume')">{{ pending === job.id + ':resume' ? '提交中…' : job.state === 'error' ? '重试' : '继续' }}</button>
         <button v-if="!['complete', 'cancelled', 'committing', 'review'].includes(job.state)" :disabled="unavailable || job.intent === 'cancel'" @click="cancelId = job.id">取消任务</button>
@@ -140,4 +147,10 @@ onBeforeUnmount(() => { alive = false; clearTimeout(timer); emit('busy', false) 
 .connection{display:flex;gap:12px;align-items:center;justify-content:space-between}.connection>div{display:flex;gap:10px;align-items:center;min-width:0}.connection strong{font-size:13px;font-weight:550}.connection small{display:block;font-size:11px}.connection-mark{display:grid;place-items:center;width:40px;height:40px;border-radius:12px;background:var(--accent-bg);color:var(--accent-color);flex-shrink:0}.connection>button{flex-shrink:0;width:38px;padding:0}.composer{border:1px solid var(--border-color);border-radius:14px;overflow:hidden}.offline-panel .composer-toggle{display:flex;width:100%;justify-content:space-between;border:0;border-radius:0;padding:14px 16px;background:var(--bg-secondary);font-weight:550}.composer-toggle span{display:flex;align-items:center;gap:8px}.expanded{transform:rotate(180deg)}.offline-panel form{display:grid;gap:10px;padding:16px}.offline-panel form>label{font-size:12px;font-weight:550;margin-top:4px}.offline-panel input{width:100%;min-width:0;box-sizing:border-box;border:1px solid var(--border-color);border-radius:9px;padding:11px;background:var(--bg-primary);color:inherit;font:inherit}.offline-panel .primary{background:var(--accent-color);color:var(--text-inverse,#fff);border-color:var(--accent-color)}.target{display:flex;align-items:center;gap:8px;border:1px solid var(--border-light);padding:10px;border-radius:10px;margin-top:4px}.target>svg{flex-shrink:0;color:var(--text-muted)}.target span{flex:1;overflow-wrap:anywhere;min-width:0;font-size:12px}.target small{display:block;font-size:10px}.target button{flex-shrink:0}.create-footer{display:flex;justify-content:space-between;align-items:center;gap:12px;margin-top:6px}.create-footer>span{font-size:11px;color:var(--text-muted)}.queue-heading,.job-heading,.actions{display:flex;align-items:center;justify-content:space-between;gap:10px;flex-wrap:wrap}.queue-heading h3{font-size:14px;margin:0}.queue-heading h3 span{font-size:11px;color:var(--text-muted);font-weight:400;margin-left:5px}.queue-heading>button{font-size:11px}.queue-filters{display:flex;gap:5px;flex-wrap:wrap}.queue-filters button{background:var(--bg-secondary);border-color:transparent;gap:7px;min-height:34px}.queue-filters button[aria-pressed=true]{background:var(--accent-bg);color:var(--accent-color);border-color:var(--border-color)}.queue-filters span{font-size:10px;opacity:.75}.offline-jobs{list-style:none;padding:0;margin:0;display:grid;gap:12px}.offline-jobs li{padding:16px;border:1px solid var(--border-color);border-radius:14px}.job-heading strong{font-weight:550;min-width:0;overflow-wrap:anywhere;flex:1}.job-heading .job-badge{font-size:11px;color:var(--text-secondary);padding:4px 8px;border-radius:6px;background:var(--bg-secondary)}.job-badge[data-tone=active]{color:var(--accent-color);background:var(--accent-bg)}.job-badge[data-tone=attention]{border:1px solid var(--border-color)}.job-destination{display:block;margin-top:5px;overflow-wrap:anywhere}.job-stages{display:grid;grid-template-columns:1fr 1fr;gap:16px;margin:14px 0 8px}.job-stages>div{min-width:0}.job-stages span{display:flex;align-items:center;gap:5px;font-size:10px;color:var(--text-secondary)}.job-stages b{margin-left:auto;font-variant-numeric:tabular-nums;font-weight:500}.job-stages progress{display:block;width:100%;height:5px;accent-color:var(--accent-color);margin-top:8px}.actions{justify-content:flex-end;margin-top:12px}.actions:empty{display:none}.offline-panel .resume{color:var(--accent-color);background:var(--accent-bg)}.feedback{display:flex;align-items:flex-start;gap:8px;margin:0;padding:12px;border-radius:9px;background:var(--bg-secondary);font-size:12px;line-height:1.7;overflow-wrap:anywhere}.feedback svg{flex-shrink:0;margin-top:2px}.feedback.error{display:block;color:var(--danger-color,#a84444);border-left:3px solid currentColor}.feedback span{display:block}.offline-jobs .feedback{margin-top:10px}.confirmation{padding:12px;background:var(--bg-secondary);border-radius:10px;margin-top:12px}.confirmation p{font-size:12px;line-height:1.7;margin:0 0 10px}.confirmation>div{display:flex;justify-content:flex-end;gap:8px}.offline-panel .danger{color:var(--danger-color,#a84444)}.queue-empty{padding:24px 14px;display:grid;justify-items:center;gap:10px;background:var(--bg-secondary);border-radius:12px;text-align:center;color:var(--text-secondary)}.queue-empty strong{font-size:13px;color:var(--text-primary);font-weight:550}.queue-empty p{font-size:12px;line-height:1.7;margin:0}.offline-help{font-size:11px;color:var(--text-secondary);border-top:1px solid var(--border-light);padding-top:14px}.offline-help summary{cursor:pointer}.offline-help p{line-height:1.8;margin:10px 0 0}.spinning{animation:offline-spin .8s linear infinite}@keyframes offline-spin{to{transform:rotate(360deg)}}
 @media(max-width:440px){.offline-panel{gap:12px}.offline-panel form,.offline-jobs li{padding:12px}.composer-toggle{padding:12px!important}.target{flex-wrap:wrap}.target button{margin-left:24px}.create-footer{flex-direction:column;align-items:stretch}.create-footer button{min-height:42px}.job-heading strong{flex-basis:100%}.job-stages{gap:10px}.job-stages span{flex-wrap:wrap;font-size:10px}.job-stages svg{display:none}.queue-filters{gap:3px}.queue-filters button{padding:6px 8px;font-size:11px}.actions button{min-height:40px}}
 @media(prefers-reduced-motion:reduce){.spinning{animation:none}}
+</style>
+<style scoped>
+.job-guidance{margin:12px 0 0;padding:10px 12px;border-radius:9px;background:var(--bg-secondary);color:var(--text-secondary);font-size:12px;line-height:1.7}
+.feedback.error button{margin-top:10px;min-height:44px}.offline-panel select:focus-visible{outline:2px solid var(--accent-color);outline-offset:2px}
+@media(max-width:440px){.queue-filters{display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:6px}.queue-filters button{min-height:44px}}
+@media(max-width:440px){.actions{display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:8px}.actions button{min-height:44px;white-space:normal}.actions button:only-child{grid-column:1/-1}.confirmation>div{display:grid;grid-template-columns:1fr 1fr}.confirmation button,.source-types button{min-height:44px}.job-stages{grid-template-columns:1fr;gap:12px}.job-stages span{flex-wrap:nowrap}.job-stages b{white-space:nowrap}}
 </style>
