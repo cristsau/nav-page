@@ -95,10 +95,14 @@ jobs:
         run: |
           mkdir -p "$RUNNER_TEMP/nav-semantic-models"
           docker run --rm --read-only --tmpfs /tmp \
+            -e DATABASE_URL=postgres://nav:ci-only@127.0.0.1:5432/nav \
+            -e NAV_PUBLIC_APP_ORIGIN=https://nav.example.test \
             -e NAV_EMBEDDING_CACHE_DIR=/models \
             -v "$RUNNER_TEMP/nav-semantic-models:/models" \
             nav-api:ci node scripts/verifySemanticRuntime.js
           docker run --rm --network none --read-only --tmpfs /tmp \
+            -e DATABASE_URL=postgres://nav:ci-only@127.0.0.1:5432/nav \
+            -e NAV_PUBLIC_APP_ORIGIN=https://nav.example.test \
             -e NAV_EMBEDDING_CACHE_DIR=/models \
             -v "$RUNNER_TEMP/nav-semantic-models:/models:ro" \
             nav-api:ci node scripts/verifySemanticRuntime.js
