@@ -15,6 +15,13 @@ import {
 const builtInThemes = Object.entries(colorSchemes)
   .filter(([themeId]) => themeId !== 'custom')
 
+test('destructive solid buttons keep readable white text in both themes', async () => {
+  const css = await fs.readFile(fileURLToPath(new URL('../../app/src/styles/variables.css', import.meta.url)), 'utf8')
+  const fill = css.match(/--danger-fill:\s*(#[0-9a-f]{6})/i)?.[1]
+  assert.ok(fill, 'A dedicated solid fill is separate from dark-mode error text')
+  assert.ok(contrastRatio('#ffffff', fill) >= 4.5)
+})
+
 test('all built-in helper text colors meet WCAG AA on page, card and input surfaces', () => {
   assert.equal(builtInThemes.length, 7)
 

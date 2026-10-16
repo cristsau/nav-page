@@ -1,121 +1,36 @@
-/* CSS Variables - 奶油风格主题 */
+/* Shared graphite defaults match the saved default palette before JS loads. */
 :root {
-  /* 亮色模式 (默认) - 奶油色系 */
-  --bg-primary: #faf8f5;
-  --bg-secondary: #f5f2ed;
-  --bg-tertiary: #ebe7e0;
-  --bg-card: #ffffff;
-  --bg-hover: #f0ede8;
-  --bg-active: #e8e4dd;
-
-  --text-primary: #4a4540;
-  --text-secondary: #7a756d;
-  --text-muted: #6f6a63;
-
-  --border-color: #e8e4dd;
-  --border-light: #f0ede8;
-
-  /* 奶咖色强调色 */
-  --accent-color: #a08060;
-  --accent-hover: #8b6b4f;
-  --accent-light: #d4c4b0;
-  --accent-bg: #f5ede5;
-
-  /* 功能色 */
-  --success-color: #7a9f7a;
-  --warning-color: #c9a86c;
-  --error-color: #c47d7d;
-  --info-color: #7a9fc9;
-
-  /* 阴影 */
-  --shadow-sm: 0 2px 8px rgba(74, 69, 64, 0.06);
-  --shadow-md: 0 4px 16px rgba(74, 69, 64, 0.08);
-  --shadow-lg: 0 8px 32px rgba(74, 69, 64, 0.12);
-  --shadow-card: 0 4px 20px rgba(74, 69, 64, 0.08);
-  --shadow-card-hover: 0 8px 30px rgba(74, 69, 64, 0.15);
-
-  /* 圆角 - 更圆润 */
-  --radius-xs: 6px;
-  --radius-sm: 10px;
-  --radius-md: 16px;
-  --radius-lg: 24px;
-  --radius-xl: 32px;
-  --radius-full: 9999px;
-
-  /* 动画 */
-  --transition-fast: 0.15s ease;
-  --transition-normal: 0.25s ease;
-  --transition-slow: 0.4s ease;
-  --ease-bounce: cubic-bezier(0.34, 1.56, 0.64, 1);
-  --ease-smooth: cubic-bezier(0.4, 0, 0.2, 1);
-
-  /* 间距 */
-  --spacing-xs: 4px;
-  --spacing-sm: 8px;
-  --spacing-md: 16px;
-  --spacing-lg: 24px;
-  --spacing-xl: 32px;
-  --spacing-2xl: 48px;
-
-  /* 布局 */
-  --header-height: 64px;
-  --max-width: 1200px;
-  --sidebar-width: 240px;
-
-  /* 背景图 */
-  --bg-image: none;
+  --bg-primary:#f6f6f8; --bg-secondary:#ededf1; --bg-tertiary:#e6e6ed;
+  --bg-card:#fff; --bg-hover:#e6e6ed; --bg-active:#dddde8;
+  --text-primary:#202128; --text-secondary:#5d5f6d; --text-muted:#646674; --text-inverse:#fff;
+  --border-color:#d6d7df; --border-light:#e2e3e9;
+  --accent-color:#635bda; --accent-hover:#5048bd; --accent-light:#c8c4f2;
+  --accent-bg:#eceafa; --accent-text:#4f47c6; --accent-contrast:#fff;
+  --success-color:#237747; --warning-color:#94600b; --error-color:#b4233d;
+  --danger-color:var(--error-color); --danger-fill:#b4233d; --danger-contrast:#fff; --info-color:#356cb0;
+  --shadow-sm:0 1px 3px #11121608; --shadow-md:0 8px 24px #11121612;
+  --shadow-lg:0 20px 64px #11121626; --shadow-card:none; --shadow-card-hover:0 3px 12px #1112160a;
+  --radius-xs:6px; --radius-sm:8px; --radius-md:10px; --radius-lg:12px; --radius-xl:16px; --radius-full:9999px;
+  --transition-fast:140ms; --transition-normal:180ms; --transition-slow:240ms;
+  --ease-bounce:cubic-bezier(.2,.8,.2,1); --ease-smooth:cubic-bezier(.2,.8,.2,1);
+  --spacing-xs:4px; --spacing-sm:8px; --spacing-md:16px; --spacing-lg:24px; --spacing-xl:32px; --spacing-2xl:48px;
+  --header-height:56px; --max-width:1440px; --sidebar-width:216px;
+  --bg-image:none; --overlay:rgba(9,10,14,.62); --media-stage:#101116;
 }
-
-/* 暗色模式 */
 .dark {
-  /* 与 useConfig 中默认 cream 方案保持一致，避免配置加载前后跳色。 */
-  --bg-primary: #1e1815;
-  --bg-secondary: #2a211d;
-  --bg-tertiary: #332823;
-  --bg-card: #372b25;
-  --bg-hover: #403129;
-  --bg-active: #49362d;
-
-  --text-primary: #f1e8df;
-  --text-secondary: #c7b7a7;
-  --text-muted: #b0a192;
-
-  --border-color: #4d3a31;
-  --border-light: #3d2f28;
-
-  --accent-color: #c4a882;
-  --accent-hover: #d4b892;
-  --accent-light: #4a4035;
-  --accent-bg: #352f28;
-
-  --success-color: #8fb88f;
-  --warning-color: #d4b87a;
-  --error-color: #d48a8a;
-  --info-color: #8ab8d4;
-
-  --shadow-sm: 0 2px 8px rgba(0, 0, 0, 0.2);
-  --shadow-md: 0 4px 16px rgba(0, 0, 0, 0.25);
-  --shadow-lg: 0 8px 32px rgba(0, 0, 0, 0.35);
-  --shadow-card: 0 4px 20px rgba(0, 0, 0, 0.25);
-  --shadow-card-hover: 0 8px 30px rgba(0, 0, 0, 0.4);
+  color-scheme:dark;
+  --bg-primary:#111216; --bg-secondary:#191a21; --bg-tertiary:#252731;
+  --bg-card:#1d1f27; --bg-hover:#252731; --bg-active:#303240;
+  --text-primary:#ededf2; --text-secondary:#b4b6c4; --text-muted:#91939f;
+  --border-color:#393c49; --border-light:#2b2d37;
+  --accent-color:#635bda; --accent-hover:#756ce5; --accent-light:#454064;
+  --accent-bg:#292646; --accent-text:#b8b2ff;
+  --success-color:#8dc9a5; --warning-color:#ebc080; --error-color:#f39aab; --info-color:#94bce9;
+  --shadow-sm:0 1px 3px #0002; --shadow-md:0 8px 24px #0003; --shadow-lg:0 20px 64px #0006;
 }
-
-/* 用户自定义主题变量（通过 JS 动态设置） */
-.user-theme {
-  /* 这些变量会被 useConfig.js 动态覆盖 */
-  --user-accent-color: var(--accent-color);
-  --user-radius: var(--radius-md);
-}
-
-/* Pointer-size policy is applied only to touch-first devices so compact
-   desktop toolbars keep their current density. */
+.user-theme { --user-accent-color:var(--accent-color); --user-radius:var(--radius-md); }
 @media (hover: none), (pointer: coarse), (any-hover: none), (any-pointer: coarse) {
-  button,
-  input[type='button'],
-  input[type='submit'],
-  input[type='reset'],
-  [role='button'] {
-    min-width: 44px !important;
-    min-height: 44px !important;
+  button, input[type='button'], input[type='submit'], input[type='reset'], [role='button'] {
+    min-width: 44px !important; min-height: 44px !important;
   }
 }

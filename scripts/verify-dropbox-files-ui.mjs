@@ -430,6 +430,9 @@ try {
     await page.screenshot({ path: join(output, 'tasks-' + width + '.png'), fullPage: true })
   }
   checks.push('task-counts-filter-collapse-cancel-confirm-and-review-preserved')
+  if (!await page.getByRole('button', { name: '离线下载', exact: true }).isVisible()) {
+    await page.locator('.drive-tools > summary').click()
+  }
   await page.getByRole('button', { name: '离线下载', exact: true }).click()
   await page.locator('#offline-url').fill('https://example.com/synthetic.mp4'); await page.locator('#offline-name').focus()
   assert.equal(await page.locator('#offline-name').inputValue(), 'synthetic.mp4')

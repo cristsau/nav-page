@@ -79,7 +79,7 @@ const defaultConfig = {
   },
   style: {
     colorScheme: 'cream',
-    accentColor: '#a08060',
+    accentColor: '#635bda',
     borderRadius: 'medium',
     cardSize: 'medium',
     animationsEnabled: true,
@@ -107,8 +107,8 @@ export const searchEngines = {
 
 export const borderRadiusOptions = {
   small: { radius: '8px', label: '紧凑' },
-  medium: { radius: '16px', label: '标准' },
-  large: { radius: '24px', label: '圆润' }
+  medium: { radius: '10px', label: '标准' },
+  large: { radius: '16px', label: '圆润' }
 }
 
 export const cardSizeOptions = {
@@ -310,6 +310,11 @@ export function applyStyleConfig() {
   const accentColor = scheme.primary
   const mutedColors = resolveThemeMutedColors(scheme)
 
+  root.style.setProperty('--accent-text', isDark ? mixColors(accentColor, '#ffffff', 0.56) : adjustColor(accentColor, -20))
+  root.style.setProperty('--accent-contrast', '#ffffff')
+  root.style.setProperty('--danger-color', isDark ? '#f39aab' : '#b4233d')
+  root.style.setProperty('--error-color', isDark ? '#f39aab' : '#b4233d', 'important')
+
   root.style.setProperty('--accent-color', accentColor, 'important')
   root.style.setProperty('--accent-hover', adjustColor(accentColor, isDark ? 18 : -15), 'important')
   root.style.setProperty('--accent-light', adjustColor(accentColor, isDark ? -28 : 40), 'important')
@@ -347,7 +352,17 @@ export function applyStyleConfig() {
     root.style.setProperty('--info-color', '#7a9fc9', 'important')
   }
 
-  root.style.setProperty('--radius-md', borderRadiusOptions[style.borderRadius]?.radius || '16px', 'important')
+  // Keep default surfaces neutral without discarding deliberately custom palettes.
+  if (style.colorScheme === 'cream' || !style.colorScheme) {
+    root.style.setProperty('--bg-hover', isDark ? '#252731' : '#e6e6ed', 'important')
+    root.style.setProperty('--bg-active', isDark ? '#303240' : '#dddde8', 'important')
+    root.style.setProperty('--border-color', isDark ? '#393c49' : '#d6d7df', 'important')
+    root.style.setProperty('--border-light', isDark ? '#2b2d37' : '#e2e3e9', 'important')
+    root.style.setProperty('--accent-bg', isDark ? '#292646' : '#eceafa', 'important')
+    root.style.setProperty('--success-color', isDark ? '#8dc9a5' : '#237747', 'important')
+    root.style.setProperty('--warning-color', isDark ? '#ebc080' : '#94600b', 'important')
+  }
+  root.style.setProperty('--radius-md', borderRadiusOptions[style.borderRadius]?.radius || '10px', 'important')
 
   if (style.animationsEnabled === false) {
     root.classList.add('reduce-motion')

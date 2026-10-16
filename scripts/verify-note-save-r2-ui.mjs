@@ -100,7 +100,7 @@ try {
   assert.equal(await page.evaluate(() => noteHarness.calls.length), 6)
   assert.equal(await page.getByRole('button', { name: '保存', exact: true }).isDisabled(), true)
   page.once('dialog', (prompt) => prompt.dismiss())
-  await page.getByRole('button', { name: '取消', exact: true }).click()
+  await page.getByRole('button', { name: '关闭', exact: true }).click()
   assert.equal(await title.inputValue(), 'Conflict draft retained')
   await page.evaluate(() => Object.defineProperty(navigator, 'clipboard', { configurable: true, value: { writeText: async (text) => { window.syntheticClipboard = text } } }))
   await page.getByRole('button', { name: '复制当前草稿', exact: true }).click()
@@ -112,7 +112,7 @@ try {
     const copy = await page.getByRole('button', { name: '复制当前草稿', exact: true }).boundingBox()
     assert.ok(copy.height >= 44 && copy.y >= 0 && copy.y + copy.height <= 844, `reachable recovery action ${width}`)
     const dialog = page.getByRole('dialog')
-    await dialog.getByRole('button', { name: '取消', exact: true }).focus()
+    await dialog.getByRole('button', { name: '关闭', exact: true }).focus()
     await page.keyboard.press('Tab')
     assert.equal(await page.evaluate(() => Boolean(document.activeElement.closest('[role="dialog"]'))), true)
   }

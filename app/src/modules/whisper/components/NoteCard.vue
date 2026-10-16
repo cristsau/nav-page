@@ -1,5 +1,5 @@
 <script setup>
-import { computed, ref, watch } from 'vue'
+import { computed, ref, watch, onBeforeUnmount } from 'vue'
 import Icon from '@/shared/components/Icon.vue'
 import { decrypt } from '@/shared/utils/crypto'
 import {
@@ -14,6 +14,28 @@ const props = defineProps({
     required: true
   }
 })
+
+const actionsMenu = ref(null)
+const actionsOpen = ref(false)
+const actionsAbove = ref(false)
+function updateActionMenu(event) {
+  actionsOpen.value = event.target.open
+  if (actionsOpen.value) actionsAbove.value = event.target.getBoundingClientRect().top > window.innerHeight / 2
+}
+function closeActions(event) {
+  if (event && actionsMenu.value?.contains(event.target)) return
+  if (actionsMenu.value) actionsMenu.value.open = false
+}
+function onActionClick(event) {
+  if (!event.target.closest('.action-btn')) return
+  // The parent editor captures this element as its return-focus target.
+  actionsMenu.value?.querySelector('summary')?.focus({ preventScroll: true })
+  if (actionsMenu.value) actionsMenu.value.open = false
+}
+watch(actionsOpen, open => {
+  document[open ? 'addEventListener' : 'removeEventListener']('pointerdown', closeActions)
+})
+onBeforeUnmount(() => document.removeEventListener('pointerdown', closeActions))
 
 const emit = defineEmits([
   'preview',
@@ -247,7 +269,10 @@ async function handleDecrypt() {
       <span v-if="note.share?.enabled" class="note-card__share-status">已分享</span>
     </div>
 
-    <div class="note-card__actions" @click.stop>
+    <details ref="actionsMenu" class="note-card__menu" :class="{ 'opens-above': actionsAbove }" @toggle="updateActionMenu" @click.stop
+      @keydown.esc.stop.prevent="closeActions(); actionsMenu.querySelector('summary').focus()">
+      <summary :aria-label="`管理笔记 ${note.title}`" title="笔记操作"><Icon name="more-horizontal" :size="18" /></summary>
+    <div class="note-card__actions" @click.capture="onActionClick">
       <button
         v-if="note.type === 'memo'"
         type="button"
@@ -326,6 +351,7 @@ async function handleDecrypt() {
         <Icon name="trash" :size="15" />
       </button>
     </div>
+    </details>
 
     <div
       v-if="showPasswordModal"
@@ -538,7 +564,7 @@ async function handleDecrypt() {
 
 .action-btn--danger:hover {
   color: #fff;
-  background: var(--error-color);
+  background: var(--danger-fill);
 }
 
 .action-btn--ai:hover {
@@ -671,4 +697,20 @@ async function handleDecrypt() {
     transform: none;
   }
 }
+
+/* One explicit, keyboard-operable action menu keeps rows compact on touch too. */
+.note-card:has(.note-card__menu[open]) { z-index:5; }
+.note-card__type { padding-right:40px; }
+.note-card__menu { position:absolute; top:8px; right:8px; z-index:4; }
+.note-card__menu > summary { display:grid; place-items:center; list-style:none; width:32px; min-height:32px; border-radius:6px; color:var(--text-secondary); cursor:pointer; }
+.note-card__menu > summary::-webkit-details-marker { display:none; }
+.note-card__menu > summary:hover, .note-card__menu[open] > summary { background:var(--bg-hover); }
+.note-card__menu > summary:focus-visible { outline:2px solid var(--accent-color); outline-offset:2px; }
+.note-card__menu .note-card__actions { top:38px; right:0; left:auto; display:grid; gap:2px; width:212px; max-width:none; max-height:360px; overflow-y:auto; padding:6px; border:1px solid var(--border-color); border-radius:8px; background:var(--bg-card); box-shadow:var(--shadow-md); opacity:1; pointer-events:auto; transform:none; }
+.note-card__menu.opens-above .note-card__actions { top:auto; bottom:38px; }
+.note-card__menu .action-btn { display:flex; justify-content:flex-start; gap:10px; width:100%; height:auto; min-height:36px; padding:8px; border:0; background:transparent; font:inherit; font-size:13px; }
+.note-card__menu .action-btn::after { content:attr(title); }
+.note-card__menu .action-btn:hover { background:var(--bg-hover); transform:none; }
+.note-card__menu .action-btn--danger { color:var(--danger-color); }
+@media (max-width:820px), (hover:none), (pointer:coarse) { .note-card__menu > summary { width:44px; } .note-card__menu > summary,.note-card__menu .action-btn { min-height:44px; } .note-card__menu .note-card__actions { top:48px; } .note-card__menu.opens-above .note-card__actions { top:auto; bottom:48px; } }
 </style>

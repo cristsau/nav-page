@@ -1,8 +1,8 @@
 <script setup>
-import { computed, ref, watch } from 'vue'
+import { defineAsyncComponent, computed, ref, watch } from 'vue'
 import Icon from '@/shared/components/Icon.vue'
 import Modal from '@/shared/components/Modal.vue'
-import BlockContent from './BlockContent.vue'
+const BlockContent = defineAsyncComponent(() => import('./BlockContent.vue'))
 import {
   fetchBackendNoteVersions,
   restoreBackendNoteVersion,

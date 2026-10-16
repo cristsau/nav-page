@@ -254,10 +254,9 @@ function handleGlobalKeydown(event) {
     target.isContentEditable ||
     ['INPUT', 'TEXTAREA', 'SELECT'].includes(target.tagName)
   )
-  const isCommandShortcut = (event.ctrlKey || event.metaKey) && event.key.toLowerCase() === 'k'
-  const isSlashShortcut = event.key === '/' && !isEditableTarget
+  const isSlashShortcut = event.key === '/' && !isEditableTarget && !event.ctrlKey && !event.metaKey && !event.altKey
 
-  if (!isCommandShortcut && !isSlashShortcut) return
+  if (!isSlashShortcut) return
 
   event.preventDefault()
   queryInput.value?.focus()
@@ -425,7 +424,7 @@ async function copyAnswer() {
           @blur="isFocused = false"
           @keydown="handleKeydown"
         >
-        <kbd class="search-box__shortcut">Ctrl K</kbd>
+        <kbd class="search-box__shortcut">/</kbd>
       </div>
 
       <button

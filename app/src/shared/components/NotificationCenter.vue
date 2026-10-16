@@ -224,7 +224,7 @@ onBeforeUnmount(() => {
   padding: 0 4px;
   place-items: center;
   color: #fff;
-  background: var(--error-color, #c95f5f);
+  background: var(--danger-fill);
   border: 2px solid var(--bg-primary);
   border-radius: 999px;
   font-size: 0.58rem;
@@ -310,7 +310,10 @@ onBeforeUnmount(() => {
 .notification-center__message,
 .notification-center__empty { margin: 0; padding: 28px 20px; color: var(--text-muted); line-height: 1.7; text-align: center; }
 .notification-center__message.is-error { color: var(--error-color); }
-@media (max-width: 640px), (pointer: coarse) {
+@media (min-width: 821px) {
+  .notification-center__panel { position:fixed; left:calc(var(--workspace-sidebar,216px) + 12px); right:auto; top:auto; bottom:20px; max-height:calc(100dvh - 40px); }
+}
+@media (max-width: 820px), (pointer: coarse) {
   .notification-center__panel { position: fixed; top: 66px; right: 10px; left: 10px; width: auto; max-height: calc(100dvh - 150px); }
   .notification-center__list { max-height: calc(100dvh - 220px); }
   .notification-center__header-actions button,

@@ -1,11 +1,12 @@
 <script setup>
-import { nextTick, onBeforeUnmount, ref, watch } from 'vue'
+import { computed, defineAsyncComponent, nextTick, onBeforeUnmount, ref, watch } from 'vue'
 import Icon from '@/shared/components/Icon.vue'
 import CopyableNoteContent from './CopyableNoteContent.vue'
 import CopyableValue from './CopyableValue.vue'
-import BlockContent from './BlockContent.vue'
+const BlockContent = defineAsyncComponent(() => import('./BlockContent.vue'))
 
 const props = defineProps({
+  embedded: Boolean,
   show: {
     type: Boolean,
     default: false
@@ -21,6 +22,12 @@ const props = defineProps({
 })
 
 const emit = defineEmits(['close', 'edit', 'ai', 'history', 'copyId', 'copyExtract', 'copyValue'])
+const desktopQuery = window.matchMedia('(min-width: 1101px)')
+const desktop = ref(desktopQuery.matches)
+const inline = computed(() => props.embedded && desktop.value)
+function viewportChanged(event) { desktop.value = event.matches }
+desktopQuery.addEventListener('change', viewportChanged)
+onBeforeUnmount(() => desktopQuery.removeEventListener('change', viewportChanged))
 const dialogRef = ref(null)
 const copyStatus = ref('')
 let copyAttempt = 0
@@ -67,7 +74,7 @@ function handleDialogKeydown(event) {
     return
   }
 
-  if (event.key !== 'Tab' || !dialogRef.value) return
+  if (inline.value || event.key !== 'Tab' || !dialogRef.value) return
 
   const focusable = [...dialogRef.value.querySelectorAll(
     'button:not([disabled]), [href], input:not([disabled]), select:not([disabled]), textarea:not([disabled]), [tabindex]:not([tabindex="-1"])'
@@ -121,12 +128,12 @@ onBeforeUnmount(restorePreviousFocus)
 </script>
 
 <template>
-  <div v-if="show && note" class="preview-modal" @click.self="requestClose">
+  <div v-if="show && note" class="preview-modal" :class="{ 'is-embedded': inline }" @click.self="requestClose">
     <div
       ref="dialogRef"
       class="preview-card"
-      role="dialog"
-      aria-modal="true"
+      :role="inline ? 'region' : 'dialog'"
+      :aria-modal="inline ? undefined : true"
       aria-labelledby="note-preview-title"
       tabindex="-1"
       @keydown="handleDialogKeydown"
@@ -264,6 +271,12 @@ onBeforeUnmount(restorePreviousFocus)
 </template>
 
 <style scoped>
+.preview-modal.is-embedded { position:sticky; inset:auto; top:24px; z-index:auto; display:flex; padding:0; background:none; backdrop-filter:none; align-items:stretch; }
+.is-embedded .preview-card { width:100%; height:calc(100dvh - 48px); max-height:calc(100dvh - 48px); border:1px solid var(--border-light); border-radius:12px; box-shadow:none; }
+.is-embedded .preview-card__body { font-size:16px; line-height:1.8; }
+.is-embedded .preview-card__footer { flex-wrap:wrap; gap:8px; padding:12px; }
+.is-embedded .preview-card__footer .btn { font-size:12px; min-height:36px; padding:8px 10px; }
+
 .preview-modal {
   position: fixed;
   inset: 0;

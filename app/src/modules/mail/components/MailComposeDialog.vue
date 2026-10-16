@@ -842,7 +842,7 @@ onBeforeUnmount(stopQueuedStatusPolling)
 .mail-compose__button { display: inline-flex; min-height: 44px; padding: 0 16px; align-items: center; justify-content: center; gap: 7px; color: var(--text-secondary); font: inherit; font-size: .72rem; font-weight: 720; background: var(--bg-secondary); border: 1px solid var(--border-light); border-radius: 12px; cursor: pointer; }
 .mail-compose__button:disabled { opacity: .48; cursor: not-allowed; }
 .mail-compose__button.is-primary { color: var(--accent-contrast, #fff); background: var(--accent-color); border-color: transparent; }
-.mail-compose__button.is-danger { color: #fff; background: var(--error-color); border-color: transparent; }
+.mail-compose__button.is-danger { color: #fff; background: var(--danger-fill); border-color: transparent; }
 @media (max-width: 600px) {
   .mail-attachments-editor__heading { align-items: flex-start; }
   .mail-attachment-list__actions { flex-direction: column; }

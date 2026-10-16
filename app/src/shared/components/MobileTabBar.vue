@@ -132,7 +132,7 @@ onBeforeUnmount(() => {
   justify-content: space-around;
   background: color-mix(in srgb, var(--bg-card) 92%, transparent);
   border: 1px solid color-mix(in srgb,var(--border-color) 70%,transparent);
-  border-radius: 25px;
+  border-radius: 18px;
   box-shadow: 0 4px 24px #00000010, 0 1px 3px #00000006;
   -webkit-backdrop-filter: blur(18px);
   backdrop-filter: blur(18px);
@@ -150,22 +150,22 @@ onBeforeUnmount(() => {
   justify-content: center;
   gap: 3px;
   color: var(--text-muted);
-  font-size: 0.68rem;
+  font-size: 12px;
   font-weight: 670;
   text-decoration: none;
-  border-radius: 20px;
+  border-radius: 12px;
 }
 
 @media (max-width: 420px) {
   .mobile-tabs a {
     min-width: 0;
     padding-inline: 4px;
-    font-size: 0.63rem;
+    font-size: 11px;
   }
 }
 
 .mobile-tabs a.is-active {
-  color: var(--text-primary);
+  color: var(--accent-text);
   background: var(--accent-bg);
 }
 

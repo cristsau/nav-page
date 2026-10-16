@@ -1062,7 +1062,7 @@ async function handleResendVerification() {
 
 /* iPhone-inspired hierarchy: calm content surfaces, one clear primary action. */
 .auth-page {min-height:100svh;background:var(--bg-secondary);padding:16px clamp(24px,5vw,72px)}
-.auth-card {border-radius:26px;border-color:var(--border-light);box-shadow:0 16px 60px color-mix(in srgb,var(--text-primary) 5%,transparent);padding:24px}
+.auth-card {border-radius:12px;border-color:var(--border-light);box-shadow:none;padding:28px}
 .auth-card__header {margin-bottom:14px}
 .auth-card__brand {padding:0;background:transparent;gap:12px;font-size:12px;letter-spacing:.14em;color:var(--text-secondary)}
 .auth-card__logo {width:44px;height:44px;border-radius:13px}
@@ -1075,9 +1075,9 @@ async function handleResendVerification() {
 .auth-tabs--account .auth-tab {padding:6px 0;min-width:44px;background:transparent;border-radius:0;color:var(--text-secondary);box-shadow:none;border-bottom:2px solid transparent}
 .auth-tabs--account .auth-tab.is-active {border-color:var(--text-primary);color:var(--text-primary)}
 .auth-field {gap:7px;font-size:13px;font-weight:600}
-.auth-field input {min-height:52px;border-radius:13px;border-color:var(--border-color);background:var(--bg-secondary);padding:14px;font-weight:400}
-.auth-submit {min-height:50px;background:var(--text-primary);color:var(--bg-card);border-radius:14px;font-size:16px;font-weight:650;margin-top:8px}
-.auth-provider {min-height:50px;background:var(--bg-card);border-radius:14px;font-size:15px}
+.auth-field input {min-height:46px;border-radius:8px;border-color:var(--border-color);background:var(--bg-secondary);padding:14px;font-weight:400}
+.auth-submit {min-height:46px;background:var(--accent-color);color:var(--accent-contrast);border-radius:8px;font-size:16px;font-weight:650;margin-top:8px}
+.auth-provider {min-height:46px;background:var(--bg-card);border-radius:8px;font-size:15px}
 .auth-trust {display:flex;align-items:center;gap:10px;min-height:44px;margin:0 0 12px;cursor:pointer}
 .auth-trust input {appearance:none;-webkit-appearance:none;flex:0 0 44px;width:44px;height:44px;min-height:44px;border:0;border-radius:12px;background:var(--bg-secondary);position:relative;cursor:pointer}
 .auth-trust input::before {content:'';position:absolute;inset:12px;border:1.5px solid var(--text-secondary);border-radius:6px}

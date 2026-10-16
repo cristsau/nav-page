@@ -86,6 +86,9 @@ try {
     shown.value = true
   }
   await page.evaluate(mountHarness)
+  const showComments = async () => { const button = page.getByRole('button', { name: '评论', exact: true }); if (await button.isVisible()) await button.click() }
+  await showComments()
+  await page.getByRole('button', { name: '属性', exact: true }).click()
   await page.getByText(comments[0].body, { exact: true }).waitFor()
   const box = (selector) => page.locator(selector).boundingBox()
   const commentInput = page.getByLabel('评论正文', { exact: true })
@@ -124,8 +127,10 @@ try {
   pass('invite-and-resolved-discussion-controls-work')
   // Invitation enables the real CRDT path; remount the isolated non-CRDT fixture for layout QA.
   await page.evaluate(() => smartHarness.open())
+  await showComments()
   await page.getByText(comments[0].body, { exact: true }).waitFor()
 
+  await page.getByRole('button', { name: '返回正文', exact: true }).click()
   for (const width of [320, 390, 768]) {
     await page.setViewportSize({ width, height: 844 })
     await page.getByRole('button', { name: '评论', exact: true }).click()
@@ -154,6 +159,7 @@ try {
   await page.screenshot({ path: join(output, 'editor-dark.png') })
   await page.evaluate(async () => { document.documentElement.classList.remove('dark'); const { applyStyleConfig } = await import('/src/shared/composables/useConfig.js'); applyStyleConfig() })
   await page.evaluate(() => smartHarness.open('editor', 'tiptap-json', 'viewer'))
+  await showComments()
   await page.getByText('当前为只读权限，可以查看评论。', { exact: true }).waitFor()
   assert.equal(await commentInput.count(), 0)
   await page.evaluate(() => smartHarness.open())
@@ -164,6 +170,7 @@ try {
   await page.evaluate(() => { smartHarness.saving.value = false })
   detailFailure = true
   await page.evaluate(() => smartHarness.open())
+  await showComments()
   await page.getByText('示例加载失败，请重试', { exact: true }).waitFor()
   detailFailure = false
   await page.getByRole('button', { name: '重新加载', exact: true }).click()

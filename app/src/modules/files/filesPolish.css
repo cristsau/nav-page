@@ -8,7 +8,31 @@
 .drive-page .drive-list>li:focus-within{background:var(--bg-hover)}
 .drive-page .drive-list>li.drive-row-checked:focus-within{background:var(--accent-bg)}
 .drive-page .drive-file:disabled{cursor:wait}
-.drive-page .drive-surface{box-shadow:0 4px 24px #00000004}
+.drive-page .drive-surface{box-shadow:none;border-radius:12px}
+.drive-page {padding:28px 32px}
+.drive-page .drive-heading {margin-bottom:20px}
+.drive-page .drive-protection {font-size:12px;margin-bottom:16px}
+.drive-page .drive-list:not(.drive-grid)>li {min-height:52px}
+.drive-page .drive-list:not(.drive-grid) .drive-file {min-height:52px;padding-block:8px}
+.drive-page .drive-file-icon {width:32px;height:32px;border-radius:8px}
+.drive-page .drive-list:not(.drive-grid) .drive-file-label strong {font-size:14px;font-weight:550}
+.drive-page .drive-button {border-radius:8px}
+.drive-page .drive-search {border-radius:8px}
+.drive-page > .drive-transfers {margin-top:16px}
+@media(min-width:821px) and (hover:hover) and (pointer:fine) {
+ .drive-page .drive-list:not(.drive-grid)>li>.drive-button {opacity:0}
+ .drive-page .drive-list:not(.drive-grid)>li:hover>.drive-button,
+ .drive-page .drive-list:not(.drive-grid)>li:focus-within>.drive-button {opacity:1}
+}
+@media(max-width:820px) {
+ .drive-page {padding:20px 16px}
+ .drive-page .drive-list:not(.drive-grid)>li,.drive-page .drive-list:not(.drive-grid) .drive-file {min-height:64px}
+ .drive-page .drive-file-label strong {white-space:normal;overflow-wrap:anywhere}
+ .drive-page .drive-toolbar {padding:12px}
+ .drive-page .drive-heading>a {min-height:36px;font-size:12px}
+ .drive-page .drive-protection {gap:8px;font-size:12px}
+ .drive-page .drive-selection-toggle {padding-bottom:8px}
+}
 .drive-page .drive-notice{align-items:center;border:1px solid var(--border-color)}
 .drive-notice>span{flex:1;min-width:0}.drive-notice>.drive-button{flex-shrink:0;min-width:36px}
 .drive-page .drive-feedback,.drive-page .drive-batch-bar,.drive-dialog .drive-feedback,.drive-dialog .queue-empty{animation:nav-drive-reveal 160ms var(--drive-ease,ease) both}

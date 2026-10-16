@@ -18,7 +18,7 @@ test('authenticated routes share one primary navigation shell', async () => {
   ])
 
   assert.match(app, /<AppShell v-if="appShellEnabled">/)
-  assert.match(shell, /<PrimaryNavigation\s*\/>/)
+  assert.match(shell, /<PrimaryNavigation\b[^>]*\/>/)
   assert.match(shell, /<MobileTabBar\s*\/>/)
   assert.match(primary, /<nav class="primary-header__nav" aria-label="主要页面">/)
   assert.match(mobile, /<nav\b[^>]*class="mobile-tabs"[^>]*aria-label="主要页面">/s)
