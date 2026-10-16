@@ -31,4 +31,5 @@ for (const vector of vectors) {
 }
 assert.ok(cosineSimilarity(vectors[0], vectors[1]) > 0.999)
 assert.ok(cosineSimilarity(vectors[0], vectors[2]) < 0.95)
-console.log(JSON.stringify({ status: 'PASS', model: embeddingModelIdentity(), dimensions: 384, samples: 3 }))
+assert.ok(requests.every(url => url.includes('/resolve/' + config.embeddingModelRevision + '/')), 'Unpinned remote model request')
+console.log(JSON.stringify({ status: 'PASS', model: embeddingModelIdentity(), dimensions: 384, samples: 3, pinnedRemoteRequests: requests.length }))
