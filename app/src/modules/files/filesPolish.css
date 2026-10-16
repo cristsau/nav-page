@@ -1,0 +1,46 @@
+/* File-library-only polish. Never animate media out: unmount releases it immediately. */
+.drive-page,.drive-dialog{--drive-ease:cubic-bezier(.22,.68,0,1.01)}
+.drive-page .drive-button,.drive-dialog button,.drive-footer .drive-button{transition:background-color 140ms ease,border-color 140ms ease,color 140ms ease,box-shadow 140ms ease,transform 120ms ease}
+.drive-page button:disabled,.drive-dialog button:disabled,.drive-footer button:disabled{transform:none;box-shadow:none}
+.drive-page button:not(:disabled):active,.drive-dialog button:not(:disabled):active,.drive-footer button:not(:disabled):active{transform:translateY(1px)}
+.drive-dialog button:focus-visible,.drive-dialog a:focus-visible,.drive-dialog select:focus-visible{outline:2px solid var(--accent-color);outline-offset:3px}
+.drive-page .drive-list>li{transition:background-color 140ms ease,border-color 140ms ease}
+.drive-page .drive-list>li:focus-within{background:var(--bg-hover)}
+.drive-page .drive-list>li.drive-row-checked:focus-within{background:var(--accent-bg)}
+.drive-page .drive-file:disabled{cursor:wait}
+.drive-page .drive-surface{box-shadow:0 4px 24px #00000004}
+.drive-page .drive-notice{align-items:center;border:1px solid var(--border-color)}
+.drive-notice>span{flex:1;min-width:0}.drive-notice>.drive-button{flex-shrink:0;min-width:36px}
+.drive-page .drive-feedback,.drive-page .drive-batch-bar,.drive-dialog .drive-feedback,.drive-dialog .queue-empty{animation:nav-drive-reveal 160ms var(--drive-ease,ease) both}
+.drive-dialog .media-preview{animation:nav-drive-reveal 180ms var(--drive-ease,ease) both}
+.modal-overlay:has(.drive-dialog) .modal__title{min-width:0;overflow-wrap:anywhere;line-height:1.5;padding-right:12px}
+.modal-overlay:has(.drive-dialog) .modal__close{flex-shrink:0}
+.modal-overlay.modal-enter-active:has(.drive-dialog){animation-duration:180ms}
+.modal-overlay.modal-enter-active:has(.drive-dialog) .modal-content{animation:nav-drive-dialog-in 180ms cubic-bezier(.22,.68,0,1.01) both}
+.modal-overlay.modal-leave-active:has(.drive-dialog){pointer-events:none}
+.modal-overlay.modal-leave-active:has(.drive-dialog) .modal-content{animation:nav-drive-dialog-out 120ms ease both}
+.drive-loading-skeleton{padding:12px 24px 0}.drive-loading-skeleton>p{display:flex;align-items:center;gap:9px;font-size:12px;color:var(--text-secondary);margin:8px 0 16px}
+.drive-skeleton-row{display:flex;align-items:center;gap:14px;min-height:76px;border-bottom:1px solid var(--border-light)}
+.drive-skeleton-row>i{display:block;width:40px;height:44px;border-radius:10px;flex-shrink:0;background:var(--bg-secondary)}
+.drive-skeleton-row>i:last-child{width:28px;height:28px;margin-left:auto}.drive-skeleton-row>span{width:48%;max-width:300px;display:grid;gap:10px}
+.drive-skeleton-row b{height:10px;border-radius:4px;background:var(--bg-secondary)}.drive-skeleton-row b:last-child{width:60%;height:7px}
+.drive-skeleton-rows{animation:nav-drive-breathe 1200ms ease-in-out 3}
+@keyframes nav-drive-reveal{from{opacity:.35;transform:translateY(4px)}to{opacity:1;transform:none}}
+@keyframes nav-drive-dialog-in{from{opacity:0;transform:translateY(8px) scale(.99)}to{opacity:1;transform:none}}
+@keyframes nav-drive-dialog-out{to{opacity:0;transform:translateY(4px)}}
+@keyframes nav-drive-breathe{50%{opacity:.45}}
+@media(hover:hover) and (pointer:fine){.drive-page .drive-grid>li:hover{border-color:var(--accent-color);box-shadow:0 4px 14px #00000008}}
+@media(max-width:720px){
+ .drive-page .drive-button,.drive-footer .drive-button,.drive-page .drive-location nav button,.drive-page .drive-view-options select,.drive-page .drive-view-switch .drive-button{min-height:44px}
+ .drive-page .drive-list:not(.drive-grid)>li{grid-template-columns:minmax(0,1fr) 44px}
+ .drive-page .drive-list:not(.drive-grid)>li.drive-selecting{grid-template-columns:24px minmax(0,1fr) 44px}
+ .drive-page .drive-grid>li>.drive-button{min-height:44px}
+ .drive-page .transfer-panel button,.drive-dialog .offline-panel button{min-height:44px}
+ .drive-page .transfer-panel .transfer-icon{width:44px}
+ .drive-page .drive-search input,.drive-page .task-search input,.drive-dialog .task-search input{font-size:16px}
+ .drive-loading-skeleton{padding:12px 14px 0}
+}
+@media(prefers-reduced-motion:reduce){
+ .drive-page *,.drive-dialog *,.drive-footer *{animation:none!important;transition:none!important;scroll-behavior:auto!important}
+ .modal-overlay:has(.drive-dialog),.modal-overlay:has(.drive-dialog) .modal-content{animation:none!important;transition:none!important}
+}

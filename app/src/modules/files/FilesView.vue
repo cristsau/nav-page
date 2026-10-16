@@ -10,13 +10,18 @@ import FolderPicker from './FolderPicker.vue'
 import DeletedFiles from './DeletedFiles.vue'
 import OfflineDownloads from './OfflineDownloads.vue'
 import UploadTasks from './UploadTasks.vue'
+import MediaPreview from './MediaPreview.vue'
+import PreviewNavigator from './PreviewNavigator.vue'
+import './filesPolish.css'
 import { planFolderUpload } from './folderUploads'
 import { fileFilters, fileSorts, fileTypeLabel, presentFiles, hasFileDrag, droppedFiles } from './filePresentation'
 
 const status = ref(null), entries = ref([]), path = ref(''), search = ref(''), query = ref('')
 const route = useRoute()
 const loading = ref(false), working = ref(false), error = ref(''), notice = ref(''), cursor = ref(null)
-const dialog = ref(''), selected = ref(null), value = ref(''), dialogError = ref(''), mediaFailed = ref(false)
+const listFailure = ref(null)
+const canRetryList = computed(() => listFailure.value && error.value === listFailure.value.message && path.value === listFailure.value.path && query.value === listFailure.value.query)
+const dialog = ref(''), selected = ref(null), value = ref(''), dialogError = ref('')
 const content = ref(''), original = ref(''), textRev = ref(''), discard = ref(false), picker = ref(null)
 const selection = ref(false), checked = ref([]), batchItems = ref([]), plans = ref([]), results = ref([]), destination = ref(null), jobs = ref([])
 const lastBatchMode = ref('')
@@ -74,7 +79,7 @@ function childPath(name) {
 }
 async function loadEntries(more = false) {
   const sequence = ++loadSequence
-  loading.value = true; error.value = ''
+  loading.value = true; error.value = ''; listFailure.value = null
   if (!more) { entries.value = []; cursor.value = null; checked.value = [] }
   try {
     const result = await filesAction('list', { path: path.value, query: query.value, cursor: more ? cursor.value : null })
@@ -82,7 +87,11 @@ async function loadEntries(more = false) {
     const merged = more ? [...entries.value, ...result.entries] : result.entries
     entries.value = [...new Map(merged.map(item => [item.id, item])).values()]
     cursor.value = result.hasMore ? result.cursor : null
-  } catch (e) { if (alive && sequence === loadSequence) error.value = message(e) }
+  } catch (e) {
+    if (alive && sequence === loadSequence) {
+      error.value = message(e); listFailure.value = { more, path: path.value, query: query.value, message: error.value }
+    }
+  }
   finally { if (alive && sequence === loadSequence) loading.value = false }
 }
 async function connect() {
@@ -121,11 +130,15 @@ function navigate(next) {
   if (loading.value || working.value) return
   path.value = next; search.value = ''; query.value = ''; notice.value = ''; changeFilter('all'); loadEntries()
 }
+function openTaskFolder(directory) {
+  if (working.value || loading.value) return
+  close(); navigate(directory)
+}
 function runSearch() { if (!loading.value && !working.value) { query.value = search.value.trim(); loadEntries() } }
 function open(mode, item = null) {
   if (working.value) return
   if (['delete', 'move', 'copy'].includes(mode)) { void beginBatch(mode, item ? [item] : chosen.value); return }
-  selected.value = item; dialog.value = mode; value.value = ''; dialogError.value = ''; discard.value = false; mediaFailed.value = false; copied.value = ''
+  selected.value = item; dialog.value = mode; value.value = ''; dialogError.value = ''; discard.value = false; copied.value = ''
   if (mode === 'rename') value.value = item.name
   if (mode === 'move') value.value = item.path
 }
@@ -329,8 +342,8 @@ onBeforeUnmount(() => { alive = false; loadSequence++; transfers?.dispose(); con
         <div class="drive-view-switch" role="group" aria-label="显示方式"><button class="drive-button drive-small" :aria-pressed="layout === 'list'" @click="layout = 'list'">列表</button><button class="drive-button drive-small" :aria-pressed="layout === 'grid'" @click="layout = 'grid'">网格</button></div>
         <p>排序与筛选仅针对已加载项目<span v-if="cursor">，可继续加载更多</span>。<span class="drive-drop-hint">可拖入文件，确认后上传到当前目录。</span></p>
       </div>
-      <div v-if="error" class="drive-feedback drive-error" role="alert"><Icon name="alert" :size="18" /><span>{{ error }}</span></div>
-      <p v-if="notice" class="drive-feedback" role="status">{{ notice }}</p>
+      <div v-if="error" class="drive-feedback drive-error drive-list-error" role="alert"><Icon name="alert" :size="18" /><span>{{ error }}</span><button v-if="canRetryList" type="button" class="drive-button drive-small" :disabled="loading || working" @click="loadEntries(listFailure.more)">重试读取文件</button></div>
+      <p v-if="notice" class="drive-feedback drive-notice" role="status"><Icon name="check" :size="18" /><span>{{ notice }}</span><button class="drive-button drive-small" type="button" aria-label="关闭操作提示" @click="notice = ''"><Icon name="close" :size="15" /></button></p>
       <p v-if="recoveryError" class="drive-feedback drive-error" role="alert">{{ recoveryError }} <button class="drive-button drive-small" @click="recoverTransfers">重试读取任务</button></p>
       <input ref="resumePicker" class="drive-hidden" type="file" aria-label="重新选择续传原文件" @change="reselectOriginal">
       <UploadTasks v-if="jobs.length" :jobs="jobs" :persistence="status?.uploadResume" :busy="loading || working" :clearing="clearingUploads"
@@ -349,7 +362,11 @@ onBeforeUnmount(() => { alive = false; loadSequence++; transfers?.dispose(); con
             <button class="drive-button drive-small" type="button" :disabled="loading || working" :aria-label="`管理 ${item.name}`" @click="open('manage', item)"><Icon name="more-horizontal" :size="18" /></button>
           </li>
         </ul>
-        <div v-if="loading" class="drive-empty drive-loading" role="status"><span class="drive-spinner" />正在读取文件…</div>
+        <div v-if="loading && !entries.length" class="drive-loading-skeleton" role="status" aria-label="正在读取文件">
+          <p><span class="drive-spinner" />正在读取文件…</p>
+          <div class="drive-skeleton-rows" aria-hidden="true"><div v-for="row in 4" :key="row" class="drive-skeleton-row"><i /><span><b /><b /></span><i /></div></div>
+        </div>
+        <div v-else-if="loading" class="drive-empty drive-loading" role="status"><span class="drive-spinner" />正在加载更多，已显示文件会保留…</div>
         <div v-else-if="!entries.length && !error" class="drive-empty"><Icon :name="query ? 'search' : 'folder'" :size="34" /><h2>{{ query ? '没有找到匹配的文件' : '这里还没有可显示的文件' }}</h2><p>{{ query ? '试试更短的文件名，或返回全部文件搜索。' : '可以上传文件或创建文件夹；受保护的备份内容不会出现在这里。' }}</p></div>
         <div v-else-if="!loading && !sorted.length && !error" class="drive-empty"><Icon name="search" :size="34" /><h2>已加载项目中没有此类型</h2><p>{{ cursor ? '还有未加载的项目，可点击下方“加载更多”继续查找。' : '试试其他类型，或清除筛选查看全部。' }}</p><button class="drive-button" @click="changeFilter('all')">清除类型筛选</button></div>
         <footer v-if="status" class="drive-list-footer"><span>显示 {{ sorted.length }} / 已加载 {{ entries.length }} 项<span v-if="cursor"> · 还有更多</span></span><button v-if="cursor" class="drive-button" :disabled="loading || working" @click="loadEntries(true)">加载更多</button><span>分块上传 ≤ {{ bytes(status.uploadLimit) }} / 文件</span></footer>
@@ -363,7 +380,7 @@ onBeforeUnmount(() => { alive = false; loadSequence++; transfers?.dispose(); con
         <p v-if="dialogError" class="drive-feedback drive-error" role="alert">{{ dialogError }}</p>
         <div v-if="working" class="drive-inline-status" role="status"><span class="drive-spinner" />正在处理，请稍候…</div>
         <DeletedFiles v-if="dialog === 'deleted'" :directory="path" @busy="working = $event" @recovered="notice = '已找回新副本，请刷新目录查看。'" />
-        <OfflineDownloads v-else-if="dialog === 'offline'" :directory="path" :video="selected?.kind === 'video' ? selected : null" @busy="working = $event" />
+        <OfflineDownloads v-else-if="dialog === 'offline'" :directory="path" :video="selected?.kind === 'video' ? selected : null" @busy="working = $event" @open-folder="openTaskFolder" />
         <template v-else-if="dialog === 'directory'">
           <p class="drive-detail">将 {{ pendingDrop.length }} 个文件（{{ bytes(dropBytes) }}）按原层级上传到：</p>
           <p class="drive-drop-target">{{ dropDirectory }}/{{ folderPlan.root }}</p>
@@ -384,13 +401,10 @@ onBeforeUnmount(() => { alive = false; loadSequence++; transfers?.dispose(); con
         </template>
         <template v-else-if="dialog === 'drop'"><p class="drive-detail">将 {{ pendingDrop.length }} 个文件（{{ bytes(dropBytes) }}）上传到：</p><p class="drive-drop-target">{{ dropDirectory || '全部文件（根目录）' }}</p><ul class="drive-operation-items"><li v-for="(file, index) in pendingDrop" :key="index"><Icon name="note" :size="18" /><span><strong>{{ file.name }}</strong><small>{{ bytes(file.size) }}</small></span></li></ul><p class="drive-detail">确认后才加入上传队列；同名文件不会覆盖。取消或关闭弹窗不会上传。</p></template>
         <template v-else-if="dialog === 'preview'">
+          <PreviewNavigator :items="sorted" :selected-id="selected.id" @select="open('preview', $event)" />
           <p v-if="selected.kind === 'video' && selected.downloadable" class="drive-detail">无法播放此编码？<button class="drive-button drive-small" :disabled="working" @click="open('offline', selected)">生成兼容视频副本</button></p>
-          <div v-if="!mediaFailed && ['image', 'video', 'audio'].includes(selected.kind) && selected.downloadable" class="drive-preview">
-            <img v-if="selected.kind === 'image'" :src="contentUrl(selected.id, true)" :alt="selected.name" @error="mediaFailed = true">
-            <video v-else-if="selected.kind === 'video'" :src="contentUrl(selected.id, true)" controls playsinline preload="metadata" @error="mediaFailed = true" />
-            <audio v-else :src="contentUrl(selected.id, true)" controls preload="metadata" @error="mediaFailed = true" />
-          </div>
-          <div v-else class="drive-empty"><Icon :name="iconName(selected)" :size="38" /><h3>{{ selected.kind === 'text' ? '读取并编辑文本' : mediaFailed ? '浏览器暂时无法播放或预览' : '在 Dropbox 中打开此文件' }}</h3><p>{{ selected.kind === 'text' ? '支持 UTF-8 文本，最大 1 MB。点击下方“编辑文本”读取内容。' : '可使用下方下载按钮，或前往 Dropbox 官方页面预览。Office 文档由官方页面提供编辑能力。' }}</p></div>
+          <MediaPreview v-if="['image', 'video', 'audio'].includes(selected.kind) && selected.downloadable" :key="selected.id + ':' + selected.rev" :item="selected" />
+          <div v-else class="drive-empty"><Icon :name="iconName(selected)" :size="38" /><h3>{{ selected.kind === 'text' ? '读取并编辑文本' : '在 Dropbox 中打开此文件' }}</h3><p>{{ selected.kind === 'text' ? '支持 UTF-8 文本，最大 1 MB。点击下方“编辑文本”读取内容。' : '可使用下方下载按钮，或前往 Dropbox 官方页面预览。Office 文档由官方页面提供编辑能力。' }}</p></div>
           <p class="drive-detail">{{ bytes(selected.size) }} · 修改于 {{ date(selected.modified) }}</p>
         </template>
         <template v-else-if="dialog === 'edit'"><label for="drive-editor" class="drive-field-label">文件内容 <span>{{ dirty ? '有未保存修改' : '与 Dropbox 一致' }}</span></label><textarea id="drive-editor" v-model="content" class="drive-editor" spellcheck="false" :disabled="working" @keydown.ctrl.s.prevent="save" @keydown.meta.s.prevent="save" /><p class="drive-detail">{{ bytes(byteLength) }} / 1 MB · 保存前会检查文件版本，不覆盖外部修改。</p></template>
@@ -423,4 +437,9 @@ onBeforeUnmount(() => { alive = false; loadSequence++; transfers?.dispose(); con
 @media(max-width:720px){.drive-view-options{padding:8px 14px 12px;gap:10px}.drive-view-options label{flex:1 1 calc(50% - 10px);flex-direction:column;align-items:stretch;gap:4px}.drive-view-options select{width:100%;min-height:42px}.drive-view-switch{margin-left:0}.drive-view-switch .drive-button{min-width:54px;min-height:40px}.drive-drop-hint{display:none}.drive-list.drive-grid{grid-template-columns:repeat(2,minmax(0,1fr));gap:8px;padding:10px 12px}.drive-grid>li,.drive-grid>li.drive-selecting{padding:14px 10px 10px}.drive-grid .drive-file-label strong{font-size:12px}.drive-grid .drive-file-label small{font-size:10px}.drive-details{grid-template-columns:65px minmax(0,1fr);font-size:12px}}
 .drive-actions{flex-wrap:wrap}.drive-history li{flex-wrap:wrap}.drive-history li>div{display:flex;gap:6px;flex-wrap:wrap}.drive-history li>span{flex:1 1 210px}
 @media(max-width:720px){.drive-actions>.drive-button{flex:1 1 40%}}
+</style>
+
+<style scoped>
+.drive-list-error{flex-wrap:wrap;align-items:center}.drive-list-error>span{flex:1;min-width:120px}.drive-list-error>button{min-height:44px;flex-shrink:0}.drive-list-error>svg{margin-top:0}
+@media(max-width:440px){.drive-list-error>button{width:100%}}
 </style>

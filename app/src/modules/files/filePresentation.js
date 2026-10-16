@@ -36,6 +36,17 @@ export function presentFiles(entries, filter = 'all', sort = 'name-asc') {
 export function hasFileDrag(transfer) {
   return Array.from(transfer?.types || []).includes('Files') || Array.from(transfer?.items || []).some(item => item.kind === 'file')
 }
+
+// Metadata only. Respect the caller's loaded/filter/sort order; never fetch the next page.
+export function mediaPreviewPosition(entries, selectedId) {
+  const seen = new Set()
+  const items = entries.filter(item => {
+    if (item.type !== 'file' || !item.downloadable || !['image', 'video', 'audio'].includes(item.kind) || !item.id || seen.has(item.id)) return false
+    seen.add(item.id); return true
+  })
+  const index = items.findIndex(item => item.id === selectedId)
+  return { index, total: items.length, previous: index > 0 ? items[index - 1] : null, next: index >= 0 ? items[index + 1] || null : null }
+}
 export function droppedFiles(transfer) {
   const items = Array.from(transfer?.items || []).filter(item => item.kind === 'file')
   if (!items.length) throw Error('请拖入本机文件；链接和网页内容不能作为文件上传。')

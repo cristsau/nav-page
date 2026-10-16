@@ -1,8 +1,29 @@
 import test from 'node:test'
 import assert from 'node:assert/strict'
-import { presentFiles, fileCategory, fileTypeLabel, droppedFiles, hasFileDrag } from '../../app/src/modules/files/filePresentation.js'
+import { presentFiles, fileCategory, fileTypeLabel, droppedFiles, hasFileDrag, mediaPreviewPosition } from '../../app/src/modules/files/filePresentation.js'
 const file = (name, extra = {}) => ({ id: name, name, type: 'file', kind: 'file', ...extra })
 const source = [file('10.txt', { kind: 'text', size: 100, modified: '2026-02-01T00:00:00Z' }), file('2.txt', { kind: 'text', size: 10, modified: '2026-01-01T00:00:00Z' }), file('3', { type: 'folder' }), file('1', { type: 'folder' }), file('unknown')]
+
+test('media navigation respects loaded order and excludes folders, unavailable and non-media entries', () => {
+  const entries = [file('z', { kind: 'video', downloadable: true }), file('folder', { type: 'folder', kind: 'image', downloadable: true }), file('hidden', { kind: 'audio', downloadable: false }), file('text', { kind: 'text', downloadable: true }), file('a', { kind: 'image', downloadable: true })]
+  const before = structuredClone(entries)
+  const pos = mediaPreviewPosition(entries, 'z')
+  assert.equal(pos.index, 0); assert.equal(pos.total, 2); assert.equal(pos.previous, null); assert.equal(pos.next.id, 'a')
+  assert.deepEqual(entries, before)
+})
+test('media navigation never wraps, duplicates or invents a position for a direct reference', () => {
+  const a = file('a', { kind: 'audio', downloadable: true }), b = file('b', { kind: 'image', downloadable: true })
+  const last = mediaPreviewPosition([a, a, b], 'b')
+  assert.equal(last.total, 2); assert.equal(last.index, 1); assert.equal(last.next, null); assert.equal(last.previous, a)
+  assert.deepEqual(mediaPreviewPosition([a, b], 'not-loaded'), { index: -1, total: 2, previous: null, next: null })
+  assert.equal(mediaPreviewPosition([], 'a').index, -1)
+})
+test('media navigation follows the caller filter and sort rather than the underlying directory', () => {
+  const entries = [file('a', { kind: 'image', downloadable: true }), file('b', { kind: 'image', downloadable: true }), file('c', { kind: 'video', downloadable: true })]
+  const pos = mediaPreviewPosition(presentFiles(entries, 'image', 'name-desc'), 'b')
+  assert.equal(pos.total, 2); assert.equal(pos.index, 0); assert.equal(pos.next.id, 'a')
+  assert.equal(mediaPreviewPosition(presentFiles(entries, 'video'), 'c').total, 1)
+})
 test('name ordering is natural, folder-first in either direction and nonmutating', () => {
   const before = structuredClone(source)
   assert.deepEqual(presentFiles(source).map(i => i.name), ['1', '3', '2.txt', '10.txt', 'unknown'])
