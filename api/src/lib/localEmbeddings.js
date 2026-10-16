@@ -15,17 +15,31 @@ async function createExtractor() {
   const transformers = await import('@huggingface/transformers')
   transformers.env.cacheDir = config.embeddingCacheDir
   transformers.env.allowRemoteModels = true
-  return createCachedEmbeddingExtractor(transformers.pipeline, config.embeddingModel, {
+  const loader = (task, model, options) => loadPinnedFeatureExtractor(transformers, task, model, options)
+  return createCachedEmbeddingExtractor(loader, config.embeddingModel, {
     dtype: 'q8',
     device: 'cpu',
     revision: config.embeddingModelRevision
   })
 }
 
+export async function loadPinnedFeatureExtractor(transformers, task, model, options) {
+  // pipeline() 4.3.1 probes main via get_pipeline_files before forwarding the
+  // caller's revision/local_files_only. Use public components so every read is
+  // pinned, including cold start and the read-only/offline cache path.
+  const tokenizer = await transformers.AutoTokenizer.from_pretrained(model, options)
+  const encoder = await transformers.AutoModel.from_pretrained(model, options)
+  try {
+    return new transformers.FeatureExtractionPipeline({ task, tokenizer, model: encoder })
+  } catch (error) {
+    await encoder.dispose()
+    throw error
+  }
+}
+
 export async function createCachedEmbeddingExtractor(pipeline, model, options) {
-  // Newer runtimes probe optional model files remotely even with a warm cache.
-  // Prefer a wholly local pipeline; only a genuinely missing model file may
-  // trigger the existing pinned-model download. Corruption/runtime errors fail.
+  // Only a genuinely missing model file may trigger the pinned-model download.
+  // Corruption/runtime errors fail rather than silently replacing the model.
   try {
     return await pipeline('feature-extraction', model, { ...options, local_files_only: true })
   } catch (error) {

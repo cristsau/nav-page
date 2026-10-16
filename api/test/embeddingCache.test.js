@@ -1,8 +1,19 @@
 import test from 'node:test'
 import assert from 'node:assert/strict'
-import { createCachedEmbeddingExtractor } from '../src/lib/localEmbeddings.js'
+import { createCachedEmbeddingExtractor, loadPinnedFeatureExtractor } from '../src/lib/localEmbeddings.js'
 
 const options = { revision: 'fixed-revision', dtype: 'q8', device: 'cpu' }
+test('public model and tokenizer components receive the exact revision and offline flag', async () => {
+  const calls = [], tokenizer = {}, encoder = {}, pinned = { ...options, local_files_only: true }
+  class FeatureExtractionPipeline { constructor(value) { Object.assign(this, value) } }
+  const runtime = { FeatureExtractionPipeline,
+    AutoTokenizer: { from_pretrained: async (...args) => { calls.push(args); return tokenizer } },
+    AutoModel: { from_pretrained: async (...args) => { calls.push(args); return encoder } } }
+  const result = await loadPinnedFeatureExtractor(runtime, 'feature-extraction', 'fixed-model', pinned)
+  assert.deepEqual(calls, [['fixed-model', pinned], ['fixed-model', pinned]])
+  assert.equal(result.model, encoder)
+  assert.equal(result.tokenizer, tokenizer)
+})
 test('warm model never attempts remote optional-file probes', async () => {
   const calls = [], extractor = () => {}
   assert.equal(await createCachedEmbeddingExtractor(async (...args) => { calls.push(args); return extractor }, 'fixed-model', options), extractor)
