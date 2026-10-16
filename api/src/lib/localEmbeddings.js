@@ -15,10 +15,23 @@ async function createExtractor() {
   const transformers = await import('@huggingface/transformers')
   transformers.env.cacheDir = config.embeddingCacheDir
   transformers.env.allowRemoteModels = true
-  return transformers.pipeline('feature-extraction', config.embeddingModel, {
+  return createCachedEmbeddingExtractor(transformers.pipeline, config.embeddingModel, {
     dtype: 'q8',
+    device: 'cpu',
     revision: config.embeddingModelRevision
   })
+}
+
+export async function createCachedEmbeddingExtractor(pipeline, model, options) {
+  // Newer runtimes probe optional model files remotely even with a warm cache.
+  // Prefer a wholly local pipeline; only a genuinely missing model file may
+  // trigger the existing pinned-model download. Corruption/runtime errors fail.
+  try {
+    return await pipeline('feature-extraction', model, { ...options, local_files_only: true })
+  } catch (error) {
+    if (error?.name !== 'ModelFileNotFoundError') throw error
+    return pipeline('feature-extraction', model, { ...options, local_files_only: false })
+  }
 }
 
 export function embeddingModelIdentity() {
