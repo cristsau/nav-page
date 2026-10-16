@@ -1375,7 +1375,7 @@ onMounted(refreshLocalState)
 }
 
 .btn--danger {
-  background: var(--error-color);
+  background: var(--danger-fill);
   color: #fff;
 }
 

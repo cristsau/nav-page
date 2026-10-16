@@ -646,7 +646,7 @@ function runMobileAction(action) {
 }
 
 .action-btn--danger:hover:not(:disabled) {
-  background: var(--error-color);
+  background: var(--danger-fill);
   border-color: var(--error-color);
   color: #fff;
 }

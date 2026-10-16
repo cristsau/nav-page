@@ -4,7 +4,7 @@
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
     <meta name="description" content="DOMO NAV 自托管网址导航与个人工作入口">
-    <meta name="theme-color" content="#a08060">
+    <meta name="theme-color" content="#635bda">
     <meta name="mobile-web-app-capable" content="yes">
     <meta name="apple-mobile-web-app-capable" content="yes">
     <meta name="apple-mobile-web-app-status-bar-style" content="default">
@@ -17,8 +17,8 @@
       .startup-skeleton {
         min-height: 100vh;
         padding: 22px clamp(18px, 5vw, 72px) 48px;
-        color: #f4eee8;
-        background: #1e1815;
+        color: #ededf2;
+        background: #111216;
         box-sizing: border-box;
         font-family: system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
       }
@@ -33,7 +33,7 @@
       .startup-skeleton__line,
       .startup-skeleton__search,
       .startup-skeleton__card {
-        background: linear-gradient(105deg, #302721 20%, #41342d 38%, #302721 58%);
+        background: linear-gradient(105deg, #1d1f27 20%, #2b2d37 38%, #1d1f27 58%);
         background-size: 220% 100%;
         animation: startup-shimmer 1.6s ease-in-out infinite;
       }
@@ -49,14 +49,14 @@
       }
       .startup-skeleton__content {
         width: min(1080px, 100%);
-        margin: clamp(92px, 14vh, 150px) auto 0;
+        margin: clamp(36px, 6vh, 72px) auto 0;
       }
       .startup-skeleton__search {
         width: min(720px, 100%);
-        height: 68px;
-        margin: 0 auto 72px;
-        border: 1px solid #55483f;
-        border-radius: 24px;
+        height: 48px;
+        margin: 0 auto 32px;
+        border: 1px solid #393c49;
+        border-radius: 8px;
       }
       .startup-skeleton__grid {
         display: grid;
@@ -64,9 +64,9 @@
         gap: 18px;
       }
       .startup-skeleton__card {
-        height: 148px;
-        border: 1px solid #463a33;
-        border-radius: 22px;
+        height: 94px;
+        border: 1px solid #393c49;
+        border-radius: 10px;
       }
       @keyframes startup-shimmer {
         to { background-position-x: -220%; }
@@ -75,19 +75,19 @@
         .startup-skeleton__content { margin-top: 84px; }
         .startup-skeleton__search { height: 60px; margin-bottom: 46px; }
         .startup-skeleton__grid { grid-template-columns: repeat(2, minmax(0, 1fr)); }
-        .startup-skeleton__card { height: 126px; }
+        .startup-skeleton__card { height: 84px; }
       }
       @media (prefers-color-scheme: light) {
-        .startup-skeleton { color: #332d29; background: #faf8f5; }
+        .startup-skeleton { color: #202128; background: #f6f6f8; }
         .startup-skeleton__logo,
         .startup-skeleton__line,
         .startup-skeleton__search,
         .startup-skeleton__card {
-          background: linear-gradient(105deg, #eee8e1 20%, #ddd3c9 38%, #eee8e1 58%);
+          background: linear-gradient(105deg, #ededf1 20%, #e2e3e9 38%, #ededf1 58%);
           background-size: 220% 100%;
         }
         .startup-skeleton__search,
-        .startup-skeleton__card { border-color: #dfd7ce; }
+        .startup-skeleton__card { border-color: #d6d7df; }
       }
       @media (prefers-reduced-motion: reduce) {
         .startup-skeleton__logo,

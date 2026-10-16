@@ -22,6 +22,9 @@ const props = defineProps({
 
 const iconPaths = {
   'chevron-right': [ ['path', { d: 'm9 18 6-6-6-6' }] ],
+  'chevron-left': [ ['path', { d: 'm15 18-6-6 6-6' }] ],
+  maximize: [ ['path', { d: 'M8 3H5a2 2 0 0 0-2 2v3m13-5h3a2 2 0 0 1 2 2v3M3 16v3a2 2 0 0 0 2 2h3m8 0h3a2 2 0 0 0 2-2v-3' }] ],
+  minimize: [ ['path', { d: 'M8 3v3a2 2 0 0 1-2 2H3m13-5v3a2 2 0 0 0 2 2h3M3 16h3a2 2 0 0 1 2 2v3m8 0v-3a2 2 0 0 1 2-2h3' }] ],
   'scan-face': [
     ['path', { d: 'M4 7V4h3M17 4h3v3M20 17v3h-3M7 20H4v-3M9 9v1M15 9v1M12 9v4h-1M9 16c1.5 1 4.5 1 6 0' }]
   ],

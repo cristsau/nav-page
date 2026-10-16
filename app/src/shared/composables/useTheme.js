@@ -3,7 +3,14 @@ import { getCurrentUserId, getSetting, setSetting } from '@/shared/db/database'
 import { applyStyleConfig } from '@/shared/composables/useConfig'
 import { fetchBackendSetting, saveBackendSetting, shouldUseBackendSettings } from '@/shared/services/settingsApi'
 
-const isDark = ref(false)
+function initialDarkPreference() {
+  try {
+    const saved = localStorage.getItem('nav-theme')
+    return saved === 'dark' || (saved !== 'light' && window.matchMedia('(prefers-color-scheme: dark)').matches)
+  } catch { return window.matchMedia('(prefers-color-scheme: dark)').matches }
+}
+const isDark = ref(initialDarkPreference())
+document.documentElement.classList.toggle('dark', isDark.value)
 let initialized = false
 let stopWatchingSystemTheme = null
 

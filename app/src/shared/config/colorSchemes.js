@@ -4,19 +4,20 @@ export const DARK_RAISED_SURFACE_WHITE_MIX = 0.04
 
 export const colorSchemes = {
   cream: {
-    name: '奶油',
-    description: '温暖柔和的棕色日常界面',
-    primary: '#a08060',
-    bg: '#faf8f5',
-    bgSecondary: '#f5f2ed',
+    // Preserve the saved ID while updating the default design language.
+    name: '石墨紫',
+    description: '中性灰阶、清晰层级与克制的紫色强调',
+    primary: '#635bda',
+    bg: '#f6f6f8',
+    bgSecondary: '#ededf1',
     bgCard: '#ffffff',
-    textPrimary: '#4a4540',
-    textSecondary: '#7a756d',
-    darkBg: '#1e1815',
-    darkBgSecondary: '#2a211d',
-    darkBgCard: '#372b25',
-    darkTextPrimary: '#f1e8df',
-    darkTextSecondary: '#c7b7a7'
+    textPrimary: '#202128',
+    textSecondary: '#5d5f6d',
+    darkBg: '#111216',
+    darkBgSecondary: '#191a21',
+    darkBgCard: '#1d1f27',
+    darkTextPrimary: '#ededf2',
+    darkTextSecondary: '#b4b6c4'
   },
   ocean: {
     name: '海洋',

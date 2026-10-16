@@ -29,6 +29,7 @@ const MAX_NOTE_IMAGES = 8
 const ALLOWED_IMAGE_TYPES = new Set(['image/jpeg', 'image/png', 'image/webp', 'image/gif'])
 
 const props = defineProps({
+  returnFocus: { type: Object, default: null },
   show: {
     type: Boolean,
     default: false
@@ -78,7 +79,16 @@ const copiedId = ref(false)
 const titleInputRef = ref(null)
 const editorDialog = ref(null)
 const editorPane = ref('writing')
+const expanded = ref(true)
+const metadataOpen = ref(false)
 let editorTrigger = null
+let bodyOverflow = ''
+let bodyLocked = false
+function releaseBodyLock() {
+  if (!bodyLocked) return
+  document.body.style.overflow = bodyOverflow
+  bodyLocked = false
+}
 const imageInputRef = ref(null)
 const blockEditorRef = ref(null)
 const cloudPickerOpen = ref(false)
@@ -187,7 +197,13 @@ function currentDirtySnapshot() {
 // 监听显示状态，初始化表单
 watch(() => props.show, async (val) => {
   if (val) {
-    editorTrigger = document.activeElement
+    if (!bodyLocked) {
+      bodyOverflow = document.body.style.overflow
+      document.body.style.overflow = 'hidden'
+      bodyLocked = true
+    }
+    metadataOpen.value = Boolean(props.note?._openAi || props.note?.encrypted)
+    editorTrigger = props.returnFocus?.isConnected ? props.returnFocus : document.activeElement
     initializingForm = true
     clearAutosaveTimer()
     if (props.note?.id) {
@@ -234,9 +250,10 @@ watch(() => props.show, async (val) => {
   } else {
     clearAutosaveTimer()
     autosaveSequence += 1
+    releaseBodyLock()
     nextTick(() => { if (editorTrigger?.isConnected) editorTrigger.focus({ preventScroll: true }) })
   }
-})
+}, { immediate: true })
 
 function resetForm(type = 'memo') {
   formData.value = {
@@ -388,6 +405,7 @@ const releaseReloadGuard = registerReloadGuard(() => props.show && (
 
 onMounted(() => window.addEventListener('beforeunload', handleBeforeUnload))
 onBeforeUnmount(() => {
+  releaseBodyLock()
   releaseReloadGuard()
   clearAutosaveTimer()
   autosaveSequence += 1
@@ -717,7 +735,7 @@ async function copyUnsavedDraft() {
 </script>
 
 <template>
-  <div v-if="show" class="editor-modal" @click.self="close">
+  <div v-if="show" class="editor-modal" :class="{ 'is-expanded': expanded }" @click.self="close">
     <div ref="editorDialog" class="editor-content" role="dialog" aria-modal="true" :aria-label="modalTitle"
       @keydown.tab="trapEditorFocus" @keydown.esc.stop.prevent="close">
       <!-- 头部 -->
@@ -737,6 +755,8 @@ async function copyUnsavedDraft() {
           </button>
         </div>
         <div class="editor__header-actions">
+          <button type="button" class="editor__pane-toggle editor__expand-toggle" :aria-pressed="expanded" @click="expanded = !expanded"><Icon :name="expanded ? 'minimize' : 'maximize'" :size="16" />{{ expanded ? '窗口' : '全屏' }}</button>
+          <button type="button" class="editor__pane-toggle" :aria-expanded="metadataOpen" @click="metadataOpen = !metadataOpen"><Icon name="settings" :size="16" />属性</button>
           <button v-if="isEdit && note?.id" type="button" class="editor__pane-toggle"
             :aria-pressed="editorPane === 'comments'" aria-controls="note-editor-comments"
             @click="editorPane = editorPane === 'comments' ? 'writing' : 'comments'">
@@ -749,8 +769,46 @@ async function copyUnsavedDraft() {
         </div>
       </div>
 
-      <div class="editor__workspace" :class="{ 'has-comments': isEdit && note?.id, 'is-comments': editorPane === 'comments' }">
+      <div class="editor__workspace" :class="{ 'has-comments': isEdit && note?.id && editorPane === 'comments', 'is-comments': editorPane === 'comments' }">
       <div class="editor__writing" aria-label="笔记正文与设置">
+      <!-- 标题 -->
+      <div class="form-group">
+        <input
+          ref="titleInputRef"
+          v-model="formData.title"
+          type="text"
+          class="input editor__title-input"
+          aria-label="笔记标题"
+          placeholder="标题"
+          :disabled="formDisabled"
+        >
+      </div>
+
+      <!-- 块内容 -->
+      <div class="form-group">
+        <BlockEditor
+          :key="`${note?.id || 'new'}:${realtimeEnabled ? 'collaboration' : 'single'}`"
+          ref="blockEditorRef"
+          v-model="formData.contentJson"
+          :plain-text="formData.content"
+          :disabled="formDisabled"
+          :allow-images="!formData.encrypted && canManageImages"
+          :note-id="note?.id || ''"
+          :realtime="realtimeEnabled"
+          @update:text="formData.content = $event"
+          @update:image-urls="syncEmbeddedImages"
+          @request-image="chooseImages"
+          @selection-change="editorSelection = $event"
+          @collaboration-status="collaborationStatus = $event"
+        />
+        <div class="editor__counter">{{ contentCount }} 字</div>
+        <button v-if="shouldUseBackendNotes() && !collaborationReadOnly" type="button" class="btn btn--secondary" :disabled="formDisabled" :aria-expanded="cloudPickerOpen" @click="cloudPickerOpen = !cloudPickerOpen"><Icon name="cloud" :size="16" />从 Dropbox 插入文件</button>
+        <NoteFilePicker v-if="cloudPickerOpen" :key="note?.id || 'new'" :disabled="formDisabled" @choose="insertCloudReference" @close="cloudPickerOpen = false" />
+        <p v-if="cloudReferenceMessage" class="editor__counter" role="status">{{ cloudReferenceMessage }}</p>
+      </div>
+
+      <details class="editor__properties" :open="metadataOpen" @toggle="metadataOpen = $event.target.open">
+        <summary><Icon name="settings" :size="16" />属性与附件<span>类型、提醒、标签、图片与加密</span><Icon name="chevron-down" :size="16" /></summary>
       <!-- 类型选择 -->
       <div class="editor__type" role="group" aria-label="笔记类型">
         <label class="type-option" :class="{ 'is-active': formData.type === 'memo' }">
@@ -763,19 +821,6 @@ async function copyUnsavedDraft() {
           <span class="type-option__icon"><Icon name="book" :size="16" /></span>
           <span class="type-option__label">日记</span>
         </label>
-      </div>
-
-      <!-- 标题 -->
-      <div class="form-group">
-        <input
-          ref="titleInputRef"
-          v-model="formData.title"
-          type="text"
-          class="input editor__title-input"
-          aria-label="笔记标题"
-          placeholder="标题"
-          :disabled="formDisabled"
-        >
       </div>
 
       <div v-if="formData.type === 'diary'" class="form-row">
@@ -817,29 +862,6 @@ async function copyUnsavedDraft() {
           <span class="checkbox-custom"></span>
           <span>标记为已完成</span>
         </label>
-      </div>
-
-      <!-- 块内容 -->
-      <div class="form-group">
-        <BlockEditor
-          :key="`${note?.id || 'new'}:${realtimeEnabled ? 'collaboration' : 'single'}`"
-          ref="blockEditorRef"
-          v-model="formData.contentJson"
-          :plain-text="formData.content"
-          :disabled="formDisabled"
-          :allow-images="!formData.encrypted && canManageImages"
-          :note-id="note?.id || ''"
-          :realtime="realtimeEnabled"
-          @update:text="formData.content = $event"
-          @update:image-urls="syncEmbeddedImages"
-          @request-image="chooseImages"
-          @selection-change="editorSelection = $event"
-          @collaboration-status="collaborationStatus = $event"
-        />
-        <div class="editor__counter">{{ contentCount }} 字</div>
-        <button v-if="shouldUseBackendNotes() && !collaborationReadOnly" type="button" class="btn btn--secondary" :disabled="formDisabled" :aria-expanded="cloudPickerOpen" @click="cloudPickerOpen = !cloudPickerOpen"><Icon name="cloud" :size="16" />从 Dropbox 插入文件</button>
-        <NoteFilePicker v-if="cloudPickerOpen" :key="note?.id || 'new'" :disabled="formDisabled" @choose="insertCloudReference" @close="cloudPickerOpen = false" />
-        <p v-if="cloudReferenceMessage" class="editor__counter" role="status">{{ cloudReferenceMessage }}</p>
       </div>
 
       <section class="form-group image-uploader" aria-labelledby="note-images-title">
@@ -991,8 +1013,9 @@ async function copyUnsavedDraft() {
           >
         </div>
       </template>
+      </details>
       </div>
-      <aside v-if="isEdit && note?.id" id="note-editor-comments" class="editor__discussion" aria-label="笔记协作与评论">
+      <aside v-show="editorPane === 'comments'" v-if="isEdit && note?.id" id="note-editor-comments" class="editor__discussion" aria-label="笔记协作与评论">
         <CollaborationPanel
           :note="note"
           :selection="editorSelection"
@@ -1019,7 +1042,7 @@ async function copyUnsavedDraft() {
           <span v-if="draftActionMessage" role="status">{{ draftActionMessage }}</span>
         </div>
         <div class="editor__footer-actions">
-        <button type="button" class="btn btn--secondary" :disabled="saving || autosaveInFlight" @click="close">取消</button>
+        <button type="button" class="btn btn--secondary" :disabled="saving || autosaveInFlight" @click="close">关闭</button>
         <button v-if="!collaborationReadOnly" type="button" class="btn btn--primary" :aria-busy="saving" :disabled="formDisabled || autosaveInFlight || autosaveStatus === 'conflict'" @click="handleSubmit">
           <span v-if="saving" class="button-spinner" aria-hidden="true"></span>
           {{ saving ? '保存中' : (isEdit ? '保存' : '创建') }}
@@ -1031,6 +1054,19 @@ async function copyUnsavedDraft() {
 </template>
 
 <style scoped>
+.editor-modal.is-expanded { padding:0; }
+.editor-modal.is-expanded .editor-content { max-width:none; width:100%; height:100dvh; max-height:100dvh; border-radius:0; box-shadow:none; }
+.editor-modal.is-expanded .editor__writing > .form-group { max-width:860px; width:100%; margin-inline:auto; }
+.editor-modal.is-expanded .editor__properties { max-width:812px; margin-inline:auto; }
+.editor__properties { margin:12px 24px 24px; border:1px solid var(--border-light); border-radius:10px; background:var(--bg-secondary); }
+.editor__properties > summary { display:flex; align-items:center; gap:8px; cursor:pointer; min-height:44px; padding:12px; font-weight:600; list-style:none; }
+.editor__properties > summary::-webkit-details-marker { display:none; }
+.editor__properties > summary span { flex:1; font-size:12px; font-weight:400; color:var(--text-muted); }
+.editor__properties > summary:focus-visible { outline:2px solid var(--accent-color); outline-offset:2px; }
+.editor__properties[open] > summary { border-bottom:1px solid var(--border-light); margin-bottom:16px; }
+.editor__properties .form-group { padding-inline:16px; }
+@media(max-width:560px) { .editor__properties { margin:8px 16px 16px; } .editor__properties > summary span { display:none; } .editor__expand-toggle { display:none !important; } }
+
 .editor-modal {
   position: fixed;
   inset: 0;
@@ -1375,7 +1411,7 @@ async function copyUnsavedDraft() {
 
 .image-uploader__remove:hover {
   color: #fff;
-  background: var(--error-color);
+  background: var(--danger-fill);
 }
 
 .image-uploader__message {
@@ -1619,7 +1655,7 @@ async function copyUnsavedDraft() {
 .editor__header-actions, .editor__footer-actions { display: flex; flex: 0 0 auto; align-items: center; gap: 8px; }
 .editor__footer-actions { margin-left: auto; }
 .editor__footer-actions .btn { min-width: 80px; }
-.editor__pane-toggle { display: none; align-items: center; justify-content: center; gap: 6px; min-height: 40px; padding: 0 12px; border: 1px solid var(--border-light); border-radius: 9px; color: var(--text-secondary); background: var(--bg-card); font: inherit; font-size: 13px; cursor: pointer; }
+.editor__pane-toggle { display: inline-flex; align-items: center; justify-content: center; gap: 6px; min-height: 40px; padding: 0 12px; border: 1px solid var(--border-light); border-radius: 9px; color: var(--text-secondary); background: var(--bg-card); font: inherit; font-size: 13px; cursor: pointer; }
 .editor__pane-toggle[aria-pressed='true'] { color: var(--accent-color); background: var(--accent-bg); }
 .editor__writing .editor__title-input { padding: 2px 0 10px; font-size: 24px; font-weight: 650; line-height: 1.4; background: transparent; border: 0; border-bottom: 1px solid var(--border-light); border-radius: 0; }
 .editor__writing .editor__title-input:focus { background: transparent; border-color: var(--accent-color); box-shadow: none; }

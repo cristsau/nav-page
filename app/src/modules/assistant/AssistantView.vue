@@ -600,6 +600,7 @@ onBeforeUnmount(() => streamController?.abort())
             <div class="assistant-message__role">
               <Icon :name="message.role === 'user' ? 'user' : 'sparkles'" :size="16" />
               <span>{{ message.role === 'user' ? '我' : 'DOMO 助理' }}</span>
+              <span v-if="message.role === 'assistant'" class="assistant-message__model">AI 生成</span>
               <span v-if="message.role === 'assistant' && message.model" class="assistant-message__model">{{ message.model }}</span>
             </div>
             <div class="assistant-message__content">{{ message.content }}<span v-if="message.streaming" class="assistant-caret" aria-label="正在生成"></span></div>

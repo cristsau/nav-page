@@ -1,5 +1,5 @@
 <script setup>
-import { ref, computed, nextTick, onBeforeUnmount, onMounted } from 'vue'
+import { defineAsyncComponent, shallowRef, ref, computed, nextTick, onBeforeUnmount, onMounted, watch } from 'vue'
 import { useRoute } from 'vue-router'
 import { getCurrentUserId, getNotes as getLocalNotes, addNote as addLocalNote, updateNote as updateLocalNote, deleteNote as deleteLocalNote, toggleNotePin as toggleLocalNotePin, getSetting as getLocalSetting, setSetting as setLocalSetting } from '@/shared/db/database'
 import { fetchBackendSetting, saveBackendSetting, shouldUseBackendSettings } from '@/shared/services/settingsApi'
@@ -21,12 +21,13 @@ import { useNoteReminders } from '@/shared/composables/useNoteReminders'
 import Icon from '@/shared/components/Icon.vue'
 import Modal from '@/shared/components/Modal.vue'
 import NoteCard from './components/NoteCard.vue'
-import NoteEditor from './components/NoteEditor.vue'
+import AsyncPanelState from '@/shared/components/AsyncPanelState.vue'
+const NoteEditor = shallowRef(null)
 import NotePreview from './components/NotePreview.vue'
 import NoteVersionHistory from './components/NoteVersionHistory.vue'
 import ReminderCenter from './components/ReminderCenter.vue'
 import ShareManager from './components/ShareManager.vue'
-import DatabaseWorkspace from './components/DatabaseWorkspace.vue'
+const DatabaseWorkspace = defineAsyncComponent(() => import('./components/DatabaseWorkspace.vue'))
 import {
   mediaCleanupHasFailures,
   mediaCleanupMessage
@@ -72,6 +73,29 @@ const workspaceMode = ref('notes')
 
 // 编辑器
 const showEditor = ref(false)
+const editorLoaded = ref(false)
+const editorLoading = ref(false)
+const editorLoadError = ref(null)
+const editorReturnFocus = ref(null)
+async function loadEditor() {
+  if (editorLoaded.value || editorLoading.value) return
+  editorLoading.value = true
+  editorLoadError.value = null
+  try {
+    NoteEditor.value = (await import('./components/NoteEditor.vue')).default
+    editorLoaded.value = true
+  } catch (error) {
+    editorLoadError.value = error
+  } finally {
+    editorLoading.value = false
+  }
+}
+watch(showEditor, (show) => {
+  if (!show) return
+  editorReturnFocus.value = document.activeElement?.closest('[role="menu"]')
+    ? createMenuButtonRef.value : document.activeElement
+  void loadEditor()
+}, { flush: 'sync' })
 const editingNote = ref(null)
 const showPreview = ref(false)
 const previewingNote = ref(null)
@@ -786,7 +810,7 @@ onBeforeUnmount(() => {
 </script>
 
 <template>
-  <div class="page" :style="bgStyle">
+  <div class="page notes-page" :style="bgStyle">
     <!-- 顶部导航 -->
     <div class="header">
       <div class="header__left">
@@ -972,7 +996,8 @@ onBeforeUnmount(() => {
       </div>
 
       <!-- 内容区域 -->
-      <div v-else class="content">
+      <div v-else class="notes-workspace">
+      <div class="content">
         <div
           v-if="pinnedMemos.length > 0 || (unpinnedMemos.length > 0 && (filterType === 'all' || filterType === 'memo'))"
           class="content__rail content__rail--memos"
@@ -1049,22 +1074,8 @@ onBeforeUnmount(() => {
           </section>
         </div>
       </div>
-      </template>
-
-      <DatabaseWorkspace v-else @status="handleDatabaseStatus" />
-    </main>
-
-    <!-- 编辑器弹窗 -->
-    <NoteEditor
-      :show="showEditor"
-      :note="editingNote"
-      :saving="savingNote"
-      :autosave-handler="handleAutosaveNote"
-      @close="showEditor = false; editingNote = null"
-      @save="handleSaveNote"
-    />
-
-    <NotePreview
+      <aside class="notes-reader" aria-label="笔记阅读区">
+    <NotePreview embedded
       :show="showPreview"
       :note="previewingNote"
       :return-focus="previewReturnFocus"
@@ -1076,6 +1087,28 @@ onBeforeUnmount(() => {
       @copy-extract="handleCopyNoteExtract"
       @copy-value="handleCopyValue"
     />
+        <div v-if="!showPreview" class="notes-reader__empty"><Icon name="note" :size="32" /><h2>留一点空间给思考</h2><p>从左侧选择记录，在这里阅读。<br>需要修改时，打开专注编辑器。</p></div>
+      </aside>
+      </div>
+      </template>
+
+      <DatabaseWorkspace v-else @status="handleDatabaseStatus" />
+    </main>
+
+    <!-- 编辑器弹窗 -->
+    <AsyncPanelState v-if="showEditor && !editorLoaded" :error="editorLoadError"
+      @close="showEditor = false; editingNote = null" />
+    <NoteEditor v-if="editorLoaded"
+      :show="showEditor"
+      :return-focus="editorReturnFocus"
+      :note="editingNote"
+      :saving="savingNote"
+      :autosave-handler="handleAutosaveNote"
+      @close="showEditor = false; editingNote = null"
+      @save="handleSaveNote"
+    />
+
+
 
     <NoteVersionHistory
       :show="showVersionHistory"
@@ -1166,6 +1199,19 @@ onBeforeUnmount(() => {
 </template>
 
 <style scoped>
+.notes-workspace { display:grid; grid-template-columns:minmax(280px,360px) minmax(0,1fr); gap:24px; align-items:start; }
+.notes-reader { min-width:0; }
+.notes-reader__empty { position:sticky; top:24px; min-height:480px; display:flex; align-items:center; justify-content:center; flex-direction:column; gap:16px; border:1px solid var(--border-light); border-radius:12px; background:var(--bg-card); color:var(--text-muted); text-align:center; }
+.notes-reader__empty h2 { font-size:18px; color:var(--text-primary); }
+.notes-reader__empty p { line-height:1.8; }
+.notes-workspace .content { display:block; }
+.notes-workspace .section { padding:0; background:transparent; border:0; border-radius:0; }
+.notes-workspace .notes-grid { display:grid; grid-template-columns:minmax(0,1fr); gap:8px; }
+.notes-workspace :deep(.note-card) { padding:12px 14px; border-radius:8px; box-shadow:none; }
+.notes-workspace :deep(.note-card:hover) { transform:none; background:var(--bg-hover); }
+.notes-workspace :deep(.note-card__content) { -webkit-line-clamp:2; line-clamp:2; }
+@media(max-width:1100px) { .notes-workspace { display:block; } .notes-reader__empty { display:none; } }
+
 .page {
   min-height: calc(100vh - var(--app-shell-header-height, 64px));
   min-height: calc(100dvh - var(--app-shell-header-height, 64px));
@@ -1290,7 +1336,7 @@ onBeforeUnmount(() => {
   font-size: 10px;
   font-weight: 700;
   line-height: 1;
-  background: var(--error-color);
+  background: var(--danger-fill);
   border: 2px solid var(--bg-primary);
   border-radius: 999px;
 }
@@ -1801,7 +1847,7 @@ onBeforeUnmount(() => {
   width: 22px;
   height: 22px;
   content: '';
-  background: var(--error-color);
+  background: var(--danger-fill);
   border-radius: 50%;
 }
 

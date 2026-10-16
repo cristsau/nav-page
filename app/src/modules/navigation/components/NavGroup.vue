@@ -773,7 +773,7 @@ const mobileGroupMenuId = computed(() => (
 }
 
 .groups-tabs__action--danger:hover:not(:disabled) {
-  background: var(--error-color);
+  background: var(--danger-fill);
   color: #fff;
 }
 

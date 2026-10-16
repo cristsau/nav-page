@@ -39,26 +39,26 @@ const {
 } = useConfig({ defer: publicShell })
 
 const PUBLIC_SHELL_TOKENS = {
-  '--bg-primary': '#f7f3ee',
-  '--bg-secondary': '#eee7df',
-  '--bg-tertiary': '#e4dbd1',
-  '--bg-card': '#fffdf9',
-  '--bg-hover': '#e9dfd5',
-  '--bg-active': '#ded1c5',
-  '--text-primary': '#332d29',
-  '--text-secondary': '#6f655e',
-  '--text-muted': '#988b82',
-  '--border-color': '#ded4ca',
-  '--border-light': '#e9e1d9',
-  '--accent-color': '#927052',
-  '--accent-hover': '#76563e',
-  '--accent-light': '#d8c4b2',
-  '--accent-bg': '#efe4d8',
-  '--success-color': '#66886e',
-  '--warning-color': '#a87b42',
-  '--error-color': '#ac6666',
-  '--info-color': '#66859c',
-  '--radius-md': '16px',
+  '--bg-primary': '#f6f6f8',
+  '--bg-secondary': '#ededf1',
+  '--bg-tertiary': '#e6e6ed',
+  '--bg-card': '#ffffff',
+  '--bg-hover': '#e6e6ed',
+  '--bg-active': '#dddde8',
+  '--text-primary': '#202128',
+  '--text-secondary': '#5d5f6d',
+  '--text-muted': '#646674',
+  '--border-color': '#d6d7df',
+  '--border-light': '#e2e3e9',
+  '--accent-color': '#635bda',
+  '--accent-hover': '#5048bd',
+  '--accent-light': '#c8c4f2',
+  '--accent-bg': '#eceafa',
+  '--success-color': '#237747',
+  '--warning-color': '#94600b',
+  '--error-color': '#b4233d',
+  '--info-color': '#356cb0',
+  '--radius-md': '10px',
   '--bg-image': 'none'
 }
 
@@ -270,9 +270,9 @@ const bgStyle = computed(() => {
 }
 
 .app--public-shell {
-  background-color: #f7f3ee !important;
+  background-color: #f6f6f8 !important;
   background-image: none !important;
-  color: #332d29;
+  color: #202128;
 }
 
 .command-launcher {

@@ -1,14 +1,14 @@
 <script setup>
-import { computed, onBeforeUnmount, onMounted, ref, watch } from 'vue'
+import { defineAsyncComponent, computed, onBeforeUnmount, onMounted, ref, watch } from 'vue'
 import { onBeforeRouteLeave, useRoute } from 'vue-router'
 import Icon from '@/shared/components/Icon.vue'
 import Modal from '@/shared/components/Modal.vue'
 import { registerReloadGuard } from '@/shared/services/reloadGuards'
 import { contentUrl, filesAction, filesStatus, uploadChunk } from './filesApi'
 import { FileTransferQueue } from './fileTransfers'
-import FolderPicker from './FolderPicker.vue'
-import DeletedFiles from './DeletedFiles.vue'
-import OfflineDownloads from './OfflineDownloads.vue'
+const FolderPicker = defineAsyncComponent(() => import('./FolderPicker.vue'))
+const DeletedFiles = defineAsyncComponent(() => import('./DeletedFiles.vue'))
+const OfflineDownloads = defineAsyncComponent(() => import('./OfflineDownloads.vue'))
 import UploadTasks from './UploadTasks.vue'
 import MediaPreview from './MediaPreview.vue'
 import PreviewNavigator from './PreviewNavigator.vue'
@@ -16,6 +16,12 @@ import './filesPolish.css'
 import { planFolderUpload } from './folderUploads'
 import { fileFilters, fileSorts, fileTypeLabel, presentFiles, hasFileDrag, droppedFiles } from './filePresentation'
 
+const toolsOpen = ref(window.matchMedia('(min-width: 821px)').matches)
+function showUploadQueue() {
+  const queue = document.getElementById('file-upload-queue')
+  queue?.scrollIntoView({ block: 'start', behavior: 'instant' })
+  queue?.focus({ preventScroll: true })
+}
 const status = ref(null), entries = ref([]), path = ref(''), search = ref(''), query = ref('')
 const route = useRoute()
 const loading = ref(false), working = ref(false), error = ref(''), notice = ref(''), cursor = ref(null)
@@ -322,7 +328,7 @@ onBeforeUnmount(() => { alive = false; loadSequence++; transfers?.dispose(); con
 <template>
   <main class="drive-page">
     <header class="drive-heading">
-      <div><p class="drive-eyebrow">PERSONAL CLOUD · DROPBOX</p><h1>文件库</h1><p class="drive-subtitle">你的文件，随时打开。只向绑定的管理员本人开放。</p></div>
+      <div><h1>文件库</h1><p class="drive-subtitle">你的文件，随时打开。只向绑定的管理员本人开放。</p></div>
       <a class="drive-button" href="https://www.dropbox.com/home" target="_blank" rel="noopener noreferrer">打开 Dropbox <Icon name="external-link" :size="15" /></a>
     </header>
     <div class="drive-protection"><Icon name="lock" :size="16" /><span>NAV 加密备份目录受保护，与日常文件管理分开。</span><router-link to="/settings?section=cloud-backup">备份设置</router-link></div>
@@ -334,7 +340,8 @@ onBeforeUnmount(() => { alive = false; loadSequence++; transfers?.dispose(); con
       </div>
       <div class="drive-location"><nav aria-label="文件路径"><template v-for="(crumb, index) in crumbs" :key="crumb.path"><Icon v-if="index" name="chevron-right" :size="13" /><button type="button" :aria-current="index === crumbs.length - 1 ? 'location' : undefined" :disabled="loading || working || !status" @click="navigate(crumb.path)">{{ crumb.name }}</button></template></nav><button class="drive-button drive-small" type="button" :disabled="loading || working" aria-label="刷新文件列表" @click="connect"><Icon name="refresh" :size="15" /></button></div>
       <p v-if="query" class="drive-query">搜索“{{ query }}”<button class="drive-button drive-small" type="button" :disabled="loading || working" @click="search = ''; runSearch()">清除搜索</button></p>
-      <div v-if="status" class="drive-view-options">
+      <details v-if="status" class="drive-tools" :open="toolsOpen" @toggle="toolsOpen = $event.target.open"><summary><Icon name="settings" :size="16" />筛选与工具<Icon name="chevron-down" :size="16" /></summary>
+      <div class="drive-view-options">
         <label>类型<select :value="filter" :disabled="working || loading" aria-label="文件类型筛选" @change="changeFilter($event.target.value)"><option v-for="[key, label] in fileFilters" :key="key" :value="key">{{ label }}</option></select></label>
         <label>排序<select v-model="sort" :disabled="working || loading" aria-label="文件排序"><option v-for="[key, label] in fileSorts" :key="key" :value="key">{{ label }}</option></select></label>
         <button v-if="status.deletedFiles" class="drive-button drive-small" :disabled="working || loading" @click="open('deleted')">回收站</button>
@@ -342,14 +349,13 @@ onBeforeUnmount(() => { alive = false; loadSequence++; transfers?.dispose(); con
         <div class="drive-view-switch" role="group" aria-label="显示方式"><button class="drive-button drive-small" :aria-pressed="layout === 'list'" @click="layout = 'list'">列表</button><button class="drive-button drive-small" :aria-pressed="layout === 'grid'" @click="layout = 'grid'">网格</button></div>
         <p>排序与筛选仅针对已加载项目<span v-if="cursor">，可继续加载更多</span>。<span class="drive-drop-hint">可拖入文件，确认后上传到当前目录。</span></p>
       </div>
+      </details>
       <div v-if="error" class="drive-feedback drive-error drive-list-error" role="alert"><Icon name="alert" :size="18" /><span>{{ error }}</span><button v-if="canRetryList" type="button" class="drive-button drive-small" :disabled="loading || working" @click="loadEntries(listFailure.more)">重试读取文件</button></div>
       <p v-if="notice" class="drive-feedback drive-notice" role="status"><Icon name="check" :size="18" /><span>{{ notice }}</span><button class="drive-button drive-small" type="button" aria-label="关闭操作提示" @click="notice = ''"><Icon name="close" :size="15" /></button></p>
       <p v-if="recoveryError" class="drive-feedback drive-error" role="alert">{{ recoveryError }} <button class="drive-button drive-small" @click="recoverTransfers">重试读取任务</button></p>
       <input ref="resumePicker" class="drive-hidden" type="file" aria-label="重新选择续传原文件" @change="reselectOriginal">
-      <UploadTasks v-if="jobs.length" :jobs="jobs" :persistence="status?.uploadResume" :busy="loading || working" :clearing="clearingUploads"
-        @pause="transfers.pause($event)" @resume="transfers.resume($event)" @reselect="selectOriginal" @cancel="transfers.cancel($event)"
-        @clear="clearFinishedUploads" @refresh="loadEntries()" />
-      <div v-if="status" class="drive-selection-toggle"><button class="drive-button drive-small" :disabled="working || loading" @click="selection = !selection; checked = []">{{ selection ? '结束选择' : '选择文件' }}</button><span v-if="selection">仅选择已显示项目，一次最多 50 项</span></div>
+
+      <div v-if="status" class="drive-selection-toggle"><button class="drive-button drive-small" :disabled="working || loading" @click="selection = !selection; checked = []">{{ selection ? '结束选择' : '选择文件' }}</button><span v-if="selection">仅选择已显示项目，一次最多 50 项</span><button v-if="jobs.length" class="drive-button drive-small" type="button" aria-controls="file-upload-queue" @click="showUploadQueue">上传任务 {{ jobs.length }}</button></div>
       <div v-if="selection" class="drive-batch-bar" aria-label="批量文件操作"><button class="drive-button drive-small" :disabled="loading || working" @click="toggleAll">{{ checked.length ? '取消选择' : '选择已显示（最多50项）' }}</button><strong>已选 {{ checked.length }} 项</strong><div><button class="drive-button drive-small" :disabled="!chosen.length || working" @click="open('move')">移动</button><button class="drive-button drive-small" :disabled="!chosen.length || working" @click="open('copy')">复制</button><button class="drive-button drive-small drive-danger" :disabled="!chosen.length || working" @click="open('delete')">删除</button></div></div>
       <div v-if="!status && !loading" class="drive-empty"><Icon name="cloud" :size="36" /><h2>连接你的个人文件库</h2><p>文件管理使用独立的 Full Dropbox 授权，不会复用备份凭据。</p><button class="drive-button" type="button" @click="connect">重新检查连接</button></div>
       <template v-else>
@@ -372,6 +378,9 @@ onBeforeUnmount(() => { alive = false; loadSequence++; transfers?.dispose(); con
         <footer v-if="status" class="drive-list-footer"><span>显示 {{ sorted.length }} / 已加载 {{ entries.length }} 项<span v-if="cursor"> · 还有更多</span></span><button v-if="cursor" class="drive-button" :disabled="loading || working" @click="loadEntries(true)">加载更多</button><span>分块上传 ≤ {{ bytes(status.uploadLimit) }} / 文件</span></footer>
       </template>
     </section>
+      <UploadTasks v-if="jobs.length" id="file-upload-queue" tabindex="-1" :jobs="jobs" :persistence="status?.uploadResume" :busy="loading || working" :clearing="clearingUploads"
+        @pause="transfers.pause($event)" @resume="transfers.resume($event)" @reselect="selectOriginal" @cancel="transfers.cancel($event)"
+        @clear="clearFinishedUploads" @refresh="loadEntries()" />
     <p class="drive-footnote">文件不保存到浏览器离线缓存。视频使用浏览器原生播放；不兼容的编码可下载或在 Dropbox 打开。</p>
 
     <Modal :show="Boolean(dialog)" :title="titles" :width="['preview', 'edit'].includes(dialog) ? '880px' : dialog === 'offline' ? '720px' : '520px'" :close-disabled="working" @close="close()">
@@ -421,6 +430,14 @@ onBeforeUnmount(() => { alive = false; loadSequence++; transfers?.dispose(); con
 </template>
 
 <style scoped>
+.drive-tools { border-bottom:1px solid var(--border-light); }
+.drive-tools > summary { display:flex; align-items:center; gap:8px; min-height:40px; padding:8px 20px; cursor:pointer; color:var(--text-secondary); font-size:12px; list-style:none; }
+.drive-tools > summary::-webkit-details-marker { display:none; }
+.drive-tools > summary > svg:last-child { margin-left:auto; }
+.drive-tools[open] > summary > svg:last-child { transform:rotate(180deg); }
+.drive-tools summary:focus-visible { outline:2px solid var(--accent-color); outline-offset:-3px; }
+@media(max-width:820px) { .drive-tools > summary { min-height:44px; padding-inline:14px; } }
+
 .drive-page{max-width:1160px;margin:auto;padding:36px 24px 48px;color:var(--text-primary);font-family:var(--font-family,sans-serif)}
 .drive-heading{display:flex;justify-content:space-between;align-items:center;gap:24px;margin-bottom:24px}.drive-eyebrow{font-size:11px;letter-spacing:.12em;color:var(--text-muted);margin:0 0 10px}.drive-heading h1{font-size:30px;letter-spacing:-.03em;margin:0 0 10px;line-height:1.2}.drive-subtitle{color:var(--text-secondary);font-size:14px;line-height:1.7;margin:0}
 .drive-button{display:inline-flex;align-items:center;justify-content:center;gap:7px;min-height:40px;min-width:40px;padding:9px 13px;border:1px solid var(--border-color);border-radius:10px;background:var(--bg-primary);color:var(--text-primary);font:inherit;font-size:13px;line-height:1.4;text-decoration:none;cursor:pointer;white-space:nowrap}.drive-button:hover:not(:disabled){background:var(--bg-hover)}.drive-button:disabled{opacity:.5;cursor:not-allowed}.drive-primary{background:var(--accent-color);color:var(--text-inverse,#fff);border-color:var(--accent-color)}.drive-primary:hover:not(:disabled){background:var(--accent-hover,var(--accent-color));filter:brightness(.95)}.drive-small{padding:6px 10px;min-height:36px}.drive-danger{color:var(--danger-color,#ad3333);background:transparent}.drive-page button:focus-visible,.drive-page a:focus-visible,.drive-dialog input:focus-visible,.drive-dialog textarea:focus-visible,.drive-footer button:focus-visible,.drive-footer a:focus-visible{outline:2px solid var(--accent-color);outline-offset:3px}

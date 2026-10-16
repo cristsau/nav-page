@@ -66,8 +66,8 @@ function renderStartupError(error) {
     'display:grid',
     'place-items:center',
     'padding:24px',
-    'background:#171310',
-    'color:#f4eee8',
+    'background:#111216',
+    'color:#ededf2',
     'font-family:system-ui,-apple-system,BlinkMacSystemFont,\"Segoe UI\",sans-serif'
   ].join(';')
 
@@ -76,8 +76,8 @@ function renderStartupError(error) {
     'width:min(460px,100%)',
     'padding:32px',
     'border:1px solid rgba(255,255,255,.12)',
-    'border-radius:24px',
-    'background:#2a211d',
+    'border-radius:12px',
+    'background:#1d1f27',
     'box-shadow:0 24px 80px rgba(0,0,0,.35)'
   ].join(';')
 
@@ -87,16 +87,16 @@ function renderStartupError(error) {
 
   const description = document.createElement('p')
   description.textContent = '登录服务或网络暂时不可用。系统未载入任何账号数据，请稍后重试。'
-  description.style.cssText = 'margin:0 0 22px;color:#cbbdb2;line-height:1.7'
+  description.style.cssText = 'margin:0 0 22px;color:#b4b6c4;line-height:1.7'
 
   const retry = document.createElement('button')
   retry.type = 'button'
   retry.textContent = '重新连接'
   retry.style.cssText = [
     'border:0',
-    'border-radius:14px',
+    'border-radius:8px',
     'padding:12px 18px',
-    'background:#a08060',
+    'background:#635bda',
     'color:#fff',
     'font:inherit',
     'font-weight:700',
