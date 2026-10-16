@@ -9,8 +9,9 @@ test('public model and tokenizer components receive the exact revision and offli
   const runtime = { FeatureExtractionPipeline,
     AutoTokenizer: { from_pretrained: async (...args) => { calls.push(args); return tokenizer } },
     AutoModel: { from_pretrained: async (...args) => { calls.push(args); return encoder } } }
-  const result = await loadPinnedFeatureExtractor(runtime, 'feature-extraction', 'fixed-model', pinned)
-  assert.deepEqual(calls, [['fixed-model', pinned], ['fixed-model', pinned]])
+  const result = await loadPinnedFeatureExtractor(runtime, 'feature-extraction', 'fixed-model', pinned,
+    { tokenizerDirectory: async () => '/fixed-pinned-cache' })
+  assert.deepEqual(calls, [['/fixed-pinned-cache', pinned], ['fixed-model', pinned]])
   assert.equal(result.model, encoder)
   assert.equal(result.tokenizer, tokenizer)
 })

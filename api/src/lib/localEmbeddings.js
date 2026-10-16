@@ -1,4 +1,5 @@
 import { config } from '../config.js'
+import { pinnedTokenizerDirectory } from './pinnedTokenizerCache.js'
 
 let extractorPromise = null
 let extractorError = null
@@ -23,11 +24,15 @@ async function createExtractor() {
   })
 }
 
-export async function loadPinnedFeatureExtractor(transformers, task, model, options) {
+export async function loadPinnedFeatureExtractor(transformers, task, model, options, { tokenizerDirectory = pinnedTokenizerDirectory } = {}) {
   // pipeline() 4.3.1 probes main via get_pipeline_files before forwarding the
   // caller's revision/local_files_only. Use public components so every read is
   // pinned, including cold start and the read-only/offline cache path.
-  const tokenizer = await transformers.AutoTokenizer.from_pretrained(model, options)
+  // AutoTokenizer also probes main without forwarding options. A local pinned
+  // directory makes that probe a filesystem read, including in a warm restart.
+  const directory = await tokenizerDirectory(config.embeddingCacheDir, model, options.revision,
+    { localOnly: options.local_files_only, fetchImpl: transformers.env?.fetch })
+  const tokenizer = await transformers.AutoTokenizer.from_pretrained(directory, { ...options, local_files_only: true })
   const encoder = await transformers.AutoModel.from_pretrained(model, options)
   try {
     return new transformers.FeatureExtractionPipeline({ task, tokenizer, model: encoder })
