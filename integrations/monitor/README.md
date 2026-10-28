@@ -22,7 +22,7 @@ This extends the existing Monitor Hub 1.5.1 / Agent 1.2.3 integration. The Hub a
 - Latest-hour summaries and trends; samples retained for 24 hours. At ten nodes, at most about 43,200 rows/day at a 60-second cadence. Storage and retention cost still require live observation.
 - Optional `NAV_PROBE_SERVICES` is an operator-configured comma-separated allowlist of at most eight local `.service` units; only `systemctl is-active` is read. Default: `nav-monitor-agent.service`. It is not a container/application health check.
 
-## Release gate — not deployed
+## Release runbook
 
 Candidate base: `818a5527c14ea5e3599a93ed4f3a42caa0a93299` (live NAV 2026.10.28.1).
 
@@ -42,9 +42,14 @@ Candidate base: `818a5527c14ea5e3599a93ed4f3a42caa0a93299` (live NAV 2026.10.28.
 - Restore the previous NAV API/Web images and source. Migration 051 is additive; old code ignores its four tables. Leave those tables/data in place during application rollback. Do not automatically restore the full database over newer user data or drop audit records.
 - Hub binary, existing Agents, download tasks, CF/DNS, domain entries and certificates are outside the change. No recovery rehearsal or OVH external watcher is part of this release.
 
-## Local verification evidence
+## Verified release — 2026-10-29
 
-2026-10-28: related unit suite 69/69 passed; final intent/monitor subset passed after the last intent adjustment; Python parser suite 4/4 passed; frontend production build passed. Desktop and mobile synthetic browser exercises covered filtering, detail trends, light/dark mode, ambiguous-date extraction, preview and confirmation. All preview data/model replies are synthetic. No real PostgreSQL integration, live sampler, real-model call or deployment has run for this batch.
+NAV API/Web version `2026.10.28.2`, commit `3a8c29e`, is deployed. The independent sampler is deployed at commit `16fbb28`; its source bundle and per-node hashes are retained separately. The API was not restarted for the sampler-only correction. Migration 051 added four tables. CI runs 40716928560 and 40722857059 each passed all 13 jobs, including real PostgreSQL. Sampler unit regression checks: 5/5.
 
-Evidence directory (local only): `D:\DomoCodex\artifacts\nav-monitor-enhancements-20261028`.
-Preview: `NAV_MONITOR_PREVIEW_OUTPUT=<private DomoCodex artifacts path> node scripts/monitor-workspace-preview.mjs` (Windows; local-only port 4196).
+All ten nodes reported at least two valid rounds to all three targets after the fixed-count correction; every valid round sent exactly five requests. Existing Agent processes and protected workloads remained unchanged. Dual-origin authenticated endpoints, anonymous denial, global search, preview/confirm/replay/undo, and audit were verified. A synthetic PNG was recognized by the configured real AI model, retaining an ambiguous billing date and not inventing an expiry date. Temporary acceptance sessions were revoked.
+
+Existing owner-session browser acceptance passed on `nav.skrskr.net`. Fresh interactive login on `nav.cristsau.cn` remains pending: the controlled browser showed Turnstile 300030. Do not conflate API session checks with a fresh user login. Real personal bills, phone hardware, long-duration sampling/retention and recovery rehearsal remain separate acceptance.
+
+Pre/post NAV snapshot manifests and a consistent Hub SQLite snapshot passed verification, without restoration. Preserve additive tables/audit on application rollback. No CF/DNS, original Agent, offline queue, certificate or external availability configuration was changed.
+
+Evidence directory (local only): `D:\DomoCodex\artifacts\nav-monitor-enhancements-20261028`, starting at `release-summary.json`. Authoritative project status remains `D:\DomoCodex\projects\NAV-security-first-batch-20260904\CURRENT.md`.

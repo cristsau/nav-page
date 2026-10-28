@@ -1,8 +1,8 @@
 # DOMO NAV 当前入口
 
-## 2026-10-28 监控增强候选
+## 2026-10-29 监控增强已发布
 
-本工作树为 `codex/nav-monitor-nodes-20261028`，基于已发布 `818a552` 继续开发监控总览、资产/AI 和三网 ICMP 采样。用户已授权本批独立分支 CI、备份、051 增量表、NAV API/Web 发布及十台现用个人 VPS 新采样服务。当前尚未发布；下文 2026-09-08 为历史记录。
+本工作树为 `codex/nav-monitor-nodes-20261028`。NAV API/Web 已发布 `2026.10.28.2` / `3a8c29e`；十台独立采样最终代码 `16fbb28`（每目标固定五包，单独经 `nav.cristsau.cn` 上报）。两次 CI 各 13 jobs、双域接口/权限、合成账单真实 AI、修改撤销及十台连续采样技术验收通过。直连域名重新登录在受控浏览器出现 Turnstile 300030，留本人普通浏览器确认；未做恢复演练。下文 2026-09-08 为历史记录。
 
 唯一完整当前状态仍维护于 `D:\DomoCodex\projects\NAV-security-first-batch-20260904\CURRENT.md`。本批实现、测试与发布回退方案见 `integrations/monitor/README.md`。
 
