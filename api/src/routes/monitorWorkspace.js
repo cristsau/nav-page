@@ -3,16 +3,25 @@ import { monitorError,monitorJson } from '../lib/monitorBridge.js'
 import { monitorOverview,proposeMonitorChange,confirmMonitorChange,validateProbeReport,probeTokenHash,HUB_FIELDS,DETAIL_FIELDS,readNodes,nodeState,monitorForUser } from '../lib/monitorWorkspace.js'
 import { interpretMonitor } from '../lib/monitorAi.js'
 import { enforceAiRateLimit } from '../lib/aiRateLimit.js'
+import { historyCache, readCarrierHistory, invalidateMonitorCache } from '../lib/monitorHistory.js'
 
 const uuid=id=>/^[a-f0-9]{8}-(?:[a-f0-9]{4}-){3}[a-f0-9]{12}$/i.test(id||'')
 export async function registerMonitorWorkspace(app,handler) {
-  app.get('/monitor/overview',handler((bridge,req)=>monitorOverview(req.currentUser.id,bridge)))
+  app.get('/monitor/overview',handler((bridge,req)=>historyCache(`${req.currentUser.id}:overview`,()=>monitorOverview(req.currentUser.id,bridge),8000)))
+  app.get('/monitor/nodes/:id/carriers',handler(async(_bridge,req)=>{
+    if(!/^\d{1,9}$/.test(req.params.id))throw monitorError('MONITOR_NODE_INVALID',400)
+    const range=req.query.range||'1h'
+    return historyCache(`${req.currentUser.id}:carriers:${req.params.id}:${range}`,()=>readCarrierHistory(req.currentUser.id,Number(req.params.id),range))
+  }))
   app.get('/monitor/nodes/:id/history',handler(async(bridge,req)=>{
     if(!/^\d{1,9}$/.test(req.params.id)) throw monitorError('MONITOR_NODE_INVALID',400)
     const hours=[1,6,24,168].includes(Number(req.query.hours))?Number(req.query.hours):6
-    const response=await bridge.request(`/nodes/${req.params.id}/metrics?hours=${hours}&points=120&series=metrics`,{signal:AbortSignal.timeout(10000)})
-    if(!response.ok){await response.body?.cancel();throw monitorError('MONITOR_UNAVAILABLE')}
-    return monitorJson(response,2*1024*1024)
+    const series=req.query.series==='ping'?'ping':'metrics'
+    return historyCache(`${req.currentUser.id}:resources:${req.params.id}:${hours}:${series}`,async()=>{
+      const response=await bridge.request(`/nodes/${req.params.id}/metrics?hours=${hours}&points=120&series=${series}`,{signal:AbortSignal.timeout(10000)})
+      if(!response.ok){await response.body?.cancel();throw monitorError('MONITOR_UNAVAILABLE')}
+      return monitorJson(response,2*1024*1024)
+    },55000)
   }))
   app.get('/monitor/nodes/:id/changes',handler(async(_bridge,req)=>{
     if(!/^\d{1,9}$/.test(req.params.id)) throw monitorError('MONITOR_NODE_INVALID',400)
@@ -22,7 +31,7 @@ export async function registerMonitorWorkspace(app,handler) {
   app.post('/monitor/nodes/:id/proposals',handler((bridge,req)=>proposeMonitorChange(req.currentUser.id,bridge,req.params.id,req.body?.patch,query,req.body?.expected)))
   app.post('/monitor/changes/:id/confirm',handler(async(bridge,req)=>{
     if(!uuid(req.params.id)||req.body?.confirmed!==true) throw monitorError('MONITOR_FIELDS_INVALID',400)
-    return confirmMonitorChange(req.currentUser.id,bridge,req.params.id)
+    try{return await confirmMonitorChange(req.currentUser.id,bridge,req.params.id)}finally{invalidateMonitorCache(req.currentUser.id)}
   }))
   app.post('/monitor/changes/:id/undo-preview',handler(async(bridge,req)=>{
     if(!uuid(req.params.id)) throw monitorError('MONITOR_FIELDS_INVALID',400)
@@ -75,7 +84,6 @@ export async function registerMonitorWorkspace(app,handler) {
         if(credential.last_report_at&&Date.now()-new Date(credential.last_report_at).getTime()<45000) return reply.code(429).send({error:'Report interval is 60 seconds'})
         for(const s of body.samples) await client.query(`INSERT INTO monitor_probe_samples(node_id,carrier,observed_at,address,sent,received,avg_ms,min_ms,max_ms,error) VALUES($1,$2,$3,$4,$5,$6,$7,$8,$9,$10) ON CONFLICT DO NOTHING`,[body.nodeId,s.carrier,body.observedAt,s.address||null,s.sent,s.received,s.avgMs,s.minMs,s.maxMs,s.error||null])
         await client.query('UPDATE monitor_probe_credentials SET last_report_at=NOW(),services=$2::jsonb WHERE node_id=$1',[body.nodeId,JSON.stringify(body.services||[])])
-        await client.query("DELETE FROM monitor_probe_samples WHERE node_id=$1 AND received_at<NOW()-INTERVAL '24 hours'",[body.nodeId])
         return {ok:true}
       })
     }catch(e){return reply.code(e.statusCode===400?400:503).send({error:e.statusCode===400?'Invalid report':'Probe reporting unavailable'})}

@@ -4,6 +4,7 @@ import { mkdtemp, writeFile, rm } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import Fastify from 'fastify'
+import { maintainMonitorHistory,readCarrierHistory,invalidateMonitorCache } from '../src/lib/monitorHistory.js'
 
 // Never run this destructive fixture against an ordinary or remote database.
 assert.equal(process.env.NODE_ENV,'test')
@@ -35,6 +36,8 @@ before(async()=>{
   await app.ready()
 })
 beforeEach(async()=>{
+  invalidateMonitorCache(owner)
+  await pool.query('TRUNCATE TABLE monitor_probe_maintenance')
   await pool.query('TRUNCATE TABLE users CASCADE')
   await pool.query("INSERT INTO users(id,username,password_hash,role,status,approved_at) VALUES($1,'monitor-fixture','not-a-password','admin','approved',NOW())",[owner])
   node={...initial};writes=0;lostResponse=false;user={id:owner,role:'admin'}
@@ -82,4 +85,65 @@ test('probe credential binds one node, enforces cadence and supports revocation'
   assert.equal((await send(body)).statusCode,429)
   await pool.query('UPDATE monitor_probe_credentials SET enabled=false')
   assert.equal((await send(body)).statusCode,401)
+})
+
+
+test('real rollups survive 3/7/30-day retention, are idempotent, and preserve weighted loss',async()=>{
+  const start=new Date('2026-10-01T00:00:00Z')
+  await pool.query("INSERT INTO monitor_probe_credentials(node_id,user_id,token_hash) VALUES(1,$1,$2)",[owner,'a'.repeat(64)])
+  for(const [minute,received,ms,error] of [[1,4,100,null],[2,5,200,null],[3,0,null,'dns']]){
+    await pool.query(`INSERT INTO monitor_probe_samples(node_id,carrier,observed_at,address,sent,received,avg_ms,min_ms,max_ms,error)
+    VALUES(1,'cu',$1,'192.0.2.1',$2,$3,$4,$4,$4,$5)`,[new Date(+start+minute*60000),error?0:5,received,ms,error])
+  }
+  const now=new Date(+start+70*60000)
+  await maintainMonitorHistory({now});await maintainMonitorHistory({now})
+  const rolls=(await pool.query('SELECT * FROM monitor_probe_rollups ORDER BY step')).rows
+  assert.equal(rolls.length,2);assert.equal(Number(rolls[0].sent),10);assert.equal(Number(rolls[0].received),9);assert.equal(rolls[0].rounds,3)
+  let result=await readCarrierHistory(owner,1,'3d',{now})
+  assert.equal(result.carriers[0].lossPercent,10);assert.equal(result.carriers[0].averageMs,1400/9);assert.equal(result.carriers[0].errorRounds,1)
+  await maintainMonitorHistory({now:new Date(+start+4*86400000)})
+  assert.equal((await pool.query('SELECT COUNT(*) FROM monitor_probe_samples')).rows[0].count,'0')
+  result=await readCarrierHistory(owner,1,'7d',{now:new Date(+start+4*86400000)})
+  assert.equal(result.carriers[0].sent,10)
+  await maintainMonitorHistory({now:new Date(+start+8*86400000)})
+  assert.equal((await pool.query('SELECT COUNT(*) FROM monitor_probe_rollups WHERE step=300')).rows[0].count,'0')
+  result=await readCarrierHistory(owner,1,'30d',{now:new Date(+start+8*86400000)})
+  assert.equal(result.carriers[0].sent,10);assert.equal(result.carriers[0].lossPercent,10)
+  await maintainMonitorHistory({now:new Date(+start+31*86400000)})
+  assert.equal((await pool.query('SELECT COUNT(*) FROM monitor_probe_rollups')).rows[0].count,'0')
+})
+
+test('rollup + raw live tail count once and maintenance failure never prunes source rows',async()=>{
+  const start=new Date('2026-10-01T00:00:00Z'),now=new Date(+start+12*60000)
+  await pool.query("INSERT INTO monitor_probe_credentials(node_id,user_id,token_hash) VALUES(1,$1,$2)",[owner,'a'.repeat(64)])
+  for(const minute of [1,6,11])await pool.query(`INSERT INTO monitor_probe_samples(node_id,carrier,observed_at,address,sent,received,avg_ms,min_ms,max_ms) VALUES(1,'cu',$1,'192.0.2.1',5,5,100,90,110)`,[new Date(+start+minute*60000)])
+  await maintainMonitorHistory({now})
+  const r=await readCarrierHistory(owner,1,'3d',{now})
+  assert.equal(r.carriers[0].sent,15);assert.equal(r.carriers[0].rounds,3)
+  let deletes=0
+  await assert.rejects(maintainMonitorHistory({now,transaction:fn=>fn({query:async sql=>{
+    if(sql.includes('pg_try_advisory'))return {rows:[{locked:true}]}
+    if(sql.startsWith('SELECT *'))return {rows:[]}
+    if(sql.startsWith('INSERT INTO monitor_probe_rollups'))throw Error('disk full')
+    if(sql.startsWith('DELETE'))deletes++
+    return {rows:[]}
+  }})}))
+  assert.equal(deletes,0)
+  user={id:owner,role:'admin'}
+  assert.equal((await app.inject('/api/monitor/nodes/1/carriers?range=30d')).statusCode,200)
+  user={id:'22222222-2222-4222-8222-222222222222',role:'admin'}
+  assert.equal((await app.inject('/api/monitor/nodes/1/carriers?range=30d')).statusCode,403)
+})
+
+test('maintenance serializes across API processes and refuses clock regression',async()=>{
+  const holder=await pool.connect()
+  try{
+    await holder.query('BEGIN');await holder.query('SELECT pg_advisory_xact_lock(864210052)')
+    assert.deepEqual(await maintainMonitorHistory(),{skipped:true})
+  }finally{await holder.query('ROLLBACK');holder.release()}
+  const now=new Date('2026-10-01T12:00:00Z')
+  await maintainMonitorHistory({now})
+  const before=(await pool.query('SELECT * FROM monitor_probe_maintenance')).rows
+  assert.deepEqual(await maintainMonitorHistory({now:new Date(+now-3600000)}),{skipped:true})
+  assert.deepEqual((await pool.query('SELECT * FROM monitor_probe_maintenance')).rows,before)
 })

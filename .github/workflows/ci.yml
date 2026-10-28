@@ -366,7 +366,7 @@ jobs:
       - name: Build frontend
         run: npm run build --prefix app
 
-      - name: Build pinned original monitor frontends and verify native Hub and Agent
+      - name: Verify pinned Hub and Agent with native management contracts
         env:
           NAV_MONITOR_BUILD_DIR: ${{ runner.temp }}/nav-monitor-build
         run: |

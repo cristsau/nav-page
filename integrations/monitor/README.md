@@ -1,6 +1,15 @@
 # NAV monitor workspace and carrier sampling
 
-This extends the existing Monitor Hub 1.5.1 / Agent 1.2.3 integration. The Hub and existing Agent binaries are unchanged. The original administration panel remains available from the native NAV overview.
+This extends the existing Monitor Hub 1.5.1 / Agent 1.2.3 integration. The Hub and existing Agent binaries are unchanged. Daily administration now uses NAV's native, lazy-loaded settings panel; the old embedded frontend is no longer built or linked.
+
+## 2026-10-29 history and native management candidate
+
+- Carrier ranges: 1 hour, 24 hours, 3 days, 7 days and 30 days. Raw rows remain 3 days, 5-minute aggregates 7 days, hourly aggregates 30 days. Weighted packet counters and latency sums survive aggregation; errors and coverage remain separate. Historical time before collection began is never backfilled.
+- Migration 052 adds aggregate, maintenance and native-admin audit tables. A five-minute background job aggregates then prunes atomically under a database advisory lock, independently of browser sessions. Rollback leaves these additive tables in place.
+- Overview sends latest carrier snapshots; histories load only for an open detail tab. Owner-scoped coalescing caches, 15-second overview refresh, one-minute carrier-history refresh and hidden-page pauses limit work.
+- Native settings cover node CRUD/order/group/notification flags, credentials and temporary registration, traffic limits/corrections, notification settings/test, TCP tasks/assignment/history, database export/retention/vacuum. NAV owns login and appearance. Third-party themes and whole-database restoration remain outside this daily UI.
+- Old `/monitor-app` paths redirect to `/monitor`. Hub and Agents remain required; their binaries, DNS, sampling cadence and download tasks do not change. Native writes have a payload-free audit and are not automatically retried after ambiguous failure.
+- Local verification and deployed evidence are tracked separately in the authoritative CURRENT entry. Previous release evidence below does not cover this candidate.
 
 ## Behavior
 
@@ -19,7 +28,7 @@ This extends the existing Monitor Hub 1.5.1 / Agent 1.2.3 integration. The Hub a
 - ICMP permission: non-root `nav-monitor-agent` user, `CAP_NET_RAW` only, 48 MiB memory / 5% CPU limits. No SSH, Docker socket access, arbitrary targets, proxy credentials or shell evaluation. Use `ping -c 5` without `-w`; the Python process enforces the total timeout. Combining count and deadline waits for replies and can exceed the request budget on a lossy path (iputils documentation: https://github.com/iputils/iputils/blob/master/doc/ping.xml).
 - Weighted loss = `(sent - received) / sent`; DNS/permission/parser/interruption errors do not count as packet loss. Failed rounds and gaps remain visible. Data older than 180 seconds is marked stale.
 - A target's response does not establish the quality of an entire carrier, nor is it an external availability check of NAV. DNS must remain DNS-only for these destinations to represent the intended hosts.
-- Latest-hour summaries and trends; samples retained for 24 hours. At ten nodes, at most about 43,200 rows/day at a 60-second cadence. Storage and retention cost still require live observation.
+- At ten nodes, at most about 43,200 raw rows/day at a 60-second cadence. Three days raw plus bounded aggregates replace unbounded history growth. Storage and retention cost still require live observation.
 - Optional `NAV_PROBE_SERVICES` is an operator-configured comma-separated allowlist of at most eight local `.service` units; only `systemctl is-active` is read. Default: `nav-monitor-agent.service`. It is not a container/application health check.
 
 ## Release runbook

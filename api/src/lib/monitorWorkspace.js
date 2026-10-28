@@ -15,6 +15,7 @@ export const DETAIL_FIELDS = ['provider','purpose','tags','links','renewalMode',
 const cycles = { monthly: 1, quarterly: 3, semiannual: 6, yearly: 12, biennial: 24, triennial: 36 }
 let connection
 const snapshots = new WeakMap()
+export function invalidateNodeSnapshot(bridge){snapshots.delete(bridge)}
 export async function monitorForUser(userId, { load = () => loadMonitorConfig(config.managedIntegrationsDir), fetcher } = {}) {
   const settings = await load()
   if (!settings) throw monitorError('MONITOR_DISABLED', 404)
@@ -115,12 +116,14 @@ export function overview(nodes, details, probes, now = Date.now(), credentials =
       carriers:probeSummary(probes.filter(p=>Number(p.node_id)===node.id),now).map(c=>({...c,status:c.status==='unconfigured'&&credential?'stale':c.status})),
       services:credential?.services||[],servicesAt:credential?.last_report_at||null }
   })
-  return { nodes:items,alerts,costs,generatedAt:new Date(now).toISOString(),probeWindowMinutes:60,refreshSeconds:10 }
+  return { nodes:items,alerts,costs,generatedAt:new Date(now).toISOString(),probeWindowMinutes:1,refreshSeconds:15 }
 }
 export async function monitorOverview(userId, bridge, queryFn = query) {
   const [nodes, details, probes, credentials] = await Promise.all([
     readNodes(bridge), queryFn('SELECT node_id,details FROM monitor_node_details WHERE user_id=$1',[userId]),
-    queryFn(`SELECT s.* FROM monitor_probe_samples s JOIN monitor_probe_credentials c USING(node_id) WHERE c.user_id=$1 AND c.enabled AND s.observed_at > NOW()-INTERVAL '1 hour' ORDER BY s.observed_at DESC`,[userId]),
+    queryFn(`SELECT s.* FROM monitor_probe_credentials c CROSS JOIN (VALUES ('cu'),('cm'),('ct')) v(carrier)
+      CROSS JOIN LATERAL (SELECT * FROM monitor_probe_samples p WHERE p.node_id=c.node_id AND p.carrier=v.carrier ORDER BY p.observed_at DESC LIMIT 1) s
+      WHERE c.user_id=$1 AND c.enabled`,[userId]),
     queryFn('SELECT node_id,services,last_report_at FROM monitor_probe_credentials WHERE user_id=$1 AND enabled',[userId])
   ])
   return overview(nodes,details.rows,probes.rows,Date.now(),credentials.rows)

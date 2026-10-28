@@ -93,7 +93,7 @@ test('new monitor endpoints require owner admin before touching DB or model',asy
   await app.register(monitorRoutes,{prefix:'/api',loadConfig:async()=>settings,fetcher:async()=>{hits++;throw Error('must not call')}})
   for(const current of [null,{id:owner,role:'user'},{id:'22222222-2222-4222-8222-222222222222',role:'admin'}]){
     user=current
-    for(const url of ['/api/monitor/overview','/api/monitor/nodes/1/history','/api/monitor/nodes/1/changes'])assert.equal((await app.inject(url)).statusCode,current?403:401)
+    for(const url of ['/api/monitor/overview','/api/monitor/nodes/1/history','/api/monitor/nodes/1/changes','/api/monitor/nodes/1/carriers?range=30d','/api/monitor/admin/settings','/api/monitor/admin/nodes'])assert.equal((await app.inject(url)).statusCode,current?403:401)
     for(const url of ['/api/monitor/nodes/1/proposals','/api/monitor/nodes/1/ai','/api/monitor/changes/22222222-2222-4222-8222-222222222222/confirm'])assert.equal((await app.inject({method:'POST',url,payload:{}})).statusCode,current?403:401)
   }
   assert.equal(hits,0);assert.equal((await app.inject({method:'POST',url:'/api/monitor/probes/report',payload:{}})).statusCode,401);await app.close()

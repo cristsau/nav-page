@@ -2,6 +2,9 @@ import { Readable } from 'node:stream'
 import { config } from '../config.js'
 import { MonitorBridge, loadMonitorConfig, monitorError, monitorJson } from '../lib/monitorBridge.js'
 import { registerMonitorWorkspace } from './monitorWorkspace.js'
+import { query } from '../db/index.js'
+import { invalidateMonitorCache } from '../lib/monitorHistory.js'
+import { invalidateNodeSnapshot } from '../lib/monitorWorkspace.js'
 
 const messages = {
   MONITOR_FIELDS_INVALID:'字段不正确，请检查后重试。', MONITOR_DATE_INVALID:'日期必须明确到年、月、日，且真实有效。',
@@ -46,12 +49,12 @@ export default async function monitorRoutes(app, options = {}) {
     const response = await bridge.request('/me')
     if (!response.ok) { await response.body?.cancel(); throw monitorError('MONITOR_UNAVAILABLE') }
     if ((await monitorJson(response)).authed !== true) throw monitorError('MONITOR_LOGIN_UNAVAILABLE')
-    return { enabled: true, connected: true, path: '/monitor-app/', login: 'nav', refreshSeconds: 5 }
+    return { enabled: true, connected: true, path: '/monitor', login: 'nav', refreshSeconds: 15 }
   }))
   await registerMonitorWorkspace(app,handler)
-  app.route({ method: ['GET', 'HEAD', 'POST', 'PUT', 'DELETE'], url: '/monitor/proxy/*', bodyLimit: 8 * 1024 * 1024,
+  for(const surface of ['proxy','admin'])app.route({ method: ['GET', 'HEAD', 'POST', 'PUT', 'DELETE'], url: `/monitor/${surface}/*`, bodyLimit: 8 * 1024 * 1024,
     handler: handler(async (bridge, req, reply) => {
-      const raw = req.raw.url, marker = '/monitor/proxy/', index = raw.indexOf(marker)
+      const raw = req.raw.url, marker = `/monitor/${surface}/`, index = raw.indexOf(marker)
       const path = '/' + raw.slice(index + marker.length)
       const type = String(req.headers['content-type'] || '').split(';', 1)[0]
       if (req.body !== undefined && !['application/json', 'application/octet-stream'].includes(type)) throw monitorError('MONITOR_BODY_INVALID', 400)
@@ -59,9 +62,26 @@ export default async function monitorRoutes(app, options = {}) {
       const stop = () => { if (!reply.raw.writableEnded) abort.abort() }
       reply.raw.once('close', stop)
       const body = req.body === undefined ? undefined : Buffer.isBuffer(req.body) ? req.body : JSON.stringify(req.body)
-      let response
-      try { response = await bridge.request(path, { method: req.method, body, contentType: type, signal: abort.signal }) }
-      catch (error) { reply.raw.off('close', stop); throw error }
+      let response,eventId
+      const write=surface==='admin'&&!['GET','HEAD'].includes(req.method)
+      // The native administration surface exposes daily management only. NAV
+      // owns auth and presentation; restoring or installing themes is not a UI action.
+      if(surface==='admin'&&!/^\/(?:nodes(?:\/(?:order|batch|[0-9]+(?:\/(?:token|traffic|ping-tasks))?))?|settings|ping-tasks(?:\/(?:order|[0-9]+))?|register-window|notify\/test|db(?:\/(?:backup|vacuum))?)$/.test(path))throw monitorError('MONITOR_PATH_INVALID',400)
+      try {
+        if(write)eventId=(await query("INSERT INTO monitor_admin_events(user_id,operation,status) VALUES($1,$2,'started') RETURNING id",[req.currentUser.id,`${req.method} ${path}`])).rows[0].id
+        response = await bridge.request(path, { method: req.method, body, contentType: type, signal: abort.signal })
+        if(write){
+          invalidateMonitorCache(req.currentUser.id)
+          invalidateNodeSnapshot(bridge)
+          if(response.ok&&req.method==='DELETE'&&/^\/nodes\/[0-9]+$/.test(path)){
+            const id=Number(path.split('/')[2])
+            await query('DELETE FROM monitor_probe_credentials WHERE user_id=$1 AND node_id=$2',[req.currentUser.id,id])
+            await query('DELETE FROM monitor_node_details WHERE user_id=$1 AND node_id=$2',[req.currentUser.id,id])
+          }
+          await query('UPDATE monitor_admin_events SET status=$2 WHERE id=$1',[eventId,response.ok?'applied':'rejected'])
+        }
+      }
+      catch (error) { if(eventId)await query("UPDATE monitor_admin_events SET status='uncertain' WHERE id=$1",[eventId]).catch(()=>{});await response?.body?.cancel();reply.raw.off('close', stop);throw error }
       reply.code(response.status)
       for (const name of ['content-type', 'content-disposition']) { const value = response.headers.get(name); if (value) reply.header(name, value) }
       // Never forward cookies, Location, auth headers or upstream cache policy.
