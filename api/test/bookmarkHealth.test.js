@@ -191,7 +191,7 @@ test('pinned request implementation never adds credentials or reads response bod
   assert.doesNotMatch(source, /['"](authorization|cookie|referer)['"]\s*:/i)
   assert.match(source, /headers\.Range = 'bytes=0-0'/)
   assert.match(source, /response\.destroy\(\)/)
-  assert.match(source, /callback\(null, address, family\)/)
+  assert.match(source, /process\.nextTick\(callback, null, address, family\)/)
   assert.match(source, /absoluteTimeoutHandle = setTimeout/)
 })
 
