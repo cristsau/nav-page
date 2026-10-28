@@ -27,6 +27,7 @@ import integrationRoutes from './routes/systemIntegrations.js'
 import backupControlRoutes from './routes/dropboxBackupControl.js'
 import dropboxFileRoutes from './routes/dropboxFiles.js'
 import offlineDownloadRoutes from './routes/offlineDownloads.js'
+import monitorRoutes from './routes/monitor.js'
 import noteAiRoutes from './routes/noteAi.js'
 import noteImagesRoutes from './routes/noteImages.js'
 import noteReminderRoutes from './routes/noteReminders.js'
@@ -202,6 +203,7 @@ export function createApp() {
   app.register(backupControlRoutes, { prefix: '/api' })
   app.register(dropboxFileRoutes, { prefix: '/api' })
   app.register(offlineDownloadRoutes, { prefix: '/api' })
+  app.register(monitorRoutes, { prefix: '/api' })
   app.register(noteAiRoutes, { prefix: '/api' })
   app.register(noteImagesRoutes, { prefix: '/api' })
   app.register(noteReminderRoutes, { prefix: '/api' })

@@ -6,6 +6,12 @@ import { loadUploadStore } from '../lib/dropboxUploadStore.js'
 import { OfflineDownloads, EncryptedOfflineStore, loadOfflineConfig, connectionIdentity } from '../lib/offlineDownloads.js'
 
 const errors = {
+  INVALID_NODE_PROFILE: '请输入 1–64 字的节点名称；地址只填 IP 或域名，不含协议、端口、路径或密钥。',
+  OFFLINE_NODE_PREPARING: '正在准备更换节点，暂不接受新任务；已有任务仍可继续或取消。',
+  OFFLINE_NODE_NOT_ACTIVE: '此节点尚未启用或已被替换，请到 NAV 的下载节点管理中核对。',
+  OFFLINE_NODE_NOT_READY: '请处理完全部任务和缓存，停止旧节点，并等待至少 45 秒无旧节点连接。',
+  OFFLINE_NODE_STALE: '待接入节点已离线或选择已失效，请刷新后重选。',
+  OFFLINE_NODE_STOP_REQUIRED: '请先停止旧节点，再确认切换。',
   MEDIA_WORKER_UNAVAILABLE: '媒体节点尚未就绪，不能创建 BT 或转码任务；请稍后刷新。',
   INVALID_TORRENT: '种子格式或文件目录不符合要求。', PRIVATE_TORRENT_UNSUPPORTED: '暂不支持私有 PT 种子。',
   UNSUPPORTED_TORRENT: '请使用公开的 v1 种子，暂不支持 v2-only 或含链接的种子。',
@@ -37,6 +43,9 @@ export default async function offlineDownloadRoutes(app, options = {}) {
       const value = request.headers.authorization
       if (request.headers.origin || typeof value !== 'string' || !/^Bearer [a-f0-9]{64}$/.test(value)
         || !timingSafeEqual(Buffer.from(value), Buffer.from('Bearer ' + settings.workerKey))) deny('OWNER_REQUIRED', 403)
+      const nodeId = request.headers['x-offline-node']
+      if (nodeId !== undefined && (typeof nodeId !== 'string' || !/^[a-f0-9]{32}$/.test(nodeId))) deny('INVALID_NODE_PROFILE')
+      request.offlineNodeId = nodeId ?? null
     }
     const connection = await loadConnection()
     if (!connection || (!worker && request.currentUser.id !== connection.ownerUserId)) deny('OWNER_REQUIRED', 403)
@@ -85,13 +94,14 @@ export default async function offlineDownloadRoutes(app, options = {}) {
   app.post(root + '/select', { bodyLimit: 4096 }, endpoint(false, (manager, req) => manager.select(req.body?.id, req.body?.selection)))
   app.post(root + '/control', { bodyLimit: 4096 }, endpoint(false, (manager, req) => manager.control(req.body?.id, req.body?.command)))
   app.post(root + '/clear', { bodyLimit: 4096 }, endpoint(false, manager => manager.clear()))
-  app.post(root + '/worker/claim', { bodyLimit: 4096 }, endpoint(true, (manager, req) => manager.claim(req.body || {})))
-  app.post(root + '/worker/progress', { bodyLimit: 131072 }, endpoint(true, (manager, req) => manager.progress(req.body?.id, req.body || {})))
-  app.post(root + '/worker/source', { bodyLimit: 4096 }, endpoint(true, (manager, req) => manager.source(req.body?.id, req.body?.offset, req.body?.length)))
-  for (const operation of ['start', 'finish']) app.post(root + '/worker/' + operation, { bodyLimit: 4096 }, endpoint(true, (manager, req) => manager.transfer(req.body?.id, operation, req.body || {})))
+  app.post(root + '/node', { bodyLimit: 4096 }, endpoint(false, (manager, req) => manager.manageNode(req.body || {})))
+  app.post(root + '/worker/claim', { bodyLimit: 4096 }, endpoint(true, (manager, req) => manager.claim(req.body || {}, req.offlineNodeId)))
+  app.post(root + '/worker/progress', { bodyLimit: 131072 }, endpoint(true, (manager, req) => manager.progress(req.body?.id, req.body || {}, req.offlineNodeId)))
+  app.post(root + '/worker/source', { bodyLimit: 4096 }, endpoint(true, (manager, req) => manager.source(req.body?.id, req.body?.offset, req.body?.length, req.offlineNodeId)))
+  for (const operation of ['start', 'finish']) app.post(root + '/worker/' + operation, { bodyLimit: 4096 }, endpoint(true, (manager, req) => manager.transfer(req.body?.id, operation, req.body || {}, undefined, req.offlineNodeId)))
   app.post(root + '/worker/chunk', { bodyLimit: CHUNK_LIMIT, onRequest: reserve }, endpoint(true, (manager, req) => {
     const offset = req.headers['x-upload-offset'], id = req.headers['x-offline-job']
     if (typeof offset !== 'string' || !/^\d{1,12}$/.test(offset) || typeof id !== 'string' || !/^[a-f0-9]{32}$/.test(id) || !Buffer.isBuffer(req.body)) deny('INVALID_CHUNK')
-    return manager.transfer(id, 'chunk', { offset: Number(offset) }, req.body)
+    return manager.transfer(id, 'chunk', { offset: Number(offset) }, req.body, req.offlineNodeId)
   }))
 }

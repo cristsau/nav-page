@@ -5,6 +5,7 @@ import { apiRequest } from '@/shared/services/apiClient'
 import FolderPicker from './FolderPicker.vue'
 import { taskFilters, taskCounts, taskGroup, offlineTransferStages, taskGuidance, taskParentDirectory, transferBytes as size, visibleTasks } from './taskPresentation'
 import TaskSearch from './TaskSearch.vue'
+import OfflineNodeManager from './OfflineNodeManager.vue'
 const props = defineProps({ directory: { type: String, default: '' }, video: { type: Object, default: null } })
 const emit = defineEmits(['busy', 'open-folder'])
 const state = ref(null), url = ref(''), name = ref(''), destination = ref(props.directory), choosing = ref(false)
@@ -49,6 +50,7 @@ async function change(path, body) {
   let ok = false
   try {
     const result = await action(path, body); ok = true
+    if (alive && path === 'node') notice.value = body.action === 'activate' ? '已保存新节点选择，等待新节点连接后领取任务。' : body.action === 'profile' ? '节点资料已保存。' : body.action === 'prepare' ? '已进入更换流程，新任务暂不接收。' : '已退出更换流程，可以继续添加任务。'
     if (alive && path === 'clear') notice.value = Number.isSafeInteger(result.removed)
       ? `已清理 ${result.removed} 条记录。${result.pendingCleanup ? `另有 ${result.pendingCleanup} 条等待节点清理缓存，稍后再清理记录即可。` : 'Dropbox 文件保持不变。'}`
       : '清理请求已处理，请查看刷新后的列表。'
@@ -61,6 +63,7 @@ async function change(path, body) {
 }
 async function add() {
   if (mediaUnavailable.value) { error.value = '媒体节点尚未就绪，请稍后刷新。'; return }
+  if (state.value?.node?.preparing) { error.value = '正在更换下载节点，暂不接受新任务。'; return }
   if (['http', 'magnet'].includes(kind.value)) {
     try { const parsed = new URL(url.value); if (!(kind.value === 'magnet' ? ['magnet:'] : ['http:', 'https:']).includes(parsed.protocol) || parsed.username || parsed.password) throw Error() }
     catch { error.value = kind.value === 'magnet' ? '请输入有效的 magnet: 磁力链接。' : '请输入 HTTP 或 HTTPS 文件直链，不含账号密码。'; return }
@@ -97,6 +100,7 @@ onBeforeUnmount(() => { alive = false; clearTimeout(timer); emit('busy', false) 
     <div class="connection"><div><span class="connection-mark"><Icon name="cloud" :size="20" /></span><span><strong>{{ connection }}</strong><small>{{ refreshError ? '下方保留上次结果，刷新成功后再操作' : lastChecked ? '更新于 ' + lastChecked.toLocaleTimeString('zh-CN', { hour12: false }) + ' · 可关闭网页' : '正在读取任务与连接状态' }}</small></span></div><button :disabled="busy || refreshing" aria-label="刷新离线任务" @click="refresh"><Icon name="refresh" :size="16" :class="{ spinning: refreshing }" /></button></div>
     <div v-if="refreshError" class="feedback error" role="alert"><span>{{ refreshError }}</span><span>保留的任务状态不代表当前进度。</span><button type="button" :disabled="busy || refreshing" @click="refresh">{{ refreshing ? '正在重试…' : '重试读取状态' }}</button></div>
     <p v-if="error" class="feedback error" role="alert">{{ error }}</p><p v-if="notice" class="feedback" role="status"><Icon name="check" :size="16" />{{ notice }}</p>
+    <OfflineNodeManager v-if="state?.node" :node="state.node" :disabled="unavailable" @change="change('node', $event)" />
     <div v-if="state?.enabled" class="composer">
       <button class="composer-toggle" :aria-expanded="composer" aria-controls="offline-create-form" @click="composer = !composer"><span><Icon name="plus" :size="17" />新建离线任务</span><Icon name="chevron-down" :size="16" :class="{ expanded: composer }" /></button>
       <form v-show="composer" id="offline-create-form" @submit.prevent="add">
@@ -110,7 +114,7 @@ onBeforeUnmount(() => { alive = false; clearTimeout(timer); emit('busy', false) 
         <label for="offline-name">保存的文件名</label><input id="offline-name" v-model="name" maxlength="255" autocomplete="off" :disabled="busy" placeholder="例如：旅行视频.mp4" required>
         <div class="target"><Icon name="folder" :size="16" /><span><small>保存位置</small>{{ destination || 'Dropbox 根目录' }}</span><button type="button" :disabled="unavailable" @click="choosing = !choosing">选择目录</button></div>
         <FolderPicker v-if="choosing" @choose="destination = $event; choosing = false" />
-        <div class="create-footer"><span>{{ size(state.maxBytes) }} / 文件 · 同时运行 1 项</span><button class="primary" :disabled="unavailable || mediaUnavailable || !hasSource || !name"><Icon :name="pending === 'add' ? 'refresh' : 'plus'" :size="15" :class="{ spinning: pending === 'add' }" />{{ pending === 'add' ? '提交中…' : '创建离线任务' }}</button></div>
+        <div class="create-footer"><span>{{ state.node?.preparing ? '正在更换节点，暂停新增任务' : size(state.maxBytes) + ' / 文件 · 同时运行 1 项' }}</span><button class="primary" :disabled="unavailable || mediaUnavailable || state.node?.preparing || !hasSource || !name"><Icon :name="pending === 'add' ? 'refresh' : 'plus'" :size="15" :class="{ spinning: pending === 'add' }" />{{ pending === 'add' ? '提交中…' : '创建离线任务' }}</button></div>
       </form>
     </div>
     <div v-if="state" class="queue-heading"><h3 ref="queueHeading" tabindex="-1">任务列表 <span>{{ entries.length }}</span></h3><button :disabled="unavailable || !counts.finished || narrowed" @click="change('clear', {})">{{ pending === 'clear' ? '清理中…' : '清理完成记录' }}</button></div>

@@ -1,7 +1,7 @@
 // Personal, outbound-only HTTP download worker. Never receives Dropbox OAuth or an admin session.
 import { open, lstat, readFile, rename, unlink, statfs, mkdir } from 'node:fs/promises'
 import { constants } from 'node:fs'
-import { createHash } from 'node:crypto'
+import { createHash, randomBytes } from 'node:crypto'
 import { resolve, join } from 'node:path'
 import { pathToFileURL } from 'node:url'
 import { downloadResponse } from './safe-download.mjs'
@@ -42,6 +42,7 @@ export async function apiCall(c, operation, input, bytes) {
   try {
     response = await fetch(c.apiBase + '/worker/' + operation, { method: 'POST', redirect: 'error', signal: AbortSignal.timeout(90000),
       headers: { Authorization: 'Bearer ' + c.workerKey, 'Sec-Fetch-Site': 'none', 'Content-Type': bytes ? 'application/octet-stream' : 'application/json',
+        ...(c.nodeId ? { 'X-Offline-Node': c.nodeId } : {}),
         ...(bytes ? { 'X-Offline-Job': input.id, 'X-Upload-Offset': String(input.offset) } : {}) }, body: bytes || JSON.stringify(input) })
   } catch { throw Error('CONTROL_NETWORK_FAILED') }
   const reader = response.body.getReader(), chunks = []; let length = 0
@@ -193,6 +194,20 @@ export class DownloadWorker {
     } finally { clearInterval(timer) }
   }
 }
+export async function nodeIdentity(directory) {
+  const path = join(directory, 'node-id.json')
+  try {
+    await privateFile(path, 256)
+    const value = JSON.parse(await readFile(path, 'utf8'))
+    if (value.version !== 1 || !safeId(value.id)) throw Error('INVALID_NODE_IDENTITY')
+    return value.id
+  } catch (error) {
+    if (error.code !== 'ENOENT') throw error
+    const id = randomBytes(16).toString('hex')
+    await atomic(path, { version: 1, id })
+    return id
+  }
+}
 export async function main(configPath) {
   if (process.platform !== 'linux' || !configPath?.startsWith('/etc/nav-offline/')) throw Error('INVALID_WORKER_ENVIRONMENT')
   await privateFile(configPath)
@@ -203,6 +218,10 @@ export async function main(configPath) {
   await mkdir(config.directory, { mode: 0o700, recursive: true })
   const directory = await lstat(config.directory)
   if (!directory.isDirectory() || directory.isSymbolicLink() || directory.uid !== process.getuid() || (directory.mode & 0o077)) throw Error('UNSAFE_LOCAL_DIRECTORY')
+  // Keep legacy workers compatible until explicitly enrolled. New installations opt in.
+  if (config.managedNode !== undefined && typeof config.managedNode !== 'boolean') throw Error('INVALID_WORKER_CONFIG')
+  if (config.managedNode === true) config.nodeId = await nodeIdentity(config.directory)
+  else if (config.nodeId !== undefined) throw Error('INVALID_WORKER_CONFIG')
   const worker = new DownloadWorker(config)
   for (const signal of ['SIGINT', 'SIGTERM']) process.on(signal, () => { worker.stopping = true })
   while (!worker.stopping) {

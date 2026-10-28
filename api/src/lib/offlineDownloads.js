@@ -4,6 +4,7 @@ import { lstat, open, rename, unlink } from 'node:fs/promises'
 import { join } from 'node:path'
 import { filePath, protectPath, deny } from './dropboxFiles.js'
 import { magnetSource, torrentInput, selectTorrentFile } from './offlineMediaPolicy.js'
+import { NODE_ONLINE_MS, validNodeId, nodeSettings, nodeProfile, migrationBlockers } from './offlineNodes.js'
 
 export const OFFLINE_LIMIT = 6 * 1024 ** 3
 const terminal = new Set(['complete', 'cancelled', 'error', 'review'])
@@ -74,6 +75,40 @@ export class EncryptedOfflineStore {
 export class OfflineDownloads {
   constructor({ store, service, uploads, identity, maxBytes = OFFLINE_LIMIT }) {
     Object.assign(this, { store, service, uploads, identity, maxBytes }); this.serial = Promise.resolve(); this.lastSeen = 0; this.failed = false; this.media = { bt: false, video: false }
+    this.candidates = new Map()
+    this.startedAt = Date.now()
+  }
+  assertNode(data, id = null) {
+    if ((id !== null && !validNodeId(id)) || nodeSettings(data).id !== id) deny('OFFLINE_NODE_NOT_ACTIVE', 409)
+  }
+  nodeView(data) {
+    const node = nodeSettings(data), now = Date.now(), blockers = migrationBlockers(data)
+    for (const [id, seen] of this.candidates) if (now - seen.lastSeen >= NODE_ONLINE_MS) this.candidates.delete(id)
+    return { ...node, lastSeen: this.lastSeen ? new Date(this.lastSeen).toISOString() : null,
+      online: now - this.lastSeen < NODE_ONLINE_MS, blockers,
+      ready: node.preparing && !blockers.unfinished && !blockers.cleanup && now - (this.lastSeen || this.startedAt) >= NODE_ONLINE_MS,
+      candidates: node.preparing ? [...this.candidates.entries()].filter(([id]) => id !== node.id)
+        .map(([id, seen]) => ({ id, lastSeen: new Date(seen.lastSeen).toISOString() })) : [] }
+  }
+  async manageNode(input) {
+    return this.transaction(data => {
+      const current = nodeSettings(data)
+      if (input.action === 'profile') data.node = { ...current, ...nodeProfile(input) }
+      else if (input.action === 'prepare') data.node = { ...current, preparing: true }
+      else if (input.action === 'cancel') data.node = { ...current, preparing: false }
+      else if (input.action === 'activate') {
+        const profile = nodeProfile(input), view = this.nodeView(data)
+        if (!view.ready) deny('OFFLINE_NODE_NOT_READY', 409)
+        if (!validNodeId(input.id) || input.id === current.id || !view.candidates.some(node => node.id === input.id)) deny('OFFLINE_NODE_STALE', 409)
+        if (input.oldNodeStopped !== true) deny('OFFLINE_NODE_STOP_REQUIRED', 409)
+        data.node = { id: input.id, ...profile, preparing: false }
+      } else deny('OFFLINE_COMMAND_INVALID')
+      return { node: this.nodeView(data) }
+    }).then(result => {
+      // Change ephemeral health only after the durable node selection has been saved.
+      if (input.action === 'activate') { this.lastSeen = 0; this.media = { bt: false, video: false }; this.candidates.delete(input.id) }
+      return result
+    })
   }
   async save(data) {
     try { await this.store.write(data) }
@@ -96,6 +131,7 @@ export class OfflineDownloads {
   async status() {
     const data = await this.store.read()
     return { enabled: true, maxBytes: this.maxBytes, queueLimit: 10, workerOnline: Date.now() - this.lastSeen < 45000,
+      node: this.nodeView(data),
       media: Date.now() - this.lastSeen < 45000 ? this.media : { bt: false, video: false },
       uploadPersistence: this.uploads.store ? 'encrypted_disk' : 'api_process',
       entries: data.jobs.filter(j => j.identity === this.identity).map(j => this.view(j)).reverse() }
@@ -126,6 +162,7 @@ export class OfflineDownloads {
     return this.transaction(data => {
       if (data.jobs.filter(j => !terminal.has(j.state)).length >= 10 || data.jobs.length >= 50) deny('OFFLINE_QUEUE_FULL', 409)
       if (data.jobs.some(j => j.destination.toLowerCase() === destination.toLowerCase() && !terminal.has(j.state))) deny('TARGET_EXISTS', 409)
+      if (nodeSettings(data).preparing) deny('OFFLINE_NODE_PREPARING', 409)
       const job = { id: randomBytes(16).toString('hex'), identity: this.identity, kind, url, torrent, metadata, selection, sourceId, sourceRev, sourceSize,
         name, destination, state: 'queued', intent: 'run',
         downloaded: 0, size: null, uploaded: 0, createdAt: new Date().toISOString(), updatedAt: new Date().toISOString() }
@@ -164,9 +201,10 @@ export class OfflineDownloads {
       job.state = 'queued'; job.updatedAt = new Date().toISOString(); return this.view(job)
     })
   }
-  async source(id, offset, length) {
+  async source(id, offset, length, nodeId = null) {
     // Worker can read only the current claimed video/revision, never an arbitrary ID.
     return this.transaction(async data => {
+      this.assertNode(data, nodeId)
       const job = this.job(data, id)
       if (job.kind !== 'video' || !job.claimed || job.intent !== 'run' || job.state !== 'downloading') deny('OFFLINE_PAUSED', 409)
       if (!Number.isSafeInteger(offset) || !Number.isSafeInteger(length) || offset < 0 || length < 1 || length > 8 * 1024 * 1024 || offset + length > job.sourceSize) deny('INVALID_RANGE', 416)
@@ -181,10 +219,19 @@ export class OfflineDownloads {
       } finally { await reader.cancel().catch(() => {}); reader.releaseLock() }
     })
   }
-  async claim(capabilities = {}) {
-    this.lastSeen = Date.now()
-    this.media = { bt: capabilities.bt === true, video: capabilities.video === true }
+  async claim(capabilities = {}, nodeId = null) {
     return this.transaction(async data => {
+      const node = nodeSettings(data)
+      if (nodeId !== null && !validNodeId(nodeId)) deny('INVALID_NODE_PROFILE')
+      if (nodeId !== node.id) {
+        if (nodeId === null) deny('OFFLINE_NODE_NOT_ACTIVE', 409)
+        this.nodeView(data)
+        if (!this.candidates.has(nodeId) && this.candidates.size >= 8) deny('BUSY', 429)
+        this.candidates.set(nodeId, { lastSeen: Date.now() })
+        return { job: null, nodeState: 'pending' }
+      }
+      this.lastSeen = Date.now()
+      this.media = { bt: capabilities.bt === true, video: capabilities.video === true }
       // One active job; a restarted worker receives the same identity, never a second job.
       let job = data.jobs.find(j => j.identity === this.identity && ['downloading', 'uploading', 'committing'].includes(j.state))
       if (job?.state === 'committing') { job.state = 'review'; job.error = 'COMMIT_RESULT_UNKNOWN'; return { job: null } }
@@ -199,9 +246,10 @@ export class OfflineDownloads {
         sourceSize: job.sourceSize, state: job.state, intent: job.intent, maxBytes: this.maxBytes } }
     })
   }
-  async progress(id, input) {
-    this.lastSeen = Date.now()
+  async progress(id, input, nodeId = null) {
     return this.transaction(data => {
+      this.assertNode(data, nodeId)
+      this.lastSeen = Date.now()
       const job = this.job(data, id)
       if (terminal.has(job.state)) { if (input.cleaned === true && ['complete', 'cancelled'].includes(job.state)) job.cleaned = true; return this.view(job) }
       if (job.state === 'committing') return this.view(job)
@@ -223,9 +271,10 @@ export class OfflineDownloads {
       job.updatedAt = new Date().toISOString(); return this.view(job)
     })
   }
-  async transfer(id, operation, input, bytes) {
-    this.lastSeen = Date.now()
+  async transfer(id, operation, input, bytes, nodeId = null) {
     return this.transaction(async data => {
+      this.assertNode(data, nodeId)
+      this.lastSeen = Date.now()
       const job = this.job(data, id)
       if (job.intent !== 'run' || !['downloading', 'uploading'].includes(job.state)) deny('OFFLINE_PAUSED', 409)
       protectPath(job.destination, await this.service.protection(), true)

@@ -1,5 +1,15 @@
 # Personal outbound download node
 
+## NAV node management (2026-10-28 candidate, not deployed)
+
+The owner-only offline-download panel now records a node name/address and guides replacement. The address is inventory metadata; NAV never connects to it, and editing it does not install or migrate a worker. Existing workers without a node header remain compatible.
+
+To replace a node after this candidate is deployed: enter preparation in NAV, finish/cancel outstanding jobs and confirm their generated caches are cleaned, then stop the old worker. Install the approved worker on the new host with `managedNode: true` in its existing private configuration. Keep its API origin/key securely configured as before; never put credentials in NAV's node form. The worker creates its own persistent `node-id.json` under its state directory. Do not copy that file from the old machine. After at least 45 seconds without the old worker, select the fresh candidate in NAV, compare the full non-secret node ID, and confirm that the old service is stopped. New tasks are blocked during preparation; existing tasks can drain. Failed, paused or uncertain jobs and unfinished cache cleanup block activation. API restart also requires a fresh quiet period.
+
+The selected identity is persisted with the existing encrypted queue. Subsequent source/upload/progress calls must match it. This is single-node routing, not worker-key revocation: replacing a compromised host additionally requires a separately reviewed credential rotation. No unfinished download/cache migration or automatic server installation is implemented.
+
+Verification: `api/test/offlineNodes.test.js`, `api/test/offlineWorker.test.js` and `scripts/verify-offline-node-ui.mjs`. Dev60 passed 36 targeted tests and 8 synthetic UI checks; Linux/real-node switch acceptance and production deployment remain pending. The following original HTTP-worker notes describe the initial baseline; later BT/video capabilities are documented in `docs/diagnostics/nav-integration-completion-20260921/MEDIA-RUNTIME-PLAN.md`.
+
 NAV's file-library **Offline download** dialog accepts public HTTP/HTTPS file URLs and an existing personal Dropbox destination. It does not accept magnets, torrents, login cookies, embedded credentials, nonstandard ports or HTML sharing pages. It never executes downloaded content.
 
 The first node is resource-limited: one active job, 6 GiB/file, 2 MiB/s download, at least 2 GiB reserved filesystem space, ten queued jobs and fifty retained records. A paused/failed job keeps its cache and blocks subsequent work until continued/cancelled. URLs must supply a bounded Content-Length; HTTP resume requires a matching strong ETag and exact range, otherwise a full 200 response restarts safely. Every redirect is DNS-resolved and pinned; private/reserved IPv4, infrastructure targets, IPv6 and HTTPS downgrades are rejected.

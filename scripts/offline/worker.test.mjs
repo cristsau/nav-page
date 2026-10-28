@@ -6,8 +6,28 @@ import { mkdtemp, writeFile, readFile, lstat, rm, chmod } from 'node:fs/promises
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { publicAddress, parseUrl, pinnedTarget, downloadResponse } from './safe-download.mjs'
-import { contentHash, DownloadWorker } from './worker.mjs'
+import { contentHash, DownloadWorker, nodeIdentity, apiCall } from './worker.mjs'
 import { dropboxContentHash } from '../../api/src/lib/dropboxFileUploads.js'
+test('managed node identity persists across restart, differs on a fresh node and rejects damaged identity', async () => {
+  const directory = await mkdtemp(join(tmpdir(), 'offline-node-')), other = await mkdtemp(join(tmpdir(), 'offline-node-'))
+  try {
+    const id = await nodeIdentity(directory)
+    assert.match(id, /^[a-f0-9]{32}$/)
+    assert.equal(await nodeIdentity(directory), id)
+    assert.notEqual(await nodeIdentity(other), id)
+    await writeFile(join(directory, 'node-id.json'), '{"version":1,"id":"damaged"}', { mode: 0o600 })
+    await assert.rejects(nodeIdentity(directory), /INVALID_NODE_IDENTITY/)
+  } finally { await rm(directory, { recursive: true, force: true }); await rm(other, { recursive: true, force: true }) }
+})
+test('all worker API operations include node identity, while legacy configuration stays compatible', async t => {
+  const requests = []
+  t.mock.method(globalThis, 'fetch', async (_url, options) => { requests.push(options); return new Response('{"job":null}', { status: 200 }) })
+  const config = { apiBase: 'https://example.test/api/offline-downloads', workerKey: 'a'.repeat(64), nodeId: 'b'.repeat(32) }
+  for (const operation of ['claim', 'progress', 'start', 'chunk', 'finish']) await apiCall(config, operation, { id: 'c'.repeat(32), offset: 0 }, operation === 'chunk' ? Buffer.from('a') : undefined)
+  assert.ok(requests.every(request => request.headers['X-Offline-Node'] === config.nodeId))
+  await apiCall({ ...config, nodeId: undefined }, 'claim', {})
+  assert.equal(requests.at(-1).headers['X-Offline-Node'], undefined)
+})
 test('download target rejects private, mapped, linklocal, reserved and infrastructure addresses', async () => {
   for (const address of ['127.0.0.1', '10.2.3.4', '172.16.0.1', '192.168.1.1', '169.254.169.254', '100.64.0.1', '198.18.0.2', '0.0.0.0', '224.0.0.1', '::1', '::ffff:127.0.0.1', '172.81.57.10', '15.204.56.108', '192.0.2.1']) assert.equal(publicAddress(address), false, address)
   assert.equal(publicAddress('1.1.1.1'), true)

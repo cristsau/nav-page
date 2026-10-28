@@ -1,0 +1,304 @@
+diff --git a/web-admin/src/App.tsx b/web-admin/src/App.tsx
+index 13d744f..ba9ee3b 100644
+--- a/web-admin/src/App.tsx
++++ b/web-admin/src/App.tsx
+@@ -8,6 +8,7 @@ import { Button } from "@/components/ui/button"
+ import { Skeleton } from "@/components/ui/skeleton"
+ import { TooltipProvider } from "@/components/ui/tooltip"
+ import { api, provisionRefusal, useNodes } from "@/lib/api"
++import { embedded, hubPath, localPath, notifyParent, observeParentTheme, parentDark } from "@/lib/mount"
+ 
+ type Me = { authed: boolean; github: boolean; site_name: string; public_page: boolean; site: string }
+ 
+@@ -19,12 +20,12 @@ function normalise(p: string) {
+ 
+ function usePath() {
+   const [path, setPath] = useState(() => {
+-    const start = normalise(location.pathname)
+-    if (start !== location.pathname) history.replaceState({}, "", start + location.search)
++    const start = normalise(localPath(location.pathname))
++    if (hubPath(start) !== location.pathname) history.replaceState({}, "", hubPath(start) + location.search)
+     return start
+   })
+   useEffect(() => {
+-    const sync = () => setPath(normalise(location.pathname))
++    const sync = () => setPath(normalise(localPath(location.pathname)))
+     addEventListener("popstate", sync)
+     return () => removeEventListener("popstate", sync)
+   }, [])
+@@ -32,7 +33,7 @@ function usePath() {
+     path,
+     useCallback((next: string) => {
+       const to = normalise(next)
+-      history.pushState({}, "", to)
++      history.pushState({}, "", hubPath(to))
+       setPath(to)
+     }, []),
+   ] as const
+@@ -67,7 +68,8 @@ function useTheme() {
+     },
+     () => DARK_MEDIA.matches,
+   )
+-  const dark = saved ? saved === "dark" : system
++  const navDark = useSyncExternalStore(observeParentTheme, parentDark)
++  const dark = navDark ?? (saved ? saved === "dark" : system)
+ 
+   // Switched with every transition held. Buttons, badges and table rows fade
+   // their colours over 150 ms while everything else changes at once, leaving
+@@ -112,6 +114,7 @@ export default function App() {
+   useEffect(() => {
+     loadMe()
+   }, [loadMe])
++  useEffect(() => { if (me?.authed) notifyParent("ready") }, [me])
+ 
+   // Every frame declares its audience. The hub closes the stream when the session
+   // behind it is revoked -- signed out from another device, a password change, a
+@@ -144,7 +147,7 @@ export default function App() {
+ 
+   async function signOut() {
+     await api("/auth/logout", { method: "POST" }).catch(() => {})
+-    location.href = "/"
++    location.href = hubPath("/")
+   }
+ 
+   return (
+@@ -156,23 +159,23 @@ export default function App() {
+           <div className="mx-auto flex max-w-7xl items-center gap-3 px-4 py-3">
+             {/* The site name is the way back to the status page, as in the
+                 theme's own header. */}
+-            <a href="/" className="font-semibold transition-opacity hover:opacity-70">
++            <a href={hubPath("/")} className="font-semibold transition-opacity hover:opacity-70">
+               {me.site_name || "Monitor"}
+             </a>
+             <span className="text-xs text-muted-foreground">后台</span>
+             <div className="flex-1" />
+             {/* The status page is a separate app, so this is a navigation. */}
+             <Button variant="ghost" size="sm" asChild>
+-              <a href="/">
++              <a href={hubPath("/")}>
+                 <ExternalLink /> 状态面板
+               </a>
+             </Button>
+-            <Button variant="ghost" size="icon" onClick={toggleTheme} title="切换主题">
++            {!embedded && <Button variant="ghost" size="icon" onClick={toggleTheme} title="切换主题">
+               {dark ? <Sun /> : <Moon />}
+-            </Button>
+-            <Button variant="ghost" size="icon" onClick={signOut} title="退出登录">
++            </Button>}
++            {!embedded && <Button variant="ghost" size="icon" onClick={signOut} title="退出登录">
+               <LogOut />
+-            </Button>
++            </Button>}
+           </div>
+         </header>
+ 
+@@ -192,7 +195,7 @@ export default function App() {
+               site={me.site || location.origin}
+               // Why this page cannot add nodes, measured by the rule the hub applies
+               // to the `Origin` it receives; empty when it can.
+-              refusal={provisionRefusal(location.origin, me.site)}
++              refusal={provisionRefusal(embedded ? me.site : location.origin, me.site)}
+               reloadMe={loadMe}
+             />
+           )}
+diff --git a/web-admin/src/components/Admin.tsx b/web-admin/src/components/Admin.tsx
+index 4a68dc8..a98e6f6 100644
+--- a/web-admin/src/components/Admin.tsx
++++ b/web-admin/src/components/Admin.tsx
+@@ -16,6 +16,7 @@ import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "@
+ import { Tooltip, TooltipContent, TooltipTrigger } from "@/components/ui/tooltip"
+ import { api, badIfaceName, behind, changes, configFields, configForm, configOverrides, configSections, configValues, currentIface, fits, GIB, groupsOf, ifaceChoice, ifaceSpec, inGroup, outdatedAgents, provisioningSite, shortAddress, trafficCorrection, upload, type ConfigField, type IfaceChoice, type Node, type PingTask, type Source } from "@/lib/api"
+ import { bytes, cycleMonths, FOREVER, money, uptime } from "@/lib/format"
++import { embedded, hubPath } from "@/lib/mount"
+ 
+ // Counters the panel can correct after migration or an accounting error.
+ const TRAFFIC_FIELDS = [
+@@ -2487,6 +2488,7 @@ function Themes() {
+   if (!themes) return null
+   return (
+     <div className="space-y-4">
++      {embedded && <p className="rounded-md border p-3 text-sm text-muted-foreground">NAV 内总览使用随项目验证的默认主题，并跟随 NAV 深浅模式。这里安装、切换的主题用于监控服务的独立入口。</p>}
+       <Card className="gap-4 p-5">
+         <div>
+           <div className="flex items-center gap-1.5">
+@@ -2561,7 +2563,7 @@ function Themes() {
+             {theme.preview && (
+               <button type="button" title="查看完整预览图" className="cursor-zoom-in" onClick={() => setZoomed(theme)}>
+                 <img
+-                  src={`/api/themes/${theme.short}/preview`}
++                  src={hubPath(`/api/themes/${theme.short}/preview`)}
+                   alt={`${theme.name} 预览图`}
+                   className="aspect-video w-full rounded-md border object-cover object-top"
+                 />
+@@ -2625,7 +2627,7 @@ function Themes() {
+               <DialogDescription>{zoomed.author} · {zoomed.version}</DialogDescription>
+             </DialogHeader>
+             <img
+-              src={`/api/themes/${zoomed.short}/preview`}
++              src={hubPath(`/api/themes/${zoomed.short}/preview`)}
+               alt={`${zoomed.name} 预览图`}
+               className="max-h-[80vh] w-full rounded-md border object-contain"
+             />
+@@ -2760,7 +2762,7 @@ function SettingsTab({ onSaved }: { onSaved: () => void }) {
+       // The tab's icon is cached under its fixed URL; a new query fetches the
+       // one just saved.
+       const link = document.querySelector<HTMLLinkElement>('link[rel="icon"]')
+-      if (ok && link) link.href = `/admin/favicon.svg?${Date.now()}`
++      if (ok && link) link.href = hubPath(`/admin/favicon.svg?${Date.now()}`)
+     })
+ 
+   return (
+@@ -2800,7 +2802,7 @@ function SettingsTab({ onSaved }: { onSaved: () => void }) {
+             <div className="flex items-center gap-2">
+               {!s.favicon && <span className="text-sm text-muted-foreground">默认</span>}
+               <div className="flex size-9 shrink-0 items-center justify-center rounded-md border">
+-                <img src={String(s.favicon || "/favicon.svg?theme")} alt="站点图标" className="size-6 object-contain" />
++                <img src={hubPath(String(s.favicon || "/favicon.svg?theme"))} alt="站点图标" className="size-6 object-contain" />
+               </div>
+               <Button size="sm" variant="outline" onClick={() => iconPicker.current?.click()}>
+                 <Upload /> 选择图标
+@@ -3260,6 +3262,12 @@ function Security({ site }: { site: string }) {
+   if (!s || !sessions.rows) return null
+   const callback = `${site}/api/auth/github/callback`
+ 
++  if (embedded) return <Card className="gap-3 p-5">
++    <h3 className="text-sm font-medium">使用 NAV 管理员身份</h3>
++    <p className="text-sm text-muted-foreground">登录、设备会话和退出登录在 NAV 的账户设置中管理。监控服务的独立应急凭据保留在服务器端。</p>
++    <p className="text-xs text-muted-foreground">独立入口的应急密码或数据库恢复需与连接配置一起维护，避免中断 NAV 的监控连接。</p>
++  </Card>
++
+   return (
+     <div className="space-y-4">
+       <Sessions rows={sessions.rows} reload={sessions.load} />
+@@ -3464,11 +3472,11 @@ function Data() {
+           {/* The browser's own download: the file is streamed straight from
+               the response, never held in the page. */}
+           <Button size="sm" asChild>
+-            <a href="/api/db/backup" download>
++            <a href={hubPath("/api/db/backup")} download>
+               <Download /> 导出备份
+             </a>
+           </Button>
+-          <Button size="sm" variant="secondary" disabled={!!busy} onClick={() => picker.current?.click()}>
++          <Button size="sm" variant="secondary" disabled={!!busy || embedded} title={embedded ? "恢复需与服务器端连接凭据一起维护" : undefined} onClick={() => picker.current?.click()}>
+             <Upload /> 导入备份
+           </Button>
+           <input
+@@ -3482,6 +3490,7 @@ function Data() {
+             }}
+           />
+         </div>
++        {embedded && <p className="text-xs text-muted-foreground">NAV 内可导出备份。整体恢复会替换登录凭据，留到最终维护与恢复验收时执行。</p>}
+       </Card>
+ 
+       {confirm === "vacuum" && (
+diff --git a/web-admin/src/components/Login.tsx b/web-admin/src/components/Login.tsx
+index 4dd2c7e..b1b9515 100644
+--- a/web-admin/src/components/Login.tsx
++++ b/web-admin/src/components/Login.tsx
+@@ -6,6 +6,7 @@ import { Input } from "@/components/ui/input"
+ import { Label } from "@/components/ui/label"
+ import { Separator } from "@/components/ui/separator"
+ import { api } from "@/lib/api"
++import { hubPath } from "@/lib/mount"
+ 
+ /** lucide removed brand marks in v1, and the GitHub logo is what makes this
+  *  button recognisable at a glance. */
+@@ -56,7 +57,7 @@ export function Login({ github, onDone }: { github: boolean; onDone: () => void
+         {github && (
+           <>
+             <Button asChild variant="outline" className="w-full">
+-              <a href="/api/auth/github">
++              <a href={hubPath("/api/auth/github")}>
+                 <GithubMark /> 使用 GitHub 登录
+               </a>
+             </Button>
+diff --git a/web-admin/src/lib/api.ts b/web-admin/src/lib/api.ts
+index 189b0a9..44a9ed8 100644
+--- a/web-admin/src/lib/api.ts
++++ b/web-admin/src/lib/api.ts
+@@ -1,4 +1,5 @@
+ import { useEffect, useState } from "react"
++import { embedded, hubPath, notifyParent } from "./mount.ts"
+ 
+ export type Metrics = {
+   /** The agent's `--iface`, empty for the default rules; absent from an agent predating it. */
+@@ -393,7 +394,9 @@ async function failure(res: Response): Promise<ApiError> {
+ /** `fetch`, failing with a message for the reader when nothing answers at all. */
+ async function send(url: string, init?: RequestInit): Promise<Response> {
+   try {
+-    return await fetch(url, init)
++    const response = await fetch(hubPath(url), init)
++    if (embedded && [401, 403].includes(response.status)) notifyParent("auth-required")
++    return response
+   } catch (e) {
+     // An abort was asked for, and the caller tells it apart by name.
+     if ((e as Error).name === "AbortError") throw e
+@@ -485,7 +488,10 @@ export function useNodes() {
+     // request started before then may fail or land after a newer one, and
+     // neither result describes the page now; it is dropped rather than shown.
+     let epoch = 0
++    let fetching = false
+     const fetchOnce = () => {
++      if (embedded && fetching) return Promise.resolve()
++      fetching = true
+       const started = epoch
+       return api<{ nodes: Node[]; admin: boolean }>("/nodes")
+         .then((d) => {
+@@ -502,6 +508,7 @@ export function useNodes() {
+           // never arrives and the panel would retain the list it already had.
+           if (e instanceof ApiError && e.status === 401) setAdmin(false)
+         })
++        .finally(() => { fetching = false })
+     }
+ 
+     const url = `${location.protocol === "https:" ? "wss" : "ws"}://${location.host}/api/ws`
+@@ -509,6 +516,9 @@ export function useNodes() {
+     // outlives a deploy would remain on the fallback poll for the rest of its
+     // life, refreshing at a fifth of the live rate with no indication.
+     const connect = () => {
++      // NAV rechecks its session on each poll; no independent browser token or
++      // long-lived stream can outlive a revoked NAV login.
++      if (embedded) { poll ??= setInterval(fetchOnce, 5000); return }
+       let opened: WebSocket
+       try {
+         opened = new WebSocket(url)
+diff --git a/web-admin/src/lib/mount.ts b/web-admin/src/lib/mount.ts
+new file mode 100644
+index 0000000..d6adcb2
+--- /dev/null
++++ b/web-admin/src/lib/mount.ts
+@@ -0,0 +1,19 @@
++declare const __NAV_MONITOR_MOUNT__: string
++export const mount = typeof __NAV_MONITOR_MOUNT__ === "string" ? __NAV_MONITOR_MOUNT__ : ""
++export const embedded = mount !== ""
++export function hubPath(path: string): string {
++  return path.startsWith("/") && !path.startsWith("//") ? mount + path : path
++}
++export function localPath(path: string): string {
++  return mount && (path === mount || path.startsWith(mount + "/")) ? path.slice(mount.length) || "/" : path
++}
++export function notifyParent(type: "ready" | "auth-required") {
++  if (embedded && parent !== window) parent.postMessage({ type: `nav-monitor:${type}`, section: location.pathname.startsWith(`${mount}/admin`) ? "admin" : "overview" }, location.origin)
++}
++export function parentDark() { return embedded && parent !== window ? parent.document.documentElement.classList.contains("dark") : null }
++export function observeParentTheme(notify: () => void) {
++  if (!embedded || parent === window) return () => {}
++  const observer = new MutationObserver(notify)
++  observer.observe(parent.document.documentElement, { attributes: true, attributeFilter: ["class"] })
++  return () => observer.disconnect()
++}
+diff --git a/web-admin/vite.config.ts b/web-admin/vite.config.ts
+index 2dff6d9..0040d55 100644
+--- a/web-admin/vite.config.ts
++++ b/web-admin/vite.config.ts
+@@ -4,7 +4,8 @@ import tailwindcss from "@tailwindcss/vite"
+ 
+ export default defineConfig({
+   // Served under /admin/ so its hashed assets cannot collide with a theme's.
+-  base: "/admin/",
++  base: process.env.NAV_MONITOR_EMBED === "1" ? "/monitor-app/admin/" : "/admin/",
++  define: { __NAV_MONITOR_MOUNT__: JSON.stringify(process.env.NAV_MONITOR_EMBED === "1" ? "/monitor-app" : "") },
+   plugins: [react(), tailwindcss()],
+   // import.meta.dirname rather than new URL(...).pathname: the latter is
+   // URL-encoded, so a checkout under a path containing a space or a non-ASCII

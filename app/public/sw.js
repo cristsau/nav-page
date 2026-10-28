@@ -216,6 +216,8 @@ self.addEventListener('sync', (event) => {
 function isPrivateRequest(url) {
   return (
     url.pathname.startsWith('/api/')
+    || url.pathname.startsWith('/monitor-app/')
+    || url.pathname === '/monitor'
     || url.pathname.startsWith('/share/')
     || url.pathname.startsWith('/quick-add')
   )

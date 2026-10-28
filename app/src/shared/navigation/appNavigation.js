@@ -35,6 +35,14 @@ export const PRIMARY_NAV_ITEMS = Object.freeze([
     description: '带来源的个人资料助理',
     icon: 'sparkles',
     path: '/assistant'
+  },
+  {
+    id: 'monitor',
+    label: '监控',
+    description: '服务器状态与管理',
+    icon: 'server',
+    path: '/monitor',
+    adminOnly: true
   }
 ])
 

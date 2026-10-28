@@ -21,6 +21,11 @@ const props = defineProps({
 })
 
 const iconPaths = {
+  server: [
+    ['rect', { x: 2, y: 3, width: 20, height: 7, rx: 2 }],
+    ['rect', { x: 2, y: 14, width: 20, height: 7, rx: 2 }],
+    ['path', { d: 'M6 6.5h.01M6 17.5h.01' }]
+  ],
   'chevron-right': [ ['path', { d: 'm9 18 6-6-6-6' }] ],
   'chevron-left': [ ['path', { d: 'm15 18-6-6 6-6' }] ],
   maximize: [ ['path', { d: 'M8 3H5a2 2 0 0 0-2 2v3m13-5h3a2 2 0 0 1 2 2v3M3 16v3a2 2 0 0 0 2 2h3m8 0h3a2 2 0 0 0 2-2v-3' }] ],

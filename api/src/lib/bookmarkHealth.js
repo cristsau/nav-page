@@ -288,7 +288,9 @@ export function requestPinnedBookmarkTarget({
       agent: false,
       autoSelectFamily: false,
       lookup(_hostname, _options, callback) {
-        callback(null, address, family)
+        // Match dns.lookup's asynchronous contract: a synchronous unreachable
+        // connect can emit on TLSSocket before HTTPS attaches its error listener.
+        process.nextTick(callback, null, address, family)
       }
     }, (response) => {
       const statusCode = Number(response.statusCode || 0)

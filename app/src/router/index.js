@@ -108,6 +108,12 @@ const routes = [
     meta: { title: '助理' }
   },
   {
+    path: '/monitor',
+    name: 'Monitor',
+    component: () => import('@/modules/monitor/MonitorView.vue'),
+    meta: { title: '服务器监控', adminOnly: true }
+  },
+  {
     path: '/share/:code',
     name: 'ShareView',
     component: () => import('@/modules/whisper/ShareView.vue'),

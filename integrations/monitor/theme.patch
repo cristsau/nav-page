@@ -1,0 +1,152 @@
+diff --git a/src/App.tsx b/src/App.tsx
+index e3787c8..ae17ae5 100644
+--- a/src/App.tsx
++++ b/src/App.tsx
+@@ -7,6 +7,7 @@ import { Button } from "@/components/ui/button"
+ import { Skeleton } from "@/components/ui/skeleton"
+ import { api, groupsOf, useNodes, type Node } from "@/lib/api"
+ import { loadConfig } from "@/lib/config"
++import { embedded, hubPath, localPath, notifyParent, observeParentTheme, parentDark } from "@/lib/mount"
+ 
+ // `history_days` is absent from hubs predating the hourly tier, which kept a
+ // week for anonymous callers.
+@@ -23,7 +24,7 @@ const NodeDetail = lazy(loadDetail)
+ // unknown path, so no server-side route is required.
+ function useNodeRoute() {
+   const read = () => {
+-    const match = location.pathname.match(/^\/node\/(\d+)/)
++    const match = localPath(location.pathname).match(/^\/node\/(\d+)/)
+     return match ? Number(match[1]) : null
+   }
+   const [id, setId] = useState(read)
+@@ -38,7 +39,7 @@ function useNodeRoute() {
+       const path = next === null ? "/" : `/node/${next}`
+       // The site name leads to the list from the list as well, and each repeat
+       // would otherwise cost one more press of back.
+-      if (location.pathname !== path) history.pushState({}, "", path)
++      if (location.pathname !== hubPath(path)) history.pushState({}, "", hubPath(path))
+       setId(next)
+       scrollTo(0, 0)
+     },
+@@ -75,7 +76,8 @@ function useTheme() {
+     },
+     () => DARK_MEDIA.matches,
+   )
+-  const dark = saved ? saved === "dark" : system
++  const navDark = useSyncExternalStore(observeParentTheme, parentDark)
++  const dark = navDark ?? (saved ? saved === "dark" : system)
+ 
+   // Switched with every transition held. Cards, buttons and badges fade their
+   // colours over 150 ms while everything else changes at once, so a meter bar
+@@ -142,7 +144,8 @@ export default function App() {
+   }, [closed, loadMe])
+ 
+   useEffect(() => {
+-    if (me && !me.public_page && !me.authed) location.href = "/admin/"
++    if (me && !me.public_page && !me.authed) location.href = hubPath("/admin/")
++    if (me?.authed) notifyParent("ready")
+   }, [me])
+ 
+   const sorted = [...(nodes ?? [])].sort((a, b) => a.sort - b.sort || a.id - b.id)
+@@ -179,13 +182,13 @@ export default function App() {
+           {/* The panel is a separate app built into the hub, not part of this
+               theme, so this is a navigation rather than a route. */}
+           <Button variant="ghost" size="sm" asChild>
+-            <a href="/admin/">
++            <a href={hubPath("/admin/")}>
+               <Wrench /> {me.authed ? "进入后台" : "登录"}
+             </a>
+           </Button>
+-          <Button variant="ghost" size="icon" onClick={toggleTheme} title="切换主题">
++          {!embedded && <Button variant="ghost" size="icon" onClick={toggleTheme} title="切换主题">
+             {dark ? <Sun /> : <Moon />}
+-          </Button>
++          </Button>}
+         </div>
+       </header>
+ 
+diff --git a/src/lib/api.ts b/src/lib/api.ts
+index b4b56a3..213aaa8 100644
+--- a/src/lib/api.ts
++++ b/src/lib/api.ts
+@@ -1,4 +1,5 @@
+ import { useEffect, useState } from "react"
++import { embedded, hubPath, notifyParent } from "./mount.ts"
+ 
+ export type Metrics = {
+   uptime: number
+@@ -120,7 +121,8 @@ const RETRIES = 6
+ export async function api<T>(path: string): Promise<T> {
+   for (let attempt = 0; ; attempt++) {
+     try {
+-      const res = await fetch(`/api${path}`, { signal: AbortSignal.timeout(TIMEOUT) })
++      const res = await fetch(hubPath(`/api${path}`), { signal: AbortSignal.timeout(TIMEOUT) })
++      if (embedded && [401, 403].includes(res.status)) notifyParent("auth-required")
+       if (!res.ok) throw await failure(res)
+       if (res.status === 204) return undefined as T
+       // A 200 carrying HTML is a proxy's page, not the hub's JSON.
+@@ -237,7 +239,10 @@ export function useNodes() {
+     // Bumped by `pause`: a request started before the page was hidden may fail
+     // or land after a fresh one, and neither result describes the page now.
+     let epoch = 0
++    let fetching = false
+     const fetchOnce = () => {
++      if (embedded && fetching) return Promise.resolve()
++      fetching = true
+       const started = epoch
+       return api<{ nodes: Node[] }>("/nodes")
+         .then((d) => {
+@@ -251,6 +256,7 @@ export function useNodes() {
+           setError(e.message)
+           if (e instanceof ApiError && e.status === 401) setClosed(true)
+         })
++        .finally(() => { fetching = false })
+     }
+ 
+     const url = `${location.protocol === "https:" ? "wss" : "ws"}://${location.host}/api/ws${GZIP}`
+@@ -258,6 +264,7 @@ export function useNodes() {
+     // outlives a deploy would remain on the fallback poll for the rest of its
+     // life, refreshing every 5 seconds rather than 2 with no indication.
+     const connect = () => {
++      if (embedded) { poll ??= setInterval(fetchOnce, 5000); return }
+       let opened: WebSocket
+       try {
+         opened = new WebSocket(url)
+diff --git a/src/lib/mount.ts b/src/lib/mount.ts
+new file mode 100644
+index 0000000..d6adcb2
+--- /dev/null
++++ b/src/lib/mount.ts
+@@ -0,0 +1,19 @@
++declare const __NAV_MONITOR_MOUNT__: string
++export const mount = typeof __NAV_MONITOR_MOUNT__ === "string" ? __NAV_MONITOR_MOUNT__ : ""
++export const embedded = mount !== ""
++export function hubPath(path: string): string {
++  return path.startsWith("/") && !path.startsWith("//") ? mount + path : path
++}
++export function localPath(path: string): string {
++  return mount && (path === mount || path.startsWith(mount + "/")) ? path.slice(mount.length) || "/" : path
++}
++export function notifyParent(type: "ready" | "auth-required") {
++  if (embedded && parent !== window) parent.postMessage({ type: `nav-monitor:${type}`, section: location.pathname.startsWith(`${mount}/admin`) ? "admin" : "overview" }, location.origin)
++}
++export function parentDark() { return embedded && parent !== window ? parent.document.documentElement.classList.contains("dark") : null }
++export function observeParentTheme(notify: () => void) {
++  if (!embedded || parent === window) return () => {}
++  const observer = new MutationObserver(notify)
++  observer.observe(parent.document.documentElement, { attributes: true, attributeFilter: ["class"] })
++  return () => observer.disconnect()
++}
+diff --git a/vite.config.ts b/vite.config.ts
+index d15ec77..19c3d28 100644
+--- a/vite.config.ts
++++ b/vite.config.ts
+@@ -3,6 +3,8 @@ import react from "@vitejs/plugin-react"
+ import tailwindcss from "@tailwindcss/vite"
+ 
+ export default defineConfig({
++  base: process.env.NAV_MONITOR_EMBED === "1" ? "/monitor-app/" : "/",
++  define: { __NAV_MONITOR_MOUNT__: JSON.stringify(process.env.NAV_MONITOR_EMBED === "1" ? "/monitor-app" : "") },
+   plugins: [react(), tailwindcss()],
+   // import.meta.dirname rather than new URL(...).pathname: the latter is
+   // URL-encoded, so a checkout under a path containing a space or a non-ASCII
