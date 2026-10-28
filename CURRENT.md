@@ -1,10 +1,10 @@
 # DOMO NAV 当前入口
 
-## 2026-10-29 监控增强已发布
+## 2026-10-29 监控历史与原生管理已发布
 
-本工作树为 `codex/nav-monitor-nodes-20261028`。NAV API/Web 已发布 `2026.10.28.2` / `3a8c29e`；十台独立采样最终代码 `16fbb28`（每目标固定五包，单独经 `nav.cristsau.cn` 上报）。两次 CI 各 13 jobs、双域接口/权限、合成账单真实 AI、修改撤销及十台连续采样技术验收通过。直连域名重新登录在受控浏览器出现 Turnstile 300030，留本人普通浏览器确认；未做恢复演练。下文 2026-09-08 为历史记录。
+本工作树 `codex/nav-monitor-nodes-20261028` 的运行代码 `06705cf` / `2026.10.29.1` 已上线。3/7/30 天趋势、整行详情和原生管理已通过精确 CI 13/13、双域接口及十台持续采样技术验收；前后备份和回退保留。临时预览已停止，旧候选制品清理被自动工具策略拦截，精确状态与路径见本轮证据。自然长期历史、本人新登录/手机及恢复演练仍有独立验收边界。
 
-唯一完整当前状态仍维护于 `D:\DomoCodex\projects\NAV-security-first-batch-20260904\CURRENT.md`。本批实现、测试与发布回退方案见 `integrations/monitor/README.md`。
+唯一完整当前状态：`D:\DomoCodex\projects\NAV-security-first-batch-20260904\CURRENT.md`。本批证据：`D:\DomoCodex\artifacts\nav-monitor-polish-20261029\release-summary.json`。实现及回退：`integrations/monitor/README.md`。下文均为历史记录。
 
 更新：2026-09-08 15:49 +08:00。归属：个人。真实目录 `D:\DomoCodex\projects\NAV-security-first-batch-20260904`。
 本地分支 `codex/nav-security-first-batch-20260904`，HEAD `f92b371674b305bbafac00fcc70f159b70c1481a`；上轮运行实现与测试提交为 `c8269ba`，文档/原型提交为 `f92b371`，均已推送。PR #70已合并为GitHub master `6952684221e401eb0d41cc6aa9d53dfe8bab6377`，当时合并树与候选树一致；本地未切分支。**本次PWA/设备验证/UI为另外一批未提交运行代码，未推送、未部署**；旧CI与产物不能覆盖。保留原有 CURRENT/R1/R2台账及UI脚本 dirty，不回旧NAV目录、不拼接历史工作树。
