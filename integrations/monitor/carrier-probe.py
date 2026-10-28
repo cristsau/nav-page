@@ -45,7 +45,10 @@ def sample(carrier, hostname):
     except (socket.gaierror, IndexError, ValueError):
         return failed(carrier, 'dns')
     try:
-        result = subprocess.run(['ping', '-4', '-n', '-c', '5', '-i', '1', '-W', '2', '-w', '12', address],
+        # iputils -c with -w counts received replies and can send more than five
+        # requests on a lossy path. Keep the send budget fixed; the parent timeout
+        # provides the overall deadline without changing ping's packet-count semantics.
+        result = subprocess.run(['ping', '-4', '-n', '-c', '5', '-i', '1', '-W', '2', address],
                                 capture_output=True, text=True, timeout=15,
                                 env={**os.environ, 'LC_ALL': 'C'})
         return parse_ping(carrier, address, result.stdout + result.stderr, result.returncode)

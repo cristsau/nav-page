@@ -1,6 +1,8 @@
 import importlib.util
 from pathlib import Path
 import unittest
+from unittest.mock import patch
+from types import SimpleNamespace
 spec=importlib.util.spec_from_file_location('probe',Path(__file__).with_name('carrier-probe.py'))
 probe=importlib.util.module_from_spec(spec)
 spec.loader.exec_module(probe)
@@ -23,4 +25,15 @@ class ProbeTest(unittest.TestCase):
         self.assertEqual(probe.parse_ping('ct','192.0.2.1','5 packets transmitted, 5 received',0)['error'],'parse')
     def test_no_redirect_can_forward_credentials(self):
         self.assertIsNone(probe.NoRedirect().redirect_request(None,None,302,'Found',{},'https://elsewhere.test'))
+    def test_lossy_destination_keeps_five_request_budget(self):
+        # Reproduce iputils' observed -c/-w interaction: wait for five replies,
+        # sending six requests when one reply is lost. With -c alone only five
+        # requests are sent, so the missing reply must appear as real packet loss.
+        def ping(args, **options):
+            sent,received=(6,5) if '-w' in args else (5,4)
+            return SimpleNamespace(returncode=0,stderr='',stdout=f'{sent} packets transmitted, {received} received\nrtt min/avg/max/mdev = 210.0/212.0/215.0/1.0 ms')
+        with patch.object(probe.socket,'getaddrinfo',return_value=[(None,None,None,None,('1.1.1.1',0))]),patch.object(probe.subprocess,'run',side_effect=ping):
+            result=probe.sample('cm','cm.skrskr.net')
+        self.assertIsNone(result['error'])
+        self.assertEqual((result['sent'],result['received']),(5,4))
 if __name__=='__main__':unittest.main()
