@@ -10,7 +10,7 @@ const plotted=computed(()=>{
   const lo=props.from?+new Date(props.from):data[0].t,span=Math.max(1,(props.to?+new Date(props.to):data.at(-1).t)-lo),max=props.unit==='%'?100:Math.max(1,...valid.map(p=>p.v));let lines=[],line=[],previous
   for(const p of data){
     if(p.v===null||!Number.isFinite(p.v)||(previous&&(p.t-previous.t>props.gapSeconds*1000||p.address!==previous.address))){if(line.length)lines.push(line.join(' '));line=[]}
-    if(p.v!==null&&Number.isFinite(p.v))line.push(`${4+((p.t-lo)/span)*292},${56-(p.v/max)*50}`)
+    if(p.v!==null&&Number.isFinite(p.v))line.push(`${4+Math.max(0,Math.min(1,(p.t-lo)/span))*292},${56-(p.v/max)*50}`)
     previous=p
   }
   if(line.length)lines.push(line.join(' '));return lines

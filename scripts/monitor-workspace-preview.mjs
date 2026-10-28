@@ -25,7 +25,7 @@ const server=await createServer({root,cacheDir:join(evidence,'vite-cache'),serve
   if(url.pathname==='/api/monitor/overview')return respond(res,fail?{error:'合成连接暂不可用'}:overview(nodes,details,samples.filter(s=>+new Date(s.observed_at)===now),Date.now(),nodes.map(n=>({node_id:n.id,last_report_at:new Date(now).toISOString(),services:[{unit:'nav-monitor-agent.service',status:'active'}]}))),fail?503:200)
   if(url.pathname.endsWith('/carriers')){
     const range=url.searchParams.get('range')||'1h',[duration,step]=HISTORY_RANGES[range],id=Number(url.pathname.split('/')[4]),from=new Date(now-duration*1000)
-    const rows=['cu','cm','ct'].flatMap((carrier,j)=>Array.from({length:Math.min(120,duration/step)},(_,i)=>({carrier,at:new Date(now-(119-i)*step*1000),first_at:new Date(now-(119-i)*step*1000),last_at:new Date(now-(119-i)*step*1000),addresses:['192.0.2.'+(100+j)],sent:5,received:i%13===0?4:5,rtt_sum:(80+j*30+Math.sin(i)*10)*5,min_ms:60,max_ms:150,rounds:1,valid_rounds:1})))
+    const rows=['cu','cm','ct'].flatMap((carrier,j)=>Array.from({length:Math.min(120,duration/step)},(_,i)=>({carrier,at:new Date(now-(Math.min(120,duration/step)-1-i)*step*1000),first_at:new Date(now-(Math.min(120,duration/step)-1-i)*step*1000),last_at:new Date(now-(Math.min(120,duration/step)-1-i)*step*1000),addresses:['192.0.2.'+(100+j)],sent:5,received:i%13===0?4:5,rtt_sum:(80+j*30+Math.sin(i)*10)*5,min_ms:60,max_ms:150,rounds:1,valid_rounds:1})))
     return respond(res,carrierSeries(rows,{range,step,from,to:new Date(now)}))
   }
   if(url.pathname.startsWith('/api/monitor/admin/')){
