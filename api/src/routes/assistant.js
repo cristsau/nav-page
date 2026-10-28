@@ -50,6 +50,9 @@ import {
   undoAssistantAdvancedOperation
 } from '../lib/assistantAdvancedOperations.js'
 import { AssistantToolOperationError } from '../lib/assistantToolOperations.js'
+import { monitorForUser, monitorOverview } from '../lib/monitorWorkspace.js'
+import { monitorAiFacts } from '../lib/monitorAi.js'
+import { isMonitorQuestion, isMonitorChangeRequest } from '../lib/assistantIntent.js'
 
 const MAX_ASSISTANT_QUERY_LENGTH = 500
 const MAX_ASSISTANT_ANSWER_LENGTH = 20_000
@@ -342,7 +345,18 @@ async function collectAssistantSources(userId, question, logger, {
     includeReminders ? reminderSourcesForUser(userId, question) : Promise.resolve([])
   ])
   const workspaceResults = workspace.results || []
+  let servers=[]
+  if(isMonitorQuestion(question)){
+    try{
+      const owner=(await query("SELECT id FROM users WHERE id=$1 AND role='admin' AND status='approved'",[userId])).rows[0]
+      if(owner){
+        const snapshot=await monitorOverview(userId,await monitorForUser(userId))
+        servers=snapshot.nodes.map(node=>({id:String(node.id),kind:'server',kindLabel:'服务器监控',title:node.name,href:`/monitor?node=${node.id}`,snippet:JSON.stringify({sampledAt:snapshot.generatedAt,...monitorAiFacts(node)}),matchReasons:['当前监控快照；诊断需区分事实和推测']}))
+      }
+    }catch{servers=[{kind:'server',title:'监控暂不可用',snippet:'当前无法获取监控数据，不得推断服务器状态。',href:'/monitor'}]}
+  }
   return buildAssistantSources([
+    ...servers,
     ...workspaceResults.slice(0, 4),
     ...reminders.slice(0, 3),
     ...workspaceResults.slice(4),
@@ -422,6 +436,7 @@ function explicitMutationToolForQuestion(question) {
 function assistantToolsForIntent(intent, question) {
   const definitions = listAssistantToolDefinitions()
   if (!intent.action) return []
+  if(isMonitorChangeRequest(question)) return definitions.filter(tool=>['query_monitor','prepare_monitor_change'].includes(tool.name))
   const selectedWriteTool = explicitMutationToolForQuestion(question)
   const allowed = new Set(selectedWriteTool ? [selectedWriteTool] : [])
   const candidateReads = {

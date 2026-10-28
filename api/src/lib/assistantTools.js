@@ -1,4 +1,6 @@
 import { searchWorkspaceHybridForUser } from './hybridWorkspaceSearch.js'
+import { monitorForUser,monitorOverview,normalizeMonitorPatch,proposeMonitorChange } from './monitorWorkspace.js'
+import { monitorAiFacts } from './monitorAi.js'
 import { mapBookmark, mapGroup } from './navigation.js'
 import { acquireNavigationTransactionLock } from './navigationTransactions.js'
 import { mapNote } from './notes.js'
@@ -161,6 +163,8 @@ const CORE_ASSISTANT_TOOL_DEFINITIONS = [
 
 export const ASSISTANT_TOOL_DEFINITIONS = Object.freeze([
   ...CORE_ASSISTANT_TOOL_DEFINITIONS,
+  {type:'function',name:'query_monitor',risk:'read',strict:false,description:'读取绑定管理员的服务器、到期日、费用、资源和三网采样。先读候选再建议修改。',parameters:objectSchema({})},
+  {type:'function',name:'prepare_monitor_change',risk:'read',strict:false,description:'只生成服务器资料修改预览，不执行修改。先读取query_monitor得到真实nodeId，日期必须明确ISO日期；有歧义先询问。返回链接供用户在监控页核对并确认。',parameters:objectSchema({nodeId:{type:'integer',minimum:1},patch:{type:'object',properties:{expires_at:{type:['string','null']},billingDate:{type:['string','null']},price:{type:'number'},currency:{type:'string'},billing_cycle:{type:'string'},provider:{type:'string'},purpose:{type:'string'},group:{type:'string'}},additionalProperties:false}},['nodeId','patch'])},
   ...ASSISTANT_ADVANCED_TOOL_DEFINITIONS
 ])
 
@@ -300,6 +304,12 @@ function validateToolArguments(toolName, args) {
     return normalizeAssistantAdvancedArguments(toolName, args)
   }
   switch (toolName) {
+    case 'query_monitor': { assertExactObject(args,[]); return {} }
+    case 'prepare_monitor_change': {
+      assertExactObject(args,['nodeId','patch'])
+      if(!Number.isSafeInteger(args.nodeId)||args.nodeId<1) fail('服务器编号不正确')
+      return {nodeId:args.nodeId,patch:normalizeMonitorPatch(args.patch)}
+    }
     case 'get_current_datetime': {
       assertExactObject(args, ['timeZone'])
       return { timeZone: normalizeTimeZone(args.timeZone) }
@@ -746,7 +756,17 @@ export async function executeAssistantTool({
 
   if (definition.risk === 'read') {
     let result
-    if (definition.name === 'get_current_datetime') {
+    if (['query_monitor','prepare_monitor_change'].includes(definition.name)) {
+      if(user.role!=='admin') fail('仅绑定管理员可访问监控','monitor_owner_required',403)
+      const bridge=await monitorForUser(userId)
+      if(definition.name==='query_monitor'){
+        const data=await monitorOverview(userId,bridge)
+        result={sampledAt:data.generatedAt,nodes:data.nodes.map(monitorAiFacts)}
+      }else{
+        const change=await proposeMonitorChange(userId,bridge,normalizedArgs.nodeId,normalizedArgs.patch)
+        result={status:'awaiting_confirmation',name:change.name,patch:change.patch,href:change.href,message:'未修改资料，请打开此链接核对并确认。'}
+      }
+    } else if (definition.name === 'get_current_datetime') {
       result = await executeGetCurrentDatetime(normalizedArgs, { now })
     } else if (definition.name === 'search_workspace') {
       result = await executeSearchWorkspace(normalizedArgs, userId, {

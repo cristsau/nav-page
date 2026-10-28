@@ -51,7 +51,7 @@ export function buildAssistantSources(searchResults = []) {
   return searchResults.slice(0, MAX_SOURCE_COUNT).map((result, index) => ({
     sourceId: `S${index + 1}`,
     recordId: String(result.numberId || result.id || '').slice(0, 120),
-    kind: ['bookmark', 'note', 'email', 'reminder'].includes(result.kind)
+    kind: ['bookmark', 'note', 'email', 'reminder', 'server'].includes(result.kind)
       ? result.kind
       : 'note',
     kindLabel: String(result.kindLabel || ''),

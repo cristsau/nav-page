@@ -1,0 +1,27 @@
+[Unit]
+Description=NAV three-carrier ICMP sample
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=oneshot
+User=nav-monitor-agent
+EnvironmentFile=/etc/nav-monitor-agent/carrier.env
+ExecStart=/usr/bin/python3 -B /opt/nav-monitor-agent/carrier-probe.py
+NoNewPrivileges=true
+ProtectSystem=strict
+ProtectHome=true
+PrivateTmp=true
+ProtectKernelTunables=true
+ProtectControlGroups=true
+RestrictSUIDSGID=true
+RestrictAddressFamilies=AF_INET AF_INET6 AF_UNIX
+CapabilityBoundingSet=CAP_NET_RAW
+AmbientCapabilities=CAP_NET_RAW
+MemoryMax=48M
+CPUQuota=5%
+TasksMax=16
+TimeoutStartSec=40
+
+[Install]
+WantedBy=multi-user.target

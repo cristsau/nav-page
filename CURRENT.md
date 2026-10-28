@@ -1,5 +1,11 @@
 # DOMO NAV 当前入口
 
+## 2026-10-28 监控增强候选
+
+本工作树为 `codex/nav-monitor-nodes-20261028`，基于已发布 `818a552` 继续开发监控总览、资产/AI 和三网 ICMP 采样。用户已授权本批独立分支 CI、备份、051 增量表、NAV API/Web 发布及十台现用个人 VPS 新采样服务。当前尚未发布；下文 2026-09-08 为历史记录。
+
+唯一完整当前状态仍维护于 `D:\DomoCodex\projects\NAV-security-first-batch-20260904\CURRENT.md`。本批实现、测试与发布回退方案见 `integrations/monitor/README.md`。
+
 更新：2026-09-08 15:49 +08:00。归属：个人。真实目录 `D:\DomoCodex\projects\NAV-security-first-batch-20260904`。
 本地分支 `codex/nav-security-first-batch-20260904`，HEAD `f92b371674b305bbafac00fcc70f159b70c1481a`；上轮运行实现与测试提交为 `c8269ba`，文档/原型提交为 `f92b371`，均已推送。PR #70已合并为GitHub master `6952684221e401eb0d41cc6aa9d53dfe8bab6377`，当时合并树与候选树一致；本地未切分支。**本次PWA/设备验证/UI为另外一批未提交运行代码，未推送、未部署**；旧CI与产物不能覆盖。保留原有 CURRENT/R1/R2台账及UI脚本 dirty，不回旧NAV目录、不拼接历史工作树。
 

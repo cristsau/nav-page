@@ -31,17 +31,19 @@ function normalizeBackendWorkspaceResult(payload = {}, limitPerType) {
     .slice(0, limit)
   const notes = (Array.isArray(payload.notes) ? payload.notes : [])
     .slice(0, limit)
+  const servers = (Array.isArray(payload.servers) ? payload.servers : []).slice(0,limit)
   return {
     bookmarks,
     notes,
-    all: [...bookmarks, ...notes].sort((left, right) => (
+    servers,
+    all: [...bookmarks, ...notes, ...servers].sort((left, right) => (
       Number(right.score || 0) - Number(left.score || 0)
       || new Date(right.updatedAt || 0).getTime() - new Date(left.updatedAt || 0).getTime()
       || String(left.kind || '').localeCompare(String(right.kind || ''))
       || String(left.id || '').localeCompare(String(right.id || ''))
     )),
-    total: bookmarks.length + notes.length,
-    failedSources: [],
+    total: bookmarks.length + notes.length + servers.length,
+    failedSources: Array.isArray(payload.failedSources) ? payload.failedSources : [],
     fuzzyEnabled: payload.fuzzyEnabled === true
   }
 }

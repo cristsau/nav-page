@@ -5,6 +5,13 @@ import {
 } from './assistantAuthorization.js'
 
 export const DEFAULT_ASSISTANT_TIME_ZONE = 'Asia/Shanghai'
+export function isMonitorQuestion(value) { return /服务器|VPS|三网|监控|\b(?:OVH|USPH|SJC|Onidel)\b/iu.test(String(value||'')) }
+export function isMonitorChangeRequest(value) {
+  const text=String(value||'')
+  return isMonitorQuestion(text) && /修改|更新|改成|改为|设置|录入|填写/.test(text)
+    && /到期|账单|费用|价格|供应商|用途|计费|币种|分组|续费/.test(text)
+    && !/笔记|备忘录|提醒|收藏|书签/.test(text)
+}
 
 export const ASSISTANT_INTENT_TYPES = Object.freeze({
   CURRENT_TIME: 'current-time',
@@ -242,7 +249,7 @@ export function classifyAssistantIntent(
     : !createMetaQuestion
   const currentDateTime = isAssistantCurrentTimeQuery(query)
   const reminderSearch = allowPrivateRetrieval && shouldSearchAssistantReminders(query)
-  const action = ACTION_VERB_PATTERN.test(query)
+  const action = (!asksForExplanation && isMonitorChangeRequest(query)) || ACTION_VERB_PATTERN.test(query)
     && ACTION_TARGET_PATTERN.test(query)
     && isExplicitAssistantMutationRequest(query)
   const webSearch = WEB_RESEARCH_PATTERN.test(query)

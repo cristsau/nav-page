@@ -41,6 +41,7 @@ const searchScopes = [
   { id: 'all', label: '全部' },
   { id: 'bookmarks', label: '书签' },
   { id: 'notes', label: '笔记' },
+  { id: 'servers', label: '服务器' },
   { id: 'web', label: 'Web' }
 ]
 const localSearchResult = ref({
@@ -73,6 +74,9 @@ const localResultGroups = computed(() => {
       label: '笔记与备忘录',
       icon: 'note',
       items: localSearchResult.value.notes
+    },
+    {
+      id:'servers',label:'服务器',icon:'server',items:localSearchResult.value.servers || []
     }
   ].filter((group) => group.items.length && (searchScope.value === 'all' || searchScope.value === group.id))
     .map((group) => ({ ...group, items: group.items.map((item) => ({ ...item, resultIndex: resultIndex++ })) }))
@@ -284,6 +288,11 @@ function selectEngine(engineId) {
 }
 
 function openLocalResult(result) {
+  if (result.kind === 'server' && /^\d+$/.test(String(result.id))) {
+    router.push({path:'/monitor',query:{node:String(result.id)}})
+    showLocalResults.value=false
+    return
+  }
   if (result.kind === 'bookmark' && result.href) {
     const targetUrl = sanitizeHttpUrl(result.href)
     if (!targetUrl) return
@@ -556,7 +565,7 @@ async function copyAnswer() {
                     {{ item.matchReasons.join(' · ') }}
                   </span>
                 </span>
-                <Icon :name="item.kind === 'bookmark' ? 'external-link' : 'note'" :size="17" />
+                <Icon :name="item.kind === 'server' ? 'server' : item.kind === 'bookmark' ? 'external-link' : 'note'" :size="17" />
               </button>
             </div>
           </section>

@@ -48,11 +48,11 @@ export function monitorTarget(raw) {
   return '/api' + raw
 }
 
-export async function monitorJson(response) {
+export async function monitorJson(response, maxBytes = 16384) {
   if (!response.body) throw monitorError('MONITOR_UNAVAILABLE')
   const reader = response.body.getReader(), chunks = []; let size = 0
   try {
-    while (true) { const { done, value } = await reader.read(); if (done) break; size += value.length; if (size > 16384) throw monitorError('MONITOR_UNAVAILABLE'); chunks.push(value) }
+    while (true) { const { done, value } = await reader.read(); if (done) break; size += value.length; if (size > maxBytes) throw monitorError('MONITOR_UNAVAILABLE'); chunks.push(value) }
     return JSON.parse(Buffer.concat(chunks).toString('utf8'))
   } finally { await reader.cancel().catch(() => {}); reader.releaseLock() }
 }

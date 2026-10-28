@@ -109,6 +109,7 @@ export function createApp() {
           'req.body.subscription.keys.p256dh',
           'req.body.subscription.keys.auth',
           'req.body.query',
+          'req.body.image',
           'req.body.to',
           'req.body.cc',
           'req.body.bcc',
