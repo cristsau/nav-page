@@ -53,7 +53,7 @@ import {
 import { AssistantToolOperationError } from '../lib/assistantToolOperations.js'
 import { monitorForUser, monitorOverview } from '../lib/monitorWorkspace.js'
 import { monitorAiFacts, validateMonitorImage } from '../lib/monitorAi.js'
-import { isMonitorQuestion, isMonitorChangeRequest } from '../lib/assistantIntent.js'
+import { isMonitorQuestion, isMonitorChangeRequest, resolveMonitorTrafficClarification } from '../lib/assistantIntent.js'
 
 const MAX_ASSISTANT_QUERY_LENGTH = 500
 const MAX_ASSISTANT_ANSWER_LENGTH = 20_000
@@ -1460,6 +1460,14 @@ export default async function assistantRoutes(fastify) {
     if (!persisted) {
       reply.code(404)
       return { error: '对话不存在' }
+    }
+
+    // Only an immediate GB/GiB clarification may resume the prior preview.
+    // Cancellation, unrelated replies and another selected server cannot inherit it.
+    const clarifiedQuestion = resolveMonitorTrafficClarification(question, persisted.history)
+    if (clarifiedQuestion) {
+      question = clarifiedQuestion
+      Object.assign(intent, classifyAssistantIntent(question, { timeZone: request.body?.timeZone }))
     }
 
     reply.hijack()

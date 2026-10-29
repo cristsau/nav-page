@@ -4,11 +4,63 @@ import {
   ASSISTANT_INTENT_TYPES,
   buildAssistantClockContext,
   classifyAssistantIntent,
+  isMonitorChangeRequest,
+  resolveMonitorTrafficClarification,
   normalizeAssistantTimeZone,
   shouldSearchAssistantReminders
 } from '../src/lib/assistantIntent.js'
 
 const FIXED_NOW = new Date('2026-08-26T01:02:03.000Z')
+
+test('only a direct quota unit clarification resumes the same monitor preview', () => {
+  const request='当前服务器：Ali-HK（ID 4）。帮我设置成每月200g上限，上行，下行取最大值'
+  const history=[{role:'user',content:request},{role:'assistant',content:'请确认 200 GB 还是 200 GiB？'}]
+  for(const reply of ['GB','200 GiB','按 200 GB','当前服务器：Ali-HK（ID 4）。200 GB']) {
+    const resolved=resolveMonitorTrafficClarification(reply,history)
+    assert.match(resolved,/用户补充确认单位/)
+    assert.equal(classifyAssistantIntent(resolved).action,true)
+  }
+  for(const reply of ['不要修改，用 GB 只是举例','算了','确认','我附图了','200 Mbps','当前服务器：Other（ID 5）。200 GB']) {
+    assert.equal(resolveMonitorTrafficClarification(reply,history),'',reply)
+  }
+  assert.equal(resolveMonitorTrafficClarification('GB',[]),'')
+  assert.equal(resolveMonitorTrafficClarification('GB',[...history,{role:'user',content:'你好'},{role:'assistant',content:'你好'}]),'')
+  assert.equal(resolveMonitorTrafficClarification('GB',[history[0],{role:'assistant',content:'已经设置 200 GB（186 GiB）'}]),'')
+})
+
+test('monitor traffic commands enter the preview route without requiring the word traffic', () => {
+  for (const question of [
+    '当前服务器：Ali-HK（ID 4）。帮我设置成每月200g上限，上行，下行取最大值',
+    '当前服务器：Ali-HK（ID 4）。帮我设置成每月200 GB上限，上行，下行取最大值',
+    '帮我把 Ali-HK 上行下行改成取最大值',
+    '把服务器入出计费改为取大',
+    '把 Ali-HK 改成单向最大值',
+    '请把 VPS 每月上限设置为 200 GiB',
+    '当前服务器：Synthetic（ID 1）。设置每月２００ＧＢ上限'
+  ]) {
+    assert.equal(isMonitorChangeRequest(question), true, question)
+    assert.equal(classifyAssistantIntent(question).action, true, question)
+  }
+})
+
+test('monitor explanations, negation and bandwidth requests do not offer asset changes', () => {
+  for (const question of [
+    'Ali-HK 每月200g上限，上行下行取最大值是什么意思？',
+    '如何给 Ali-HK 设置每月200GB上限？',
+    '不要把 Ali-HK 上行下行设置成取最大值',
+    'Ali-HK 暂时不修改流量额度，先讨论',
+    'Ali-HK 设置每月200GB上限，我们先讨论',
+    '请翻译“帮我设置服务器每月200GB上限”',
+    '请改写“把服务器上行下行设置为取最大值”',
+    '请把 Ali-HK 的带宽设置为2000Mbps上限',
+    '请把 Ali-HK 上行带宽设置为2000Mbps上限',
+    '请把服务器连接数上限设置为200',
+    '帮我创建一条笔记，内容是服务器设置每月200GB上限'
+  ]) {
+    assert.equal(isMonitorChangeRequest(question), false, question)
+    if (!question.includes('创建一条笔记')) assert.equal(classifyAssistantIntent(question).action, false, question)
+  }
+})
 
 test('date and time questions use a deterministic clock intent without reminder retrieval', () => {
   const result = classifyAssistantIntent('今天日期', { now: FIXED_NOW })

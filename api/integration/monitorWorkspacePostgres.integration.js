@@ -28,7 +28,9 @@ before(async()=>{
   await writeFile(join(privateDir,'monitor.json'),JSON.stringify(settings),{mode:0o600})
   config.managedIntegrationsDir=privateDir
   app=Fastify()
+  app.decorate('requireAuth',async req=>{req.currentUser=user})
   app.decorate('requireAdmin',async(req,reply)=>{req.currentUser=user;if(user.role!=='admin'){reply.code(403);throw Error('admin')}})
+  await app.register((await import('../src/routes/assistant.js')).default,{prefix:'/api'})
   const routes=(await import('../src/routes/monitor.js')).default
   await app.register(routes,{prefix:'/api',loadConfig:async()=>settings,fetcher:async(url,options)=>{
     if(url.endsWith('/auth/login'))return Response.json({ok:true},{headers:{'set-cookie':`monitor_session=${'b'.repeat(64)}; HttpOnly`}})
@@ -56,6 +58,66 @@ const assistantBridge={request:async(_path,options={})=>{
   }
   return Response.json({nodes:[node],admin:true})
 }}
+
+// Exercise the actual HTTP -> intent -> offered tools -> persisted card path.
+// Only the model and native Hub transports are synthetic; no outbound requests.
+for (const [label, question, patch, clarifyUnit] of [
+  ['ambiguous unit', '帮我设置成每月200g上限，上行，下行取最大值', null],
+  ['explicit quota', '帮我设置成每月200 GB上限，上行，下行取最大值', {traffic_limit:200e9,traffic_mode:'max'}],
+  ['direction only', '帮我把上行下行改成取最大值', {traffic_mode:'max'}],
+  ['unit follow-up', '帮我设置成每月200g上限，上行，下行取最大值', {traffic_limit:200e9,traffic_mode:'max'}, true]
+]) test(`assistant HTTP traffic request: ${label}`,async t=>{
+  const previousSecret=config.rateLimitKeySecret
+  config.rateLimitKeySecret='synthetic-route-rate-limit-fixture-only'
+  t.after(()=>{config.rateLimitKeySecret=previousSecret})
+  const provider={enabled:true,useServerManaged:false,mode:'direct',apiMode:'responses',endpoint:'https://8.8.8.8/v1/responses',apiKey:'synthetic-not-a-credential',model:'gpt-6.1-sol',modelMode:'pinned'}
+  await pool.query("INSERT INTO user_settings(user_id,key,value) VALUES($1,'appConfig',$2::jsonb)",[owner,JSON.stringify({search:{providers:{chatgpt:provider}}})])
+  let steps=0
+  let modelPatch=clarifyUnit?null:patch
+  const offered=[]
+  const answer=text=>Response.json({model:'gpt-6.1-sol',output:[{type:'message',role:'assistant',content:[{type:'output_text',text}]}]})
+  const call=(name,args)=>Response.json({model:'gpt-6.1-sol',output:[{type:'function_call',call_id:`synthetic-${steps}`,name,arguments:JSON.stringify(args)}]})
+  t.mock.method(globalThis,'fetch',async(url,options={})=>{
+    if(String(url).startsWith('http://nav-monitor:28080/')){
+      if(String(url).endsWith('/auth/login'))return Response.json({ok:true},{headers:{'set-cookie':`monitor_session=${'c'.repeat(64)}; HttpOnly`}})
+      assert.notEqual(options.method,'PUT','preview must not mutate the Hub')
+      return Response.json({admin:true,nodes:[node]})
+    }
+    assert.ok(String(url).startsWith('https://8.8.8.8/'),'unexpected outbound endpoint')
+    if(String(url).endsWith('/models'))return Response.json({data:[{id:'gpt-6.1-sol'}]})
+    const body=JSON.parse(options.body)
+    offered.push((body.tools||[]).map(tool=>tool.name).sort())
+    steps++
+    if(steps===1)return call('query_monitor',{})
+    if(steps===2 && modelPatch)return call('prepare_monitor_change',{nodeId:1,patch:modelPatch})
+    return answer(modelPatch?'已生成修改预览，请确认后保存。':'请确认 200 GB 还是 200 GiB；尚未修改。')
+  })
+  const send=payload=>app.inject({method:'POST',url:'/api/assistant/chat/stream',payload:{monitorNode:1,modelMode:'pinned',model:'gpt-6.1-sol',...payload}})
+  let response=await send({query:question})
+  if(clarifyUnit){
+    assert.equal(response.statusCode,200)
+    assert.match(response.body,/200 GB.*200 GiB/)
+    assert.equal((await pool.query('SELECT 1 FROM monitor_changes WHERE user_id=$1',[owner])).rowCount,0)
+    const conversation=(await pool.query('SELECT id FROM assistant_conversations WHERE user_id=$1',[owner])).rows[0]
+    steps=0;modelPatch=patch
+    response=await send({query:'200 GB',conversationId:conversation.id})
+  }
+  assert.equal(response.statusCode,200)
+  assert.match(response.headers['content-type'],/text\/event-stream/)
+  assert.ok(steps>=2,'request must enter the agent loop and read real candidates')
+  for(const names of offered)assert.deepEqual(names,['prepare_monitor_change','query_monitor'])
+  const operations=await pool.query('SELECT status FROM assistant_agent_operations WHERE user_id=$1',[owner])
+  assert.equal(operations.rows.length,patch?1:0)
+  if(patch){
+    assert.equal(operations.rows[0].status,'awaiting_confirmation')
+    assert.match(response.body,/awaiting_confirmation/)
+    const proposals=await pool.query('SELECT patch FROM monitor_changes WHERE user_id=$1',[owner])
+    assert.deepEqual(proposals.rows.map(row=>row.patch),[patch])
+  }else assert.match(response.body,/200 GB.*200 GiB/)
+  assert.equal(writes,0)
+  assert.deepEqual(node,initial)
+})
+
 async function assistantProposal(patch){
   const conversationId=randomUUID(),messageId=randomUUID(),operationId=randomUUID()
   await pool.query("INSERT INTO assistant_conversations(id,user_id,title) VALUES($1,$2,'Synthetic monitor edit')",[conversationId,owner])

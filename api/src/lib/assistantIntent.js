@@ -7,10 +7,36 @@ import {
 export const DEFAULT_ASSISTANT_TIME_ZONE = 'Asia/Shanghai'
 export function isMonitorQuestion(value) { return /服务器|VPS|三网|监控|\b(?:OVH|USPH|SJC|Onidel|Ali[- ]?HK)\b/iu.test(String(value||'')) }
 export function isMonitorChangeRequest(value) {
-  const text=String(value||'')
-  return isMonitorQuestion(text) && /修改|更新|改成|改为|设置|录入|填写/.test(text)
-    && /资料|截图|到期|账单|费用|价格|供应商|用途|计费|币种|分组|续费|流量|额度|重置日|国家|国旗|地区/.test(text)
-    && !/笔记|备忘录|提醒|收藏|书签/.test(text)
+  const text = String(value || '').normalize('NFKC')
+  if (!isMonitorQuestion(text) || !/修改|更新|改成|改为|设置|录入|填写/.test(text)) return false
+  if (isAssistantCreateMetaQuestion(text)
+    || /笔记|备忘录|提醒|收藏|书签|翻译|译成|翻成|改写|润色|引用|复述|转述|举例|示例|造句|先讨论|只讨论|不执行/.test(text)
+    || /(?:不要|别|无需|不需要|禁止|取消|暂不|暂时不|先不|不).{0,24}(?:修改|更新|改成|改为|设置|录入|填写)/.test(text)) return false
+
+  // Traffic quota/direction phrases need preview tools even without "流量".
+  // A bare "上限" must not turn CPU, bandwidth or connection settings into assets.
+  const trafficQuota = /(?:每月|月度|上限).{0,12}\d+(?:\.\d+)?\s*[kmgt](?:i?b)?(?![a-z/])/iu.test(text)
+    || /\d+(?:\.\d+)?\s*[kmgt](?:i?b)?(?![a-z/])\s*上限/iu.test(text)
+  const trafficDirection = /上行|下行|入出|出入|入站|出站|单向|双向/.test(text)
+    && /取大|取最大|最大值|求和|合计|只算|仅算/.test(text)
+  return trafficQuota || trafficDirection || /资料|截图|到期|账单|费用|价格|供应商|用途|计费|币种|分组|续费|流量|额度|重置日|国家|国旗|地区/.test(text)
+}
+
+export function resolveMonitorTrafficClarification(question, history = []) {
+  const current = String(question || '').normalize('NFKC').trim()
+  // NFKC normalizes the context parentheses as well as full-width unit input.
+  const normalizedContext = /^当前服务器:([^\n]+?\(ID \d+\))。/
+  const target = current.match(normalizedContext)?.[1]
+  const answer = current.replace(normalizedContext, '').trim()
+  if (!/^(?:(?:按|用|是|选择|采用)\s*)?(?:\d+(?:\.\d+)?\s*)?gi?b[。.!！]?$/iu.test(answer)) return ''
+  const [request, clarification] = history.slice(-2)
+  if (request?.role !== 'user' || clarification?.role !== 'assistant') return ''
+  const previous = String(request.content || '').normalize('NFKC').trim()
+  if (!isMonitorChangeRequest(previous) || !/\d+(?:\.\d+)?\s*g(?![a-z])/iu.test(previous)) return ''
+  if (!/\bGB\b/iu.test(clarification.content) || !/\bGiB\b/iu.test(clarification.content)
+    || !/确认|选择|还是|哪种/.test(clarification.content)) return ''
+  if (target && target !== previous.match(normalizedContext)?.[1]) return ''
+  return `${previous}\n用户补充确认单位：${answer}`
 }
 
 export const ASSISTANT_INTENT_TYPES = Object.freeze({
