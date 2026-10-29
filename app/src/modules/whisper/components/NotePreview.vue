@@ -29,6 +29,7 @@ function viewportChanged(event) { desktop.value = event.matches }
 desktopQuery.addEventListener('change', viewportChanged)
 onBeforeUnmount(() => desktopQuery.removeEventListener('change', viewportChanged))
 const dialogRef = ref(null)
+const bodyRef = ref(null)
 const copyStatus = ref('')
 let copyAttempt = 0
 let previouslyFocusedElement = null
@@ -110,7 +111,7 @@ watch(
         ? props.returnFocus
         : document.activeElement
       await nextTick()
-      dialogRef.value?.focus()
+      dialogRef.value?.focus({ preventScroll: true })
       return
     }
 
@@ -124,6 +125,12 @@ watch(
   }
 )
 
+watch(() => [props.show, props.note?.id], async ([show]) => {
+  if (!show) return
+  await nextTick()
+  if (bodyRef.value) bodyRef.value.scrollTop = 0
+  dialogRef.value?.focus({ preventScroll: true })
+})
 onBeforeUnmount(restorePreviousFocus)
 </script>
 
@@ -212,7 +219,7 @@ onBeforeUnmount(restorePreviousFocus)
         </CopyableValue>
       </div>
 
-      <div class="preview-card__body">
+      <div ref="bodyRef" class="preview-card__body">
         <div v-if="note.encrypted && !note._unlocked" class="preview-card__encrypted">
           该内容已加密，请先从笔记卡片解锁。
         </div>
@@ -271,7 +278,7 @@ onBeforeUnmount(restorePreviousFocus)
 </template>
 
 <style scoped>
-.preview-modal.is-embedded { position:sticky; inset:auto; top:24px; z-index:auto; display:flex; padding:0; background:none; backdrop-filter:none; align-items:stretch; }
+.preview-modal.is-embedded { position:relative; inset:auto; z-index:auto; display:flex; padding:0; background:none; backdrop-filter:none; align-items:stretch; }
 .is-embedded .preview-card { width:100%; height:calc(100dvh - 48px); max-height:calc(100dvh - 48px); border:1px solid var(--border-light); border-radius:12px; box-shadow:none; }
 .is-embedded .preview-card__body { font-size:16px; line-height:1.8; }
 .is-embedded .preview-card__footer { flex-wrap:wrap; gap:8px; padding:12px; }

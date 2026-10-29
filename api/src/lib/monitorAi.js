@@ -11,13 +11,15 @@ export function monitorAiFacts(node) {
   return { id:node.id,name:redactAssistantContext(node.name),online:node.online,fresh:node.fresh,
     provider:redactAssistantContext(node.provider),purpose:redactAssistantContext(node.purpose),
     cpu:node.cpu,memory:node.memory,disk:node.disk,rx:node.rx,tx:node.tx,
+    country:node.countryCode||node.country,countryOverride:node.countryOverride,
+    trafficLimitBytes:node.trafficLimit,trafficMode:node.trafficMode,trafficResetDay:node.traffic_reset_day,trafficUsedBytes:node.trafficUsed,
     trafficPercent:node.trafficPercent,expiresAt:node.expires_at,billingDate:node.billingDate,
     price:node.price,currency:node.currency,billingCycle:node.billing_cycle,
     carriers:node.carriers.map(({name,status,latencyMs,lossPercent,sent,received,observedAt})=>({name,status,latencyMs,lossPercent,sent,received,observedAt})) }
 }
 export function validateMonitorImage(image) {
   if(!image) return null
-  if(typeof image!=='string'||image.length>4*1024*1024) throw monitorError('MONITOR_IMAGE_INVALID',400)
+  if(typeof image!=='string'||image.length>4*1024*1024+128) throw monitorError('MONITOR_IMAGE_INVALID',400)
   const match=/^data:image\/(png|jpeg|webp);base64,([A-Za-z0-9+/]+={0,2})$/.exec(image)
   if(!match) throw monitorError('MONITOR_IMAGE_INVALID',400)
   const data=Buffer.from(match[2],'base64')

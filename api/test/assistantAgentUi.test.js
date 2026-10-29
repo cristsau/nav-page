@@ -34,7 +34,7 @@ test('assistant UI renders bounded tool progress and durable action receipts', a
   assert.match(view, /event === 'action'/)
   assert.match(view, /assistant-actions/)
   assert.match(view, /operationId/)
-  assert.match(view, /可安全创建日记、备忘录、书签和分组/)
+  assert.match(view, /截图仅用于本次分析/)
 })
 
 test('assistant route separates clock, local, web and write execution paths', async () => {

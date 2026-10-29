@@ -41,25 +41,25 @@ export async function deleteAssistantConversation(conversationId) {
   })
 }
 
-function assistantActionRequest(operationId, action) {
+function assistantActionRequest(operationId, action, confirmationId) {
   const id = String(operationId || '').trim()
   if (!id) throw new Error('助理操作 ID 缺失')
   return request(`/assistant/actions/${encodeURIComponent(id)}/${action}`, {
     method: 'POST',
-    body: JSON.stringify({})
+    body: JSON.stringify(confirmationId ? {confirmationId} : {})
   })
 }
 
-export function confirmAssistantAction(operationId) {
-  return assistantActionRequest(operationId, 'confirm')
+export function confirmAssistantAction(operationId, confirmationId) {
+  return assistantActionRequest(operationId, 'confirm', confirmationId)
 }
 
-export function cancelAssistantAction(operationId) {
-  return assistantActionRequest(operationId, 'cancel')
+export function cancelAssistantAction(operationId, confirmationId) {
+  return assistantActionRequest(operationId, 'cancel', confirmationId)
 }
 
-export function undoAssistantAction(operationId) {
-  return assistantActionRequest(operationId, 'undo')
+export function undoAssistantAction(operationId, confirmationId) {
+  return assistantActionRequest(operationId, 'undo', confirmationId)
 }
 
 export async function updateAssistantConversationPreferences(
@@ -82,6 +82,8 @@ export async function streamAssistantMessage({
   model = '',
   reasoningEffort = 'low',
   operationId,
+  image,
+  monitorNode,
   signal,
   onEvent = () => {}
 }) {
@@ -98,6 +100,8 @@ export async function streamAssistantMessage({
     body: JSON.stringify({
       conversationId: conversationId || undefined,
       query,
+      ...(image?{image}:{}),
+      ...(monitorNode?{monitorNode}:{}),
       modelMode,
       ...(modelMode === 'pinned' && model ? { model } : {}),
       reasoningEffort,

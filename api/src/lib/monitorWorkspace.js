@@ -10,8 +10,8 @@ export const CARRIERS = Object.freeze([
   { id: 'cm', name: '移动', host: 'cm.skrskr.net' },
   { id: 'ct', name: '电信', host: 'ct.skrskr.net' }
 ])
-export const HUB_FIELDS = ['price','currency','billing_cycle','expires_at','group','notify']
-export const DETAIL_FIELDS = ['provider','purpose','tags','links','renewalMode','billingDate']
+export const HUB_FIELDS = ['price','currency','billing_cycle','expires_at','group','notify','traffic_limit','traffic_mode','traffic_reset_day']
+export const DETAIL_FIELDS = ['provider','purpose','tags','links','renewalMode','billingDate','countryOverride']
 const cycles = { monthly: 1, quarterly: 3, semiannual: 6, yearly: 12, biennial: 24, triennial: 36 }
 let connection
 const snapshots = new WeakMap()
@@ -35,7 +35,7 @@ export async function readNodes(bridge, { fresh = false, timeoutMs = 8000 } = {}
 }
 const numeric = value => typeof value === 'number' && Number.isFinite(value) ? value : null
 export function nodeState(node, details = {}) {
-  return Object.fromEntries([...HUB_FIELDS.map(key => [key, node[key] ?? (key === 'expires_at' ? null : '')]), ...DETAIL_FIELDS.map(key => [key, details[key] ?? (['tags','links'].includes(key) ? [] : key==='billingDate'?null:'')])])
+  return Object.fromEntries([...HUB_FIELDS.map(key => [key, node[key] ?? (key==='expires_at'?null:({traffic_limit:0,traffic_mode:'sum',traffic_reset_day:1}[key] ?? ''))]), ...DETAIL_FIELDS.map(key => [key, details[key] ?? (['tags','links'].includes(key) ? [] : key==='billingDate'?null:'')])])
 }
 function date(value) {
   if (value === null || value === '') return null
@@ -49,6 +49,9 @@ export function normalizeMonitorPatch(input) {
     if (['expires_at','billingDate'].includes(key)) out[key] = date(value)
     else if (key === 'price') {
       if (numeric(value) === null || value < 0 || value > 1000000) throw monitorError('MONITOR_FIELDS_INVALID',400)
+      out[key] = value
+    } else if (['traffic_limit','traffic_reset_day'].includes(key)) {
+      if (!Number.isSafeInteger(value) || value < (key === 'traffic_limit' ? 0 : 1) || (key === 'traffic_reset_day' && value > 31)) throw monitorError('MONITOR_FIELDS_INVALID',400)
       out[key] = value
     } else if (key === 'notify') {
       if (typeof value !== 'boolean') throw monitorError('MONITOR_FIELDS_INVALID',400)
@@ -66,6 +69,8 @@ export function normalizeMonitorPatch(input) {
     } else {
       if (typeof value !== 'string' || value.length > (key === 'purpose' ? 500 : 80) || /[\x00-\x1f\x7f]/.test(value)) throw monitorError('MONITOR_FIELDS_INVALID',400)
       out[key] = value.trim()
+      if (key === 'countryOverride' && out[key] && (!/^[A-Z]{2}$/.test(out[key]) || ['ZZ','XA','XB','EU','EZ','UN','QO'].includes(out[key]) || new Intl.Locale(`und-${out[key]}`).region !== out[key] || new Intl.DisplayNames(['en'],{type:'region'}).of(out[key]) === out[key])) throw monitorError('MONITOR_FIELDS_INVALID',400)
+      if (key === 'traffic_mode' && !['sum','up','down','max'].includes(out[key])) throw monitorError('MONITOR_FIELDS_INVALID',400)
       if (key === 'currency' && !/^[A-Z]{3}$/.test(out[key])) throw monitorError('MONITOR_FIELDS_INVALID',400)
       if (key === 'billing_cycle' && ![...Object.keys(cycles),'once'].includes(out[key]) && !/^([1-9]|[1-9][0-9]|1[01][0-9]|120)m$/.test(out[key])) throw monitorError('MONITOR_FIELDS_INVALID',400)
       if (key === 'billing_cycle') out[key] = Object.entries(cycles).find(([,months])=>`${months}m`===out[key])?.[0] || out[key]
@@ -112,7 +117,8 @@ export function overview(nodes, details, probes, now = Date.now(), credentials =
       ipv4:node.ipv4||node.ip||'',ipv6:node.ipv6||'',os:node.os,cpuName:node.cpu_name,cores:node.cpu_cores,agentVersion:node.agent_version,
       ...nodeState(node,detail),expiryDays,cpu,memory,disk,load:fresh?m?.load:null,uptime:fresh?m?.uptime:null,
       memoryTotal:node.mem_total,diskTotal:node.disk_total,rx:fresh?numeric(m?.net_rx):null,tx:fresh?numeric(m?.net_tx):null,
-      trafficUsed:node.month_used,trafficLimit:node.traffic_limit,trafficMode:node.traffic_mode,trafficPercent:traffic,
+      trafficUsed:numeric(node.month_used),trafficLimit:numeric(node.traffic_limit),trafficMode:node.traffic_mode||'sum',trafficPercent:traffic,
+      trafficUpload:numeric(node.month_tx),trafficDownload:numeric(node.month_rx),countryCode:detail.countryOverride||node.country||'',
       carriers:probeSummary(probes.filter(p=>Number(p.node_id)===node.id),now).map(c=>({...c,status:c.status==='unconfigured'&&credential?'stale':c.status})),
       services:credential?.services||[],servicesAt:credential?.last_report_at||null }
   })

@@ -1,6 +1,7 @@
 <script setup>
 import { computed, nextTick, onBeforeUnmount, onMounted, ref, watch } from 'vue'
 import { RouterLink, useRoute, useRouter } from 'vue-router'
+import { apiRequest } from '@/shared/services/apiClient'
 import Icon from '@/shared/components/Icon.vue'
 import AiUsagePanel from '@/modules/settings/components/AiUsagePanel.vue'
 import {
@@ -32,6 +33,23 @@ const activeConversation = ref(null)
 const messages = ref([])
 const conversationSearch = ref('')
 const question = ref('')
+const screenshot = ref(null), imageInput = ref(null), monitorContext = ref(null)
+let imageSequence = 0
+async function attachScreenshot(file) {
+  if (!file || sending.value) return
+  const sequence = ++imageSequence
+  if (!['image/png','image/jpeg','image/webp'].includes(file.type) || file.size>3*1024*1024) {errorMessage.value='请选择 3 MB 以内的 PNG、JPEG 或 WebP 截图';return}
+  try {const image=await new Promise((resolve,reject)=>{const reader=new FileReader();reader.onload=()=>resolve(reader.result);reader.onerror=reject;reader.readAsDataURL(file)});if(sequence===imageSequence)screenshot.value={image,name:file.name||'粘贴的截图'}}catch{errorMessage.value='截图读取失败'}
+}
+function pasteScreenshot(event){const item=[...(event.clipboardData?.items||[])].find(i=>i.kind==='file'&&i.type.startsWith('image/'));if(item){event.preventDefault();attachScreenshot(item.getAsFile())}}
+watch(()=>route.query.monitorNode,async value=>{
+  monitorContext.value=null
+  if(!/^\d+$/.test(String(value||'')))return
+  try{const data=await apiRequest('/monitor/overview');if(String(route.query.monitorNode)===String(value))monitorContext.value=data.nodes.find(n=>String(n.id)===String(value))||null}catch{errorMessage.value='服务器资料暂不可用'}
+},{immediate:true})
+function clearMonitorContext(){monitorContext.value=null;const query={...route.query};delete query.monitorNode;router.replace({query})}
+const monitorFields={traffic_limit:'每月流量额度',traffic_mode:'计费方式',traffic_reset_day:'每月重置日',countryOverride:'国家或地区',expires_at:'到期日期',billingDate:'账单日期',price:'费用',currency:'币种',billing_cycle:'付款周期',provider:'供应商',purpose:'用途',group:'分组'}
+function monitorValue(field,value){if(field==='traffic_limit')return value?`${value/1e9} GB（${(value/1024**3).toFixed(2)} GiB）`:'不限额';if(field==='traffic_mode')return ({sum:'双向合计',up:'仅上传',down:'仅下载',max:'单向最大值'})[value]||'未设置';if(field==='countryOverride')return value||'根据 IP 自动识别';if(field==='traffic_reset_day')return `每月 ${value} 日`;return value===null||value===undefined||value===''?'未设置':String(value)}
 const loadingConversations = ref(false)
 const loadingConversation = ref(false)
 const sending = ref(false)
@@ -67,6 +85,8 @@ function safeActionHref(action) {
 }
 
 const TOOL_LABELS = Object.freeze({
+  query_monitor: '读取服务器资料',
+  prepare_monitor_change: '准备服务器修改卡片',
   get_current_datetime: '读取当前时间',
   search_workspace: '检索站内资料',
   list_navigation_groups: '读取导航分组',
@@ -113,6 +133,7 @@ function actionOutcome(action) {
 }
 
 function actionConfirmationLabel(action) {
+  if(action?.tool==='prepare_monitor_change')return action.preview?.undo?'确认撤销':'确认保存'
   if (action?.tool === 'send_email_draft') return '确认发送邮件'
   if (String(action?.tool || '').startsWith('delete_')) return '确认永久删除'
   if (action?.tool === 'revoke_note_share') return '确认撤销分享'
@@ -144,7 +165,7 @@ function replaceActionReceipt(receipt) {
 
 async function mutateAssistantAction(action, kind) {
   if (!action?.operationId || actionBusyId.value) return
-  if (kind === 'confirm') {
+  if (kind === 'confirm' && action.tool!=='prepare_monitor_change') {
     const details = actionPreviewLines(action).join('\n')
     if (!window.confirm(`${actionConfirmationLabel(action)}？${details ? `\n\n${details}` : ''}`)) return
   }
@@ -152,10 +173,10 @@ async function mutateAssistantAction(action, kind) {
   errorMessage.value = ''
   try {
     const result = kind === 'confirm'
-      ? await confirmAssistantAction(action.operationId)
+      ? await confirmAssistantAction(action.operationId, action.confirmationId)
       : kind === 'cancel'
-        ? await cancelAssistantAction(action.operationId)
-        : await undoAssistantAction(action.operationId)
+        ? await cancelAssistantAction(action.operationId, action.confirmationId)
+        : await undoAssistantAction(action.operationId, action.confirmationId)
     replaceActionReceipt(result.receipt)
   } catch (error) {
     errorMessage.value = error.message || '助理操作未完成'
@@ -164,7 +185,7 @@ async function mutateAssistantAction(action, kind) {
   }
 }
 
-const canSend = computed(() => Boolean(question.value.trim()) && !sending.value)
+const canSend = computed(() => Boolean(question.value.trim()||screenshot.value) && !sending.value)
 const activeTitle = computed(() => activeConversation.value?.title || '新的对话')
 const modelPicker = computed(() => buildChatModelPicker({
   currentModel: assistantPreferences.value.model,
@@ -302,6 +323,7 @@ async function openConversation(conversationId) {
 function startNewConversation() {
   if (sending.value) return
   activeConversation.value = null
+  screenshot.value=null;pendingSend.value=null;imageSequence++
   assistantPreferences.value = preferencesFromConversation(null)
   messages.value = []
   errorMessage.value = ''
@@ -350,16 +372,18 @@ async function sendQuestion(options = {}) {
   const retryPendingSend = options?.retry === true && pendingSend.value
     ? { ...pendingSend.value }
     : null
-  const text = retryPendingSend?.query || question.value.trim()
+  const text = retryPendingSend?.query || question.value.trim() || (screenshot.value?'请识别这张截图；不确定的信息请先问我。':'')
   if (!text || sending.value) return
   if (retryPendingSend) {
     pendingSend.value = retryPendingSend
   } else {
     pendingSend.value = {
       query: text,
+      image:screenshot.value?.image,
+      monitorNode:monitorContext.value?.id,
       operationId: createAssistantOperationId()
     }
-    question.value = ''
+    question.value = '';screenshot.value=null;imageSequence++
   }
   const operationId = pendingSend.value.operationId
   sending.value = true
@@ -389,6 +413,8 @@ async function sendQuestion(options = {}) {
     await streamAssistantMessage({
       conversationId: activeConversation.value?.id || '',
       query: text,
+      image:pendingSend.value?.image,
+      monitorNode:pendingSend.value?.monitorNode,
       ...assistantPreferences.value,
       operationId,
       signal: streamController.signal,
@@ -451,7 +477,7 @@ function retryLastQuestion() {
 }
 
 function handleComposerKeydown(event) {
-  if (event.key === 'Enter' && !event.shiftKey) {
+  if (event.key === 'Enter' && !event.shiftKey && !event.isComposing) {
     event.preventDefault()
     void sendQuestion()
   }
@@ -623,6 +649,7 @@ onBeforeUnmount(() => streamController?.abort())
                 <ul v-if="action.status === 'awaiting_confirmation' && actionPreviewLines(action).length" class="assistant-action__preview">
                   <li v-for="line in actionPreviewLines(action)" :key="line">{{ line }}</li>
                 </ul>
+                <div v-if="action.tool==='prepare_monitor_change'" class="monitor-diff"><div v-for="change in action.preview?.changes||[]" :key="change.field"><strong>{{monitorFields[change.field]||change.field}}</strong><del>{{monitorValue(change.field,change.before)}}</del><span>→ {{monitorValue(change.field,change.after)}}</span></div></div>
                 <div v-if="action.status === 'awaiting_confirmation'" class="assistant-action__buttons">
                   <button type="button" :disabled="actionBusyId === action.operationId" @click="mutateAssistantAction(action, 'cancel')">取消</button>
                   <button type="button" class="is-primary" :disabled="actionBusyId === action.operationId" @click="mutateAssistantAction(action, 'confirm')">
@@ -663,7 +690,10 @@ onBeforeUnmount(() => streamController?.abort())
           重试本次请求
         </button>
       </div>
-      <form class="assistant-composer" @submit.prevent="sendQuestion">
+      <form class="assistant-composer" @submit.prevent="sendQuestion" @paste="pasteScreenshot">
+        <div v-if="monitorContext" class="monitor-context"><span>服务器 · {{monitorContext.name}}</span><button type="button" @click="clearMonitorContext">移除</button></div>
+        <div v-if="screenshot" class="screenshot-preview"><img :src="screenshot.image" alt="待分析截图"/><span>{{screenshot.name}}</span><button type="button" @click="screenshot=null;imageSequence++">移除截图</button></div>
+        <input ref="imageInput" hidden type="file" accept="image/png,image/jpeg,image/webp" @change="attachScreenshot($event.target.files?.[0]);$event.target.value=''"/>
         <label for="assistant-question">向 DOMO 助理提问</label>
         <textarea
           id="assistant-question"
@@ -675,7 +705,7 @@ onBeforeUnmount(() => streamController?.abort())
           @keydown="handleComposerKeydown"
         ></textarea>
         <div>
-              <span>可检索站内与网页；明确要求时可安全创建日记、备忘录、书签和分组</span>
+<button type="button" :disabled="sending" @click="imageInput?.click()"><Icon name="image" :size="16"/>添加截图</button><span>截图仅用于本次分析</span>
           <button type="submit" :disabled="!canSend">
             <Icon name="sparkles" :size="17" />
             {{ sending ? '回答中…' : '发送' }}
@@ -689,6 +719,8 @@ onBeforeUnmount(() => streamController?.abort())
 </template>
 
 <style scoped>
+.monitor-diff>div{display:grid;grid-template-columns:1fr 1fr 1.5fr;gap:8px;padding:8px 0;border-bottom:1px solid var(--border-color);overflow-wrap:anywhere}.monitor-diff del{color:var(--text-secondary)}.screenshot-preview img{max-height:90px;max-width:130px;object-fit:contain}.screenshot-preview,.monitor-context{display:flex;align-items:center;gap:10px;flex-wrap:wrap}.monitor-context{color:var(--accent-color);font-size:12px}.assistant-composer .screenshot-preview{justify-content:flex-start}.monitor-diff{font-size:12px}@media(max-width:600px){.monitor-diff>div{grid-template-columns:1fr 1fr}.monitor-diff strong{grid-column:1/-1}}
+
 .assistant-page {
   display: grid;
   min-height: calc(100vh - var(--app-shell-header-height, 64px));

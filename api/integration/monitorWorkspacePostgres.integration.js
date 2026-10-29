@@ -1,10 +1,12 @@
 import test, { before, beforeEach, after } from 'node:test'
 import assert from 'node:assert/strict'
+import { randomUUID } from 'node:crypto'
 import { mkdtemp, writeFile, rm } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import Fastify from 'fastify'
 import { maintainMonitorHistory,readCarrierHistory,invalidateMonitorCache } from '../src/lib/monitorHistory.js'
+import { proposeAssistantMonitor, mutateAssistantMonitor } from '../src/lib/assistantMonitorOperations.js'
 
 // Never run this destructive fixture against an ordinary or remote database.
 assert.equal(process.env.NODE_ENV,'test')
@@ -16,7 +18,7 @@ assert.equal(target.pathname,'/nav_monitor_workspace_test')
 assert.equal(target.search,'')
 const owner='11111111-1111-4111-8111-111111111111'
 const settings={version:1,enabled:true,ownerUserId:owner,password:'synthetic-integration-only',upstream:'http://nav-monitor:28080',site:'https://node.cvv.gr'}
-const initial={id:1,name:'Synthetic VPS',online:true,last_seen_ago:5,price:12,currency:'USD',billing_cycle:'monthly',expires_at:'2026-12-02',group:'',notify:false}
+const initial={id:1,name:'Synthetic VPS',online:true,last_seen_ago:5,price:12,currency:'USD',billing_cycle:'monthly',expires_at:'2026-12-02',group:'',notify:false,traffic_limit:0,traffic_mode:'sum',traffic_reset_day:1}
 let pool,app,privateDir,config,originalDir,node,writes,lostResponse,user
 before(async()=>{
   const database=await import('../src/db/index.js');pool=database.pool
@@ -45,6 +47,80 @@ beforeEach(async()=>{
 after(async()=>{await app?.close();if(config)config.managedIntegrationsDir=originalDir;await pool?.end();if(privateDir)await rm(privateDir,{recursive:true})})
 async function request(path,payload={}){const r=await app.inject({method:'POST',url:'/api/monitor'+path,payload});return {status:r.statusCode,body:r.json()}}
 async function preview(patch){const r=await request('/nodes/1/proposals',{patch});assert.equal(r.status,200);return r.body.id}
+
+const assistantBridge={request:async(_path,options={})=>{
+  if(options.method==='PUT'){
+    writes++;Object.assign(node,JSON.parse(options.body))
+    if(lostResponse)throw Error('synthetic response lost')
+    return Response.json({ok:true})
+  }
+  return Response.json({nodes:[node],admin:true})
+}}
+async function assistantProposal(patch){
+  const conversationId=randomUUID(),messageId=randomUUID(),operationId=randomUUID()
+  await pool.query("INSERT INTO assistant_conversations(id,user_id,title) VALUES($1,$2,'Synthetic monitor edit')",[conversationId,owner])
+  await pool.query("INSERT INTO assistant_messages(id,user_id,conversation_id,role,content) VALUES($1,$2,$3,'user','Synthetic explicit server edit')",[messageId,owner,conversationId])
+  return {userId:owner,conversationId,messageId,operationId,nodeId:1,patch,candidateIds:['monitor:1'],bridge:assistantBridge}
+}
+const revisions=new Map()
+async function mutate(operationId,kind,userId=owner,revision=revisions.get(operationId)){
+  const result=await mutateAssistantMonitor(userId,operationId,kind,{expectedChangeId:revision,getBridge:async()=>assistantBridge})
+  revisions.set(operationId,result.receipt.confirmationId);return result
+}
+async function proposeAssistant(input){const result=await proposeAssistantMonitor(input);revisions.set(input.operationId,result.receipt.confirmationId);return result}
+
+test('assistant preview, replay, confirmation and undo persist across real PostgreSQL transactions',async()=>{
+  const input=await assistantProposal({traffic_limit:200e9,traffic_mode:'max',countryOverride:'HK'})
+  const previews=await Promise.all([proposeAssistant(input),proposeAssistant(input)])
+  assert.equal(writes,0);assert.deepEqual(previews[0].receipt.preview,previews[1].receipt.preview)
+  assert.equal((await pool.query('SELECT * FROM monitor_changes')).rowCount,1)
+  assert.equal(previews[0].receipt.preview.changes[0].before,0)
+  await assert.rejects(proposeAssistantMonitor({...input,patch:{traffic_limit:300e9}}),e=>e.code==='MONITOR_CHANGE_CONFLICT')
+  await assert.rejects(mutate(input.operationId,'confirm','22222222-2222-4222-8222-222222222222'),e=>e.code==='MONITOR_CHANGE_MISSING')
+  assert.equal((await mutate(input.operationId,'confirm')).receipt.status,'succeeded')
+  assert.equal((await mutate(input.operationId,'confirm')).receipt.status,'succeeded')
+  assert.equal(writes,1);assert.equal(node.traffic_limit,200e9);assert.equal(node.traffic_mode,'max')
+  assert.equal((await pool.query('SELECT details FROM monitor_node_details')).rows[0].details.countryOverride,'HK')
+  const oldRevision=revisions.get(input.operationId)
+  const undo=await mutate(input.operationId,'undo')
+  assert.notEqual(revisions.get(input.operationId),oldRevision)
+  await assert.rejects(mutate(input.operationId,'confirm',owner,oldRevision),e=>e.code==='MONITOR_CHANGE_CONFLICT')
+  assert.equal(undo.receipt.status,'awaiting_confirmation');assert.equal(writes,1)
+  assert.equal(undo.receipt.preview.changes.find(c=>c.field==='countryOverride').after,'')
+  assert.equal((await mutate(input.operationId,'confirm')).receipt.status,'undone')
+  assert.equal((await mutate(input.operationId,'confirm')).receipt.status,'undone')
+  assert.equal(writes,2);assert.equal(node.traffic_limit,0);assert.equal(node.traffic_mode,'sum')
+  assert.equal((await pool.query('SELECT details FROM monitor_node_details')).rows[0].details.countryOverride,'')
+})
+
+test('assistant cancellation and expiry cannot save; undo refuses external changes',async()=>{
+  let input=await assistantProposal({price:24})
+  await proposeAssistant(input)
+  assert.equal((await mutate(input.operationId,'cancel')).receipt.status,'cancelled')
+  await assert.rejects(mutate(input.operationId,'confirm'),e=>e.code==='MONITOR_CHANGE_REVIEW')
+  input=await assistantProposal({price:36});await proposeAssistant(input)
+  await pool.query("UPDATE monitor_changes SET created_at=NOW()-interval '2 hours',expires_at=NOW()-interval '1 hour' WHERE status='preview'")
+  await assert.rejects(mutate(input.operationId,'confirm'),e=>e.code==='MONITOR_CHANGE_REVIEW')
+  assert.equal(writes,0)
+  input=await assistantProposal({price:48});await proposeAssistant(input);await mutate(input.operationId,'confirm')
+  node.price=60
+  await assert.rejects(mutate(input.operationId,'undo'),e=>e.code==='MONITOR_CHANGE_CONFLICT')
+  assert.equal(node.price,60);assert.equal(writes,1)
+})
+
+test('assistant unknown write result stays unconfirmed until native readback reconciles',async()=>{
+  const input=await assistantProposal({traffic_mode:'max',traffic_limit:200e9})
+  await proposeAssistant(input);lostResponse=true
+  await assert.rejects(mutate(input.operationId,'confirm'),e=>e.code==='MONITOR_CHANGE_REVIEW')
+  await assert.rejects(mutate(input.operationId,'confirm'),e=>e.code==='MONITOR_CHANGE_REVIEW')
+  assert.equal(writes,1)
+  assert.equal((await pool.query('SELECT status FROM assistant_agent_operations')).rows[0].status,'awaiting_confirmation')
+  const change=(await pool.query('SELECT * FROM monitor_changes')).rows[0]
+  assert.equal(change.status,'uncertain');lostResponse=false
+  assert.equal((await request(`/changes/${change.id}/reconcile`)).body.status,'applied')
+  assert.equal((await mutate(input.operationId,'confirm')).receipt.status,'succeeded')
+  assert.equal(writes,1)
+})
 test('real JSONB round trip, confirm replay, undo conflict and ownership',async()=>{
   const id=await preview({expires_at:'2027-12-02',provider:'Example vendor'})
   assert.equal(writes,0)
