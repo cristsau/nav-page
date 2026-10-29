@@ -1572,7 +1572,7 @@ export default async function assistantRoutes(fastify) {
             usage: null,
             latencyMs: Math.max(0, Date.now() - startedAt)
           }, request.log)
-          const fallback = image ? {answer:'AI 模型尚未配置，未分析这张截图，也未修改资料。请先在设置中配置支持图片的模型。',degradedReason:'not-configured'} : intent.action
+          const fallback = image ? '图片分析未完成；请检查已显示的预览或操作回执，再重试。未确认的修改不会保存。' : intent.action
             ? 'AI 执行过程未完成；本次请求没有继续执行新的写入。请查看已显示的操作回执后再决定是否重试。'
             : buildRetrievalFallbackAnswer(sources)
           writeSse(reply.raw, 'reset', { content: fallback, degradedReason: 'provider-unavailable' })

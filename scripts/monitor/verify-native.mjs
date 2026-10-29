@@ -52,7 +52,8 @@ try {
   const change=await (await request(`nodes/${node.id}/proposals`,'POST',{patch:{traffic_limit:200e9,traffic_mode:'max',traffic_reset_day:3,countryOverride:'HK'}})).json()
   await request(`changes/${change.id}/confirm`,'POST',{confirmed:true})
   const changed=(await (await request('overview')).json()).nodes.find(n=>n.id===node.id)
-  assert.equal(changed.trafficUsed,34);assert.equal(changed.trafficLimit,200e9)
+  // The pinned Hub starts a new billing window when its reset day changes.
+  assert.equal(changed.trafficUsed,0);assert.equal(changed.trafficLimit,200e9)
   assert.equal(changed.trafficMode,'max');assert.equal(changed.countryCode,'HK')
   const undo=await (await request(`changes/${change.id}/undo-preview`,'POST')).json()
   await request(`changes/${undo.id}/confirm`,'POST',{confirmed:true})
