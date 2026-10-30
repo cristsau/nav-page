@@ -1,4 +1,4 @@
-// Real Vue workspace and modal, synthetic read-only APIs; never contacts a live NAV.
+// Real Vue workspace and modal, synthetic APIs (including isolated order writes); never contacts a live NAV.
 import assert from 'node:assert/strict'
 import { createRequire } from 'node:module'
 import { mkdir, writeFile } from 'node:fs/promises'
@@ -37,14 +37,15 @@ const base = { online: true, fresh: true, group: '', tags: [], links: [], carrie
   price: 0, currency: 'USD', billing_cycle: 'monthly', expires_at: null, expiryDays: null, provider: '合成供应商', purpose: '界面回归验证',
   os: 'Debian', cores: 2, memoryTotal: 2 * 1024 ** 3, diskTotal: 40 * 1024 ** 3, uptime: 86400, rx: 1024, tx: 2048, services: [], country: 'US' }
 const original = { nodes: [
-  { ...base, id: 1, name: '合成 CPU 服务器', cpu: 76.5 },
-  { ...base, id: 2, name: '合成内存服务器', memory: 91.2 },
-  { ...base, id: 3, name: '合成流量服务器名称较长用于手机布局', trafficUsed: 900e9, trafficLimit: 0, trafficPercent: null },
-  { ...base, id: 4, name: '合成离线服务器', online: false, fresh: false, cpu: 99, memory: 99 }
+  { ...base, id: 1, name: '合成 CPU 服务器', group: 'A', os: 'Ubuntu 24.04.3 LTS', cpu: 76.5, expiryDays: 22 },
+  { ...base, id: 2, name: '合成内存服务器', group: 'B', os: 'Windows Server 2025', memory: 91.2 },
+  { ...base, id: 3, name: '合成流量服务器名称较长用于手机布局', group: 'A', os: '', trafficUsed: 900e9, trafficLimit: 0, trafficPercent: null },
+  { ...base, id: 4, name: '合成离线服务器', group: 'B', online: false, fresh: false, cpu: 99, memory: 99 }
 ], alerts: [{ nodeId: 2, kind: 'capacity', text: '合成内存服务器 内存使用率较高' },
-  { nodeId: 4, kind: 'offline', text: '合成离线服务器 已离线' }], generatedAt: to }
+  { nodeId: 4, kind: 'offline', text: '合成离线服务器 已离线' }, { nodeId: 1, kind: 'expiry' }], generatedAt: to }
 const errors = [], unexpected = [], external = [], checks = []
-let browser, payload = structuredClone(original)
+const record = message => { checks.push(message); console.log(message) }
+let browser, payload = structuredClone(original), saveMode = 'ok', orderWrites = []
 await mkdir(output, { recursive: true })
 try {
   await server.listen()
@@ -57,6 +58,15 @@ try {
       const url = new URL(route.request().url())
       if (url.hostname !== '127.0.0.1') { external.push(url.origin); return route.abort() }
       if (!url.pathname.startsWith('/api/')) return route.continue()
+      if (url.pathname === '/api/monitor/admin/nodes' && route.request().method() === 'GET') return route.fulfill({ json: { nodes: payload.nodes } })
+      if (url.pathname === '/api/monitor/admin/nodes/order' && route.request().method() === 'PUT') {
+        const { ids } = route.request().postDataJSON(); orderWrites.push(ids)
+        assert.deepEqual([...ids].sort(), payload.nodes.map(n => n.id).sort())
+        if (saveMode === 'fail') return route.fulfill({ status: 500, json: { error: 'synthetic save failure' } })
+        payload.nodes = ids.map(id => payload.nodes.find(n => n.id === id))
+        if (saveMode === 'lost') return route.abort('failed')
+        return route.fulfill({ json: { ok: true } })
+      }
       if (route.request().method() !== 'GET') { unexpected.push(route.request().method() + ' ' + url.pathname); return route.abort() }
       if (url.pathname === '/api/monitor/overview') return route.fulfill({ json: payload })
       if (url.pathname.endsWith('/carriers')) return route.fulfill({ json: { from, to, step: 60, carriers } })
@@ -68,13 +78,13 @@ try {
     await page.goto('http://127.0.0.1:4197/__monitor-regression')
     const card = page.locator('.resource-summary')
     await card.getByText('CPU 占用最高', { exact: true }).waitFor()
-    assert.equal((await card.locator('.highlight-node').textContent()).trim(), original.nodes[0].name)
+    assert.equal((await card.locator('.highlight-name').textContent()).trim(), original.nodes[0].name)
     await page.getByRole('button', { name: '下一项资源' }).click()
     await card.getByText('内存占用最高', { exact: true }).waitFor()
-    assert.match(await card.locator('.highlight-node').textContent(), /合成内存服务器/)
+    await card.locator('.highlight-name').filter({ hasText: '合成内存服务器' }).waitFor()
     await page.getByRole('button', { name: '下一项资源' }).click()
     await card.getByText('本周期流量最多', { exact: true }).waitFor()
-    assert.match(await card.locator('.highlight-node').textContent(), /合成流量服务器/)
+    await card.locator('.highlight-name').filter({ hasText: '合成流量服务器' }).waitFor()
     await card.locator('.highlight-node').click()
     await page.getByRole('dialog', { name: original.nodes[2].name, exact: true }).waitFor()
     await page.getByRole('button', { name: '关闭弹窗' }).click()
@@ -83,17 +93,19 @@ try {
     await card.getByText('CPU 占用最高', { exact: true }).waitFor()
     await page.getByRole('button', { name: '上一项资源' }).click()
     await card.getByText('本周期流量最多', { exact: true }).waitFor()
-    checks.push(`${engine}: three resource pages, wrap both ways, winner detail`)
-    await page.locator('.alert-summary').click()
-    await page.waitForFunction(() => document.querySelector('#monitor-alerts').open)
-    assert.equal(await page.locator('.alert-summary').getAttribute('aria-expanded'), 'true')
-    await page.locator('.alert-list button').first().click()
+    await card.locator('.highlight-name').filter({ hasText: '合成流量服务器' }).waitFor()
+    record(`${engine}: three resource pages, wrap both ways, winner detail`)
+    assert.match(await page.locator('.alert-summary').textContent(), /已离线/)
+    assert.match(await page.locator('#monitor-alerts').textContent(), /内存 91.2%/)
+    await page.locator('.alert-preview').first().click()
+    await page.getByRole('dialog', { name: original.nodes[3].name, exact: true }).waitFor()
+    await page.getByRole('button', { name: '关闭弹窗' }).click()
+    await page.getByRole('dialog').waitFor({ state: 'hidden' })
+    await page.locator('.attention-item').filter({ hasText: '内存 91.2%' }).click()
     await page.getByRole('dialog', { name: original.nodes[1].name, exact: true }).waitFor()
     await page.getByRole('button', { name: '关闭弹窗' }).click()
     await page.getByRole('dialog').waitFor({ state: 'hidden' })
-    await page.locator('#monitor-alerts summary').click()
-    await page.waitForFunction(() => document.querySelector('.alert-summary').getAttribute('aria-expanded') === 'false')
-    checks.push(`${engine}: alert count, expansion, linked node and collapse`)
+    record(`${engine}: explicit alert reasons and direct node links in card and issue strip`)
     for (const width of [320, 390, 768, 1440]) {
       await page.setViewportSize({ width, height: 900 })
       for (const dark of [false, true]) {
@@ -103,6 +115,17 @@ try {
         for (const button of await page.locator('.highlight-pager button').all()) {
           const box = await button.boundingBox(); assert.ok(box.width >= 44 && box.height >= 44)
         }
+        const osLayout = await page.locator('.node-row').evaluateAll(rows => rows.map(row => {
+          const name = row.querySelector('.node-name'), os = row.querySelector('.node-os'), title = row.querySelector('.node-title')
+          const before = name.getBoundingClientRect().height, rowHeight = row.getBoundingClientRect().height
+          const rect = os.getBoundingClientRect(), titleRect = title.getBoundingClientRect()
+          os.style.display = 'none'
+          const unchanged = name.getBoundingClientRect().height === before && row.getBoundingClientRect().height === rowHeight
+          os.style.display = ''
+          return { unchanged, inside: rect.right <= name.getBoundingClientRect().right + 1, separate: titleRect.right <= rect.left + 1 }
+        }))
+        assert.ok(osLayout.every(v => v.unchanged && v.inside && v.separate), `${engine}/${width}: OS badge changes layout ${JSON.stringify(osLayout)}`)
+        if (width === 1440) assert.ok((await page.locator('.summary').boundingBox()).height <= 190, 'summary too tall')
         if (width === 390 || width === 1440) await page.screenshot({ path: join(output, `${engine}-${width}-${dark ? 'dark' : 'light'}-overview.png`), fullPage: true })
         await card.locator('.highlight-node').click()
         await page.locator('.carrier-card .trend').first().waitFor()
@@ -132,9 +155,94 @@ try {
         if (width === 390 || width === 1440) await page.screenshot({ path: join(output, `${engine}-${width}-${dark ? 'dark' : 'light'}-detail.png`) })
         await page.getByRole('button', { name: '关闭弹窗' }).click()
         await page.getByRole('dialog').waitFor({ state: 'hidden' })
-        checks.push(`${engine}: ${width}px ${dark ? 'dark' : 'light'} chart, readout, coverage, modal and touch controls`)
+        record(`${engine}: ${width}px ${dark ? 'dark' : 'light'} chart, readout, coverage, modal and touch controls`)
       }
     }
+    await page.setViewportSize({ width: 1440, height: 1000 })
+    await page.evaluate(() => window.setTheme(false))
+    const rowIds = () => page.locator('.node-row').evaluateAll(rows => rows.map(row => Number(row.dataset.nodeId)))
+    const grip = id => page.locator(`[data-node-id="${id}"] .drag-handle`)
+    const status = page.locator('.sort-status')
+    const waitSaved = async () => { await status.getByText('顺序已保存', { exact: true }).waitFor(); await page.waitForFunction(() => !document.querySelector('.drag-handle').disabled) }
+    const reset = async () => { payload = structuredClone(original); saveMode = 'ok'; await page.getByLabel('服务器分组', { exact: true }).selectOption(''); await page.getByLabel('排序', { exact: true }).selectOption('custom'); await page.getByRole('button', { name: '刷新监控' }).click(); await page.waitForFunction(() => document.querySelector('.node-row').dataset.nodeId === '1') }
+    await reset()
+    // Pointer events exercise the same dedicated handle path in Chromium and WebKit.
+    async function drag(fromId, toId, side = 'before') {
+      await grip(fromId).scrollIntoViewIfNeeded()
+      const a = await grip(fromId).boundingBox(), b = await page.locator(`[data-node-id="${toId}"]`).boundingBox()
+      await page.mouse.move(a.x + a.width / 2, a.y + a.height / 2); await page.mouse.down()
+      await page.mouse.move(b.x + 60, b.y + (side === 'before' ? 12 : b.height - 12), { steps: 10 }); await page.mouse.up()
+      await waitSaved()
+    }
+    await drag(3, 1)
+    assert.deepEqual(await rowIds(), [3, 1, 2, 4])
+    assert.equal(await page.getByRole('dialog').count(), 0)
+    await page.reload(); await page.locator('.node-row').first().waitFor()
+    assert.deepEqual(await rowIds(), [3, 1, 2, 4])
+    await grip(3).focus(); await page.keyboard.press('ArrowDown'); await waitSaved()
+    assert.deepEqual(await rowIds(), [1, 3, 2, 4])
+    record(`${engine}: drag and keyboard order saved, page reload keeps custom order`)
+    await reset()
+    await page.getByLabel('服务器分组', { exact: true }).selectOption('A')
+    await grip(3).focus(); await page.keyboard.press('ArrowUp'); await waitSaved()
+    assert.deepEqual(payload.nodes.map(n => n.id), [3, 2, 1, 4])
+    assert.deepEqual(await rowIds(), [3, 1])
+    record(`${engine}: filtered reorder preserves hidden servers and their slots`)
+    await reset(); saveMode = 'fail'
+    await grip(1).focus(); await page.keyboard.press('ArrowDown')
+    await status.getByText('排序未保存，已恢复原顺序。请重试。', { exact: true }).waitFor()
+    assert.deepEqual(await rowIds(), [1, 2, 3, 4])
+    await grip(1).focus()
+    saveMode = 'lost'; const beforeLost = orderWrites.length
+    await page.keyboard.press('ArrowDown'); await waitSaved()
+    assert.deepEqual(await rowIds(), [2, 1, 3, 4]); assert.equal(orderWrites.length, beforeLost + 1)
+    record(`${engine}: rejected save restores order; lost response reconciles once without duplicate write`)
+    await reset(); payload.nodes = [original.nodes[1], original.nodes[0], original.nodes[2], original.nodes[3]]
+    const beforeConflict = orderWrites.length
+    await grip(1).focus(); await page.keyboard.press('ArrowDown')
+    await status.getByText('服务器顺序已变化，已显示当前顺序，请重新拖动。', { exact: true }).waitFor()
+    assert.equal(orderWrites.length, beforeConflict); assert.deepEqual(await rowIds(), [2, 1, 3, 4])
+    await reset(); const beforeCancel = orderWrites.length
+    const handle = await grip(1).boundingBox()
+    await page.mouse.move(handle.x + 20, handle.y + 20); await page.mouse.down(); await page.mouse.move(handle.x + 60, handle.y + 70)
+    await page.keyboard.press('Escape'); await page.mouse.up()
+    assert.equal(orderWrites.length, beforeCancel); assert.deepEqual(await rowIds(), [1, 2, 3, 4])
+    record(`${engine}: stale order rejected before write; Escape cancels drag`)
+    // OS comes from reported data, including missing/long values, and adds no height.
+    assert.equal(await page.locator('[data-node-id="1"] .node-os').getAttribute('title'), 'Ubuntu 24.04.3 LTS')
+    assert.match(await page.locator('[data-node-id="2"] .node-os').textContent(), /Windows/)
+    assert.match(await page.locator('[data-node-id="3"] .node-os').textContent(), /未知/)
+    record(`${engine}: reported OS and unknown fallback fit beside server name`)
+    if (engine === 'chromium') {
+      await page.setViewportSize({ width: 390, height: 1000 }); await reset()
+      await grip(2).evaluate(el => el.scrollIntoView({ block: 'center' }))
+      const a = await grip(2).boundingBox(), b = await page.locator('[data-node-id="1"]').boundingBox()
+      const cdp = await context.newCDPSession(page), x = a.x + a.width / 2, y = a.y + a.height / 2
+      await cdp.send('Input.dispatchTouchEvent', { type: 'touchStart', touchPoints: [{ x, y }] })
+      for (let step = 1; step <= 10; step++) await cdp.send('Input.dispatchTouchEvent', { type: 'touchMove', touchPoints: [{ x: x + (b.x + 80 - x) * step / 10, y: y + (b.y + 12 - y) * step / 10 }] })
+      await cdp.send('Input.dispatchTouchEvent', { type: 'touchEnd', touchPoints: [] })
+      await waitSaved(); assert.deepEqual(await rowIds(), [2, 1, 3, 4]); await cdp.detach()
+      record(`${engine}: native touch drag on mobile saves without opening details`)
+    }
+    await reset(); await page.setViewportSize({ width: 1440, height: 1000 })
+    await page.emulateMedia({ reducedMotion: 'no-preference' })
+    const heightBefore = (await card.boundingBox()).height
+    await page.getByRole('button', { name: '下一项资源' }).click()
+    await page.waitForFunction(() => document.querySelector('.highlight-content')?.getAnimations().length > 0)
+    await page.waitForFunction(() => document.querySelector('.highlight-content') && !document.querySelector('.highlight-content').className.includes('-active'))
+    assert.equal((await card.boundingBox()).height, heightBefore)
+    await page.emulateMedia({ reducedMotion: 'reduce' })
+    record(`${engine}: brief resource transition keeps card height stable; reduced motion supported`)
+    // Curated synthetic preview: one concrete expiry alert, desktop and mobile.
+    payload = { ...structuredClone(original), nodes: original.nodes.map((n, i) => ({ ...n, name: ['SJC', 'Build-01', 'Edge-SG', 'Edge-JP'][i], online: true, fresh: true, memory: 30, expiryDays: i === 3 ? 22 : null })), alerts: [{ nodeId: 4, kind: 'expiry' }] }
+    await page.getByRole('button', { name: '刷新监控' }).click()
+    await page.locator('.alert-preview').getByText('22 天后到期', { exact: true }).waitFor()
+    for (const width of [390, 1440]) {
+      await page.setViewportSize({ width, height: width === 390 ? 1000 : 900 }); await page.evaluate(() => window.scrollTo(0, 0))
+      await page.screenshot({ path: join(output, `${engine}-${width}-preview.png`) })
+    }
+    // Return resource card to traffic for empty/zero checks below.
+    while (!(await card.locator('.highlight-label-full').textContent()).includes('流量')) await page.getByRole('button', { name: '下一项资源' }).click()
     payload = { ...original, nodes: [], alerts: [] }
     await page.getByRole('button', { name: '刷新监控' }).click()
     await card.getByText('暂无流量数据', { exact: true }).waitFor()
@@ -146,7 +254,7 @@ try {
     payload = { ...original, nodes: [{ ...original.nodes[0], cpu: 0, memory: 0, trafficUsed: 0 }], alerts: [] }
     await page.getByRole('button', { name: '刷新监控' }).click()
     await card.getByText('0.0%', { exact: true }).waitFor()
-    checks.push(`${engine}: refresh recomputes winners, empty/unknown distinct from zero, zero alerts`)
+    record(`${engine}: refresh recomputes winners, empty/unknown distinct from zero, zero alerts`)
     await browser.close(); browser = null
   }
   assert.deepEqual(errors, []); assert.deepEqual(unexpected, []); assert.deepEqual(external, [])
