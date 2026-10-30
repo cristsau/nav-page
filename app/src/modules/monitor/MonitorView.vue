@@ -5,6 +5,7 @@ import Icon from '@/shared/components/Icon.vue'
 import Modal from '@/shared/components/Modal.vue'
 import { apiRequest } from '@/shared/services/apiClient'
 import MonitorTrend from './MonitorTrend.vue'
+import { monitorHighlights } from './monitorHighlights'
 const MonitorSettings=defineAsyncComponent(()=>import('./MonitorSettings.vue'))
 const route=useRoute(),router=useRouter()
 const data=ref(null),loading=ref(true),error=ref(''),notice=ref(''),settingsOpen=ref(false),filter=ref(''),group=ref(''),status=ref('all'),sort=ref('name')
@@ -23,7 +24,11 @@ const nodes=computed(()=>{
 })
 const online=computed(()=>data.value?.nodes.filter(n=>n.online).length||0)
 const expiring=computed(()=>data.value?.nodes.filter(n=>n.expiryDays!==null&&n.expiryDays<=30).length||0)
-const costs=computed(()=>Object.entries(data.value?.costs||{}).map(([currency,amount])=>`${currency} ${amount.toFixed(2)}`).join(' / ')||'尚未录入')
+const highlightPage=ref(0),alertsExpanded=ref(false)
+const highlights=computed(()=>monitorHighlights(data.value?.nodes||[]))
+const highlight=computed(()=>highlights.value[highlightPage.value])
+const alertNodes=computed(()=>new Set((data.value?.alerts||[]).map(a=>a.nodeId)).size)
+function turnHighlight(direction){highlightPage.value=(highlightPage.value+direction+highlights.value.length)%highlights.value.length}
 import { countryCodes, countryName } from './countryCodes'
 const trafficModes={sum:'双向合计',up:'仅上传',down:'仅下载',max:'单向最大值'}
 const flag=code=>/^[A-Z]{2}$/.test(code||'')&&code!=='ZZ'?String.fromCodePoint(...[...code].map(c=>127397+c.charCodeAt(0))):''
@@ -117,8 +122,22 @@ onBeforeUnmount(()=>{disposed=true;clearTimeout(timer);clearTimeout(carrierTimer
       <div v-if="error" class="error" role="alert">{{error}} <span v-if="data">当前显示上次结果。</span><button @click="load">重试</button></div>
       <div v-if="loading&&!data" class="loading" role="status">正在读取监控数据…</div>
       <template v-if="data">
-        <section class="summary" aria-label="服务器概览"><button @click="status='all'"><span>全部服务器</span><strong>{{data.nodes.length}}</strong><small>{{online}} 在线 · {{data.nodes.length-online}} 离线</small></button><button @click="status='expiry'"><span>30 天内到期</span><strong>{{expiring}}</strong></button><div><span>月均费用</span><strong class="cost">{{costs}}</strong><small title="按原币种统计，不含一次性费用">按周期折算</small></div><div><span>三网采样</span><strong>ICMP <em>60 秒</em></strong><small>后台持续检测</small></div></section>
-        <details v-if="data.alerts.length" class="alerts"><summary><Icon name="alert" :size="16"/> {{data.alerts.length}} 项需要关注 <span>到期、离线、流量与容量</span></summary><div class="alert-list"><button v-for="(item,i) in data.alerts" :key="i" @click="openNode(item.nodeId)">{{item.text}} <span>查看 →</span></button></div></details>
+        <section class="summary" aria-label="服务器概览">
+          <button @click="status='all'"><span>全部服务器</span><strong>{{data.nodes.length}}</strong><small>{{online}} 在线 · {{data.nodes.length-online}} 离线</small></button>
+          <button @click="status='expiry'"><span>30 天内到期</span><strong>{{expiring}}</strong></button>
+          <div class="resource-summary">
+            <div class="highlight-content" aria-live="polite" aria-atomic="true">
+              <span>{{highlight.label}}</span>
+              <strong>{{highlight.key==='trafficUsed'?bytes(highlight.value):pct(highlight.value)}}</strong>
+              <button v-if="highlight.node" class="highlight-node" :aria-label="`查看 ${highlight.node.name} 详情`" @click="openNode(highlight.node.id)">{{highlight.node.name}} <Icon name="chevron-right" :size="14"/></button>
+              <small v-else>{{highlight.live?'暂无实时指标':'暂无流量数据'}}</small>
+              <small v-if="highlight.key==='trafficUsed'&&highlight.node">按各服务器流量计费方式统计</small>
+            </div>
+            <nav class="highlight-pager" aria-label="资源概览翻页"><button aria-label="上一项资源" @click="turnHighlight(-1)"><Icon name="chevron-left" :size="16"/></button><span>{{highlightPage+1}} / {{highlights.length}}</span><button aria-label="下一项资源" @click="turnHighlight(1)"><Icon name="chevron-right" :size="16"/></button></nav>
+          </div>
+          <button class="alert-summary" :aria-expanded="Boolean(data.alerts.length&&alertsExpanded)" :aria-controls="data.alerts.length?'monitor-alerts':undefined" @click="alertsExpanded=data.alerts.length?!alertsExpanded:false"><span>告警提示</span><strong :class="{'due':data.alerts.length}">{{data.alerts.length}} <em>项</em></strong><small>{{data.alerts.length?`${alertNodes} 台服务器 · ${alertsExpanded?'收起':'查看'}告警`:'暂无告警'}}</small></button>
+        </section>
+        <details v-if="data.alerts.length" id="monitor-alerts" class="alerts" :open="alertsExpanded" @toggle="alertsExpanded=$event.target.open"><summary><Icon name="alert" :size="16"/> {{data.alerts.length}} 项需要关注 <span>到期、离线、流量与容量</span></summary><div class="alert-list"><button v-for="(item,i) in data.alerts" :key="i" @click="openNode(item.nodeId)">{{item.text}} <span>查看 →</span></button></div></details>
         <section class="toolbar" aria-label="筛选服务器"><label class="search"><Icon name="search" :size="18"/><input v-model="filter" placeholder="搜索名称、IP、供应商、用途或标签" aria-label="搜索服务器"/></label><select v-model="group" aria-label="服务器分组"><option value="">全部分组</option><option v-for="g in groups" :key="g">{{g}}</option></select><select v-model="status" aria-label="状态筛选"><option value="all">全部状态</option><option value="online">在线</option><option value="offline">离线</option><option value="expiry">即将到期</option></select><select v-model="sort" aria-label="排序"><option value="name">名称排序</option><option value="expiry">到期优先</option><option value="memory">内存占用</option><option value="traffic">流量占用</option></select></section>
         <div v-if="!nodes.length" class="empty">没有匹配的服务器。<button @click="filter='';group='';status='all'">清除筛选</button></div>
         <div v-else class="node-table"><div class="table-head"><span>服务器 / 用途</span><span>CPU · 内存 · 磁盘</span><span>网络 / 本周期</span><span>联通 · 移动 · 电信</span><span>费用 / 到期</span><span/></div>
